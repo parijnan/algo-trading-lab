@@ -95,8 +95,8 @@ SLIPPAGE_POINTS         = 1.0
 # Backtest Scope
 # ---------------------------------------------------------------------------
 # Date range for backtest — set to None to use full available data
-BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = None      # None = use all available data
+BACKTEST_START_DATE     = '2020-03-01'
+BACKTEST_END_DATE       = '2020-04-30'      # None = use all available data
 
 # Lot size
 LOT_SIZE                = 75        # Nifty lot size (update if SEBI changes this)
