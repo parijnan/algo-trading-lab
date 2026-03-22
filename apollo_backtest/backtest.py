@@ -390,21 +390,24 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     # ------------------------------------------------------------------
     # Trade state — persists across days
     # ------------------------------------------------------------------
-    in_trade     = False
-    direction    = None
-    sell_strike  = None
-    buy_strike   = None
-    option_type  = None
-    expiry       = None
-    sell_entry   = None
-    buy_entry    = None
-    sell_ltp     = None
-    buy_ltp      = None
-    entry_time   = None
-    entry_spot   = None
-    sell_opt_df  = None
-    buy_opt_df   = None
-    trade_log    = []     # 1-min snapshots for the current open trade
+    in_trade       = False
+    direction      = None
+    sell_strike    = None
+    buy_strike     = None
+    option_type    = None
+    expiry         = None
+    sell_entry     = None
+    buy_entry      = None
+    sell_ltp       = None
+    buy_ltp        = None
+    entry_time     = None
+    entry_spot     = None
+    sell_opt_df    = None
+    buy_opt_df     = None
+    trade_log      = []     # 1-min snapshots for the current open trade
+    # Running LTPs for carry-forward across 1-min snapshot windows
+    snap_sell_ltp  = None
+    snap_buy_ltp   = None
 
     for day_date in trading_days:
 
@@ -435,13 +438,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         # (trade may have been entered on a high-VIX day and is still open)
         # ------------------------------------------------------------------
         if in_trade and day_date not in high_vix_dates:
-            _append_1min_snapshots(
+            snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots(
                 day_date, nifty_1m, vix_1m,
                 nifty_75_indexed, nifty_15,
                 sell_opt_df, buy_opt_df,
                 sell_strike, buy_strike, option_type,
                 sell_entry, buy_entry, direction, expiry,
-                trade_log
+                trade_log,
+                snap_sell_ltp, snap_buy_ltp
             )
             continue
 
@@ -480,13 +484,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 # Get the 1-min window for this 15-min candle
                 # i.e. from previous 15-min timestamp to current
                 prev_ts = day_15.iloc[idx - 1]['time_stamp'] if idx > 0 else ts
-                _append_1min_snapshots_window(
+                snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots_window(
                     prev_ts, ts, nifty_1m, vix_1m,
                     nifty_75_indexed, nifty_15,
                     sell_opt_df, buy_opt_df,
                     sell_strike, buy_strike, option_type,
                     sell_entry, buy_entry, direction, expiry,
-                    trade_log
+                    trade_log,
+                    snap_sell_ltp, snap_buy_ltp
                 )
 
             # --------------------------------------------------------------
@@ -541,17 +546,19 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     _log_exit(trade_record)
                     _save_trade_log(trade_counter, entry_time, trade_log)
 
-                    in_trade    = False
-                    trade_log   = []
-                    direction   = None
-                    sell_strike = None
-                    buy_strike  = None
-                    option_type = None
-                    expiry      = None
-                    sell_entry  = None
-                    buy_entry   = None
-                    sell_opt_df = None
-                    buy_opt_df  = None
+                    in_trade      = False
+                    trade_log     = []
+                    direction     = None
+                    sell_strike   = None
+                    buy_strike    = None
+                    option_type   = None
+                    expiry        = None
+                    sell_entry    = None
+                    buy_entry     = None
+                    sell_opt_df   = None
+                    buy_opt_df    = None
+                    snap_sell_ltp = None
+                    snap_buy_ltp  = None
 
             # --------------------------------------------------------------
             # Entry / re-entry
@@ -600,17 +607,19 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 sell_entry = apply_slippage(sell_entry_raw, is_buy=False)
                 buy_entry  = apply_slippage(buy_entry_raw,  is_buy=True)
 
-                in_trade    = True
-                direction   = entry_direction
-                sell_strike = sel_strike
-                buy_strike  = hedge_strike
-                option_type = sel_otype
-                expiry      = selected_expiry
-                entry_time  = exec_ts
-                entry_spot  = exec_spot
-                sell_ltp    = sell_entry
-                buy_ltp     = buy_entry
-                trade_log   = []
+                in_trade      = True
+                direction     = entry_direction
+                sell_strike   = sel_strike
+                buy_strike    = hedge_strike
+                option_type   = sel_otype
+                expiry        = selected_expiry
+                entry_time    = exec_ts
+                entry_spot    = exec_spot
+                sell_ltp      = sell_entry
+                buy_ltp       = buy_entry
+                trade_log     = []
+                snap_sell_ltp = sell_entry
+                snap_buy_ltp  = buy_entry
 
                 logger.info(
                     f"  ENTRY {direction:8s} | {exec_ts} | "
@@ -633,10 +642,24 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                    nifty_15, sell_opt_df, buy_opt_df,
                                    sell_strike, buy_strike, option_type,
                                    sell_entry, buy_entry, direction, expiry,
-                                   trade_log: list):
+                                   trade_log: list,
+                                   last_sell_ltp: float = None,
+                                   last_buy_ltp:  float = None):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
+
+    Carries forward last known LTP when option data is missing for a timestamp
+    so the log is never truncated by data gaps. last_sell_ltp / last_buy_ltp
+    seed the carry-forward from the caller (avoids falling back to entry price
+    at the start of a new window after a gap).
+
+    Returns (last_sell_ltp, last_buy_ltp) so the caller can pass them into
+    the next window call.
     """
+    # Seed running LTPs — use last known if provided, otherwise entry price
+    running_sell_ltp = last_sell_ltp if last_sell_ltp is not None else sell_entry
+    running_buy_ltp  = last_buy_ltp  if last_buy_ltp  is not None else buy_entry
+
     window = nifty_1m[
         (nifty_1m.index > from_ts) & (nifty_1m.index <= to_ts)
     ]
@@ -644,8 +667,13 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         spot = float(row['close'])
         vix  = get_1min_value(vix_1m, ts, 'close')
 
-        sell_ltp = get_option_price(sell_opt_df, ts, 'close') or sell_entry
-        buy_ltp  = get_option_price(buy_opt_df,  ts, 'close') or buy_entry
+        # Fetch option prices — carry forward last known on miss
+        fetched_sell = get_option_price(sell_opt_df, ts, 'close')
+        fetched_buy  = get_option_price(buy_opt_df,  ts, 'close')
+        if fetched_sell is not None:
+            running_sell_ltp = fetched_sell
+        if fetched_buy is not None:
+            running_buy_ltp = fetched_buy
 
         prior_75 = nifty_75_indexed[nifty_75_indexed.index <= ts]
         trend_75 = prior_75.iloc[-1]['trend'] if not prior_75.empty else None
@@ -656,11 +684,13 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         snapshot = _build_snapshot(
             ts, spot, vix,
             sell_strike, buy_strike, option_type,
-            sell_ltp, buy_ltp,
+            running_sell_ltp, running_buy_ltp,
             sell_entry, buy_entry,
             direction, trend_75, trend_15, expiry
         )
         trade_log.append(snapshot)
+
+    return running_sell_ltp, running_buy_ltp
 
 
 def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
@@ -668,20 +698,24 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
                             sell_opt_df, buy_opt_df,
                             sell_strike, buy_strike, option_type,
                             sell_entry, buy_entry, direction, expiry,
-                            trade_log: list):
+                            trade_log: list,
+                            last_sell_ltp: float = None,
+                            last_buy_ltp:  float = None):
     """
     Append all 1-min snapshots for a full day (for overnight-held trades
     on non-high-VIX days).
+    Returns (last_sell_ltp, last_buy_ltp) for chaining across days.
     """
     day_start = pd.Timestamp(f"{day_date} 09:15:00")
     day_end   = pd.Timestamp(f"{day_date} 15:30:00")
-    _append_1min_snapshots_window(
+    return _append_1min_snapshots_window(
         day_start - pd.Timedelta(minutes=1), day_end,
         nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
         sell_opt_df, buy_opt_df,
         sell_strike, buy_strike, option_type,
         sell_entry, buy_entry, direction, expiry,
-        trade_log
+        trade_log,
+        last_sell_ltp, last_buy_ltp
     )
 
 
