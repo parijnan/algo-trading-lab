@@ -105,10 +105,19 @@ def load_1min_data():
 
 
 def load_contracts():
-    """Load Nifty weekly expiry contract list."""
+    """
+    Load Nifty weekly expiry contract list.
+    Uses 'end_date' as the accurate expiry timestamp (15:30 on expiry day)
+    rather than 'expiry_date' which has an incorrect 07:00 time from the
+    ICICI Direct download format.
+    'expiry_date' is still used for date-based DTE calculations and folder
+    naming since it carries the correct calendar date.
+    """
     df = pd.read_csv(CONTRACT_LIST_FILE)
     df['expiry_date'] = pd.to_datetime(
         df['expiry_date'], utc=False).dt.tz_localize(None)
+    df['end_date'] = pd.to_datetime(
+        df['end_date'], utc=False).dt.tz_localize(None)
     df = df.sort_values('expiry_date').reset_index(drop=True)
     return df
 
@@ -174,22 +183,26 @@ def get_expiry(signal_time: pd.Timestamp,
     Select appropriate expiry:
     - Use current weekly expiry if DTE >= MIN_DTE (calendar days)
     - Roll to next weekly expiry if DTE < MIN_DTE
+
+    Returns end_date (accurate 15:30 expiry timestamp) for use as the
+    expiry value throughout the backtest. expiry_date is used only for
+    DTE calculation and folder name lookup (date portion only).
     """
     signal_date = signal_time.date()
     future = contracts_df[
         contracts_df['expiry_date'].dt.date >= signal_date
-    ]['expiry_date']
+    ]
 
     if future.empty:
         return None
 
-    current_expiry = future.iloc[0]
-    dte = (current_expiry.date() - signal_date).days
+    current_row = future.iloc[0]
+    dte = (current_row['expiry_date'].date() - signal_date).days
 
     if dte >= MIN_DTE:
-        return current_expiry
+        return current_row['end_date']
     elif len(future) > 1:
-        return future.iloc[1]
+        return future.iloc[1]['end_date']
     return None
 
 
@@ -540,6 +553,23 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_entry, sell_exit_net,
                         buy_entry,  buy_exit_net)
                     pl_rupees = pl_points * LOT_SIZE
+
+                    # Capture the execution candle (signal ts+1) in the log
+                    # so the log runs all the way to the actual exit timestamp
+                    exec_spot_val = get_1min_value(nifty_1m, exec_ts, 'close') or spot
+                    exec_vix_val  = get_1min_value(vix_1m,   exec_ts, 'close')
+                    prior_75_exec = nifty_75_indexed[nifty_75_indexed.index <= exec_ts]
+                    trend_75_exec = prior_75_exec.iloc[-1]['trend']                                     if not prior_75_exec.empty else trend_75
+                    prior_15_exec = nifty_15[nifty_15['time_stamp'] <= exec_ts]
+                    trend_15_exec = prior_15_exec.iloc[-1]['trend']                                     if not prior_15_exec.empty else trend_15
+                    exit_snapshot = _build_snapshot(
+                        exec_ts, exec_spot_val, exec_vix_val,
+                        sell_strike, buy_strike, option_type,
+                        sell_exit_raw, buy_exit_raw,
+                        sell_entry, buy_entry,
+                        direction, trend_75_exec, trend_15_exec, expiry
+                    )
+                    trade_log.append(exit_snapshot)
 
                     trade_record = _build_trade_record(
                         entry_time, exec_ts, direction, expiry,
