@@ -456,6 +456,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         if day_15.empty:
             continue
 
+        # Market open anchor for this day — used to capture 09:15 on first candle
+        day_open_anchor = pd.Timestamp(f"{day_date} 09:14:00")
+        last_15min_ts   = None   # tracks last processed 15-min candle timestamp
+
         for idx in range(len(day_15)):
             row      = day_15.iloc[idx]
             ts       = row['time_stamp']
@@ -470,6 +474,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             trend_75 = prior_75.iloc[-1]['trend']
 
             if pd.isna(trend_15) or pd.isna(trend_75):
+                last_15min_ts = ts
                 continue
 
             has_next = (idx + 1) < len(day_15)
@@ -481,9 +486,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             # Append 1-min snapshots for active trade up to this 15-min bar
             # --------------------------------------------------------------
             if in_trade:
-                # Get the 1-min window for this 15-min candle
-                # i.e. from previous 15-min timestamp to current
-                prev_ts = day_15.iloc[idx - 1]['time_stamp'] if idx > 0 else ts
+                # Window runs from end of previous 15-min bar to current bar.
+                # On first candle of the day (idx==0), use market open anchor
+                # so 09:15 itself is included.
+                prev_ts = last_15min_ts if last_15min_ts is not None else day_open_anchor
                 snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots_window(
                     prev_ts, ts, nifty_1m, vix_1m,
                     nifty_75_indexed, nifty_15,
@@ -493,6 +499,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trade_log,
                     snap_sell_ltp, snap_buy_ltp
                 )
+
+            last_15min_ts = ts
 
             # --------------------------------------------------------------
             # Monitor open trade for exits
@@ -627,6 +635,24 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     f"Sell {sel_strike}{sel_otype.upper()} @ {sell_entry:.1f} | "
                     f"Buy  {hedge_strike}{sel_otype.upper()} @ {buy_entry:.1f} | "
                     f"Expiry: {selected_expiry.date()}"
+                )
+
+        # ------------------------------------------------------------------
+        # Capture 15:16–15:30 tail on high-VIX days while trade is active
+        # The 15-min loop ends at 15:15 — this fills the gap to close.
+        # ------------------------------------------------------------------
+        if in_trade:
+            day_close = pd.Timestamp(f"{day_date} 15:30:00")
+            last_anchor = last_15min_ts if last_15min_ts is not None                           else pd.Timestamp(f"{day_date} 15:15:00")
+            if last_anchor < day_close:
+                snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots_window(
+                    last_anchor, day_close,
+                    nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
+                    sell_opt_df, buy_opt_df,
+                    sell_strike, buy_strike, option_type,
+                    sell_entry, buy_entry, direction, expiry,
+                    trade_log,
+                    snap_sell_ltp, snap_buy_ltp
                 )
 
     logger.info(f"Backtest complete. Total trades: {len(all_trades)}")
