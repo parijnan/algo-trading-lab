@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Precomputed intermediate data files — large, reproducible, not version controlled
+data/nifty_15min.csv
+data/nifty_75min.csv
+data/vix_daily.csv
+
+# Trade logs — output, not source
+data/trade_logs/
+data/trade_summary.csv
+
+# Credentials — never commit these
+*credentials*
+*api_key*
+*.env
+
+# Raw historical data — stored separately, not in repo
+data/nifty/
+data/sensex/
+data/indices/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
