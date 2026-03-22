@@ -19,7 +19,7 @@ VIX_INDEX_FILE      = os.path.join(BASE_DATA_PATH, "indices", "india_vix.csv")
 NIFTY_OPTIONS_PATH  = os.path.join(BASE_DATA_PATH, "nifty", "options")
 
 # Contract list — same file used by the data downloader
-CONTRACT_LIST_FILE  = os.path.join(BASE_DATA_PATH, "..", "options_list_nf.csv")
+CONTRACT_LIST_FILE  = "/home/parijnan/scripts/Historical Data/data/options_list_nf.csv"
 
 # Precomputed intermediate files (written by precompute.py, read by backtest.py)
 PRECOMPUTED_DIR     = os.path.join(os.path.dirname(__file__), "data")
@@ -100,3 +100,8 @@ BACKTEST_END_DATE       = None      # None = use all available data
 
 # Lot size
 LOT_SIZE                = 75        # Nifty lot size (update if SEBI changes this)
+
+# ---------------------------------------------------------------------------
+# Options Pricing
+# ---------------------------------------------------------------------------
+RISK_FREE_RATE          = 5.0       # Annualised risk-free rate (%) — RBI repo rate approx
