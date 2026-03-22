@@ -321,10 +321,17 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
                     sell_ltp: float, buy_ltp: float,
                     sell_entry: float, buy_entry: float,
                     direction: str, trend_75, trend_15,
-                    expiry: pd.Timestamp) -> dict:
+                    expiry: pd.Timestamp,
+                    realised_pl_pts: float = None,
+                    realised_pl_rs:  float = None) -> dict:
     """
     Build a single 1-min snapshot row for the per-trade log.
     Captures everything needed to analyse trade behaviour post-hoc.
+
+    realised_pl_pts / realised_pl_rs are only populated on the final
+    (exit) row — they reflect slippage-adjusted P&L matching the trade
+    summary. All other rows have None for these columns.
+    unrealised_pl_pts reflects mark-to-market value without slippage.
     """
     unrealised_pl = _calc_pl(sell_entry, sell_ltp, buy_entry, buy_ltp)
 
@@ -338,23 +345,25 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
     dte = (expiry.date() - ts.date()).days
 
     return {
-        'time_stamp':       ts,
-        'spot':             round(spot, 2),
-        'vix':              round(vix, 2) if vix is not None else None,
-        'sell_strike':      sell_strike,
-        'buy_strike':       buy_strike,
-        'option_type':      option_type,
-        'sell_ltp':         round(sell_ltp, 2),
-        'buy_ltp':          round(buy_ltp,  2),
-        'sell_entry':       round(sell_entry, 2),
-        'buy_entry':        round(buy_entry,  2),
+        'time_stamp':        ts,
+        'spot':              round(spot, 2),
+        'vix':               round(vix, 2) if vix is not None else None,
+        'sell_strike':       sell_strike,
+        'buy_strike':        buy_strike,
+        'option_type':       option_type,
+        'sell_ltp':          round(sell_ltp, 2),
+        'buy_ltp':           round(buy_ltp,  2),
+        'sell_entry':        round(sell_entry, 2),
+        'buy_entry':         round(buy_entry,  2),
         'unrealised_pl_pts': round(unrealised_pl, 2),
         'unrealised_pl_rs':  round(unrealised_pl * LOT_SIZE, 2),
-        'index_sl_level':   index_sl_level,
-        'option_sl_level':  option_sl_level,
-        'trend_75':         trend_75,
-        'trend_15':         trend_15,
-        'dte':              dte,
+        'realised_pl_pts':   round(realised_pl_pts, 2) if realised_pl_pts is not None else None,
+        'realised_pl_rs':    round(realised_pl_rs,  2) if realised_pl_rs  is not None else None,
+        'index_sl_level':    index_sl_level,
+        'option_sl_level':   option_sl_level,
+        'trend_75':          trend_75,
+        'trend_15':          trend_15,
+        'dte':               dte,
     }
 
 
@@ -567,7 +576,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_strike, buy_strike, option_type,
                         sell_exit_raw, buy_exit_raw,
                         sell_entry, buy_entry,
-                        direction, trend_75_exec, trend_15_exec, expiry
+                        direction, trend_75_exec, trend_15_exec, expiry,
+                        realised_pl_pts=pl_points,
+                        realised_pl_rs=pl_rupees
                     )
                     trade_log.append(exit_snapshot)
 
