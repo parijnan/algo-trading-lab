@@ -96,27 +96,58 @@ def load_index(filepath: str, label: str) -> pd.DataFrame:
 def resample_ohlcv(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     """
     Resample a 1-min OHLCV DataFrame to the given timeframe in minutes.
-    Uses market-anchored resampling so candles always start at 09:15.
-    Returns a clean DataFrame with a regular DatetimeIndex.
+    Uses manual day-by-day anchored grouping so candles always start at 09:15
+    regardless of the interval. This avoids pandas resample drifting on
+    non-clock-aligned intervals like 75 minutes.
+
+    For a 375-minute session with 75-min candles, this guarantees exactly:
+      09:15, 10:30, 11:45, 13:00, 14:15
     """
-    df = df.set_index('time_stamp')
+    market_open_time  = pd.Timestamp(MARKET_OPEN).time()
+    market_close_time = pd.Timestamp(MARKET_CLOSE).time()
 
-    # Anchor resampling to 09:15 so the 75-min candles align to session start
-    # rather than arbitrary clock boundaries
-    offset = pd.tseries.frequencies.to_offset(f"{minutes}min")
-    resampled = df.resample(offset, offset='9h15min').agg(RESAMPLE_OHLCV)
+    candles = []
 
-    # Drop incomplete candles — any row outside market hours
-    resampled = resampled[
-        (resampled.index.time >= pd.Timestamp(MARKET_OPEN).time()) &
-        (resampled.index.time <= pd.Timestamp(MARKET_CLOSE).time())
-    ]
+    for date, day_df in df.groupby(df['time_stamp'].dt.date):
+        # Filter strictly to market hours for this day
+        day_df = day_df[
+            (day_df['time_stamp'].dt.time >= market_open_time) &
+            (day_df['time_stamp'].dt.time <= market_close_time)
+        ].copy()
 
-    # Drop rows where all OHLC are NaN (gaps, holidays)
+        if day_df.empty:
+            continue
+
+        # Build anchor timestamps for this day starting at 09:15
+        session_start = pd.Timestamp(f"{date} {MARKET_OPEN}")
+        session_end   = pd.Timestamp(f"{date} {MARKET_CLOSE}")
+
+        anchor = session_start
+        while anchor <= session_end:
+            window_end = anchor + pd.Timedelta(minutes=minutes) - pd.Timedelta(minutes=1)
+            window_end = min(window_end, session_end)
+
+            window = day_df[
+                (day_df['time_stamp'] >= anchor) &
+                (day_df['time_stamp'] <= window_end)
+            ]
+
+            if not window.empty:
+                candle = {
+                    'time_stamp': anchor,
+                    'open':       window['open'].iloc[0],
+                    'high':       window['high'].max(),
+                    'low':        window['low'].min(),
+                    'close':      window['close'].iloc[-1],
+                    'volume':     window['volume'].sum(),
+                }
+                candles.append(candle)
+
+            anchor += pd.Timedelta(minutes=minutes)
+
+    resampled = pd.DataFrame(candles)
     resampled = resampled.dropna(subset=['open', 'high', 'low', 'close'])
-    resampled = resampled.reset_index()
-    resampled = resampled.rename(columns={'time_stamp': 'time_stamp'})
-
+    resampled = resampled.reset_index(drop=True)
     return resampled
 
 
@@ -165,9 +196,10 @@ def compute_supertrend(df: pd.DataFrame, period: int, multiplier: float,
     # Human-readable signal
     df_st['trend_signal'] = df_st['trend'].map({True: 'bullish', False: 'bearish'})
 
-    # Mark None for the warmup period where Supertrend is not yet valid
+    # Mark NaN for the warmup period where Supertrend is not yet valid
     warmup_mask = df_st['Supertrend'].isna()
-    df_st.loc[warmup_mask, 'trend']        = None
+    df_st['trend']        = df_st['trend'].astype(object)
+    df_st.loc[warmup_mask, 'trend']        = pd.NA
     df_st.loc[warmup_mask, 'trend_flip']   = False
     df_st.loc[warmup_mask, 'trend_signal'] = None
 
@@ -254,8 +286,9 @@ def main():
                 f"({vix_daily['date'].min()} → {vix_daily['date'].max()})")
     logger.info(f"  Bullish 75-min candles : "
                 f"{nifty_75min['trend'].sum():,} / {nifty_75min['trend'].notna().sum():,}")
+    bearish_count = (nifty_75min['trend'].dropna() == False).sum()
     logger.info(f"  Bearish 75-min candles : "
-                f"{(~nifty_75min['trend'].fillna(True)).sum():,} / "
+                f"{bearish_count:,} / "
                 f"{nifty_75min['trend'].notna().sum():,}")
     logger.info(f"  Days with VIX > 16     : "
                 f"{(vix_daily['vix_open'] > 16).sum()} / {len(vix_daily)}")
