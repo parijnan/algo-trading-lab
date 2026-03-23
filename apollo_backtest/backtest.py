@@ -424,6 +424,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     buy_ltp        = None
     entry_time     = None
     entry_spot     = None
+    entry_vix      = None   # VIX at entry — stored for use in trade record at exit
     sell_opt_df    = None
     buy_opt_df     = None
     trade_log      = []     # 1-min snapshots for the current open trade
@@ -441,6 +442,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         if in_trade and expiry is not None and day_date > expiry.date():
             pl_points = _calc_pl(sell_entry, sell_ltp, buy_entry, buy_ltp)
             pl_rupees = pl_points * LOT_SIZE
+            expiry_exit_vix = get_1min_value(vix_1m, expiry, 'close')
             trade_record = _build_trade_record(
                 entry_time, expiry, direction, expiry,
                 sell_strike, buy_strike, option_type,
@@ -448,7 +450,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 sell_entry, buy_entry,
                 apply_slippage(sell_ltp, is_buy=True),
                 apply_slippage(buy_ltp,  is_buy=False),
-                pl_points, pl_rupees, 'expiry'
+                pl_points, pl_rupees, 'expiry',
+                entry_vix=entry_vix, exit_vix=expiry_exit_vix
             )
             trade_counter += 1
             all_trades.append(trade_record)
@@ -605,13 +608,15 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     )
                     trade_log.append(exit_snapshot)
 
+                    exit_vix = get_1min_value(vix_1m, exec_ts, 'close')
                     trade_record = _build_trade_record(
                         entry_time, exec_ts, direction, expiry,
                         sell_strike, buy_strike, option_type,
                         entry_spot, spot,
                         sell_entry, buy_entry,
                         sell_exit_net, buy_exit_net,
-                        pl_points, pl_rupees, exit_reason
+                        pl_points, pl_rupees, exit_reason,
+                        entry_vix=entry_vix, exit_vix=exit_vix
                     )
                     trade_counter += 1
                     all_trades.append(trade_record)
@@ -632,6 +637,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     snap_sell_ltp = None
                     snap_buy_ltp  = None
                     entry_exec_ts = None
+                    entry_vix     = None
 
             # --------------------------------------------------------------
             # Entry / re-entry
@@ -688,6 +694,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 expiry        = selected_expiry
                 entry_time    = exec_ts
                 entry_spot    = exec_spot
+                entry_vix     = get_1min_value(vix_1m, exec_ts, 'close')
                 sell_ltp      = sell_entry
                 buy_ltp       = buy_entry
                 trade_log     = []
@@ -826,7 +833,8 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
                          entry_spot, exit_spot,
                          sell_entry, buy_entry,
                          sell_exit, buy_exit,
-                         pl_points, pl_rupees, exit_reason) -> dict:
+                         pl_points, pl_rupees, exit_reason,
+                         entry_vix=None, exit_vix=None) -> dict:
     return {
         'entry_time':  entry_time,
         'exit_time':   exit_time,
@@ -845,6 +853,8 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
         'pl_points':   pl_points,
         'pl_rupees':   pl_rupees,
         'exit_reason': exit_reason,
+        'entry_vix':   round(entry_vix, 2) if entry_vix is not None else None,
+        'exit_vix':    round(exit_vix,  2) if exit_vix  is not None else None,
     }
 
 
