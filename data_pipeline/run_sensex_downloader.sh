@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+REPO_DIR="/home/parijnan/scripts/algo-trading-lab"
+PIPELINE_DIR="$REPO_DIR/data_pipeline"
+PYTHON="/home/parijnan/anaconda3/bin/python"
+SCRIPT="$PIPELINE_DIR/weekly_option_data_sensex.py"
+CONFIG_FILE="$PIPELINE_DIR/config/options_list_sensex.csv"
+CREDENTIALS="$PIPELINE_DIR/data/user_credentials_angel.csv"
+LOG="$PIPELINE_DIR/cron.log"
+
+# ---------------------------------------------------------------------------
+# Read Slack token from credentials CSV (header row: ...,slack_token,...)
+# ---------------------------------------------------------------------------
+SLACK_TOKEN=$(python3 -c "
+import csv
+with open('$CREDENTIALS') as f:
+    reader = csv.DictReader(f)
+    print(next(reader)['slack_token'])
+")
+SLACK_CHANNEL="#data-alerts"
+SLACK_URL="https://slack.com/api/chat.postMessage"
+
+send_slack() {
+    curl -s -X POST "$SLACK_URL" \
+        -H "Authorization: Bearer $SLACK_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"channel\": \"$SLACK_CHANNEL\", \"text\": \"$1\"}" > /dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Step 1 — Send Slack warning
+# ---------------------------------------------------------------------------
+send_slack "⚠️ *Sensex Downloader* – Run started. Do not push updates to GitHub until downloads are complete."
+echo "$(date '+%Y-%m-%d %H:%M:%S') Slack warning sent." >> "$LOG"
+
+# ---------------------------------------------------------------------------
+# Step 2 — Git pull
+# ---------------------------------------------------------------------------
+echo "$(date '+%Y-%m-%d %H:%M:%S') Pulling latest from GitHub..." >> "$LOG"
+cd "$REPO_DIR"
+git pull >> "$LOG" 2>&1
+if [ $? -ne 0 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git pull failed." >> "$LOG"
+    send_slack "🚨 *Sensex Downloader* – git pull failed. Check cron.log on VPS."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3 — Run the Python downloader
+# ---------------------------------------------------------------------------
+echo "$(date '+%Y-%m-%d %H:%M:%S') Starting Sensex downloader..." >> "$LOG"
+$PYTHON "$SCRIPT" >> "$LOG" 2>&1
+
+# ---------------------------------------------------------------------------
+# Step 4 — Push options_list_sensex.csv only if it was modified
+# ---------------------------------------------------------------------------
+cd "$REPO_DIR"
+if ! git diff --quiet "$CONFIG_FILE"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_sensex.csv modified – pushing to GitHub..." >> "$LOG"
+    git add "$CONFIG_FILE"
+    git commit -m "Update options_list_sensex.csv – $(date '+%Y-%m-%d') run" >> "$LOG" 2>&1
+    git push >> "$LOG" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git push failed." >> "$LOG"
+        send_slack "🚨 *Sensex Downloader* – git push failed after download. Manual push required."
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_sensex.csv pushed to GitHub." >> "$LOG"
+    fi
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_sensex.csv unchanged – no push needed." >> "$LOG"
+fi
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') Wrapper script complete." >> "$LOG"
