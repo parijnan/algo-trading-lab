@@ -430,6 +430,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     # Running LTPs for carry-forward across 1-min snapshot windows
     snap_sell_ltp  = None
     snap_buy_ltp   = None
+    # Execution timestamp of entry — snapshots must not start before this
+    entry_exec_ts  = None
 
     for day_date in trading_days:
 
@@ -511,7 +513,13 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 # Window runs from end of previous 15-min bar to current bar.
                 # On first candle of the day (idx==0), use market open anchor
                 # so 09:15 itself is included.
+                # IMPORTANT: never start before entry_exec_ts — this prevents
+                # look-ahead bias where minutes inside the signal candle
+                # (before execution) appear in the trade log.
                 prev_ts = last_15min_ts if last_15min_ts is not None else day_open_anchor
+                # Clamp to entry execution timestamp on the first window after entry
+                if entry_exec_ts is not None and prev_ts < entry_exec_ts - pd.Timedelta(minutes=1):
+                    prev_ts = entry_exec_ts - pd.Timedelta(minutes=1)
                 snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots_window(
                     prev_ts, ts, nifty_1m, vix_1m,
                     nifty_75_indexed, nifty_15,
@@ -623,6 +631,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     buy_opt_df    = None
                     snap_sell_ltp = None
                     snap_buy_ltp  = None
+                    entry_exec_ts = None
 
             # --------------------------------------------------------------
             # Entry / re-entry
@@ -684,6 +693,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 trade_log     = []
                 snap_sell_ltp = sell_entry
                 snap_buy_ltp  = buy_entry
+                entry_exec_ts = exec_ts   # snapshots must not start before this
 
                 logger.info(
                     f"  ENTRY {direction:8s} | {exec_ts} | "
