@@ -8,18 +8,22 @@ import os
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-# Base path to the historical data directory. Update this per machine.
-BASE_DATA_PATH = "/home/parijnan/scripts/Historical Data/data"
+# Repo root — derived from this file's location (apollo_backtest/configs.py)
+# so paths resolve correctly regardless of working directory.
+REPO_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Data pipeline data directory — all raw market data lives here
+PIPELINE_DATA   = os.path.join(REPO_ROOT, "data_pipeline", "data")
 
 # Index data
-NIFTY_INDEX_FILE    = os.path.join(BASE_DATA_PATH, "indices", "nifty.csv")
-VIX_INDEX_FILE      = os.path.join(BASE_DATA_PATH, "indices", "india_vix.csv")
+NIFTY_INDEX_FILE    = os.path.join(PIPELINE_DATA, "indices", "nifty.csv")
+VIX_INDEX_FILE      = os.path.join(PIPELINE_DATA, "indices", "india_vix.csv")
 
 # Nifty options — one folder per expiry date (YYYY-MM-DD)
-NIFTY_OPTIONS_PATH  = os.path.join(BASE_DATA_PATH, "nifty", "options")
+NIFTY_OPTIONS_PATH  = os.path.join(PIPELINE_DATA, "nifty", "options")
 
-# Contract list — same file used by the data downloader
-CONTRACT_LIST_FILE  = "/home/parijnan/scripts/Historical Data/data/options_list_nf.csv"
+# Contract list — lives in data_pipeline/config/ alongside the downloader scripts
+CONTRACT_LIST_FILE  = os.path.join(REPO_ROOT, "data_pipeline", "config", "options_list_nf.csv")
 
 # Precomputed intermediate files (written by precompute.py, read by backtest.py)
 PRECOMPUTED_DIR     = os.path.join(os.path.dirname(__file__), "data")
