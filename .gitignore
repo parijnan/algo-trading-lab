@@ -224,3 +224,9 @@ data/sensex/
 *credentials*
 *api_key*
 *.env
+
+# Data pipeline
+data_pipeline/data/
+data_pipeline/*.log
+user_credentials*.csv
+instrument_master.csv
