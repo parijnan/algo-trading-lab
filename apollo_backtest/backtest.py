@@ -563,6 +563,21 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         buy_entry,  buy_exit_net)
                     pl_rupees = pl_points * LOT_SIZE
 
+                    # Capture the 1-min window between the signal candle (ts)
+                    # and the execution candle (exec_ts) — this fills the gap
+                    # between the last snapshot written and the exit timestamp.
+                    # e.g. signal at 14:30, execution at 14:45 → fills 14:31-14:44
+                    if ts < exec_ts:
+                        snap_sell_ltp, snap_buy_ltp = _append_1min_snapshots_window(
+                            ts, exec_ts - pd.Timedelta(minutes=1),
+                            nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
+                            sell_opt_df, buy_opt_df,
+                            sell_strike, buy_strike, option_type,
+                            sell_entry, buy_entry, direction, expiry,
+                            trade_log,
+                            snap_sell_ltp, snap_buy_ltp
+                        )
+
                     # Capture the execution candle (signal ts+1) in the log
                     # so the log runs all the way to the actual exit timestamp
                     exec_spot_val = get_1min_value(nifty_1m, exec_ts, 'close') or spot
