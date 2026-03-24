@@ -55,6 +55,7 @@ INDEX_INSTRUMENTS = [
 # ---------------------------------------------------------------------------
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR     = os.path.join(BASE_DIR, "data")
+CONFIG_DIR   = os.path.join(BASE_DIR, "config")
 INDICES_DIR  = os.path.join(DATA_DIR, "indices")
 OPTIONS_DIR  = os.path.join(DATA_DIR, "sensex")
 
@@ -490,7 +491,7 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
 
 if __name__ == "__main__":
     # --- Load data files ---
-    contracts_df        = pd.read_csv(os.path.join(DATA_DIR, "config", "options_list_sensex.csv"),
+    contracts_df        = pd.read_csv(os.path.join(CONFIG_DIR, "options_list_sensex.csv"),
                                       parse_dates=["expiry_date", "start_date"])
     user_credentials_df = pd.read_csv(os.path.join(DATA_DIR, "user_credentials_angel.csv"))
 
