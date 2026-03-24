@@ -53,6 +53,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') Starting Sensex downloader..." >> "$LOG"
 $PYTHON "$SCRIPT" >> "$LOG" 2>&1
+PY_EXIT_CODE=$?
 
 # ---------------------------------------------------------------------------
 # Step 4 — Push options_list_sensex.csv only if it was modified
@@ -71,6 +72,15 @@ if ! git diff --quiet "$CONFIG_FILE"; then
     fi
 else
     echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_sensex.csv unchanged – no push needed." >> "$LOG"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5 — Final Slack notification
+# ---------------------------------------------------------------------------
+if [ $PY_EXIT_CODE -eq 0 ]; then
+    send_slack "✅ *Sensex Downloader* – Run completed successfully. Safe to push updates to GitHub."
+else
+    send_slack "🚨 *Sensex Downloader* – Run completed with errors. Check cron.log on VPS."
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Wrapper script complete." >> "$LOG"
