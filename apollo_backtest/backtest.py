@@ -544,13 +544,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 # Window runs from end of previous 15-min bar to current bar.
                 # On first candle of the day (idx==0), use market open anchor
                 # so 09:15 itself is included.
-                # IMPORTANT: never start before entry_exec_ts — this prevents
-                # look-ahead bias where minutes inside the signal candle
-                # (before execution) appear in the trade log.
                 prev_ts = last_15min_ts if last_15min_ts is not None else day_open_anchor
-                # Clamp to entry execution timestamp on the first window after entry
+                # Clamp to entry execution timestamp on the FIRST window only —
+                # prevents look-ahead bias (minutes inside signal candle appearing
+                # in trade log). Cleared immediately after use so subsequent days
+                # are not affected.
                 if entry_exec_ts is not None and prev_ts < entry_exec_ts - pd.Timedelta(minutes=1):
                     prev_ts = entry_exec_ts - pd.Timedelta(minutes=1)
+                entry_exec_ts = None   # clamp used — clear so it doesn't affect future windows
                 snap_sell_ltp, snap_buy_ltp, sl_1min_ts, sl_1min_type = \
                     _append_1min_snapshots_window(
                         prev_ts, ts, nifty_1m, vix_1m,
@@ -561,6 +562,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         trade_log,
                         snap_sell_ltp, snap_buy_ltp
                     )
+
 
             last_15min_ts = ts
 
@@ -603,6 +605,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 # 1-min SL detected during the preceding snapshot window scan
                 # This fires immediately without waiting for 15-min candle close
                 if sl_1min_ts is not None:
+
                     exit_reason = sl_1min_type
                     # Update LTPs to the values at the SL hit timestamp
                     sell_ltp = snap_sell_ltp
@@ -626,6 +629,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                             sell_ltp, sell_entry, buy_ltp, buy_entry)
                         if sl:
                             if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
+                                # SL fired at 09:15 close — recheck at 09:16 close.
+                                # If still valid, exit at 09:16 OPEN (not next 15-min open).
                                 recheck_ts       = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
                                 recheck_spot     = get_1min_value(nifty_1m, recheck_ts, 'close')
                                 recheck_sell_ltp = get_option_price(
@@ -639,6 +644,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                         recheck_buy_ltp,  buy_entry)
                                     if sl_recheck:
                                         exit_reason = sl_recheck
+                                        exec_ts  = recheck_ts  # exit at 09:16 open
+                                        exec_col = 'open'
+                                        sell_ltp = recheck_sell_ltp
+                                        buy_ltp  = recheck_buy_ltp
                             else:
                                 exit_reason = sl
 
@@ -647,6 +656,34 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     exit_reason = 'expiry'
 
                 if exit_reason:
+                    # Step 1: Fill the gap between signal candle and execution candle.
+                    # This MUST happen before pricing so that if an SL fires in the
+                    # gap, exec_ts is overridden to the correct 1-min candle BEFORE
+                    # we fetch any exit prices.
+                    if ts < exec_ts:
+                        _gf_sell_ltp, _gf_buy_ltp, _gf_sl_ts, _gf_sl_type = \
+                            _append_1min_snapshots_window(
+                                ts, exec_ts - pd.Timedelta(minutes=1),
+                                nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
+                                sell_opt_df, buy_opt_df,
+                                sell_strike, buy_strike, option_type,
+                                sell_entry, buy_entry, direction, expiry,
+                                trade_log,
+                                snap_sell_ltp, snap_buy_ltp
+                            )
+                        snap_sell_ltp = _gf_sell_ltp
+                        snap_buy_ltp  = _gf_buy_ltp
+                        # If SL fired during gap-fill, override exec_ts and exit_reason
+                        # before any pricing happens
+                        if _gf_sl_ts is not None:
+                            exec_ts     = _gf_sl_ts + pd.Timedelta(minutes=1)
+                            exec_col    = 'open'
+                            exit_reason = _gf_sl_type
+                            sell_ltp    = snap_sell_ltp
+                            buy_ltp     = snap_buy_ltp
+
+                    # Step 2: Fetch exit prices using final exec_ts (may have been
+                    # overridden above if SL fired during gap-fill)
                     sell_exit_raw = get_option_price(
                         sell_opt_df, exec_ts, exec_col) or sell_ltp
                     buy_exit_raw  = get_option_price(
@@ -658,7 +695,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_entry, sell_exit_net,
                         buy_entry,  buy_exit_net)
 
-                    # Exit additional lots simultaneously if still active
+                    # Step 3: Exit additional lots simultaneously if still active
                     if has_additional:
                         add_sell_exit_raw = get_option_price(
                             sell_opt_df, exec_ts, exec_col) or add_sell_ltp
@@ -673,27 +710,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                             add_buy_entry,  add_buy_exit_net)
                         has_additional    = False
 
-                    # Normalised P&L per unit of capital:
-                    # base_pl + additional_pl * 0.5 (additional_lots / base_lots)
+                    # Step 4: Normalised P&L per unit of capital
                     pl_points = round(
                         base_pl + add_booked_pl * ADDITIONAL_LOT_MULTIPLIER, 2)
                     pl_rupees = pl_points * LOT_SIZE
-
-                    # Capture the 1-min window between the signal candle (ts)
-                    # and the execution candle (exec_ts) — this fills the gap
-                    # between the last snapshot written and the exit timestamp.
-                    # e.g. signal at 14:30, execution at 14:45 → fills 14:31-14:44
-                    if ts < exec_ts:
-                        snap_sell_ltp, snap_buy_ltp, _, _ = \
-                            _append_1min_snapshots_window(
-                                ts, exec_ts - pd.Timedelta(minutes=1),
-                                nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
-                                sell_opt_df, buy_opt_df,
-                                sell_strike, buy_strike, option_type,
-                                sell_entry, buy_entry, direction, expiry,
-                                trade_log,
-                                snap_sell_ltp, snap_buy_ltp
-                            )
 
                     # Capture the execution candle (signal ts+1) in the log
                     # so the log runs all the way to the actual exit timestamp
@@ -919,9 +939,10 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         )
         trade_log.append(snapshot)
 
-        # Check SL on every 1-min candle — stop at first hit
-        # Apply 9:15 guard: no SL before NO_EXIT_BEFORE time
-        if sl_hit_ts is None and ts.time() >= pd.Timestamp(NO_EXIT_BEFORE).time():
+        # Check SL on every 1-min candle — stop at first hit.
+        # No guard here: SL at candle X close → exit at X+1 open, always correct.
+        # The NO_EXIT_BEFORE guard only applies at the 15-min fallback level.
+        if sl_hit_ts is None:
             sl = check_stop_losses(
                 spot, sell_strike, direction,
                 running_sell_ltp, sell_entry,
