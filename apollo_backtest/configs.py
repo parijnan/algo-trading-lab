@@ -47,7 +47,7 @@ VIX_CAUTION_HIGH        = 16.0      # Above this: Apollo strategy territory
 # ---------------------------------------------------------------------------
 # Higher timeframe — defines trend regime
 ST_75MIN_PERIOD         = 10        # ATR period
-ST_75MIN_MULTIPLIER     = 3.0       # Band multiplier
+ST_75MIN_MULTIPLIER     = 4.5       # Band multiplier — higher = fewer but cleaner regime flips
 
 # Lower timeframe — entry/exit trigger
 ST_15MIN_PERIOD         = 10        # ATR period
@@ -70,7 +70,7 @@ MIN_DTE                 = 2         # If DTE < this, roll to next expiry
 
 # ---------------------------------------------------------------------------
 # Stop Loss Parameters
-# All three are checked — first to trigger exits the trade
+# All conditions checked on every 1-min candle — first to trigger exits the trade
 # ---------------------------------------------------------------------------
 # 1. Index-based stop: exit when spot is within INDEX_SL_OFFSET points of
 #    the sell strike (i.e. approaching ATM, still OTM). Once delta crosses
@@ -79,11 +79,24 @@ MIN_DTE                 = 2         # If DTE < this, roll to next expiry
 #    For bullish (sold PE): SL when spot <= sell_strike + INDEX_SL_OFFSET
 INDEX_SL_OFFSET         = 50        # points before sell strike reaches ATM
 
-# No exit at 09:15 — defer to 09:16 and re-check to avoid wild price discovery
+# No exit at 09:15 candle — defer to 09:16 and re-check (15-min fallback only)
 NO_EXIT_BEFORE          = '09:16'
 
-# 2. Option premium multiplier stop
-OPTION_SL_MULTIPLIER    = 2.0       # Exit if sold option LTP > entry * this multiplier
+# 2. Dynamic option premium SL
+#    Base SL = OPTION_SL_BASE_PCT * net_credit above sell_entry
+#    Tightens by OPTION_SL_DAY_REDUCTION per day in trade
+#    Trails up to a floor once OPTION_SL_TRAIL_TRIGGER * net_credit profit is reached
+#    At OPTION_SL_TRAIL_LOCK2 * net_credit profit, floor moves to OPTION_SL_TRAIL_FLOOR2
+OPTION_SL_BASE_PCT      = 0.50      # Base SL = 50% of net credit above sell_entry
+OPTION_SL_DAY_REDUCTION = 0.10      # Tighten by 10% of net credit per day in trade
+                                     # Day 0: 50%, Day 1: 40%, Day 2: 30%, Day 3: 20%...
+OPTION_SL_TRAIL_TRIGGER = 0.50      # Start trailing once unrealised P&L > 50% of net credit
+OPTION_SL_TRAIL_FLOOR1  = 0.0       # First trail floor: breakeven (P&L >= 0)
+OPTION_SL_TRAIL_LOCK2   = 0.75      # Lock in profit once unrealised P&L > 75% of net credit
+OPTION_SL_TRAIL_FLOOR2  = 0.25      # Second trail floor: lock in 25% of net credit
+
+# Legacy multiplier — kept for reference only, replaced by dynamic SL above
+OPTION_SL_MULTIPLIER    = 2.0       # Not used in backtest — superseded by dynamic SL
 
 # 3. Spread loss cap (for credit spread: % of max possible loss on the spread)
 #    For debit spread: % of premium paid

@@ -30,6 +30,9 @@ from configs import (
     VIX_THRESHOLD,
     TARGET_DELTA, HEDGE_POINTS, STRIKE_STEP, MIN_DTE,
     INDEX_SL_OFFSET, OPTION_SL_MULTIPLIER, SPREAD_LOSS_CAP,
+    OPTION_SL_BASE_PCT, OPTION_SL_DAY_REDUCTION,
+    OPTION_SL_TRAIL_TRIGGER, OPTION_SL_TRAIL_FLOOR1,
+    OPTION_SL_TRAIL_LOCK2, OPTION_SL_TRAIL_FLOOR2,
     NO_EXIT_BEFORE, ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     SPREAD_TYPE,
@@ -287,12 +290,54 @@ def select_strike(spot: float, expiry: pd.Timestamp,
 
 
 # ---------------------------------------------------------------------------
+# Stop loss computation
+# ---------------------------------------------------------------------------
+
+def compute_option_sl(sell_entry: float, buy_entry: float,
+                      buy_ltp: float, days_in_trade: int,
+                      peak_unrealised_pl: float) -> float:
+    """
+    Compute the dynamic option SL threshold for the sold option.
+    Returns the maximum sell_ltp at which the position should be held.
+    Exit if sell_ltp > returned value.
+
+    Three mechanisms — tightest wins:
+    1. Base SL tightened by days in trade:
+       sell_entry + net_credit * (BASE_PCT - DAY_REDUCTION * days)
+       Day 0: +50%, Day 1: +40%, Day 2: +30% ...
+    2. Trail floor 1 (breakeven): once peak P&L > TRAIL_TRIGGER * net_credit
+    3. Trail floor 2 (lock 25%): once peak P&L > TRAIL_LOCK2 * net_credit
+    Floors only move up — never loosen once triggered.
+    """
+    net_credit = sell_entry - buy_entry
+
+    # 1. Base SL tightening
+    pct    = max(OPTION_SL_BASE_PCT - OPTION_SL_DAY_REDUCTION * days_in_trade, 0.05)
+    base_sl = sell_entry + net_credit * pct
+
+    # 2. Trail floor 1: breakeven
+    # spread P&L = (sell_entry - sell_ltp) + (buy_ltp - buy_entry) >= FLOOR1 * net_credit
+    # sell_ltp <= sell_entry + (buy_ltp - buy_entry) - FLOOR1 * net_credit
+    trail1_sl = None
+    if peak_unrealised_pl > OPTION_SL_TRAIL_TRIGGER * net_credit:
+        trail1_sl = sell_entry + (buy_ltp - buy_entry) - OPTION_SL_TRAIL_FLOOR1 * net_credit
+
+    # 3. Trail floor 2: lock in 25% of net credit
+    trail2_sl = None
+    if peak_unrealised_pl > OPTION_SL_TRAIL_LOCK2 * net_credit:
+        trail2_sl = sell_entry + (buy_ltp - buy_entry) - OPTION_SL_TRAIL_FLOOR2 * net_credit
+
+    candidates = [c for c in [base_sl, trail1_sl, trail2_sl] if c is not None]
+    return min(candidates)
+
+# ---------------------------------------------------------------------------
 # Stop loss checks
 # ---------------------------------------------------------------------------
 
 def check_stop_losses(spot: float, sell_strike: int, direction: str,
                       sell_ltp: float, sell_entry: float,
-                      buy_ltp: float, buy_entry: float) -> str:
+                      buy_ltp: float, buy_entry: float,
+                      option_sl_level: float = None) -> str:
     """
     Check all three stop loss conditions.
     Returns triggered SL type string, or None.
@@ -305,7 +350,10 @@ def check_stop_losses(spot: float, sell_strike: int, direction: str,
     if direction == 'bullish' and spot <= sell_strike + INDEX_SL_OFFSET:
         return 'index_sl'
 
-    if sell_ltp >= sell_entry * OPTION_SL_MULTIPLIER:
+    # Option SL: use dynamic level if provided, else fall back to multiplier
+    effective_option_sl = option_sl_level if option_sl_level is not None \
+                          else sell_entry * OPTION_SL_MULTIPLIER
+    if sell_ltp >= effective_option_sl:
         return 'option_sl'
 
     if SPREAD_TYPE == 'credit':
@@ -457,6 +505,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     add_sell_ltp   = None
     add_buy_ltp    = None
     add_booked_pl  = 0.0
+    # Dynamic SL tracking
+    peak_unrealised_pl = 0.0
+    trade_entry_date   = None
 
     for day_date in trading_days:
 
@@ -489,7 +540,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         # (trade may have been entered on a high-VIX day and is still open)
         # ------------------------------------------------------------------
         if in_trade and day_date not in high_vix_dates:
-            snap_sell_ltp, snap_buy_ltp, sl_1min_ts, sl_1min_type = \
+            snap_sell_ltp, snap_buy_ltp, sl_1min_ts, sl_1min_type, peak_unrealised_pl = \
                 _append_1min_snapshots(
                     day_date, nifty_1m, vix_1m,
                     nifty_75_indexed, nifty_15,
@@ -497,7 +548,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     sell_strike, buy_strike, option_type,
                     sell_entry, buy_entry, direction, expiry,
                     trade_log,
-                    snap_sell_ltp, snap_buy_ltp
+                    snap_sell_ltp, snap_buy_ltp,
+                    peak_unrealised_pl, trade_entry_date
                 )
             # If a 1-min SL was hit on this overnight day, carry sl_1min_ts
             # forward — it will be processed on the next trading day loop
@@ -552,7 +604,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 if entry_exec_ts is not None and prev_ts < entry_exec_ts - pd.Timedelta(minutes=1):
                     prev_ts = entry_exec_ts - pd.Timedelta(minutes=1)
                 entry_exec_ts = None   # clamp used — clear so it doesn't affect future windows
-                snap_sell_ltp, snap_buy_ltp, sl_1min_ts, sl_1min_type = \
+                snap_sell_ltp, snap_buy_ltp, sl_1min_ts, sl_1min_type, peak_unrealised_pl = \
                     _append_1min_snapshots_window(
                         prev_ts, ts, nifty_1m, vix_1m,
                         nifty_75_indexed, nifty_15,
@@ -560,7 +612,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_strike, buy_strike, option_type,
                         sell_entry, buy_entry, direction, expiry,
                         trade_log,
-                        snap_sell_ltp, snap_buy_ltp
+                        snap_sell_ltp, snap_buy_ltp,
+                        peak_unrealised_pl, trade_entry_date
                     )
 
 
@@ -624,9 +677,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
                     # 15-min SL check as fallback (with 9:15 guard)
                     if exit_reason is None:
+                        days_in_trade_15 = (ts.date() - trade_entry_date).days if trade_entry_date else 0
+                        option_sl_lvl_15 = compute_option_sl(
+                            sell_entry, buy_entry, buy_ltp,
+                            days_in_trade_15, peak_unrealised_pl)
                         sl = check_stop_losses(
                             spot, sell_strike, direction,
-                            sell_ltp, sell_entry, buy_ltp, buy_entry)
+                            sell_ltp, sell_entry, buy_ltp, buy_entry,
+                            option_sl_level=option_sl_lvl_15)
                         if sl:
                             if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
                                 # SL fired at 09:15 close — recheck at 09:16 close.
@@ -661,7 +719,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     # gap, exec_ts is overridden to the correct 1-min candle BEFORE
                     # we fetch any exit prices.
                     if ts < exec_ts:
-                        _gf_sell_ltp, _gf_buy_ltp, _gf_sl_ts, _gf_sl_type = \
+                        _gf_sell_ltp, _gf_buy_ltp, _gf_sl_ts, _gf_sl_type, _gf_peak = \
                             _append_1min_snapshots_window(
                                 ts, exec_ts - pd.Timedelta(minutes=1),
                                 nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
@@ -669,8 +727,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                 sell_strike, buy_strike, option_type,
                                 sell_entry, buy_entry, direction, expiry,
                                 trade_log,
-                                snap_sell_ltp, snap_buy_ltp
+                                snap_sell_ltp, snap_buy_ltp,
+                                peak_unrealised_pl, trade_entry_date
                             )
+                        peak_unrealised_pl = max(peak_unrealised_pl, _gf_peak)
                         snap_sell_ltp = _gf_sell_ltp
                         snap_buy_ltp  = _gf_buy_ltp
                         # If SL fired during gap-fill, override exec_ts and exit_reason
@@ -765,14 +825,16 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     snap_buy_ltp   = None
                     entry_exec_ts  = None
                     entry_vix      = None
-                    has_additional = False
-                    add_sell_entry = None
-                    add_buy_entry  = None
-                    add_sell_ltp   = None
-                    add_buy_ltp    = None
-                    add_booked_pl  = 0.0
-                    sl_1min_ts     = None
-                    sl_1min_type   = None
+                    has_additional     = False
+                    add_sell_entry     = None
+                    add_buy_entry      = None
+                    add_sell_ltp       = None
+                    add_buy_ltp        = None
+                    add_booked_pl      = 0.0
+                    peak_unrealised_pl = 0.0
+                    trade_entry_date   = None
+                    sl_1min_ts         = None
+                    sl_1min_type       = None
 
             # --------------------------------------------------------------
             # Entry / re-entry
@@ -839,12 +901,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 snap_sell_ltp  = sell_entry
                 snap_buy_ltp   = buy_entry
                 entry_exec_ts  = exec_ts
-                has_additional = True
-                add_sell_entry = sell_entry
-                add_buy_entry  = buy_entry
-                add_sell_ltp   = sell_entry
-                add_buy_ltp    = buy_entry
-                add_booked_pl  = 0.0
+                has_additional     = True
+                add_sell_entry     = sell_entry
+                add_buy_entry      = buy_entry
+                add_sell_ltp       = sell_entry
+                add_buy_ltp        = buy_entry
+                add_booked_pl      = 0.0
+                peak_unrealised_pl = 0.0
+                trade_entry_date   = exec_ts.date()
 
                 logger.info(
                     f"  ENTRY {direction:8s} | {exec_ts} | "
@@ -862,7 +926,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             day_close = pd.Timestamp(f"{day_date} 15:30:00")
             last_anchor = last_15min_ts if last_15min_ts is not None                           else pd.Timestamp(f"{day_date} 15:15:00")
             if last_anchor < day_close:
-                snap_sell_ltp, snap_buy_ltp, _, _ = \
+                snap_sell_ltp, snap_buy_ltp, _, _, _peak_tail = \
                     _append_1min_snapshots_window(
                         last_anchor, day_close,
                         nifty_1m, vix_1m, nifty_75_indexed, nifty_15,
@@ -870,8 +934,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_strike, buy_strike, option_type,
                         sell_entry, buy_entry, direction, expiry,
                         trade_log,
-                        snap_sell_ltp, snap_buy_ltp
+                        snap_sell_ltp, snap_buy_ltp,
+                        peak_unrealised_pl, trade_entry_date
                     )
+                peak_unrealised_pl = max(peak_unrealised_pl, _peak_tail)
 
     logger.info(f"Backtest complete. Total trades: {len(all_trades)}")
     return all_trades
@@ -888,26 +954,19 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                    sell_entry, buy_entry, direction, expiry,
                                    trade_log: list,
                                    last_sell_ltp: float = None,
-                                   last_buy_ltp:  float = None):
+                                   last_buy_ltp:  float = None,
+                                   peak_unrealised_pl: float = 0.0,
+                                   trade_entry_date = None):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
-    Also checks index and option SL conditions on every 1-min candle.
-
-    SL monitoring on 1-min data: index SL and option SL can trigger at any
-    minute, not just on 15-min candle closes. The first SL hit is recorded
-    and returned so the caller can execute the exit immediately.
-
-    Trend flip exits are NOT checked here — they require a 15-min candle
-    close and are handled by the 15-min loop.
-
-    Carries forward last known LTP when option data is missing.
-    Returns (last_sell_ltp, last_buy_ltp, sl_ts, sl_type) where sl_ts and
-    sl_type are the timestamp and type of the first SL hit (None if no hit).
+    Checks index and dynamic option SL on every 1-min candle.
+    Returns (last_sell_ltp, last_buy_ltp, sl_ts, sl_type, peak_unrealised_pl).
     """
-    running_sell_ltp = last_sell_ltp if last_sell_ltp is not None else sell_entry
-    running_buy_ltp  = last_buy_ltp  if last_buy_ltp  is not None else buy_entry
-    sl_hit_ts        = None
-    sl_hit_type      = None
+    running_sell_ltp   = last_sell_ltp if last_sell_ltp is not None else sell_entry
+    running_buy_ltp    = last_buy_ltp  if last_buy_ltp  is not None else buy_entry
+    sl_hit_ts          = None
+    sl_hit_type        = None
+    running_peak_pl    = peak_unrealised_pl
 
     window = nifty_1m[
         (nifty_1m.index > from_ts) & (nifty_1m.index <= to_ts)
@@ -939,6 +998,17 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         )
         trade_log.append(snapshot)
 
+        # Update unrealised P&L and peak
+        unrealised = (sell_entry - running_sell_ltp) + (running_buy_ltp - buy_entry)
+        if unrealised > running_peak_pl:
+            running_peak_pl = unrealised
+
+        # Compute dynamic option SL level for this candle
+        days_in_trade = (ts.date() - trade_entry_date).days if trade_entry_date else 0
+        option_sl_lvl = compute_option_sl(
+            sell_entry, buy_entry, running_buy_ltp,
+            days_in_trade, running_peak_pl)
+
         # Check SL on every 1-min candle — stop at first hit.
         # No guard here: SL at candle X close → exit at X+1 open, always correct.
         # The NO_EXIT_BEFORE guard only applies at the 15-min fallback level.
@@ -946,13 +1016,14 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl = check_stop_losses(
                 spot, sell_strike, direction,
                 running_sell_ltp, sell_entry,
-                running_buy_ltp,  buy_entry)
+                running_buy_ltp,  buy_entry,
+                option_sl_level=option_sl_lvl)
             if sl:
                 sl_hit_ts   = ts
                 sl_hit_type = sl
                 break   # stop scanning — exit will be handled by caller
 
-    return running_sell_ltp, running_buy_ltp, sl_hit_ts, sl_hit_type
+    return running_sell_ltp, running_buy_ltp, sl_hit_ts, sl_hit_type, running_peak_pl
 
 
 def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
@@ -962,11 +1033,12 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
                             sell_entry, buy_entry, direction, expiry,
                             trade_log: list,
                             last_sell_ltp: float = None,
-                            last_buy_ltp:  float = None):
+                            last_buy_ltp:  float = None,
+                            peak_unrealised_pl: float = 0.0,
+                            trade_entry_date = None):
     """
-    Append all 1-min snapshots for a full day (for overnight-held trades
-    on non-high-VIX days).
-    Returns (last_sell_ltp, last_buy_ltp, sl_hit_ts, sl_hit_type).
+    Append all 1-min snapshots for a full day (for overnight-held trades on non-high-VIX days).
+    Returns (last_sell_ltp, last_buy_ltp, sl_hit_ts, sl_hit_type, peak_unrealised_pl).
     """
     day_start = pd.Timestamp(f"{day_date} 09:15:00")
     day_end   = pd.Timestamp(f"{day_date} 15:30:00")
@@ -977,7 +1049,8 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
         sell_strike, buy_strike, option_type,
         sell_entry, buy_entry, direction, expiry,
         trade_log,
-        last_sell_ltp, last_buy_ltp
+        last_sell_ltp, last_buy_ltp,
+        peak_unrealised_pl, trade_entry_date
     )
 
 
