@@ -40,6 +40,14 @@ A directional trend-following credit spread strategy deployed when India VIX > 1
 | Notifications | Slack |
 | Language | Python |
 
+## VIX Regime
+
+| VIX Level | Strategy |
+|---|---|
+| < 14 | Artemis — full confidence |
+| 14 – 16 | Artemis — reduced size, tighter SLs |
+| > 16 | Apollo |
+
 ## Data Pipeline
 Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maintained by an automated pipeline. See data_pipeline/ for scripts and config.
 
@@ -48,39 +56,43 @@ Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maint
 | Sensex options + all indices | Angel Broking — VPS cron via `run_sensex_downloader.sh` | Daily at 15:45 | Mid-2024 onwards |
 | Nifty options | ICICI Breeze — laptop cron via `run_nifty_downloader.sh` | Tuesdays at 23:30 | May 2019 onwards |
 
-Pipeline design
+### Pipeline design
+- 1-minute OHLCV data, saved as CSV, organised by expiry date
+- Sensex and Nifty options: one file per contract (`{strike}{ce|pe}.csv`), one folder per expiry (`YYYY-MM-DD/`)
+- Index files: single rolling CSV per index (`sensex.csv`, `nifty.csv`, `india_vix.csv`)
+- Incremental saves — each file is written after every 2-day chunk, no data loss on interruption
+- Resume on restart — picks up from the last saved timestamp in each file
+- Sliding-window rate limiter enforcing broker API limits (AngelOne: 2/sec, 180/min, 5000/hr; Breeze: 100/min, 5000/day)
+- Slack notifications on completion (`#data-alerts`) and fatal errors (`#error-alerts`)
+- `download_status` flag in config CSVs tracks which expiries are fully downloaded
 
-1-minute OHLCV data, saved as CSV, organised by expiry date
-Sensex and Nifty options: one file per contract ({strike}{ce|pe}.csv), one folder per expiry (YYYY-MM-DD/)
-Index files: single rolling CSV per index (sensex.csv, nifty.csv, india_vix.csv)
-Incremental saves — each file is written after every 2-day chunk, no data loss on interruption
-Resume on restart — picks up from the last saved timestamp in each file
-Sliding-window rate limiter enforcing broker API limits (AngelOne: 2/sec, 180/min, 5000/hr; Breeze: 100/min, 5000/day)
-Slack notifications on completion (#data-alerts) and fatal errors (#error-alerts)
-download_status flag in config CSVs tracks which expiries are fully downloaded
+### Timestamp formats
+| File type | Format |
+|-----------|--------|
+| Index files | `YYYY-MM-DD HH:MM:SS+05:30` |
+| Sensex options files | `YYYY-MM-DDTHH:MM:SS+05:30` |
+| Nifty options files | As returned by Breeze API |
 
-Timestamp formats
-File typeFormatIndex filesYYYY-MM-DD HH:MM:SS+05:30Sensex options filesYYYY-MM-DDTHH:MM:SS+05:30Nifty options filesAs returned by Breeze API
-AngelOne API
+### AngelOne API
+- `getCandleData()` — max 1000 records per call; 2 trading days per chunk (375 min × 2 = 750 records)
+- Exchange codes: `BFO` (Sensex options), `BSE` (Sensex index), `NSE` (Nifty / India VIX)
+- Options identified by token from `instrument_master.csv` (auto-refreshed daily)
+- Strike prices stored as strike × 100 in instrument master (e.g. `8700000` = 87000)
+- Expiry dates stored as `DDMMMYYYY` in instrument master (e.g. `24SEP2026`)
+- Broker returns random dates when no data exists — window guard discards out-of-range rows
+- Data retained on broker servers for ~1-2 weeks post-expiry — daily cron ensures same-day capture
 
-getCandleData() — max 1000 records per call; 2 trading days per chunk (375 min × 2 = 750 records)
-Exchange codes: BFO (Sensex options), BSE (Sensex index), NSE (Nifty / India VIX)
-Options identified by token from instrument_master.csv (auto-refreshed daily)
-Strike prices stored as strike × 100 in instrument master (e.g. 8700000 = 87000)
-Expiry dates stored as DDMMMYYYY in instrument master (e.g. 24SEP2026)
-Broker returns random dates when no data exists — window guard discards out-of-range rows
-Data retained on broker servers for ~1-2 weeks post-expiry — daily cron ensures same-day capture
+### ICICI Breeze API
+- `get_historical_data()` — no per-call record limit; full date range in a single call
+- Contracts identified by strike price, right (call/put), and expiry date — no token lookup
+- Data retained for a rolling 3-year window
+- Session authentication requires Selenium (headless Chrome) — runs on laptop only
 
-ICICI Breeze API
+### Data storage
+Data files are not tracked by git. On each machine, a `data/` directory sits alongside the pipeline scripts:
 
-get_historical_data() — no per-call record limit; full date range in a single call
-Contracts identified by strike price, right (call/put), and expiry date — no token lookup
-Data retained for a rolling 3-year window
-Session authentication requires Selenium (headless Chrome) — runs on laptop only
-
-Data storage
-Data files are not tracked by git. On each machine, a data/ directory sits alongside the pipeline scripts:
-VPS (/home/parijnan/scripts/algo-trading-lab/data_pipeline/data/):
+**VPS** (`/home/parijnan/scripts/algo-trading-lab/data_pipeline/data/`):
+```
 data/
 ├── user_credentials_angel.csv    # not in git
 ├── instrument_master.csv         # not in git — auto-refreshed daily
@@ -92,7 +104,10 @@ data/
     └── YYYY-MM-DD/
         ├── 78000ce.csv
         └── 78000pe.csv
-Laptop (/home/parijnan/scripts/algo-trading-lab/data_pipeline/data/):
+```
+
+**Laptop** (`/home/parijnan/scripts/algo-trading-lab/data_pipeline/data/`):
+```
 data/
 ├── user_credentials_icici.csv    # not in git
 ├── indices/                      # synced from VPS via sync_data.sh
@@ -102,14 +117,9 @@ data/
         └── YYYY-MM-DD/
             ├── 23000ce.csv
             └── 23000pe.csv
+```
 
-## VIX Regime
-
-| VIX Level | Strategy |
-|---|---|
-| < 14 | Artemis — full confidence |
-| 14 – 16 | Artemis — reduced size, tighter SLs |
-| > 16 | Apollo |
+---
 
 ## Repository Structure
 
