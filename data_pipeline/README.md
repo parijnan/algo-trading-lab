@@ -49,5 +49,5 @@ data_pipeline/
 
 **Laptop:**
 ```
-30 23 * * 2 /home/parijnan/anaconda3/bin/python "/home/parijnan/scripts/algo-trading-lab/data_pipeline/weekly_option_data_nifty.py" >> "/home/parijnan/scripts/algo-trading-lab/data_pipeline/cron.log" 2>&1
+30 23 * * 3 /home/parijnan/anaconda3/bin/python "/home/parijnan/scripts/algo-trading-lab/data_pipeline/weekly_option_data_nifty.py" >> "/home/parijnan/scripts/algo-trading-lab/data_pipeline/cron.log" 2>&1
 ```
