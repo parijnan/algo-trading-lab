@@ -72,8 +72,15 @@ MIN_DTE                 = 2         # If DTE < this, roll to next expiry
 # Stop Loss Parameters
 # All three are checked — first to trigger exits the trade
 # ---------------------------------------------------------------------------
-# 1. Index-based hard stop: points beyond the sold strike
-INDEX_SL_OFFSET         = 100       # points — tighter than iron condor given directional bias
+# 1. Index-based stop: exit when spot is within INDEX_SL_OFFSET points of
+#    the sell strike (i.e. approaching ATM, still OTM). Once delta crosses
+#    ~0.50 gamma becomes brutal — we exit before that.
+#    For bearish (sold CE): SL when spot >= sell_strike - INDEX_SL_OFFSET
+#    For bullish (sold PE): SL when spot <= sell_strike + INDEX_SL_OFFSET
+INDEX_SL_OFFSET         = 50        # points before sell strike reaches ATM
+
+# No exit at 09:15 — defer to 09:16 and re-check to avoid wild price discovery
+NO_EXIT_BEFORE          = '09:16'
 
 # 2. Option premium multiplier stop
 OPTION_SL_MULTIPLIER    = 2.0       # Exit if sold option LTP > entry * this multiplier
@@ -81,6 +88,22 @@ OPTION_SL_MULTIPLIER    = 2.0       # Exit if sold option LTP > entry * this mul
 # 3. Spread loss cap (for credit spread: % of max possible loss on the spread)
 #    For debit spread: % of premium paid
 SPREAD_LOSS_CAP         = 0.75      # Exit if spread has lost 75% of max loss
+
+# ---------------------------------------------------------------------------
+# Additional Lots & ELM (Extra Loss Margin)
+# ---------------------------------------------------------------------------
+# For every 2 base lots, 1 additional lot is traded (same strikes, same spread).
+# This utilises idle margin and is normalised to per-₹1,04,000 unit for reporting.
+# additional_lots = base_lots // 2  →  multiplier = 0.5 always
+ADDITIONAL_LOT_MULTIPLIER = 0.5
+
+# Capital per reporting unit — used for lot sizing context
+LOT_CAPITAL             = 104000    # Rs per unit of base position
+
+# ELM: exit additional lots at 15:15 the day before expiry (Monday for Nifty Tuesday expiry)
+# elm_time = expiry - 87300 seconds (24h 15min)
+# Holiday adjustment: if the day before expiry is a holiday, move elm_time back one day
+ELM_SECONDS_BEFORE_EXPIRY = 87300  # 24h 15min in seconds
 
 # ---------------------------------------------------------------------------
 # Execution Assumptions

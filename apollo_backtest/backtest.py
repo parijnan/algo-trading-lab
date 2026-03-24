@@ -30,6 +30,7 @@ from configs import (
     VIX_THRESHOLD,
     TARGET_DELTA, HEDGE_POINTS, STRIKE_STEP, MIN_DTE,
     INDEX_SL_OFFSET, OPTION_SL_MULTIPLIER, SPREAD_LOSS_CAP,
+    NO_EXIT_BEFORE, ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     SPREAD_TYPE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -104,20 +105,31 @@ def load_1min_data():
     return nifty_1m, vix_1m
 
 
-def load_contracts():
+def load_contracts(holidays_df: pd.DataFrame = None):
     """
     Load Nifty weekly expiry contract list.
-    Uses 'end_date' as the accurate expiry timestamp (15:30 on expiry day)
-    rather than 'expiry_date' which has an incorrect 07:00 time from the
-    ICICI Direct download format.
-    'expiry_date' is still used for date-based DTE calculations and folder
-    naming since it carries the correct calendar date.
+    Uses 'end_date' as the accurate expiry timestamp (15:30 on expiry day).
+    Also computes elm_time for each expiry:
+    elm_time = end_date - ELM_SECONDS_BEFORE_EXPIRY (Monday 15:15 for Tuesday expiry)
+    Adjusted back if the preceding day is a market holiday.
     """
     df = pd.read_csv(CONTRACT_LIST_FILE)
     df['expiry_date'] = pd.to_datetime(
         df['expiry_date'], utc=False).dt.tz_localize(None)
     df['end_date'] = pd.to_datetime(
         df['end_date'], utc=False).dt.tz_localize(None)
+    elm_times = []
+    for _, row in df.iterrows():
+        elm = row['end_date'] - pd.Timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
+        if holidays_df is not None:
+            day_before = (row['end_date'] - pd.Timedelta(days=1)).date()
+            if day_before in holidays_df['date'].values:
+                elm -= pd.Timedelta(days=1)
+                two_before = (row['end_date'] - pd.Timedelta(days=2)).date()
+                if two_before in holidays_df['date'].values:
+                    elm -= pd.Timedelta(days=1)
+        elm_times.append(elm)
+    df['elm_time'] = elm_times
     df = df.sort_values('expiry_date').reset_index(drop=True)
     return df
 
@@ -285,9 +297,12 @@ def check_stop_losses(spot: float, sell_strike: int, direction: str,
     Check all three stop loss conditions.
     Returns triggered SL type string, or None.
     """
-    if direction == 'bearish' and spot >= sell_strike + INDEX_SL_OFFSET:
+    # Index SL: fires when spot approaches sell strike from OTM side
+    # Bearish (sold CE): SL when spot >= sell_strike - INDEX_SL_OFFSET
+    # Bullish (sold PE): SL when spot <= sell_strike + INDEX_SL_OFFSET
+    if direction == 'bearish' and spot >= sell_strike - INDEX_SL_OFFSET:
         return 'index_sl'
-    if direction == 'bullish' and spot <= sell_strike - INDEX_SL_OFFSET:
+    if direction == 'bullish' and spot <= sell_strike + INDEX_SL_OFFSET:
         return 'index_sl'
 
     if sell_ltp >= sell_entry * OPTION_SL_MULTIPLIER:
@@ -335,11 +350,11 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
     """
     unrealised_pl = _calc_pl(sell_entry, sell_ltp, buy_entry, buy_ltp)
 
-    # SL levels for reference
+    # SL levels for reference — index SL fires when spot approaches ATM
     if direction == 'bearish':
-        index_sl_level  = sell_strike + INDEX_SL_OFFSET
-    else:
         index_sl_level  = sell_strike - INDEX_SL_OFFSET
+    else:
+        index_sl_level  = sell_strike + INDEX_SL_OFFSET
     option_sl_level = round(sell_entry * OPTION_SL_MULTIPLIER, 2)
 
     dte = (expiry.date() - ts.date()).days
@@ -373,7 +388,8 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
 
 def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                  vix_daily: pd.DataFrame, contracts_df: pd.DataFrame,
-                 nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame):
+                 nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
+                 holidays_df: pd.DataFrame = None):
     """
     Main backtest loop.
     Iterates through all 15-min candles on high-VIX days,
@@ -418,21 +434,27 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     buy_strike     = None
     option_type    = None
     expiry         = None
+    elm_time       = None   # ELM exit time for additional lots
     sell_entry     = None
     buy_entry      = None
     sell_ltp       = None
     buy_ltp        = None
     entry_time     = None
     entry_spot     = None
-    entry_vix      = None   # VIX at entry — stored for use in trade record at exit
+    entry_vix      = None
     sell_opt_df    = None
     buy_opt_df     = None
-    trade_log      = []     # 1-min snapshots for the current open trade
-    # Running LTPs for carry-forward across 1-min snapshot windows
+    trade_log      = []
     snap_sell_ltp  = None
     snap_buy_ltp   = None
-    # Execution timestamp of entry — snapshots must not start before this
     entry_exec_ts  = None
+    # Additional lots state (same strikes, half quantity)
+    has_additional = False
+    add_sell_entry = None
+    add_buy_entry  = None
+    add_sell_ltp   = None
+    add_buy_ltp    = None
+    add_booked_pl  = 0.0
 
     for day_date in trading_days:
 
@@ -543,6 +565,31 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     sell_opt_df, ts, 'close') or sell_ltp
                 buy_ltp  = get_option_price(
                     buy_opt_df,  ts, 'close') or buy_ltp
+                if has_additional:
+                    add_sell_ltp = get_option_price(
+                        sell_opt_df, ts, 'close') or add_sell_ltp
+                    add_buy_ltp  = get_option_price(
+                        buy_opt_df,  ts, 'close') or add_buy_ltp
+
+                # ----------------------------------------------------------
+                # ELM: exit additional lots at elm_time (Monday 15:15)
+                # Base position continues with unchanged rules after this
+                # ----------------------------------------------------------
+                if has_additional and elm_time is not None and ts >= elm_time:
+                    add_sell_exit_raw = get_option_price(
+                        sell_opt_df, exec_ts, exec_col) or add_sell_ltp
+                    add_buy_exit_raw  = get_option_price(
+                        buy_opt_df,  exec_ts, exec_col) or add_buy_ltp
+                    add_sell_exit_net = apply_slippage(add_sell_exit_raw, is_buy=True)
+                    add_buy_exit_net  = apply_slippage(add_buy_exit_raw,  is_buy=False)
+                    add_booked_pl     = _calc_pl(
+                        add_sell_entry, add_sell_exit_net,
+                        add_buy_entry,  add_buy_exit_net)
+                    has_additional    = False
+                    logger.info(
+                        f"  ELM   additional exit | {exec_ts} | "
+                        f"Add P&L: {add_booked_pl:+.2f} pts"
+                    )
 
                 exit_reason = None
 
@@ -551,11 +598,29 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                        (direction == 'bearish' and trend_15 == True):
                         exit_reason = 'trend_flip_15'
 
+                # SL check with 9:15 guard — if SL fires at 9:15, defer
+                # to 9:16 and re-check. Only exit if still valid at 9:16.
                 sl = check_stop_losses(
                     spot, sell_strike, direction,
                     sell_ltp, sell_entry, buy_ltp, buy_entry)
                 if sl:
-                    exit_reason = sl
+                    if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
+                        recheck_ts       = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
+                        recheck_spot     = get_1min_value(nifty_1m, recheck_ts, 'close')
+                        recheck_sell_ltp = get_option_price(
+                            sell_opt_df, recheck_ts, 'close') or sell_ltp
+                        recheck_buy_ltp  = get_option_price(
+                            buy_opt_df,  recheck_ts, 'close') or buy_ltp
+                        if recheck_spot is not None:
+                            sl_recheck = check_stop_losses(
+                                recheck_spot, sell_strike, direction,
+                                recheck_sell_ltp, sell_entry,
+                                recheck_buy_ltp,  buy_entry)
+                            if sl_recheck:
+                                exit_reason = sl_recheck
+                            # else: SL no longer valid at 9:16 — do not exit
+                    else:
+                        exit_reason = sl
 
                 if expiry is not None and ts.date() >= expiry.date() \
                         and ts.time() >= pd.Timestamp('15:15').time():
@@ -569,9 +634,29 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
                     sell_exit_net = apply_slippage(sell_exit_raw, is_buy=True)
                     buy_exit_net  = apply_slippage(buy_exit_raw,  is_buy=False)
-                    pl_points     = _calc_pl(
+                    base_pl       = _calc_pl(
                         sell_entry, sell_exit_net,
                         buy_entry,  buy_exit_net)
+
+                    # Exit additional lots simultaneously if still active
+                    if has_additional:
+                        add_sell_exit_raw = get_option_price(
+                            sell_opt_df, exec_ts, exec_col) or add_sell_ltp
+                        add_buy_exit_raw  = get_option_price(
+                            buy_opt_df,  exec_ts, exec_col) or add_buy_ltp
+                        add_sell_exit_net = apply_slippage(
+                            add_sell_exit_raw, is_buy=True)
+                        add_buy_exit_net  = apply_slippage(
+                            add_buy_exit_raw,  is_buy=False)
+                        add_booked_pl     = _calc_pl(
+                            add_sell_entry, add_sell_exit_net,
+                            add_buy_entry,  add_buy_exit_net)
+                        has_additional    = False
+
+                    # Normalised P&L per unit of capital:
+                    # base_pl + additional_pl * 0.5 (additional_lots / base_lots)
+                    pl_points = round(
+                        base_pl + add_booked_pl * ADDITIONAL_LOT_MULTIPLIER, 2)
                     pl_rupees = pl_points * LOT_SIZE
 
                     # Capture the 1-min window between the signal candle (ts)
@@ -623,21 +708,28 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     _log_exit(trade_record)
                     _save_trade_log(trade_counter, entry_time, trade_log)
 
-                    in_trade      = False
-                    trade_log     = []
-                    direction     = None
-                    sell_strike   = None
-                    buy_strike    = None
-                    option_type   = None
-                    expiry        = None
-                    sell_entry    = None
-                    buy_entry     = None
-                    sell_opt_df   = None
-                    buy_opt_df    = None
-                    snap_sell_ltp = None
-                    snap_buy_ltp  = None
-                    entry_exec_ts = None
-                    entry_vix     = None
+                    in_trade       = False
+                    trade_log      = []
+                    direction      = None
+                    sell_strike    = None
+                    buy_strike     = None
+                    option_type    = None
+                    expiry         = None
+                    elm_time       = None
+                    sell_entry     = None
+                    buy_entry      = None
+                    sell_opt_df    = None
+                    buy_opt_df     = None
+                    snap_sell_ltp  = None
+                    snap_buy_ltp   = None
+                    entry_exec_ts  = None
+                    entry_vix      = None
+                    has_additional = False
+                    add_sell_entry = None
+                    add_buy_entry  = None
+                    add_sell_ltp   = None
+                    add_buy_ltp    = None
+                    add_booked_pl  = 0.0
 
             # --------------------------------------------------------------
             # Entry / re-entry
@@ -686,21 +778,30 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 sell_entry = apply_slippage(sell_entry_raw, is_buy=False)
                 buy_entry  = apply_slippage(buy_entry_raw,  is_buy=True)
 
-                in_trade      = True
-                direction     = entry_direction
-                sell_strike   = sel_strike
-                buy_strike    = hedge_strike
-                option_type   = sel_otype
-                expiry        = selected_expiry
-                entry_time    = exec_ts
-                entry_spot    = exec_spot
-                entry_vix     = get_1min_value(vix_1m, exec_ts, 'close')
-                sell_ltp      = sell_entry
-                buy_ltp       = buy_entry
-                trade_log     = []
-                snap_sell_ltp = sell_entry
-                snap_buy_ltp  = buy_entry
-                entry_exec_ts = exec_ts   # snapshots must not start before this
+                expiry_row    = contracts_df[contracts_df['end_date'] == selected_expiry]
+                sel_elm_time  = expiry_row['elm_time'].iloc[0] if not expiry_row.empty else None
+                in_trade       = True
+                direction      = entry_direction
+                sell_strike    = sel_strike
+                buy_strike     = hedge_strike
+                option_type    = sel_otype
+                expiry         = selected_expiry
+                elm_time       = sel_elm_time
+                entry_time     = exec_ts
+                entry_spot     = exec_spot
+                entry_vix      = get_1min_value(vix_1m, exec_ts, 'close')
+                sell_ltp       = sell_entry
+                buy_ltp        = buy_entry
+                trade_log      = []
+                snap_sell_ltp  = sell_entry
+                snap_buy_ltp   = buy_entry
+                entry_exec_ts  = exec_ts
+                has_additional = True
+                add_sell_entry = sell_entry
+                add_buy_entry  = buy_entry
+                add_sell_ltp   = sell_entry
+                add_buy_ltp    = buy_entry
+                add_booked_pl  = 0.0
 
                 logger.info(
                     f"  ENTRY {direction:8s} | {exec_ts} | "
@@ -931,19 +1032,25 @@ if __name__ == "__main__":
 
     nifty_15, nifty_75, vix_daily = load_precomputed()
     nifty_1m, vix_1m              = load_1min_data()
-    contracts_df                  = load_contracts()
+    holidays_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data_pipeline', 'config', 'holidays.csv')
+    holidays_df_elm = pd.read_csv(holidays_path, parse_dates=['date'])
+    holidays_df_elm['date'] = pd.to_datetime(holidays_df_elm['date']).dt.date
+    contracts_df = load_contracts(holidays_df_elm)
 
     logger.info(f"  Contracts    : {len(contracts_df)} expiries")
     logger.info(f"  VIX threshold: {VIX_THRESHOLD}")
     logger.info(f"  Spread type  : {SPREAD_TYPE}")
     logger.info(f"  Target delta : {TARGET_DELTA}")
     logger.info(f"  Hedge points : {HEDGE_POINTS}")
-    logger.info(f"  Index SL     : {INDEX_SL_OFFSET} pts beyond sell strike")
+    logger.info(f"  Index SL     : {INDEX_SL_OFFSET} pts before sell strike reaches ATM")
     logger.info(f"  Option SL    : {OPTION_SL_MULTIPLIER}x entry premium")
     logger.info(f"  Spread SL    : {SPREAD_LOSS_CAP*100:.0f}% of max loss")
 
     all_trades = run_backtest(
-        nifty_15, nifty_75, vix_daily, contracts_df, nifty_1m, vix_1m)
+        nifty_15, nifty_75, vix_daily, contracts_df,
+        nifty_1m, vix_1m, holidays_df_elm)
     save_trade_summary(all_trades)
 
     logger.info("=== Apollo Backtest complete ===")
