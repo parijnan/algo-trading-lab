@@ -335,12 +335,16 @@ def parse_expiry_from_master(expiry_str: str) -> datetime:
 
 def get_option_filepath(expiry_date: datetime, strike: int, option_type: str) -> str:
     """
-    Build the full path for an option contract CSV file.
-    e.g.  .../options/2026-09-24/87000ce.csv
+    Build the full path for an option or futures contract CSV file.
+    Options: .../sensex/2026-09-24/87000ce.csv
+    Futures: .../sensex/2026-09-24/2026-09-24_futures.csv
     """
-    expiry_dir = os.path.join(OPTIONS_DIR, expiry_date.strftime("%Y-%m-%d"))
+    expiry_dir  = os.path.join(OPTIONS_DIR, expiry_date.strftime("%Y-%m-%d"))
     os.makedirs(expiry_dir, exist_ok=True)
-    filename   = f"{strike}{option_type.lower()}.csv"
+    if option_type == "futures":
+        filename = f"{expiry_date.strftime('%Y-%m-%d')}_futures.csv"
+    else:
+        filename = f"{strike}{option_type.lower()}.csv"
     return os.path.join(expiry_dir, filename)
 
 
@@ -434,7 +438,11 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
     inst = instruments_df.copy()
     inst["expiry_parsed"] = inst["expiry"].apply(parse_expiry_from_master)
     inst["strike_actual"] = (inst["strike"] / 100).astype(int)
-    inst["option_type"]   = inst["symbol"].str[-2:].str.lower()   # "ce" or "pe"
+    inst["option_type"]   = inst.apply(
+        lambda row: "futures" if row["instrumenttype"] == "FUTIDX"
+                    else row["symbol"][-2:].lower(),   # "ce" or "pe"
+        axis=1
+    )
 
     for _, contract in pending.iterrows():
         expiry_date = pd.Timestamp(contract["expiry_date"]).to_pydatetime()
@@ -481,7 +489,7 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
         )
 
     # Persist updated statuses back to contracts.csv
-    contracts_df.to_csv(os.path.join(DATA_DIR, "config", "options_list_sensex.csv"), index=False)
+    contracts_df.to_csv(os.path.join(CONFIG_DIR, "options_list_sensex.csv"), index=False)
     logger.info("contracts.csv updated with download statuses.")
 
 
