@@ -386,7 +386,8 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
                     direction: str, trend_75, trend_15,
                     expiry: pd.Timestamp,
                     realised_pl_pts: float = None,
-                    realised_pl_rs:  float = None) -> dict:
+                    realised_pl_rs:  float = None,
+                    dynamic_option_sl: float = None) -> dict:
     """
     Build a single 1-min snapshot row for the per-trade log.
     Captures everything needed to analyse trade behaviour post-hoc.
@@ -403,7 +404,7 @@ def _build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
         index_sl_level  = sell_strike - INDEX_SL_OFFSET
     else:
         index_sl_level  = sell_strike + INDEX_SL_OFFSET
-    option_sl_level = round(sell_entry * OPTION_SL_MULTIPLIER, 2)
+    option_sl_level = round(dynamic_option_sl, 2) if dynamic_option_sl is not None                       else round(sell_entry * OPTION_SL_MULTIPLIER, 2)
 
     dte = (expiry.date() - ts.date()).days
 
@@ -517,11 +518,12 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         if in_trade and expiry is not None and day_date > expiry.date():
             pl_points = _calc_pl(sell_entry, sell_ltp, buy_entry, buy_ltp)
             pl_rupees = pl_points * LOT_SIZE
-            expiry_exit_vix = get_1min_value(vix_1m, expiry, 'close')
+            expiry_exit_vix  = get_1min_value(vix_1m,   expiry, 'close')
+            expiry_exit_spot = get_1min_value(nifty_1m, expiry, 'close') or entry_spot
             trade_record = _build_trade_record(
                 entry_time, expiry, direction, expiry,
                 sell_strike, buy_strike, option_type,
-                entry_spot, sell_ltp,
+                entry_spot, expiry_exit_spot,
                 sell_entry, buy_entry,
                 apply_slippage(sell_ltp, is_buy=True),
                 apply_slippage(buy_ltp,  is_buy=False),
@@ -783,6 +785,11 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trend_75_exec = prior_75_exec.iloc[-1]['trend']                                     if not prior_75_exec.empty else trend_75
                     prior_15_exec = nifty_15[nifty_15['time_stamp'] <= exec_ts]
                     trend_15_exec = prior_15_exec.iloc[-1]['trend']                                     if not prior_15_exec.empty else trend_15
+                    # Compute final option SL level for exit snapshot
+                    _exit_days = (exec_ts.date() - trade_entry_date).days if trade_entry_date else 0
+                    _exit_opt_sl = compute_option_sl(
+                        sell_entry, buy_entry, buy_exit_raw,
+                        _exit_days, peak_unrealised_pl)
                     exit_snapshot = _build_snapshot(
                         exec_ts, exec_spot_val, exec_vix_val,
                         sell_strike, buy_strike, option_type,
@@ -790,7 +797,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_entry, buy_entry,
                         direction, trend_75_exec, trend_15_exec, expiry,
                         realised_pl_pts=pl_points,
-                        realised_pl_rs=pl_rupees
+                        realised_pl_rs=pl_rupees,
+                        dynamic_option_sl=_exit_opt_sl
                     )
                     trade_log.append(exit_snapshot)
 
@@ -989,25 +997,25 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         prior_15 = nifty_15[nifty_15['time_stamp'] <= ts]
         trend_15 = prior_15.iloc[-1]['trend'] if not prior_15.empty else None
 
+        # Compute unrealised P&L, peak, and dynamic SL BEFORE building snapshot
+        # so the snapshot reflects the correct SL level for that candle
+        unrealised = (sell_entry - running_sell_ltp) + (running_buy_ltp - buy_entry)
+        if unrealised > running_peak_pl:
+            running_peak_pl = unrealised
+        days_in_trade = (ts.date() - trade_entry_date).days if trade_entry_date else 0
+        option_sl_lvl = compute_option_sl(
+            sell_entry, buy_entry, running_buy_ltp,
+            days_in_trade, running_peak_pl)
+
         snapshot = _build_snapshot(
             ts, spot, vix,
             sell_strike, buy_strike, option_type,
             running_sell_ltp, running_buy_ltp,
             sell_entry, buy_entry,
-            direction, trend_75, trend_15, expiry
+            direction, trend_75, trend_15, expiry,
+            dynamic_option_sl=option_sl_lvl
         )
         trade_log.append(snapshot)
-
-        # Update unrealised P&L and peak
-        unrealised = (sell_entry - running_sell_ltp) + (running_buy_ltp - buy_entry)
-        if unrealised > running_peak_pl:
-            running_peak_pl = unrealised
-
-        # Compute dynamic option SL level for this candle
-        days_in_trade = (ts.date() - trade_entry_date).days if trade_entry_date else 0
-        option_sl_lvl = compute_option_sl(
-            sell_entry, buy_entry, running_buy_ltp,
-            days_in_trade, running_peak_pl)
 
         # Check SL on every 1-min candle — stop at first hit.
         # No guard here: SL at candle X close → exit at X+1 open, always correct.
