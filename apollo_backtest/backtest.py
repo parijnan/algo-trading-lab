@@ -371,8 +371,8 @@ def check_stop_losses(spot: float, sell_strike: int, direction: str,
 # ---------------------------------------------------------------------------
 
 def apply_slippage(price: float, is_buy: bool) -> float:
-    """Add slippage to buys, subtract from sells."""
-    return (price + SLIPPAGE_POINTS) if is_buy else (price - SLIPPAGE_POINTS)
+    """Add slippage to buys, subtract from sells. Floor at 0 — options can't be negative."""
+    return (price + SLIPPAGE_POINTS) if is_buy else max(price - SLIPPAGE_POINTS, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -516,7 +516,12 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
         # Close any trade where expiry has passed without an explicit exit
         # ------------------------------------------------------------------
         if in_trade and expiry is not None and day_date > expiry.date():
-            pl_points = _calc_pl(sell_entry, sell_ltp, buy_entry, buy_ltp)
+            _sell_exp = get_option_price(sell_opt_df, expiry, 'close') or sell_ltp
+            _buy_exp  = get_option_price(buy_opt_df,  expiry, 'close') or buy_ltp
+            _sell_exp_net = apply_slippage(_sell_exp, is_buy=True)
+            _buy_exp_net  = apply_slippage(_buy_exp,  is_buy=False)
+            pl_points = _calc_pl(sell_entry, _sell_exp_net, buy_entry, _buy_exp_net)
+            pl_points = round(pl_points + add_booked_pl * ADDITIONAL_LOT_MULTIPLIER, 2)
             pl_rupees = pl_points * LOT_SIZE
             expiry_exit_vix  = get_1min_value(vix_1m,   expiry, 'close')
             expiry_exit_spot = get_1min_value(nifty_1m, expiry, 'close') or entry_spot
@@ -525,8 +530,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 sell_strike, buy_strike, option_type,
                 entry_spot, expiry_exit_spot,
                 sell_entry, buy_entry,
-                apply_slippage(sell_ltp, is_buy=True),
-                apply_slippage(buy_ltp,  is_buy=False),
+                _sell_exp_net, _buy_exp_net,
                 pl_points, pl_rupees, 'expiry',
                 entry_vix=entry_vix, exit_vix=expiry_exit_vix
             )
@@ -534,8 +538,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             all_trades.append(trade_record)
             _log_exit(trade_record)
             _save_trade_log(trade_counter, entry_time, trade_log)
-            in_trade  = False
-            trade_log = []
+            in_trade       = False
+            trade_log      = []
+            has_additional = False
+            add_booked_pl  = 0.0
 
         # ------------------------------------------------------------------
         # Build 1-min log for any active trade on non-high-VIX days
@@ -553,9 +559,66 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     snap_sell_ltp, snap_buy_ltp,
                     peak_unrealised_pl, trade_entry_date
                 )
-            # If a 1-min SL was hit on this overnight day, carry sl_1min_ts
-            # forward — it will be processed on the next trading day loop
-            # which has access to exec_ts (next candle open) for exit pricing.
+            # If a 1-min SL was hit on this overnight day, exit immediately.
+            # exec price = open of sl_hit_ts + 1 minute
+            if sl_1min_ts is not None and in_trade:
+                _sl_exec_ts  = sl_1min_ts + pd.Timedelta(minutes=1)
+                _sell_sl_raw = get_option_price(sell_opt_df, _sl_exec_ts, 'open') or snap_sell_ltp
+                _buy_sl_raw  = get_option_price(buy_opt_df,  _sl_exec_ts, 'open') or snap_buy_ltp
+                _sell_sl_net = apply_slippage(_sell_sl_raw, is_buy=True)
+                _buy_sl_net  = apply_slippage(_buy_sl_raw,  is_buy=False)
+                _base_pl     = _calc_pl(sell_entry, _sell_sl_net, buy_entry, _buy_sl_net)
+                if has_additional:
+                    _add_sell_raw = get_option_price(sell_opt_df, _sl_exec_ts, 'open') or snap_sell_ltp
+                    _add_buy_raw  = get_option_price(buy_opt_df,  _sl_exec_ts, 'open') or snap_buy_ltp
+                    add_booked_pl = _calc_pl(
+                        add_sell_entry, apply_slippage(_add_sell_raw, is_buy=True),
+                        add_buy_entry,  apply_slippage(_add_buy_raw,  is_buy=False))
+                    has_additional = False
+                _pl_pts = round(_base_pl + add_booked_pl * ADDITIONAL_LOT_MULTIPLIER, 2)
+                _pl_rs  = _pl_pts * LOT_SIZE
+                _exit_spot = get_1min_value(nifty_1m, _sl_exec_ts, 'close') or entry_spot
+                _exit_vix  = get_1min_value(vix_1m,   _sl_exec_ts, 'close')
+                # Add exit snapshot to trade log
+                _prior_75 = nifty_75_indexed[nifty_75_indexed.index <= _sl_exec_ts]
+                _t75 = _prior_75.iloc[-1]['trend'] if not _prior_75.empty else None
+                _prior_15 = nifty_15[nifty_15['time_stamp'] <= _sl_exec_ts]
+                _t15 = _prior_15.iloc[-1]['trend'] if not _prior_15.empty else None
+                _exit_days = (_sl_exec_ts.date() - trade_entry_date).days if trade_entry_date else 0
+                _exit_opt_sl = compute_option_sl(sell_entry, buy_entry, _buy_sl_raw,
+                                                 _exit_days, peak_unrealised_pl)
+                trade_log.append(_build_snapshot(
+                    _sl_exec_ts, _exit_spot, _exit_vix,
+                    sell_strike, buy_strike, option_type,
+                    _sell_sl_raw, _buy_sl_raw, sell_entry, buy_entry,
+                    direction, _t75, _t15, expiry,
+                    realised_pl_pts=_pl_pts, realised_pl_rs=_pl_rs,
+                    dynamic_option_sl=_exit_opt_sl))
+                trade_record = _build_trade_record(
+                    entry_time, _sl_exec_ts, direction, expiry,
+                    sell_strike, buy_strike, option_type,
+                    entry_spot, _exit_spot,
+                    sell_entry, buy_entry,
+                    _sell_sl_net, _buy_sl_net,
+                    _pl_pts, _pl_rs, sl_1min_type,
+                    entry_vix=entry_vix, exit_vix=_exit_vix)
+                trade_counter += 1
+                all_trades.append(trade_record)
+                _log_exit(trade_record)
+                _save_trade_log(trade_counter, entry_time, trade_log)
+                in_trade = False; trade_log = []
+                direction = None; sell_strike = None; buy_strike = None
+                option_type = None; expiry = None; elm_time = None
+                sell_entry = None; buy_entry = None
+                sell_opt_df = None; buy_opt_df = None
+                snap_sell_ltp = None; snap_buy_ltp = None
+                entry_exec_ts = None; entry_vix = None
+                has_additional = False; add_sell_entry = None
+                add_buy_entry = None; add_sell_ltp = None
+                add_buy_ltp = None; add_booked_pl = 0.0
+                peak_unrealised_pl = 0.0; trade_entry_date = None
+                sl_1min_ts = None; sl_1min_type = None
+                trade_counter += 0  # counter already incremented above
             continue
 
         if day_date not in high_vix_dates:
@@ -714,6 +777,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 if expiry is not None and ts.date() >= expiry.date() \
                         and ts.time() >= pd.Timestamp('15:15').time():
                     exit_reason = 'expiry'
+                    exec_ts  = expiry   # always exit at actual expiry timestamp
+                    exec_col = 'close'  # use close price at expiry
 
                 if exit_reason:
                     # Step 1: Fill the gap between signal candle and execution candle.
