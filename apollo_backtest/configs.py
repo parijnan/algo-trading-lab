@@ -70,37 +70,60 @@ MIN_DTE                 = 2         # If DTE < this, roll to next expiry
 
 # ---------------------------------------------------------------------------
 # Stop Loss Parameters
-# All conditions checked on every 1-min candle — first to trigger exits the trade
+# Five SL mechanisms run concurrently — first to trigger exits the trade.
+# Each of the four non-trend-flip SLs can be individually toggled on/off.
 # ---------------------------------------------------------------------------
-# 1. Index-based stop: exit when spot is within INDEX_SL_OFFSET points of
-#    the sell strike (i.e. approaching ATM, still OTM). Once delta crosses
-#    ~0.50 gamma becomes brutal — we exit before that.
-#    For bearish (sold CE): SL when spot >= sell_strike - INDEX_SL_OFFSET
-#    For bullish (sold PE): SL when spot <= sell_strike + INDEX_SL_OFFSET
-INDEX_SL_OFFSET         = 50        # points before sell strike reaches ATM
 
 # No exit at 09:15 candle — defer to 09:16 and re-check (15-min fallback only)
 NO_EXIT_BEFORE          = '09:16'
 
-# 2. Dynamic option premium SL
-#    Base SL = OPTION_SL_BASE_PCT * net_credit above sell_entry
-#    Tightens by OPTION_SL_DAY_REDUCTION per day in trade
-#    Trails up to a floor once OPTION_SL_TRAIL_TRIGGER * net_credit profit is reached
-#    At OPTION_SL_TRAIL_LOCK2 * net_credit profit, floor moves to OPTION_SL_TRAIL_FLOOR2
-OPTION_SL_BASE_PCT      = 0.50      # Base SL = 50% of net credit above sell_entry
-OPTION_SL_DAY_REDUCTION = 0.10      # Tighten by 10% of net credit per day in trade
-                                     # Day 0: 50%, Day 1: 40%, Day 2: 30%, Day 3: 20%...
-OPTION_SL_TRAIL_TRIGGER = 0.50      # Start trailing once unrealised P&L > 50% of net credit
-OPTION_SL_TRAIL_FLOOR1  = 0.0       # First trail floor: breakeven (P&L >= 0)
-OPTION_SL_TRAIL_LOCK2   = 0.75      # Lock in profit once unrealised P&L > 75% of net credit
-OPTION_SL_TRAIL_FLOOR2  = 0.25      # Second trail floor: lock in 25% of net credit
+# ------ SL Toggles --------------------------------------------------------
+# Set to False to disable that SL entirely for a run (useful for optimisation)
+ENABLE_INDEX_SL         = True
+ENABLE_OPTION_SL        = True
+ENABLE_SPREAD_SL        = True
+ENABLE_TRAILING_SL      = True
 
-# Legacy multiplier — kept for reference only, replaced by dynamic SL above
-OPTION_SL_MULTIPLIER    = 2.0       # Not used in backtest — superseded by dynamic SL
+# ------ 1. Index SL -------------------------------------------------------
+# Exit when spot is within INDEX_SL_OFFSET points of the sell strike (OTM side).
+# Bearish (sold CE): fires when spot >= sell_strike - INDEX_SL_OFFSET
+# Bullish (sold PE): fires when spot <= sell_strike + INDEX_SL_OFFSET
+INDEX_SL_OFFSET         = 50        # points from sell strike to trigger exit
 
-# 3. Spread loss cap (for credit spread: % of max possible loss on the spread)
-#    For debit spread: % of premium paid
-SPREAD_LOSS_CAP         = 0.75      # Exit if spread has lost 75% of max loss
+# ------ 2. Option SL ------------------------------------------------------
+# Based solely on the sold option's LTP vs its entry price.
+# Multiplier steps down each calendar day in trade, floors at OPTION_SL_FLOOR_MULT.
+# Exit if: sell_ltp >= sell_entry * multiplier_for_day
+# Day 0: 2.00x, Day 1: 1.66x, Day 2: 1.33x, Day 3: 1.00x, Day 4: 0.66x,
+# Day 5+: 0.33x (floor)
+OPTION_SL_MULTIPLIERS   = [2.00, 1.66, 1.33, 1.00, 0.66]  # index = days_in_trade
+OPTION_SL_FLOOR_MULT    = 0.33      # multiplier used from Day 5 onwards
+
+# ------ 3. Spread SL ------------------------------------------------------
+# Based on unrealised P&L of the entire spread vs net credit received.
+# Steps down each calendar day in trade, floors at SPREAD_SL_FLOOR_PCT (0 = breakeven).
+# Exit if: unrealised_pl_pts <= -net_credit * pct_for_day
+# Day 0: 50%, Day 1: 40%, Day 2: 30%, Day 3: 20%, Day 4: 10%, Day 5+: 0%
+SPREAD_SL_PCTS          = [0.50, 0.40, 0.30, 0.20, 0.10]  # index = days_in_trade
+SPREAD_SL_FLOOR_PCT     = 0.00      # floor pct used from Day 5 onwards
+
+# ------ 4. Trailing SL ----------------------------------------------------
+# Ratchet SL on unrealised P&L — activates once profit threshold is reached,
+# then can only move up (never loosens). Checked against unrealised_pl_pts.
+# Persistent state 'trailing_sl_floor' is tracked in trade state.
+#
+# Stage 1: activates when unrealised_pl_pts >= net_credit * TRAILING_SL_TRIGGER_1
+#          floor set to net_credit * TRAILING_SL_FLOOR_1 (0 = breakeven)
+# Stage 2: upgrades when unrealised_pl_pts >= net_credit * TRAILING_SL_TRIGGER_2
+#          floor moves to net_credit * TRAILING_SL_FLOOR_2
+# Stage 3: upgrades when unrealised_pl_pts >= net_credit * TRAILING_SL_TRIGGER_3
+#          floor moves to net_credit * TRAILING_SL_FLOOR_3
+TRAILING_SL_TRIGGER_1   = 0.3333   # activate at 33.33% of net credit
+TRAILING_SL_FLOOR_1     = 0.00     # lock in breakeven (0% of net credit)
+TRAILING_SL_TRIGGER_2   = 0.6666   # upgrade at 66.66% of net credit
+TRAILING_SL_FLOOR_2     = 0.3333   # lock in 33.33% of net credit
+TRAILING_SL_TRIGGER_3   = 0.80     # upgrade at 80% of net credit
+TRAILING_SL_FLOOR_3     = 0.40     # lock in 40% of net credit
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
