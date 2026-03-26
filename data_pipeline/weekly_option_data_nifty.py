@@ -289,7 +289,7 @@ def download_expiry(breeze, contracts_list_df: pd.DataFrame, i: int):
 
     logger.info(f"Expiry {expiry_str} complete – {done} contracts downloaded.")
     slack_bot_sendtext(
-        f"Nifty options download complete – expiry {expiry_str} "
+        f"💻 Nifty options download complete – expiry {expiry_str} "
         f"({done} contracts, ~{_rate_limiter.daily_count} API calls used today)",
         SLACK_DATA_CHANNEL
     )

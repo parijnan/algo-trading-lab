@@ -20,7 +20,7 @@ with open('$CREDENTIALS') as f:
     reader = csv.DictReader(f)
     print(next(reader)['slack_token'])
 ")
-SLACK_CHANNEL="#data-alerts"
+SLACK_CHANNEL="#error-alerts"
 SLACK_URL="https://slack.com/api/chat.postMessage"
 
 send_slack() {

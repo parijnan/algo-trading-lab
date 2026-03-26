@@ -312,7 +312,7 @@ def update_index(obj, display_name: str, exchange: str,
     combined.to_csv(filepath, index=False)
     logger.info(f"[{display_name}] {filename} updated – total rows: {len(combined)}")
     slack_bot_sendtext(
-        f"[{display_name}] {filename} updated – {len(new_data)} new rows added "
+        f"☁️ [{display_name}] {filename} updated – {len(new_data)} new rows added "
         f"(total: {len(combined)})",
         SLACK_DATA_CHANNEL
     )
@@ -483,7 +483,7 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
         ] = True
         logger.info(f"Expiry {expiry_date.date()} marked complete.")
         slack_bot_sendtext(
-            f"Sensex options download complete – expiry {expiry_date.date()} "
+            f"☁️ Sensex options download complete – expiry {expiry_date.date()} "
             f"({actual_downloads} of {len(expiry_contracts)} contracts had data)",
             SLACK_DATA_CHANNEL
         )
