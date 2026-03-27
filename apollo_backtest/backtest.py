@@ -579,7 +579,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             pl_rupees = pl_points * LOT_SIZE
             expiry_exit_vix  = get_1min_value(vix_1m,   expiry, 'close')
             expiry_exit_spot = get_1min_value(nifty_1m, expiry, 'close') or entry_spot
-            trade_stats = _compute_trade_stats(trade_log)
+            trade_stats = _compute_trade_stats(trade_log, direction)
             trade_record = _build_trade_record(
                 entry_time, expiry, direction, expiry,
                 sell_strike, buy_strike, option_type,
@@ -649,7 +649,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     days_in_trade=_exit_days,
                     trailing_sl_floor=trailing_sl_floor,
                     realised_pl_pts=_pl_pts, realised_pl_rs=_pl_rs))
-                trade_stats = _compute_trade_stats(trade_log)
+                trade_stats = _compute_trade_stats(trade_log, direction)
                 trade_record = _build_trade_record(
                     entry_time, _sl_exec_ts, direction, expiry,
                     sell_strike, buy_strike, option_type,
@@ -922,7 +922,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trade_log.append(exit_snapshot)
 
                     exit_vix = get_1min_value(vix_1m, exec_ts, 'close')
-                    trade_stats = _compute_trade_stats(trade_log)
+                    trade_stats = _compute_trade_stats(trade_log, direction)
                     trade_record = _build_trade_record(
                         entry_time, exec_ts, direction, expiry,
                         sell_strike, buy_strike, option_type,
@@ -1193,47 +1193,63 @@ def _calc_pl(sell_entry: float, sell_exit: float,
     return round((sell_entry - sell_exit) + (buy_exit - buy_entry), 2)
 
 
-def _compute_trade_stats(trade_log: list) -> dict:
+def _compute_trade_stats(trade_log: list, direction: str) -> dict:
     """
     Scan the per-trade 1-min log and compute extremes across the full trade lifetime
     (including the exit candle).
 
-    Returns a dict with 12 fields:
+    Returns a dict with 14 fields:
       max/min unrealised_pl_pts and their timestamps
       max/min sell_ltp and their timestamps
       max/min buy_ltp and their timestamps
+      best_spot / best_spot_ts — most favourable spot price reached:
+        bearish (sold CE): min spot (market moved down, away from sell strike)
+        bullish (sold PE): max spot (market moved up, away from sell strike)
     """
+    empty = {
+        'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
+        'min_unrealised_pl_pts': None, 'min_unrealised_pl_ts': None,
+        'max_sell_ltp':          None, 'max_sell_ltp_ts':      None,
+        'min_sell_ltp':          None, 'min_sell_ltp_ts':      None,
+        'max_buy_ltp':           None, 'max_buy_ltp_ts':       None,
+        'min_buy_ltp':           None, 'min_buy_ltp_ts':       None,
+        'best_spot':             None, 'best_spot_ts':         None,
+    }
     if not trade_log:
-        return {
-            'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
-            'min_unrealised_pl_pts': None, 'min_unrealised_pl_ts': None,
-            'max_sell_ltp':          None, 'max_sell_ltp_ts':      None,
-            'min_sell_ltp':          None, 'min_sell_ltp_ts':      None,
-            'max_buy_ltp':           None, 'max_buy_ltp_ts':       None,
-            'min_buy_ltp':           None, 'min_buy_ltp_ts':       None,
-        }
+        return empty
 
-    max_pl = min_pl = trade_log[0]['unrealised_pl_pts']
-    max_pl_ts = min_pl_ts = trade_log[0]['time_stamp']
+    first = trade_log[0]
+    max_pl = min_pl = first['unrealised_pl_pts']
+    max_pl_ts = min_pl_ts = first['time_stamp']
 
-    max_sell = min_sell = trade_log[0]['sell_ltp']
-    max_sell_ts = min_sell_ts = trade_log[0]['time_stamp']
+    max_sell = min_sell = first['sell_ltp']
+    max_sell_ts = min_sell_ts = first['time_stamp']
 
-    max_buy = min_buy = trade_log[0]['buy_ltp']
-    max_buy_ts = min_buy_ts = trade_log[0]['time_stamp']
+    max_buy = min_buy = first['buy_ltp']
+    max_buy_ts = min_buy_ts = first['time_stamp']
+
+    best_spot    = first['spot']
+    best_spot_ts = first['time_stamp']
 
     for row in trade_log[1:]:
         ts  = row['time_stamp']
         pl  = row['unrealised_pl_pts']
         sl  = row['sell_ltp']
         bl  = row['buy_ltp']
+        sp  = row['spot']
 
-        if pl > max_pl:  max_pl,   max_pl_ts   = pl,  ts
-        if pl < min_pl:  min_pl,   min_pl_ts   = pl,  ts
-        if sl > max_sell: max_sell, max_sell_ts = sl,  ts
-        if sl < min_sell: min_sell, min_sell_ts = sl,  ts
-        if bl > max_buy:  max_buy,  max_buy_ts  = bl,  ts
-        if bl < min_buy:  min_buy,  min_buy_ts  = bl,  ts
+        if pl > max_pl:   max_pl,   max_pl_ts   = pl, ts
+        if pl < min_pl:   min_pl,   min_pl_ts   = pl, ts
+        if sl > max_sell: max_sell, max_sell_ts  = sl, ts
+        if sl < min_sell: min_sell, min_sell_ts  = sl, ts
+        if bl > max_buy:  max_buy,  max_buy_ts   = bl, ts
+        if bl < min_buy:  min_buy,  min_buy_ts   = bl, ts
+
+        # Best spot: lowest for bearish (sold CE), highest for bullish (sold PE)
+        if direction == 'bearish' and sp < best_spot:
+            best_spot, best_spot_ts = sp, ts
+        elif direction == 'bullish' and sp > best_spot:
+            best_spot, best_spot_ts = sp, ts
 
     return {
         'max_unrealised_pl_pts': round(max_pl,   2),
@@ -1248,6 +1264,8 @@ def _compute_trade_stats(trade_log: list) -> dict:
         'max_buy_ltp_ts':        max_buy_ts,
         'min_buy_ltp':           round(min_buy,  2),
         'min_buy_ltp_ts':        min_buy_ts,
+        'best_spot':             round(best_spot, 2),
+        'best_spot_ts':          best_spot_ts,
     }
 
 
@@ -1290,6 +1308,7 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
             'min_sell_ltp':          None, 'min_sell_ltp_ts':      None,
             'max_buy_ltp':           None, 'max_buy_ltp_ts':       None,
             'min_buy_ltp':           None, 'min_buy_ltp_ts':       None,
+            'best_spot':             None, 'best_spot_ts':         None,
         })
     return record
 
