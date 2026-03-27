@@ -79,10 +79,10 @@ NO_EXIT_BEFORE          = '09:16'
 
 # ------ SL Toggles --------------------------------------------------------
 # Set to False to disable that SL entirely for a run (useful for optimisation)
-ENABLE_INDEX_SL         = True
-ENABLE_OPTION_SL        = True
-ENABLE_SPREAD_SL        = True
-ENABLE_TRAILING_SL      = True
+ENABLE_INDEX_SL         = False
+ENABLE_OPTION_SL        = False
+ENABLE_SPREAD_SL        = False
+ENABLE_TRAILING_SL      = False
 
 # ------ 1. Index SL -------------------------------------------------------
 # Exit when spot is within INDEX_SL_OFFSET points of the sell strike (OTM side).
