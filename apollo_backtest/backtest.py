@@ -579,6 +579,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
             pl_rupees = pl_points * LOT_SIZE
             expiry_exit_vix  = get_1min_value(vix_1m,   expiry, 'close')
             expiry_exit_spot = get_1min_value(nifty_1m, expiry, 'close') or entry_spot
+            trade_stats = _compute_trade_stats(trade_log)
             trade_record = _build_trade_record(
                 entry_time, expiry, direction, expiry,
                 sell_strike, buy_strike, option_type,
@@ -586,6 +587,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 sell_entry, buy_entry,
                 _sell_exp, _buy_exp,
                 pl_points, pl_rupees, 'expiry',
+                trade_stats=trade_stats,
                 entry_vix=entry_vix, exit_vix=expiry_exit_vix
             )
             trade_counter += 1
@@ -647,6 +649,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     days_in_trade=_exit_days,
                     trailing_sl_floor=trailing_sl_floor,
                     realised_pl_pts=_pl_pts, realised_pl_rs=_pl_rs))
+                trade_stats = _compute_trade_stats(trade_log)
                 trade_record = _build_trade_record(
                     entry_time, _sl_exec_ts, direction, expiry,
                     sell_strike, buy_strike, option_type,
@@ -654,6 +657,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     sell_entry, buy_entry,
                     _sell_sl_net, _buy_sl_net,
                     _pl_pts, _pl_rs, sl_1min_type,
+                    trade_stats=trade_stats,
                     entry_vix=entry_vix, exit_vix=_exit_vix)
                 trade_counter += 1
                 all_trades.append(trade_record)
@@ -918,6 +922,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trade_log.append(exit_snapshot)
 
                     exit_vix = get_1min_value(vix_1m, exec_ts, 'close')
+                    trade_stats = _compute_trade_stats(trade_log)
                     trade_record = _build_trade_record(
                         entry_time, exec_ts, direction, expiry,
                         sell_strike, buy_strike, option_type,
@@ -925,6 +930,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         sell_entry, buy_entry,
                         sell_exit_net, buy_exit_net,
                         pl_points, pl_rupees, exit_reason,
+                        trade_stats=trade_stats,
                         entry_vix=entry_vix, exit_vix=exit_vix
                     )
                     trade_counter += 1
@@ -1187,14 +1193,73 @@ def _calc_pl(sell_entry: float, sell_exit: float,
     return round((sell_entry - sell_exit) + (buy_exit - buy_entry), 2)
 
 
+def _compute_trade_stats(trade_log: list) -> dict:
+    """
+    Scan the per-trade 1-min log and compute extremes across the full trade lifetime
+    (including the exit candle).
+
+    Returns a dict with 12 fields:
+      max/min unrealised_pl_pts and their timestamps
+      max/min sell_ltp and their timestamps
+      max/min buy_ltp and their timestamps
+    """
+    if not trade_log:
+        return {
+            'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
+            'min_unrealised_pl_pts': None, 'min_unrealised_pl_ts': None,
+            'max_sell_ltp':          None, 'max_sell_ltp_ts':      None,
+            'min_sell_ltp':          None, 'min_sell_ltp_ts':      None,
+            'max_buy_ltp':           None, 'max_buy_ltp_ts':       None,
+            'min_buy_ltp':           None, 'min_buy_ltp_ts':       None,
+        }
+
+    max_pl = min_pl = trade_log[0]['unrealised_pl_pts']
+    max_pl_ts = min_pl_ts = trade_log[0]['time_stamp']
+
+    max_sell = min_sell = trade_log[0]['sell_ltp']
+    max_sell_ts = min_sell_ts = trade_log[0]['time_stamp']
+
+    max_buy = min_buy = trade_log[0]['buy_ltp']
+    max_buy_ts = min_buy_ts = trade_log[0]['time_stamp']
+
+    for row in trade_log[1:]:
+        ts  = row['time_stamp']
+        pl  = row['unrealised_pl_pts']
+        sl  = row['sell_ltp']
+        bl  = row['buy_ltp']
+
+        if pl > max_pl:  max_pl,   max_pl_ts   = pl,  ts
+        if pl < min_pl:  min_pl,   min_pl_ts   = pl,  ts
+        if sl > max_sell: max_sell, max_sell_ts = sl,  ts
+        if sl < min_sell: min_sell, min_sell_ts = sl,  ts
+        if bl > max_buy:  max_buy,  max_buy_ts  = bl,  ts
+        if bl < min_buy:  min_buy,  min_buy_ts  = bl,  ts
+
+    return {
+        'max_unrealised_pl_pts': round(max_pl,   2),
+        'max_unrealised_pl_ts':  max_pl_ts,
+        'min_unrealised_pl_pts': round(min_pl,   2),
+        'min_unrealised_pl_ts':  min_pl_ts,
+        'max_sell_ltp':          round(max_sell, 2),
+        'max_sell_ltp_ts':       max_sell_ts,
+        'min_sell_ltp':          round(min_sell, 2),
+        'min_sell_ltp_ts':       min_sell_ts,
+        'max_buy_ltp':           round(max_buy,  2),
+        'max_buy_ltp_ts':        max_buy_ts,
+        'min_buy_ltp':           round(min_buy,  2),
+        'min_buy_ltp_ts':        min_buy_ts,
+    }
+
+
 def _build_trade_record(entry_time, exit_time, direction, expiry,
                          sell_strike, buy_strike, option_type,
                          entry_spot, exit_spot,
                          sell_entry, buy_entry,
                          sell_exit, buy_exit,
                          pl_points, pl_rupees, exit_reason,
+                         trade_stats: dict = None,
                          entry_vix=None, exit_vix=None) -> dict:
-    return {
+    record = {
         'entry_time':  entry_time,
         'exit_time':   exit_time,
         'direction':   direction,
@@ -1215,6 +1280,18 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
         'entry_vix':   round(entry_vix, 2) if entry_vix is not None else None,
         'exit_vix':    round(exit_vix,  2) if exit_vix  is not None else None,
     }
+    if trade_stats:
+        record.update(trade_stats)
+    else:
+        record.update({
+            'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
+            'min_unrealised_pl_pts': None, 'min_unrealised_pl_ts': None,
+            'max_sell_ltp':          None, 'max_sell_ltp_ts':      None,
+            'min_sell_ltp':          None, 'min_sell_ltp_ts':      None,
+            'max_buy_ltp':           None, 'max_buy_ltp_ts':       None,
+            'min_buy_ltp':           None, 'min_buy_ltp_ts':       None,
+        })
+    return record
 
 
 def _log_exit(trade: dict):
