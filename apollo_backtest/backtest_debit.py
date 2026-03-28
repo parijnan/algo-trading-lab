@@ -40,6 +40,7 @@ from configs_debit import (
     HEDGE_POINTS, STRIKE_STEP, MIN_DTE, BUY_LEG_OFFSET,
     NO_EXIT_BEFORE,
     ENABLE_PROFIT_TARGET, ENABLE_TIME_GATE, ENABLE_TRAILING_PROFIT,
+    ENABLE_DAY0_SPREAD_SL, DAY0_SPREAD_SL_PCT,
     PROFIT_TARGET_PCT,
     TIME_GATE_DAYS, TIME_GATE_MIN_PROFIT_PCT, TIME_GATE_CHECK_TIME,
     TRAIL_VIX_THRESHOLD,
@@ -309,25 +310,31 @@ def check_exits(unrealised_pl: float, max_profit: float,
                 ts: pd.Timestamp,
                 gate_date,
                 max_unrealised_pl_so_far: float,
-                use_trailing: bool = False) -> str:
+                use_trailing: bool = False,
+                days_in_trade: int = 0,
+                net_debit: float = 0.0) -> str:
     """
     Check all toggleable exit conditions for a debit spread.
     Returns the triggered exit type string, or None.
     trend_flip and expiry are handled by the caller — not checked here.
 
-    Exit order (first to trigger wins):
-    1. profit_target   — unrealised_pl >= max_profit * PROFIT_TARGET_PCT
-    2. time_gate       — trade past gate_date, past TIME_GATE_CHECK_TIME,
-                         and never reached TIME_GATE_MIN_PROFIT_PCT * max_profit
-    3. trailing_profit — unrealised_pl < trailing_profit_floor (once active)
-                         only checked when use_trailing is True
+    Exit evaluation order (first to trigger wins):
+    1. profit_target    — unrealised_pl >= max_profit * PROFIT_TARGET_PCT
+    2. day0_spread_sl   — Day 0 only: unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT
+    3. time_gate        — past gate_date, past TIME_GATE_CHECK_TIME, never showed profit
+    4. trailing_profit  — unrealised_pl < trailing_profit_floor (once active, VIX-gated)
     """
     # 1. Profit target
     if ENABLE_PROFIT_TARGET:
         if unrealised_pl >= max_profit * PROFIT_TARGET_PCT:
             return 'profit_target'
 
-    # 2. Time gate — three conditions must all be true simultaneously:
+    # 2. Day 0 spread SL — only active on entry day
+    if ENABLE_DAY0_SPREAD_SL and days_in_trade == 0:
+        if unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT:
+            return 'day0_spread_sl'
+
+    # 3. Time gate — three conditions must all be true simultaneously:
     #    a. current date is on or after gate_date (pre-computed at entry)
     #    b. current time is at or after TIME_GATE_CHECK_TIME (avoids 09:15 noise)
     #    c. trade has never reached the minimum profit threshold
@@ -338,7 +345,7 @@ def check_exits(unrealised_pl: float, max_profit: float,
                 max_unrealised_pl_so_far < gate_threshold):
             return 'time_gate'
 
-    # 3. Trailing profit lock — only active when use_trailing is True
+    # 4. Trailing profit lock — only active when use_trailing is True
     # use_trailing is pre-computed at entry: ENABLE_TRAILING_PROFIT and entry_vix >= TRAIL_VIX_THRESHOLD
     if use_trailing and trailing_profit_floor is not None:
         if unrealised_pl < trailing_profit_floor:
@@ -633,7 +640,8 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         if exit_hit_ts is None:
             ex = check_exits(
                 unrealised, max_profit, running_trail,
-                ts, gate_date, running_max_pl, use_trailing)
+                ts, gate_date, running_max_pl, use_trailing,
+                days_in_trade=days_in_trade, net_debit=net_debit)
             if ex:
                 exit_hit_ts   = ts
                 exit_hit_type = ex
@@ -981,10 +989,12 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
                 # 15-min fallback exit check (with 09:15 guard)
                 if exit_reason is None:
-                    unrealised_15 = _calc_pl(buy_entry, buy_ltp, sell_entry, sell_ltp)
+                    unrealised_15  = _calc_pl(buy_entry, buy_ltp, sell_entry, sell_ltp)
+                    days_in_trade_15 = (ts.date() - trade_entry_date).days if trade_entry_date else 0
                     ex_15 = check_exits(
                         unrealised_15, max_profit, trailing_profit_floor,
-                        ts, gate_date, max_unrealised_pl_so_far, use_trailing)
+                        ts, gate_date, max_unrealised_pl_so_far, use_trailing,
+                        days_in_trade=days_in_trade_15, net_debit=net_debit)
                     if ex_15:
                         if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
                             recheck_ts       = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
@@ -997,7 +1007,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                     sell_entry, recheck_sell_ltp)
                                 ex_recheck = check_exits(
                                     recheck_unreal, max_profit, trailing_profit_floor,
-                                    recheck_ts, gate_date, max_unrealised_pl_so_far, use_trailing)
+                                    recheck_ts, gate_date, max_unrealised_pl_so_far, use_trailing,
+                                    days_in_trade=days_in_trade_15, net_debit=net_debit)
                                 if ex_recheck:
                                     exit_reason  = ex_recheck
                                     exec_ts      = recheck_ts
@@ -1322,6 +1333,7 @@ if __name__ == "__main__":
     logger.info(f"  HEDGE_POINTS   : {HEDGE_POINTS}")
     logger.info(f"  VIX threshold  : {VIX_THRESHOLD}")
     logger.info(f"  Profit target  : {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} — {PROFIT_TARGET_PCT*100:.0f}% of max profit")
+    logger.info(f"  Day 0 SL       : {'ON' if ENABLE_DAY0_SPREAD_SL else 'OFF'} — {DAY0_SPREAD_SL_PCT*100:.0f}% of net debit")
     logger.info(f"  Time gate      : {'ON' if ENABLE_TIME_GATE else 'OFF'} — {TIME_GATE_DAYS}d, from {TIME_GATE_CHECK_TIME}, min {TIME_GATE_MIN_PROFIT_PCT*100:.0f}% of max profit")
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — VIX >= {TRAIL_VIX_THRESHOLD}, triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
 
