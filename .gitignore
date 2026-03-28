@@ -213,7 +213,9 @@ apollo_backtest/data/vix_daily.csv
 
 # Trade output
 apollo_backtest/data/trade_logs/
+apollo_backtest/data/trade_logs_debit/
 apollo_backtest/data/trade_summary.csv
+apollo_backtest/data/trade_summary_debit.csv
 
 # Raw historical data — stored separately
 data/indices/
