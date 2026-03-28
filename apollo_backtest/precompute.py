@@ -15,7 +15,7 @@ import pandas as pd
 # Ensure the project root is on the path so configs and indicators import cleanly
 sys.path.insert(0, os.path.dirname(__file__))
 
-from configs import (
+from configs_debit import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
     NIFTY_15MIN_FILE, NIFTY_75MIN_FILE, VIX_DAILY_FILE,
     PRECOMPUTED_DIR,
