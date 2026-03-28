@@ -59,12 +59,12 @@ STRIKE_STEP             = 50        # Nifty strike interval
 # Bullish (buying PE): buy_strike = ATM + BUY_LEG_OFFSET
 # Bearish (buying CE): buy_strike = ATM - BUY_LEG_OFFSET
 # where ATM = round(spot / STRIKE_STEP) * STRIKE_STEP
-BUY_LEG_OFFSET          = 50        # starting assumption: ATM
+BUY_LEG_OFFSET          = 0        # starting assumption: ATM
 
 # Spread width — distance from buy leg to sell leg in index points.
 # Sell leg is placed further OTM from the buy leg.
 # max_profit = HEDGE_POINTS - net_debit
-HEDGE_POINTS            = 300      # starting assumption: 100pts (test 50/150/200)
+HEDGE_POINTS            = 100      # starting assumption: 100pts (test 50/150/200)
 
 # Expiry roll threshold
 MIN_DTE                 = 2        # If DTE < this, roll to next expiry
@@ -111,20 +111,27 @@ TIME_GATE_CHECK_TIME    = '09:30'  # gate evaluates from this time on gate day
 #
 # trigger: unrealised_pl < trailing_profit_floor (once any stage active)
 #
+# VIX gate: trailing is only active for trades where entry_vix >= TRAIL_VIX_THRESHOLD.
+# Set TRAIL_VIX_THRESHOLD = 0.0 to enable for all trades.
+# Set TRAIL_VIX_THRESHOLD = 999.0 to disable for all trades.
+# ENABLE_TRAILING_PROFIT = False disables trailing entirely regardless of VIX.
+#
 # Stage 1: activates when unrealised_pl >= max_profit * TRAIL_TRIGGER_1
 #          floor set to max_profit * TRAIL_FLOOR_1
 # Stage 2: upgrades when unrealised_pl >= max_profit * TRAIL_TRIGGER_2
 #          floor moves to max_profit * TRAIL_FLOOR_2
 # Stage 3: upgrades when unrealised_pl >= max_profit * TRAIL_TRIGGER_3
 #          floor moves to max_profit * TRAIL_FLOOR_3
-# Calibrated from D-R01: only 25% of winners reach 40% of max profit.
+# Calibrated from D-R07c: tight settings for high-VIX regimes.
+TRAIL_VIX_THRESHOLD     = 20.0    # trailing active only when entry_vix >= this value
+
 TRAIL_TRIGGER_1         = 0.20    # activate at 20% of max profit
 TRAIL_FLOOR_1           = 0.10    # lock in 10% of max profit
 
 TRAIL_TRIGGER_2         = 0.35    # upgrade at 35% of max profit
 TRAIL_FLOOR_2           = 0.20    # lock in 20% of max profit
 
-TRAIL_TRIGGER_3         = 0.50    # upgrade at 50% of max profit
+TRAIL_TRIGGER_3         = 0.45    # upgrade at 45% of max profit
 TRAIL_FLOOR_3           = 0.30    # lock in 30% of max profit
 
 # ---------------------------------------------------------------------------
