@@ -291,7 +291,7 @@ def update_trailing_profit(trailing_profit_floor: float,
 
 
 def get_gate_date(entry_time: pd.Timestamp, gate_days: int,
-                  holidays_set: set) -> 'date':
+                  holidays_set: set):
     """
     Returns the gate activation date: the first trading day on or after
     entry_date + gate_days calendar days.
@@ -299,7 +299,6 @@ def get_gate_date(entry_time: pd.Timestamp, gate_days: int,
 
     holidays_set: a set of datetime.date objects.
     """
-    from datetime import date as date_type
     gate_date = entry_time.date() + timedelta(days=gate_days)
     while gate_date.weekday() >= 5 or gate_date in holidays_set:
         gate_date += timedelta(days=1)
