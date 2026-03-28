@@ -59,12 +59,12 @@ STRIKE_STEP             = 50        # Nifty strike interval
 # Bullish (buying PE): buy_strike = ATM + BUY_LEG_OFFSET
 # Bearish (buying CE): buy_strike = ATM - BUY_LEG_OFFSET
 # where ATM = round(spot / STRIKE_STEP) * STRIKE_STEP
-BUY_LEG_OFFSET          = 0        # starting assumption: ATM
+BUY_LEG_OFFSET          = 50        # starting assumption: ATM
 
 # Spread width — distance from buy leg to sell leg in index points.
 # Sell leg is placed further OTM from the buy leg.
 # max_profit = HEDGE_POINTS - net_debit
-HEDGE_POINTS            = 100      # starting assumption: 100pts (test 50/150/200)
+HEDGE_POINTS            = 300      # starting assumption: 100pts (test 50/150/200)
 
 # Expiry roll threshold
 MIN_DTE                 = 2        # If DTE < this, roll to next expiry
