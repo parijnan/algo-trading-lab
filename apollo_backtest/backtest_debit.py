@@ -213,26 +213,26 @@ def select_strikes(spot: float, direction: str) -> tuple:
     Buy leg: ATM + BUY_LEG_OFFSET (0 = ATM, negative = OTM, positive = ITM)
     Sell leg: further OTM from buy leg by HEDGE_POINTS
 
-    Bullish (buying PE to profit from downside protection / spread):
-      buy_strike  = ATM + BUY_LEG_OFFSET  (higher strike = more ITM for PE)
-      sell_strike = buy_strike - HEDGE_POINTS
+    Bullish (buying CE to profit from upward move):
+      buy_strike  = ATM + BUY_LEG_OFFSET  (lower strike = more ITM for CE)
+      sell_strike = buy_strike + HEDGE_POINTS  (further OTM CE)
 
-    Bearish (buying CE to profit from upside move):
-      buy_strike  = ATM - BUY_LEG_OFFSET  (lower strike = more ITM for CE)
-      sell_strike = buy_strike + HEDGE_POINTS
+    Bearish (buying PE to profit from downward move):
+      buy_strike  = ATM - BUY_LEG_OFFSET  (higher strike = more ITM for PE)
+      sell_strike = buy_strike - HEDGE_POINTS  (further OTM PE)
 
     Returns (buy_strike, sell_strike, option_type)
     """
     atm = int(round(spot / STRIKE_STEP) * STRIKE_STEP)
 
     if direction == 'bullish':
-        option_type = 'pe'
-        buy_strike  = atm + BUY_LEG_OFFSET
-        sell_strike = buy_strike - HEDGE_POINTS
-    else:  # bearish
         option_type = 'ce'
-        buy_strike  = atm - BUY_LEG_OFFSET
+        buy_strike  = atm + BUY_LEG_OFFSET
         sell_strike = buy_strike + HEDGE_POINTS
+    else:  # bearish
+        option_type = 'pe'
+        buy_strike  = atm - BUY_LEG_OFFSET
+        sell_strike = buy_strike - HEDGE_POINTS
 
     return buy_strike, sell_strike, option_type
 
@@ -423,24 +423,8 @@ def _compute_trade_stats(trade_log: list, direction: str) -> dict:
       max/min buy_ltp and their timestamps
       max/min sell_ltp and their timestamps
       best_spot / best_spot_ts — most favourable spot reached:
-        bearish (bought CE): min spot (market moved up, CE appreciated)
-        bullish (bought PE): max spot (market moved down, PE appreciated)
-
-    Note on best_spot direction for debit spreads:
-      Bearish = bought CE = want spot to fall → best_spot is lowest spot
-      Bullish = bought PE = want spot to fall → best_spot is lowest spot
-    Wait — debit spread direction convention:
-      Bullish signal → buy PE (profiting from a downward move? No.)
-    
-    Re-reading design doc Section 3.1:
-      Bullish signal → buy PE at ATM + offset, sell PE further OTM lower
-      This is a BULL PUT SPREAD — profits if spot RISES (or stays above sell strike)
-      Bearish signal → buy CE at ATM - offset, sell CE further OTM higher
-      This is a BEAR CALL SPREAD — profits if spot FALLS (or stays below sell strike)
-    
-    So:
-      Bullish → best_spot = max(spot)  (spot rising is favourable)
-      Bearish → best_spot = min(spot)  (spot falling is favourable)
+        bullish (bought CE): max spot — spot rising is favourable
+        bearish (bought PE): min spot — spot falling is favourable
     """
     empty = {
         'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
