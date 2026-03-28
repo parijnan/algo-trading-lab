@@ -59,12 +59,12 @@ STRIKE_STEP             = 50        # Nifty strike interval
 # Bullish (buying PE): buy_strike = ATM + BUY_LEG_OFFSET
 # Bearish (buying CE): buy_strike = ATM - BUY_LEG_OFFSET
 # where ATM = round(spot / STRIKE_STEP) * STRIKE_STEP
-BUY_LEG_OFFSET          = 0        # starting assumption: ATM
+BUY_LEG_OFFSET          = 50        # starting assumption: ATM
 
 # Spread width — distance from buy leg to sell leg in index points.
 # Sell leg is placed further OTM from the buy leg.
 # max_profit = HEDGE_POINTS - net_debit
-HEDGE_POINTS            = 100      # starting assumption: 100pts (test 50/150/200)
+HEDGE_POINTS            = 300      # starting assumption: 100pts (test 50/150/200)
 
 # Expiry roll threshold
 MIN_DTE                 = 2        # If DTE < this, roll to next expiry
@@ -80,17 +80,17 @@ NO_EXIT_BEFORE          = '09:16'
 
 # ------ Exit Toggles -------------------------------------------------------
 # Set to False to disable that exit for a run (all off = D-R01 calibration)
-ENABLE_PROFIT_TARGET    = False
-ENABLE_DAY0_SPREAD_SL   = False
-ENABLE_TIME_GATE        = False
-ENABLE_TRAILING_PROFIT  = False
+ENABLE_PROFIT_TARGET    = True
+ENABLE_DAY0_SPREAD_SL   = True
+ENABLE_TIME_GATE        = True
+ENABLE_TRAILING_PROFIT  = True
 
 # ------ 1. Profit Target ---------------------------------------------------
 # Exit when unrealised P&L reaches a % of max spread profit.
 # max_profit = HEDGE_POINTS - net_debit
 # trigger: unrealised_pl >= max_profit * PROFIT_TARGET_PCT
 # Calibrated from D-R01: only 8.6% of winners reach 60%; 60% reach 20%.
-PROFIT_TARGET_PCT       = 0.20     # exit at 20% of max spread profit
+PROFIT_TARGET_PCT       = 0.50     # exit at 20% of max spread profit
 
 # ------ 2. Day 0 Spread SL ------------------------------------------------
 # Active ONLY on the entry day (days_in_trade == 0).
@@ -101,7 +101,6 @@ PROFIT_TARGET_PCT       = 0.20     # exit at 20% of max spread profit
 #   Day 0 winners median dip: -6.3% of net debit
 #   Day 0 losers  median dip: -34.5% of net debit
 #   At -20%: catches 30/36 losers (83%), stops 1/8 winners (12%)
-ENABLE_DAY0_SPREAD_SL   = False        # toggle
 DAY0_SPREAD_SL_PCT      = 0.20        # exit if loss > 20% of net debit on Day 0
 
 # ------ 3. Time Gate -------------------------------------------------------
