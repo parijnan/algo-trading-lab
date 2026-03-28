@@ -1,5 +1,5 @@
 """
-backtest.py — Apollo Backtest Engine
+backtest_credit.py — Apollo Backtest Engine
 Dual-timeframe Supertrend trend-following credit spread strategy.
 Deployed only when India VIX > VIX_THRESHOLD.
 
@@ -22,7 +22,7 @@ import mibian
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from configs import (
+from configs_credit import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
     NIFTY_OPTIONS_PATH, CONTRACT_LIST_FILE,
     NIFTY_15MIN_FILE, NIFTY_75MIN_FILE, VIX_DAILY_FILE,

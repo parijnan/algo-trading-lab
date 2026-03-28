@@ -1,5 +1,5 @@
 """
-configs.py — Apollo Backtest Configuration
+configs_credit.py — Apollo Backtest Configuration
 All parameters in one place. Tweak here, nothing else needs to change.
 """
 
