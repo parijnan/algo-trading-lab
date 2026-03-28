@@ -47,7 +47,7 @@ VIX_CAUTION_HIGH        = 16.0      # Above this: Apollo strategy territory
 # ---------------------------------------------------------------------------
 # Higher timeframe — defines trend regime
 ST_75MIN_PERIOD         = 10        # ATR period
-ST_75MIN_MULTIPLIER     = 4.5       # Band multiplier — higher = fewer but cleaner regime flips
+ST_75MIN_MULTIPLIER     = 3.0       # Band multiplier — higher = fewer but cleaner regime flips
 
 # Lower timeframe — entry/exit trigger
 ST_15MIN_PERIOD         = 10        # ATR period
@@ -82,7 +82,7 @@ NO_EXIT_BEFORE          = '09:16'
 ENABLE_INDEX_SL         = False
 ENABLE_OPTION_SL        = False
 ENABLE_SPREAD_SL        = False
-ENABLE_TRAILING_SL      = False
+ENABLE_TRAILING_SL      = True
 
 # ------ 1. Index SL -------------------------------------------------------
 # Exit when spot is within INDEX_SL_OFFSET points of the sell strike (OTM side).
