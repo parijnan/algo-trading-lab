@@ -25,6 +25,7 @@ import os
 import sys
 import logging
 import warnings
+from datetime import timedelta
 import pandas as pd
 import numpy as np
 
@@ -40,7 +41,7 @@ from configs_debit import (
     NO_EXIT_BEFORE,
     ENABLE_PROFIT_TARGET, ENABLE_TIME_GATE, ENABLE_TRAILING_PROFIT,
     PROFIT_TARGET_PCT,
-    TIME_GATE_DAYS, TIME_GATE_MIN_PROFIT_PCT,
+    TIME_GATE_DAYS, TIME_GATE_MIN_PROFIT_PCT, TIME_GATE_CHECK_TIME,
     TRAIL_TRIGGER_1, TRAIL_FLOOR_1,
     TRAIL_TRIGGER_2, TRAIL_FLOOR_2,
     TRAIL_TRIGGER_3, TRAIL_FLOOR_3,
@@ -289,17 +290,36 @@ def update_trailing_profit(trailing_profit_floor: float,
     return new_floor
 
 
+def get_gate_date(entry_time: pd.Timestamp, gate_days: int,
+                  holidays_set: set) -> 'date':
+    """
+    Returns the gate activation date: the first trading day on or after
+    entry_date + gate_days calendar days.
+    Skips weekends (weekday >= 5) and market holidays.
+
+    holidays_set: a set of datetime.date objects.
+    """
+    from datetime import date as date_type
+    gate_date = entry_time.date() + timedelta(days=gate_days)
+    while gate_date.weekday() >= 5 or gate_date in holidays_set:
+        gate_date += timedelta(days=1)
+    return gate_date
+
+
 def check_exits(unrealised_pl: float, max_profit: float,
                 trailing_profit_floor: float,
-                calendar_days_since_entry: int,
+                ts: pd.Timestamp,
+                gate_date,
                 max_unrealised_pl_so_far: float) -> str:
     """
     Check all toggleable exit conditions for a debit spread.
     Returns the triggered exit type string, or None.
     trend_flip and expiry are handled by the caller — not checked here.
 
+    Exit order (first to trigger wins):
     1. profit_target   — unrealised_pl >= max_profit * PROFIT_TARGET_PCT
-    2. time_gate       — trade too old AND never showed meaningful profit
+    2. time_gate       — trade past gate_date, past TIME_GATE_CHECK_TIME,
+                         and never reached TIME_GATE_MIN_PROFIT_PCT * max_profit
     3. trailing_profit — unrealised_pl < trailing_profit_floor (once active)
     """
     # 1. Profit target
@@ -307,10 +327,14 @@ def check_exits(unrealised_pl: float, max_profit: float,
         if unrealised_pl >= max_profit * PROFIT_TARGET_PCT:
             return 'profit_target'
 
-    # 2. Time gate — both conditions must be true simultaneously
-    if ENABLE_TIME_GATE:
+    # 2. Time gate — three conditions must all be true simultaneously:
+    #    a. current date is on or after gate_date (pre-computed at entry)
+    #    b. current time is at or after TIME_GATE_CHECK_TIME (avoids 09:15 noise)
+    #    c. trade has never reached the minimum profit threshold
+    if ENABLE_TIME_GATE and gate_date is not None:
         gate_threshold = max_profit * TIME_GATE_MIN_PROFIT_PCT
-        if (calendar_days_since_entry >= TIME_GATE_DAYS and
+        if (ts.date() >= gate_date and
+                ts.time() >= pd.Timestamp(TIME_GATE_CHECK_TIME).time() and
                 max_unrealised_pl_so_far < gate_threshold):
             return 'time_gate'
 
@@ -561,7 +585,8 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                    last_sell_ltp: float = None,
                                    trailing_profit_floor: float = None,
                                    max_unrealised_pl_so_far: float = 0.0,
-                                   trade_entry_date=None):
+                                   trade_entry_date=None,
+                                   gate_date=None):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
     Checks all exit conditions on every 1-min candle.
@@ -598,7 +623,6 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
 
         unrealised    = _calc_pl(buy_entry, running_buy_ltp, sell_entry, running_sell_ltp)
         days_in_trade = (ts.date() - trade_entry_date).days if trade_entry_date else 0
-        cal_days      = (ts.date() - trade_entry_date).days if trade_entry_date else 0
 
         # Update ratchet and running max before snapshot and exit check
         running_trail  = update_trailing_profit(running_trail, unrealised, max_profit)
@@ -621,7 +645,7 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         if exit_hit_ts is None:
             ex = check_exits(
                 unrealised, max_profit, running_trail,
-                cal_days, running_max_pl)
+                ts, gate_date, running_max_pl)
             if ex:
                 exit_hit_ts   = ts
                 exit_hit_type = ex
@@ -643,7 +667,8 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
                             last_sell_ltp: float = None,
                             trailing_profit_floor: float = None,
                             max_unrealised_pl_so_far: float = 0.0,
-                            trade_entry_date=None):
+                            trade_entry_date=None,
+                            gate_date=None):
     """Append all 1-min snapshots for a full day (overnight-held trades)."""
     day_start = pd.Timestamp(f"{day_date} 09:15:00")
     day_end   = pd.Timestamp(f"{day_date} 15:30:00")
@@ -657,7 +682,7 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
         trade_log,
         last_buy_ltp, last_sell_ltp,
         trailing_profit_floor, max_unrealised_pl_so_far,
-        trade_entry_date,
+        trade_entry_date, gate_date,
     )
 
 
@@ -680,6 +705,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
     high_vix_dates = set(vix_daily[vix_daily['vix_open'] > VIX_THRESHOLD]['date'])
     logger.info(f"High-VIX days (VIX > {VIX_THRESHOLD}): {len(high_vix_dates)}")
+
+    # Pre-build holidays set for gate_date computation at entry
+    holidays_set = set(holidays_df['date'].values) if holidays_df is not None else set()
 
     all_trades      = []
     option_df_cache = {}
@@ -737,6 +765,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     # Exit mechanism state
     trailing_profit_floor    = None   # ratchet — only moves up, never reverts
     max_unrealised_pl_so_far = 0.0    # tracks peak P&L for time_gate condition
+    gate_date                = None   # pre-computed at entry, never changes during trade
     trade_entry_date         = None
 
     for day_date in trading_days:
@@ -791,7 +820,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trade_log,
                     snap_buy_ltp, snap_sell_ltp,
                     trailing_profit_floor, max_unrealised_pl_so_far,
-                    trade_entry_date,
+                    trade_entry_date, gate_date,
                 )
 
             if sl_1min_ts is not None and in_trade:
@@ -853,7 +882,8 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 has_additional = False; add_buy_entry = None; add_sell_entry = None
                 add_buy_ltp = None; add_sell_ltp = None; add_booked_pl = 0.0
                 trailing_profit_floor = None; max_unrealised_pl_so_far = 0.0
-                trade_entry_date = None; sl_1min_ts = None; sl_1min_type = None
+                trade_entry_date = None; gate_date = None
+                sl_1min_ts = None; sl_1min_type = None
             continue
 
         if day_date not in high_vix_dates:
@@ -909,7 +939,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         trade_log,
                         snap_buy_ltp, snap_sell_ltp,
                         trailing_profit_floor, max_unrealised_pl_so_far,
-                        trade_entry_date,
+                        trade_entry_date, gate_date,
                     )
 
             last_15min_ts = ts
@@ -959,11 +989,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
                 # 15-min fallback exit check (with 09:15 guard)
                 if exit_reason is None:
-                    unrealised_15    = _calc_pl(buy_entry, buy_ltp, sell_entry, sell_ltp)
-                    cal_days_15      = (ts.date() - trade_entry_date).days if trade_entry_date else 0
+                    unrealised_15 = _calc_pl(buy_entry, buy_ltp, sell_entry, sell_ltp)
                     ex_15 = check_exits(
                         unrealised_15, max_profit, trailing_profit_floor,
-                        cal_days_15, max_unrealised_pl_so_far)
+                        ts, gate_date, max_unrealised_pl_so_far)
                     if ex_15:
                         if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
                             recheck_ts       = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
@@ -976,7 +1005,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                     sell_entry, recheck_sell_ltp)
                                 ex_recheck = check_exits(
                                     recheck_unreal, max_profit, trailing_profit_floor,
-                                    cal_days_15, max_unrealised_pl_so_far)
+                                    recheck_ts, gate_date, max_unrealised_pl_so_far)
                                 if ex_recheck:
                                     exit_reason  = ex_recheck
                                     exec_ts      = recheck_ts
@@ -1009,7 +1038,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                 trade_log,
                                 snap_buy_ltp, snap_sell_ltp,
                                 trailing_profit_floor, max_unrealised_pl_so_far,
-                                trade_entry_date,
+                                trade_entry_date, gate_date,
                             )
                         if _gf_exit_ts is not None:
                             exec_ts     = _gf_exit_ts + pd.Timedelta(minutes=1)
@@ -1110,6 +1139,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trailing_profit_floor    = None
                     max_unrealised_pl_so_far = 0.0
                     trade_entry_date         = None
+                    gate_date                = None
                     sl_1min_ts               = None
                     sl_1min_type             = None
 
@@ -1200,6 +1230,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 trailing_profit_floor    = None
                 max_unrealised_pl_so_far = 0.0
                 trade_entry_date         = exec_ts.date()
+                gate_date                = get_gate_date(exec_ts, TIME_GATE_DAYS, holidays_set)
 
                 logger.info(
                     f"  ENTRY {direction:8s} | {exec_ts} | "
@@ -1230,7 +1261,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         trade_log,
                         snap_buy_ltp, snap_sell_ltp,
                         trailing_profit_floor, max_unrealised_pl_so_far,
-                        trade_entry_date,
+                        trade_entry_date, gate_date,
                     )
 
     logger.info(f"Backtest complete. Total trades: {len(all_trades)}")
@@ -1292,7 +1323,7 @@ if __name__ == "__main__":
     logger.info(f"  HEDGE_POINTS   : {HEDGE_POINTS}")
     logger.info(f"  VIX threshold  : {VIX_THRESHOLD}")
     logger.info(f"  Profit target  : {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} — {PROFIT_TARGET_PCT*100:.0f}% of max profit")
-    logger.info(f"  Time gate      : {'ON' if ENABLE_TIME_GATE else 'OFF'} — {TIME_GATE_DAYS}d, min {TIME_GATE_MIN_PROFIT_PCT*100:.0f}% of max profit")
+    logger.info(f"  Time gate      : {'ON' if ENABLE_TIME_GATE else 'OFF'} — {TIME_GATE_DAYS}d, from {TIME_GATE_CHECK_TIME}, min {TIME_GATE_MIN_PROFIT_PCT*100:.0f}% of max profit")
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
 
     nifty_15, nifty_75, vix_daily = load_precomputed()

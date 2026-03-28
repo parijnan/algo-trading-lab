@@ -88,16 +88,22 @@ ENABLE_TRAILING_PROFIT  = False
 # Exit when unrealised P&L reaches a % of max spread profit.
 # max_profit = HEDGE_POINTS - net_debit
 # trigger: unrealised_pl >= max_profit * PROFIT_TARGET_PCT
-PROFIT_TARGET_PCT       = 0.60     # exit at 60% of max spread profit
+# Calibrated from D-R01: only 8.6% of winners reach 60%; 60% reach 20%.
+PROFIT_TARGET_PCT       = 0.20     # exit at 20% of max spread profit
 
 # ------ 2. Time Gate -------------------------------------------------------
 # Exit dead trades that have shown no life within N calendar days.
-# Both conditions must be true simultaneously:
-#   - calendar days since entry >= TIME_GATE_DAYS
+# Gate activation: first trading day on or after entry_date + TIME_GATE_DAYS.
+# Weekends and holidays are skipped — gate_date is always a trading day.
+# Both conditions must be true simultaneously to fire:
+#   - current date >= gate_date AND current time >= TIME_GATE_CHECK_TIME
 #   - max unrealised P&L so far < TIME_GATE_MIN_PROFIT_PCT * max_profit
 # Trades that have ever touched TIME_GATE_MIN_PROFIT_PCT survive the gate.
 TIME_GATE_DAYS          = 1        # calendar days before gate activates
 TIME_GATE_MIN_PROFIT_PCT = 0.20   # must have reached 20% of max profit to survive
+TIME_GATE_CHECK_TIME    = '09:30'  # gate evaluates from this time on gate day
+                                    # 09:30 = after first 15-min candle has closed
+                                    # avoids noisy gap-open 09:15 candle
 
 # ------ 3. Trailing Profit Lock --------------------------------------------
 # Ratchet on unrealised P&L as % of max_profit. Activates at Stage 1 trigger,
@@ -111,14 +117,15 @@ TIME_GATE_MIN_PROFIT_PCT = 0.20   # must have reached 20% of max profit to survi
 #          floor moves to max_profit * TRAIL_FLOOR_2
 # Stage 3: upgrades when unrealised_pl >= max_profit * TRAIL_TRIGGER_3
 #          floor moves to max_profit * TRAIL_FLOOR_3
-TRAIL_TRIGGER_1         = 0.40    # activate at 40% of max profit
-TRAIL_FLOOR_1           = 0.20    # lock in 20% of max profit
+# Calibrated from D-R01: only 25% of winners reach 40% of max profit.
+TRAIL_TRIGGER_1         = 0.20    # activate at 20% of max profit
+TRAIL_FLOOR_1           = 0.10    # lock in 10% of max profit
 
-TRAIL_TRIGGER_2         = 0.65    # upgrade at 65% of max profit
-TRAIL_FLOOR_2           = 0.40    # lock in 40% of max profit
+TRAIL_TRIGGER_2         = 0.35    # upgrade at 35% of max profit
+TRAIL_FLOOR_2           = 0.20    # lock in 20% of max profit
 
-TRAIL_TRIGGER_3         = 0.80    # upgrade at 80% of max profit
-TRAIL_FLOOR_3           = 0.60    # lock in 60% of max profit
+TRAIL_TRIGGER_3         = 0.50    # upgrade at 50% of max profit
+TRAIL_FLOOR_3           = 0.30    # lock in 30% of max profit
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
