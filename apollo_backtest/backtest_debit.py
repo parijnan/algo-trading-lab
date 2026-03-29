@@ -47,7 +47,7 @@ from configs_debit import (
     TRAIL_TRIGGER_1, TRAIL_FLOOR_1,
     TRAIL_TRIGGER_2, TRAIL_FLOOR_2,
     TRAIL_TRIGGER_3, TRAIL_FLOOR_3,
-    ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY,
+    ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY, ENABLE_ADDITIONAL_LOTS,
     SLIPPAGE_POINTS, LOT_SIZE,
     SPREAD_TYPE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -954,21 +954,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     add_buy_ltp  = get_option_price(buy_opt_df,  ts, 'close') or add_buy_ltp
                     add_sell_ltp = get_option_price(sell_opt_df, ts, 'close') or add_sell_ltp
 
-                # ELM: exit additional lots at elm_time
-                if has_additional and elm_time is not None and ts >= elm_time:
-                    add_buy_exit_raw  = get_option_price(buy_opt_df,  exec_ts, exec_col) or add_buy_ltp
-                    add_sell_exit_raw = get_option_price(sell_opt_df, exec_ts, exec_col) or add_sell_ltp
-                    add_buy_exit_net  = apply_slippage(add_buy_exit_raw,  is_buy=False)
-                    add_sell_exit_net = apply_slippage(add_sell_exit_raw, is_buy=True)
-                    add_booked_pl     = _calc_pl(
-                        add_buy_entry,  add_buy_exit_net,
-                        add_sell_entry, add_sell_exit_net)
-                    has_additional = False
-                    logger.info(
-                        f"  ELM   additional exit | {exec_ts} | "
-                        f"Add P&L: {add_booked_pl:+.2f} pts"
-                    )
-
+                # Pre-expiry full position exit at elm_time (15:15 day before expiry)
+                # Fires after all other exit checks — prevents carrying into expiry day
+                # and avoids ELM margin requirement. Executes at open of next 1-min candle.
+                # Only check this if no other exit has already fired.
                 exit_reason = None
 
                 # Consume any 1-min exit hit from the preceding snapshot window
@@ -1017,6 +1006,13 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                     sell_ltp     = recheck_sell_ltp
                         else:
                             exit_reason = ex_15
+
+                # Pre-expiry exit — full position at 15:15 day before expiry
+                # Fires after all other checks; exec at open of next candle (15:16)
+                if exit_reason is None and elm_time is not None and ts >= elm_time:
+                    exit_reason = 'pre_expiry_exit'
+                    exec_ts     = ts + pd.Timedelta(minutes=1)
+                    exec_col    = 'open'
 
                 # Expiry check
                 if expiry is not None and ts.date() >= expiry.date() \
@@ -1226,7 +1222,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 snap_buy_ltp  = buy_entry
                 snap_sell_ltp = sell_entry
                 entry_exec_ts = exec_ts
-                has_additional           = True
+                has_additional           = ENABLE_ADDITIONAL_LOTS
                 add_buy_entry            = buy_entry
                 add_sell_entry           = sell_entry
                 add_buy_ltp              = buy_entry
@@ -1332,6 +1328,7 @@ if __name__ == "__main__":
     logger.info(f"  BUY_LEG_OFFSET : {BUY_LEG_OFFSET}")
     logger.info(f"  HEDGE_POINTS   : {HEDGE_POINTS}")
     logger.info(f"  VIX threshold  : {VIX_THRESHOLD}")
+    logger.info(f"  Additional lots: {'ON' if ENABLE_ADDITIONAL_LOTS else 'OFF'}")
     logger.info(f"  Profit target  : {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} — {PROFIT_TARGET_PCT*100:.0f}% of max profit")
     logger.info(f"  Day 0 SL       : {'ON' if ENABLE_DAY0_SPREAD_SL else 'OFF'} — {DAY0_SPREAD_SL_PCT*100:.0f}% of net debit")
     logger.info(f"  Time gate      : {'ON' if ENABLE_TIME_GATE else 'OFF'} — {TIME_GATE_DAYS}d, from {TIME_GATE_CHECK_TIME}, min {TIME_GATE_MIN_PROFIT_PCT*100:.0f}% of max profit")

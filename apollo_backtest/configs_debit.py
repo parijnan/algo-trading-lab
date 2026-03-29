@@ -81,7 +81,7 @@ NO_EXIT_BEFORE          = '09:16'
 # ------ Exit Toggles -------------------------------------------------------
 # Set to False to disable that exit for a run (all off = D-R01 calibration)
 ENABLE_PROFIT_TARGET    = True
-ENABLE_DAY0_SPREAD_SL   = True
+ENABLE_DAY0_SPREAD_SL   = False
 ENABLE_TIME_GATE        = True
 ENABLE_TRAILING_PROFIT  = True
 
@@ -101,6 +101,7 @@ PROFIT_TARGET_PCT       = 0.50     # exit at 20% of max spread profit
 #   Day 0 winners median dip: -6.3% of net debit
 #   Day 0 losers  median dip: -34.5% of net debit
 #   At -20%: catches 30/36 losers (83%), stops 1/8 winners (12%)
+ENABLE_DAY0_SPREAD_SL   = False        # toggle
 DAY0_SPREAD_SL_PCT      = 0.20        # exit if loss > 20% of net debit on Day 0
 
 # ------ 3. Time Gate -------------------------------------------------------
@@ -149,9 +150,13 @@ TRAIL_FLOOR_3           = 0.30    # lock in 30% of max profit
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
 # ---------------------------------------------------------------------------
+# Set ENABLE_ADDITIONAL_LOTS = False for single-lot baseline runs.
+# When False, has_additional is never set — base lot only, no ELM exit needed.
+# When True, 1 additional lot per 2 base lots; P&L = base_pl + add_pl * 0.5
+ENABLE_ADDITIONAL_LOTS    = False      # False = single lot baseline
 ADDITIONAL_LOT_MULTIPLIER = 0.5
-LOT_CAPITAL             = 104000
-ELM_SECONDS_BEFORE_EXPIRY = 87300  # 24h 15min in seconds
+LOT_CAPITAL               = 100000
+ELM_SECONDS_BEFORE_EXPIRY = 87300     # 24h 15min — full position exits at 15:15 day before expiry
 
 # ---------------------------------------------------------------------------
 # Execution Assumptions
