@@ -80,6 +80,7 @@ NO_EXIT_BEFORE          = '09:16'
 
 # ------ Exit Toggles -------------------------------------------------------
 # Set to False to disable that exit for a run (all off = D-R01 calibration)
+ENABLE_HARD_STOP        = True
 ENABLE_PROFIT_TARGET    = True
 ENABLE_DAY0_SPREAD_SL   = False
 ENABLE_TIME_GATE        = True
@@ -99,8 +100,8 @@ ENABLE_TRAILING_PROFIT  = False
 PROFIT_TARGET_VIX_LOW       = 20.0
 PROFIT_TARGET_VIX_HIGH      = 30.0
 PROFIT_TARGET_PCT_LOW_VIX   = 0.50    # VIX < 20
-PROFIT_TARGET_PCT_MID_VIX   = 0.40    # VIX 20–30
-PROFIT_TARGET_PCT_HIGH_VIX  = 0.60    # VIX >= 30
+PROFIT_TARGET_PCT_MID_VIX   = 0.50    # VIX 20–30
+PROFIT_TARGET_PCT_HIGH_VIX  = 0.50    # VIX >= 30
 
 # ------ 2. Day 0 Spread SL ------------------------------------------------
 # Active ONLY on the entry day (days_in_trade == 0).
@@ -133,7 +134,7 @@ DAY0_SPREAD_SL_PCT      = 0.20        # exit if loss > 20% of net debit on Day 0
 TIME_GATE_DAYS                      = 1
 TIME_GATE_CHECK_TIME                = '09:30'
 TIME_GATE_VIX_THRESHOLD             = 23.0
-TIME_GATE_MIN_PROFIT_PCT_LOW_VIX    = 0.25    # VIX < 23
+TIME_GATE_MIN_PROFIT_PCT_LOW_VIX    = 0.33    # VIX < 23
 TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX   = 0.33    # VIX >= 23
 
 # ------ 3. Trailing Profit Lock --------------------------------------------
@@ -164,6 +165,20 @@ TRAIL_FLOOR_2           = 0.15    # lock in 20% of max profit
 
 TRAIL_TRIGGER_3         = 0.40    # upgrade at 45% of max profit
 TRAIL_FLOOR_3           = 0.25    # lock in 30% of max profit
+
+# ------ Hard Stop Loss -----------------------------------------------------
+# Exits the full position when unrealised P&L drops to or below this level.
+# Fires on every 1-min candle close. Executes at next 1-min candle open.
+# Primary purpose: risk management and trading psychology.
+# Set HARD_STOP_POINTS to a large number (e.g. 9999) to effectively disable
+# without toggling ENABLE_HARD_STOP.
+#
+# Calibrated from D-R03fg analysis:
+#   Worst loser in dataset: -83.95 pts
+#   Losers breaching -65: 10/104 (10%), avg saving +7.1 pts each
+#   Winners breaching -65: 1/103 (1%), cost acceptable
+#   Net P&L impact: approximately flat (-Rs 184)
+HARD_STOP_POINTS        = 65.0        # exit when unrealised_pl <= -65 pts
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)

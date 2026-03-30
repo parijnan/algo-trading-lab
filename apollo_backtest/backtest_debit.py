@@ -40,6 +40,7 @@ from configs_debit import (
     HEDGE_POINTS, STRIKE_STEP, MIN_DTE, BUY_LEG_OFFSET,
     NO_EXIT_BEFORE,
     ENABLE_PROFIT_TARGET, ENABLE_TIME_GATE, ENABLE_TRAILING_PROFIT,
+    ENABLE_HARD_STOP, HARD_STOP_POINTS,
     ENABLE_DAY0_SPREAD_SL, DAY0_SPREAD_SL_PCT,
     PROFIT_TARGET_VIX_LOW, PROFIT_TARGET_VIX_HIGH,
     PROFIT_TARGET_PCT_LOW_VIX, PROFIT_TARGET_PCT_MID_VIX, PROFIT_TARGET_PCT_HIGH_VIX,
@@ -323,11 +324,12 @@ def check_exits(unrealised_pl: float, max_profit: float,
     trend_flip and expiry are handled by the caller — not checked here.
 
     Exit evaluation order (first to trigger wins):
-    1. profit_target    — VIX-sensitive threshold on unrealised_pl vs max_profit
-    2. day0_spread_sl   — Day 0 only: unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT
-    3. time_gate        — past gate_date, past TIME_GATE_CHECK_TIME,
+    1. hard_stop        — unconditional floor: unrealised_pl <= -HARD_STOP_POINTS
+    2. profit_target    — VIX-sensitive threshold on unrealised_pl vs max_profit
+    3. day0_spread_sl   — Day 0 only: unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT
+    4. time_gate        — past gate_date, past TIME_GATE_CHECK_TIME,
                           VIX-sensitive min profit threshold never reached
-    4. trailing_profit  — unrealised_pl < trailing_profit_floor (once active, VIX-gated)
+    5. trailing_profit  — unrealised_pl < trailing_profit_floor (once active, VIX-gated)
     """
     # VIX-sensitive profit target threshold
     if entry_vix is not None and entry_vix >= PROFIT_TARGET_VIX_HIGH:
@@ -343,17 +345,22 @@ def check_exits(unrealised_pl: float, max_profit: float,
     else:
         gate_min_profit_pct = TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX
 
-    # 1. Profit target
+    # 1. Hard stop — unconditional floor, fires before all other exits
+    if ENABLE_HARD_STOP:
+        if unrealised_pl <= -HARD_STOP_POINTS:
+            return 'hard_stop'
+
+    # 2. Profit target
     if ENABLE_PROFIT_TARGET:
         if unrealised_pl >= max_profit * profit_target_pct:
             return 'profit_target'
 
-    # 2. Day 0 spread SL — only active on entry day
+    # 3. Day 0 spread SL — only active on entry day
     if ENABLE_DAY0_SPREAD_SL and days_in_trade == 0:
         if unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT:
             return 'day0_spread_sl'
 
-    # 3. Time gate — three conditions must all be true simultaneously:
+    # 4. Time gate — three conditions must all be true simultaneously:
     #    a. current date is on or after gate_date (pre-computed at entry)
     #    b. current time is at or after TIME_GATE_CHECK_TIME (avoids 09:15 noise)
     #    c. trade has never reached the VIX-sensitive minimum profit threshold
@@ -363,7 +370,7 @@ def check_exits(unrealised_pl: float, max_profit: float,
                 max_unrealised_pl_so_far < gate_min_profit_pct * max_profit):
             return 'time_gate'
 
-    # 4. Trailing profit lock — only active when use_trailing is True
+    # 5. Trailing profit lock — only active when use_trailing is True
     # use_trailing is pre-computed at entry: ENABLE_TRAILING_PROFIT and entry_vix >= TRAIL_VIX_THRESHOLD
     if use_trailing and trailing_profit_floor is not None:
         if unrealised_pl < trailing_profit_floor:
@@ -1365,6 +1372,7 @@ if __name__ == "__main__":
     logger.info(f"  HEDGE_POINTS   : {HEDGE_POINTS}")
     logger.info(f"  VIX threshold  : {VIX_THRESHOLD}")
     logger.info(f"  Additional lots: {'ON' if ENABLE_ADDITIONAL_LOTS else 'OFF'}")
+    logger.info(f"  Hard stop      : {'ON' if ENABLE_HARD_STOP else 'OFF'} — -{HARD_STOP_POINTS:.0f} pts")
     logger.info(f"  Profit target  : {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} — "
                 f"{PROFIT_TARGET_PCT_LOW_VIX*100:.0f}%/<{PROFIT_TARGET_VIX_LOW:.0f} | "
                 f"{PROFIT_TARGET_PCT_MID_VIX*100:.0f}%/{PROFIT_TARGET_VIX_LOW:.0f}-{PROFIT_TARGET_VIX_HIGH:.0f} | "
