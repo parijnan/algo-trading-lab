@@ -55,11 +55,11 @@ SPREAD_TYPE             = 'debit'
 STRIKE_STEP             = 50        # Nifty strike interval
 
 # Buy leg offset from ATM in index points.
-# 0 = ATM (starting assumption), negative = OTM, positive = ITM.
+# 0 = ATM (starting assumption), negative = ITM, positive = OTM.
 # Bullish (buying PE): buy_strike = ATM + BUY_LEG_OFFSET
 # Bearish (buying CE): buy_strike = ATM - BUY_LEG_OFFSET
 # where ATM = round(spot / STRIKE_STEP) * STRIKE_STEP
-BUY_LEG_OFFSET          = 50        # starting assumption: ATM
+BUY_LEG_OFFSET          = -50        # starting assumption: ATM
 
 # Spread width — distance from buy leg to sell leg in index points.
 # Sell leg is placed further OTM from the buy leg.
@@ -83,14 +83,24 @@ NO_EXIT_BEFORE          = '09:16'
 ENABLE_PROFIT_TARGET    = True
 ENABLE_DAY0_SPREAD_SL   = False
 ENABLE_TIME_GATE        = True
-ENABLE_TRAILING_PROFIT  = True
+ENABLE_TRAILING_PROFIT  = False
 
 # ------ 1. Profit Target ---------------------------------------------------
-# Exit when unrealised P&L reaches a % of max spread profit.
-# max_profit = HEDGE_POINTS - net_debit
-# trigger: unrealised_pl >= max_profit * PROFIT_TARGET_PCT
-# Calibrated from D-R01: only 8.6% of winners reach 60%; 60% reach 20%.
-PROFIT_TARGET_PCT       = 0.50     # exit at 20% of max spread profit
+# VIX-sensitive profit target — uses entry_vix to select threshold.
+# entry_vix < PROFIT_TARGET_VIX_LOW:                    PCT_LOW_VIX
+# PROFIT_TARGET_VIX_LOW <= entry_vix < VIX_HIGH:        PCT_MID_VIX
+# entry_vix >= PROFIT_TARGET_VIX_HIGH:                  PCT_HIGH_VIX
+#
+# To use a uniform threshold: set all three PCT values to the same number.
+# Calibrated from D-R01f winner depth analysis:
+#   VIX < 20:  50% — median winner peak 62-64%, well served by 50%
+#   VIX 20-30: 40% — shallow winners in 20-23 band, only 17-50% reach 50%
+#   VIX >= 30: 60% — deep winners, mean peak 149%, room to run past 50%
+PROFIT_TARGET_VIX_LOW       = 20.0
+PROFIT_TARGET_VIX_HIGH      = 30.0
+PROFIT_TARGET_PCT_LOW_VIX   = 0.50    # VIX < 20
+PROFIT_TARGET_PCT_MID_VIX   = 0.40    # VIX 20–30
+PROFIT_TARGET_PCT_HIGH_VIX  = 0.60    # VIX >= 30
 
 # ------ 2. Day 0 Spread SL ------------------------------------------------
 # Active ONLY on the entry day (days_in_trade == 0).
@@ -101,7 +111,6 @@ PROFIT_TARGET_PCT       = 0.50     # exit at 20% of max spread profit
 #   Day 0 winners median dip: -6.3% of net debit
 #   Day 0 losers  median dip: -34.5% of net debit
 #   At -20%: catches 30/36 losers (83%), stops 1/8 winners (12%)
-ENABLE_DAY0_SPREAD_SL   = False        # toggle
 DAY0_SPREAD_SL_PCT      = 0.20        # exit if loss > 20% of net debit on Day 0
 
 # ------ 3. Time Gate -------------------------------------------------------
@@ -110,13 +119,22 @@ DAY0_SPREAD_SL_PCT      = 0.20        # exit if loss > 20% of net debit on Day 0
 # Weekends and holidays are skipped — gate_date is always a trading day.
 # Both conditions must be true simultaneously to fire:
 #   - current date >= gate_date AND current time >= TIME_GATE_CHECK_TIME
-#   - max unrealised P&L so far < TIME_GATE_MIN_PROFIT_PCT * max_profit
-# Trades that have ever touched TIME_GATE_MIN_PROFIT_PCT survive the gate.
-TIME_GATE_DAYS          = 1        # calendar days before gate activates
-TIME_GATE_MIN_PROFIT_PCT = 0.20   # must have reached 20% of max profit to survive
-TIME_GATE_CHECK_TIME    = '09:30'  # gate evaluates from this time on gate day
-                                    # 09:30 = after first 15-min candle has closed
-                                    # avoids noisy gap-open 09:15 candle
+#   - max unrealised P&L so far < gate_min_profit_pct * max_profit
+# Trades that have ever touched the threshold survive the gate.
+#
+# VIX-sensitive threshold — uses entry_vix to select gate threshold.
+# entry_vix < TIME_GATE_VIX_THRESHOLD:  TIME_GATE_MIN_PROFIT_PCT_LOW_VIX
+# entry_vix >= TIME_GATE_VIX_THRESHOLD: TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX
+#
+# To use a uniform threshold: set both PCT values to the same number.
+# Calibrated from D-R01f analysis:
+#   VIX < 23:  25% — near-perfect loser/winner separation in 20-23 band
+#   VIX >= 23: 33% — current confirmed optimum
+TIME_GATE_DAYS                      = 1
+TIME_GATE_CHECK_TIME                = '09:30'
+TIME_GATE_VIX_THRESHOLD             = 23.0
+TIME_GATE_MIN_PROFIT_PCT_LOW_VIX    = 0.25    # VIX < 23
+TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX   = 0.33    # VIX >= 23
 
 # ------ 3. Trailing Profit Lock --------------------------------------------
 # Ratchet on unrealised P&L as % of max_profit. Activates at Stage 1 trigger,
@@ -138,14 +156,14 @@ TIME_GATE_CHECK_TIME    = '09:30'  # gate evaluates from this time on gate day
 # Calibrated from D-R07c: tight settings for high-VIX regimes.
 TRAIL_VIX_THRESHOLD     = 20.0    # trailing active only when entry_vix >= this value
 
-TRAIL_TRIGGER_1         = 0.20    # activate at 20% of max profit
-TRAIL_FLOOR_1           = 0.10    # lock in 10% of max profit
+TRAIL_TRIGGER_1         = 0.15    # activate at 20% of max profit
+TRAIL_FLOOR_1           = 0.05    # lock in 10% of max profit
 
-TRAIL_TRIGGER_2         = 0.35    # upgrade at 35% of max profit
-TRAIL_FLOOR_2           = 0.20    # lock in 20% of max profit
+TRAIL_TRIGGER_2         = 0.25    # upgrade at 35% of max profit
+TRAIL_FLOOR_2           = 0.15    # lock in 20% of max profit
 
-TRAIL_TRIGGER_3         = 0.45    # upgrade at 45% of max profit
-TRAIL_FLOOR_3           = 0.30    # lock in 30% of max profit
+TRAIL_TRIGGER_3         = 0.40    # upgrade at 45% of max profit
+TRAIL_FLOOR_3           = 0.25    # lock in 30% of max profit
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
