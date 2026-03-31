@@ -233,3 +233,14 @@ data_pipeline/*.log
 user_credentials*.csv
 instrument_master.csv
 .vscode/settings.json
+
+# Apollo Production — runtime data (never commit live state or trade logs)
+apollo_production/data/apollo_state.csv
+apollo_production/data/apollo_trades.csv
+apollo_production/data/supertrend_cache.csv
+
+# Apollo Production — SDK log output
+apollo_production/logs/
+
+# Apollo Production — credentials (belt-and-suspenders)
+apollo_production/data/user_credentials.csv
