@@ -178,7 +178,7 @@ TRAIL_FLOOR_3           = 0.25    # lock in 30% of max profit
 #   Losers breaching -65: 10/104 (10%), avg saving +7.1 pts each
 #   Winners breaching -65: 1/103 (1%), cost acceptable
 #   Net P&L impact: approximately flat (-Rs 184)
-HARD_STOP_POINTS        = 65.0        # exit when unrealised_pl <= -65 pts
+HARD_STOP_POINTS        = 67.5        # exit when unrealised_pl <= -65 pts
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
