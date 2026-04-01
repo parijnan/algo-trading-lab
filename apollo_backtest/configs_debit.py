@@ -218,7 +218,7 @@ LOT_SIZE                = 75       # Nifty lot size
 # Set to [] to disable.
 # Tuesday (1) = Nifty weekly expiry day. Expiry-day dynamics break trend-following.
 #   39 trades, 38.5% WR, -Rs 18,709 — only day with negative P&L.
-EXCLUDE_TRADE_DAYS      = []          # e.g. [1] to exclude Tuesday
+EXCLUDE_TRADE_DAYS      = [1]          # e.g. [1] to exclude Tuesday
 
 # Filter 2: Excluded signal candle close times.
 # Apollo signals fire on 15-min candle CLOSE; entry executes at NEXT candle OPEN.
@@ -226,4 +226,4 @@ EXCLUDE_TRADE_DAYS      = []          # e.g. [1] to exclude Tuesday
 #   Signal '09:45' close → entry at 10:00 open  (market re-settling, 40% WR)
 #   Signal '10:00' close → entry at 10:15 open  (dead zone, 0% WR historically)
 # Format: list of 'HH:MM' strings. Set to [] to disable.
-EXCLUDE_SIGNAL_CANDLES  = []          # e.g. ['09:45', '10:00']
+EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']          # e.g. ['09:45', '10:00']
