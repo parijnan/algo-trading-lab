@@ -52,6 +52,7 @@ from configs_debit import (
     TRAIL_TRIGGER_2, TRAIL_FLOOR_2,
     TRAIL_TRIGGER_3, TRAIL_FLOOR_3,
     ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY, ENABLE_ADDITIONAL_LOTS,
+    EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
     SLIPPAGE_POINTS, LOT_SIZE,
     SPREAD_TYPE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -723,6 +724,42 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
 
 
 # ---------------------------------------------------------------------------
+# Entry filter
+# ---------------------------------------------------------------------------
+
+def entry_allowed(signal_ts: pd.Timestamp) -> bool:
+    """
+    Returns True if a new entry is permitted at this signal timestamp.
+
+    signal_ts is the 15-min candle whose CLOSE triggered the Supertrend flip.
+    Entry executes at the OPEN of the next candle. Filters are evaluated on
+    the signal candle time — not the entry execution time.
+
+    A Monday signal that enters at Tuesday open is a Monday signal and will
+    NOT be blocked by a Tuesday day-of-week exclusion.
+
+    Does not affect in-trade management — only the entry decision.
+    """
+    # Filter 1: excluded day of week
+    if EXCLUDE_TRADE_DAYS and signal_ts.dayofweek in EXCLUDE_TRADE_DAYS:
+        logger.debug(
+            f"  Entry blocked — excluded day "
+            f"({signal_ts.strftime('%A')}): {signal_ts}")
+        return False
+
+    # Filter 2: excluded signal candle close times
+    if EXCLUDE_SIGNAL_CANDLES:
+        signal_hhmm = signal_ts.strftime('%H:%M')
+        if signal_hhmm in EXCLUDE_SIGNAL_CANDLES:
+            logger.debug(
+                f"  Entry blocked — excluded signal candle "
+                f"({signal_hhmm}): {signal_ts}")
+            return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Main backtest loop
 # ---------------------------------------------------------------------------
 
@@ -1200,6 +1237,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 if entry_direction is None or not has_next:
                     continue
 
+                # Entry filters — evaluated on signal candle time (ts), not exec_ts
+                if not entry_allowed(ts):
+                    continue
+
                 exec_spot = next_row['open']
 
                 selected_expiry = get_expiry(exec_ts, contracts_df)
@@ -1372,7 +1413,7 @@ if __name__ == "__main__":
     logger.info(f"  HEDGE_POINTS   : {HEDGE_POINTS}")
     logger.info(f"  VIX threshold  : {VIX_THRESHOLD}")
     logger.info(f"  Additional lots: {'ON' if ENABLE_ADDITIONAL_LOTS else 'OFF'}")
-    logger.info(f"  Hard stop      : {'ON' if ENABLE_HARD_STOP else 'OFF'} — -{HARD_STOP_POINTS:.0f} pts")
+    logger.info(f"  Hard stop      : {'ON' if ENABLE_HARD_STOP else 'OFF'} — -{HARD_STOP_POINTS:.1f} pts")
     logger.info(f"  Profit target  : {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} — "
                 f"{PROFIT_TARGET_PCT_LOW_VIX*100:.0f}%/<{PROFIT_TARGET_VIX_LOW:.0f} | "
                 f"{PROFIT_TARGET_PCT_MID_VIX*100:.0f}%/{PROFIT_TARGET_VIX_LOW:.0f}-{PROFIT_TARGET_VIX_HIGH:.0f} | "
@@ -1382,6 +1423,8 @@ if __name__ == "__main__":
                 f"{TIME_GATE_MIN_PROFIT_PCT_LOW_VIX*100:.0f}%/<VIX{TIME_GATE_VIX_THRESHOLD:.0f} | "
                 f"{TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX*100:.0f}%/≥VIX{TIME_GATE_VIX_THRESHOLD:.0f}")
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — VIX >= {TRAIL_VIX_THRESHOLD}, triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
+    logger.info(f"  Excl. days     : {EXCLUDE_TRADE_DAYS if EXCLUDE_TRADE_DAYS else 'none'}")
+    logger.info(f"  Excl. candles  : {EXCLUDE_SIGNAL_CANDLES if EXCLUDE_SIGNAL_CANDLES else 'none'}")
 
     nifty_15, nifty_75, vix_daily = load_precomputed()
     nifty_1m, vix_1m              = load_1min_data()

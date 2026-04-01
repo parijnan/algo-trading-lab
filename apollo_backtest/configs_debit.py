@@ -178,7 +178,7 @@ TRAIL_FLOOR_3           = 0.25    # lock in 30% of max profit
 #   Losers breaching -65: 10/104 (10%), avg saving +7.1 pts each
 #   Winners breaching -65: 1/103 (1%), cost acceptable
 #   Net P&L impact: approximately flat (-Rs 184)
-HARD_STOP_POINTS        = 67.5        # exit when unrealised_pl <= -65 pts
+HARD_STOP_POINTS        = 67.5        # exit when unrealised_pl <= -67.5 pts
 
 # ---------------------------------------------------------------------------
 # Additional Lots & ELM (Extra Loss Margin)
@@ -203,3 +203,27 @@ BACKTEST_START_DATE     = '2020-01-01'
 BACKTEST_END_DATE       = None
 
 LOT_SIZE                = 75       # Nifty lot size
+# ---------------------------------------------------------------------------
+# Entry Filters
+# Pre-entry conditions checked on every valid Supertrend flip signal.
+# If any filter rejects, the entry is skipped entirely.
+# In-trade management is completely unaffected — these only block new entries.
+# A trade already open on a filtered day continues to be managed normally.
+# ---------------------------------------------------------------------------
+
+# Filter 1: Excluded days of week.
+# 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
+# Evaluated on signal candle day (ts.dayofweek), not entry execution day.
+# A Monday signal that enters at Tuesday open is treated as a Monday signal.
+# Set to [] to disable.
+# Tuesday (1) = Nifty weekly expiry day. Expiry-day dynamics break trend-following.
+#   39 trades, 38.5% WR, -Rs 18,709 — only day with negative P&L.
+EXCLUDE_TRADE_DAYS      = []          # e.g. [1] to exclude Tuesday
+
+# Filter 2: Excluded signal candle close times.
+# Apollo signals fire on 15-min candle CLOSE; entry executes at NEXT candle OPEN.
+# This list contains the SIGNAL CANDLE CLOSE times to block (not the entry times).
+#   Signal '09:45' close → entry at 10:00 open  (market re-settling, 40% WR)
+#   Signal '10:00' close → entry at 10:15 open  (dead zone, 0% WR historically)
+# Format: list of 'HH:MM' strings. Set to [] to disable.
+EXCLUDE_SIGNAL_CANDLES  = []          # e.g. ['09:45', '10:00']
