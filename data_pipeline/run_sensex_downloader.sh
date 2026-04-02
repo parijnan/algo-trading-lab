@@ -20,6 +20,12 @@ with open('$CREDENTIALS') as f:
     reader = csv.DictReader(f)
     print(next(reader)['slack_token'])
 ")
+SLACK_MEMBER_ID=$(python3 -c "
+import csv
+with open('$CREDENTIALS') as f:
+    reader = csv.DictReader(f)
+    print(next(reader)['slack_member_id'])
+")
 SLACK_DATA_CHANNEL="#data-alerts"
 SLACK_ERROR_CHANNEL="#error-alerts"
 SLACK_URL="https://slack.com/api/chat.postMessage"
@@ -41,7 +47,7 @@ send_slack_error() {
 # ---------------------------------------------------------------------------
 # Step 1 — Send Slack warning
 # ---------------------------------------------------------------------------
-send_slack_msg "⚠️ *Sensex Downloader* – Run started. Do not push updates to GitHub until downloads are complete."
+send_slack_msg "<@$SLACK_MEMBER_ID> ⚠️ *Sensex Downloader* – Run started. Do not push updates to GitHub until downloads are complete."
 echo "$(date '+%Y-%m-%d %H:%M:%S') Slack warning sent." >> "$LOG"
 
 # ---------------------------------------------------------------------------
@@ -86,9 +92,9 @@ fi
 # Step 5 — Final Slack notification
 # ---------------------------------------------------------------------------
 if [ $PY_EXIT_CODE -eq 0 ]; then
-    send_slack_msg "✅ *Sensex Downloader* – Run completed successfully. Safe to push updates to GitHub."
+    send_slack_msg "<@$SLACK_MEMBER_ID> ✅ *Sensex Downloader* – Run completed successfully. Safe to push updates to GitHub."
 else
-    send_slack_msg "🚨 *Sensex Downloader* – Run completed with errors. Check cron.log on VPS."
+    send_slack_msg "<@$SLACK_MEMBER_ID> 🚨 *Sensex Downloader* – Run completed with errors. Check cron.log on VPS."
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Wrapper script complete." >> "$LOG"
