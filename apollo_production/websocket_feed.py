@@ -6,16 +6,17 @@ Public interface (all apollo.py ever calls):
     feed.start(smart_connect_obj, auth_token, user_name)
     feed.subscribe_options(buy_token, sell_token)
     feed.unsubscribe_options(buy_token, sell_token)
-    feed.get_ltp(token)       -> float | None
-    feed.is_connected()       -> bool
+    feed.get_ltp(token)            -> float | None
+    feed.get_ohlc(token)           -> dict {open, high, low, close} | None
+    feed.is_connected()            -> bool
+    feed.resubscribe_all()
     feed.stop()
 
 Design principles:
     - Single daemon thread runs sws.connect() — main thread never blocks
     - threading.Lock protects all shared state reads and writes
-    - Own subscription registry fixes SDK RESUBSCRIBE_FLAG bug:
-      we track what is currently subscribed so any future reconnect
-      logic in apollo.py can resubscribe exactly the right tokens
+    - OHLC aggregated from LTP ticks per token — resets on every get_ohlc() call
+    - Own subscription registry fixes SDK RESUBSCRIBE_FLAG bug
     - Shutdown: sock.close() -> close_connection() -> join(5s) -> ctypes fallback
     - No Slack messaging — caller's responsibility
     - No strategy logic — pure feed layer
@@ -24,7 +25,6 @@ Design principles:
 import ctypes
 import threading
 import time
-from datetime import datetime
 
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 
@@ -51,30 +51,29 @@ class ApolloFeed:
 
     Lifecycle:
         feed = ApolloFeed()
-        feed.start(obj, auth_token, user_name)   # called once at session start
+        feed.start(obj, auth_token, user_name)    # called once at session start
         feed.subscribe_options(buy_tok, sell_tok) # called after entry
         feed.unsubscribe_options(buy_tok, sell_tok) # called after exit
         feed.stop()                               # called at session end
     """
 
     def __init__(self):
-        self._sws          = None         # SmartWebSocketV2 instance
-        self._ws_thread    = None         # daemon thread running sws.connect()
+        self._sws          = None
+        self._ws_thread    = None
         self._lock         = threading.Lock()
 
-        # Shared state — written by WS thread, read by main thread
-        self._ltp          = {}           # {token: float}
-        self._tick_count   = {}           # {token: int}
-        self._connected    = False        # True once on_open fires
+        # LTP shared state — written by WS thread, read by main thread
+        self._ltp          = {}   # {token: float}
+        self._tick_count   = {}   # {token: int}
+        self._connected    = False
 
-        # Subscription registry — our source of truth for what is subscribed.
-        # Fixes SDK RESUBSCRIBE_FLAG bug: SDK tracks subscriptions in
-        # input_request_dict but sets RESUBSCRIBE_FLAG=True on unsubscribe,
-        # so a reconnect would resubscribe unsubscribed tokens. We maintain
-        # our own registry so apollo.py can call feed.resubscribe_all() on
-        # reconnect with exactly the right tokens.
-        self._subscribed_index   = set()  # index tokens currently subscribed
-        self._subscribed_options = set()  # option tokens currently subscribed
+        # OHLC aggregation state — one window per token, resets on get_ohlc()
+        # Structure: {token: {open, high, low, close, has_tick}}
+        self._ohlc         = {}
+
+        # Subscription registry — our source of truth, fixes SDK RESUBSCRIBE_FLAG bug
+        self._subscribed_index   = set()
+        self._subscribed_options = set()
 
     # -----------------------------------------------------------------------
     # Public interface
@@ -87,10 +86,11 @@ class ApolloFeed:
         Parameters
         ----------
         smart_connect_obj : SmartConnect
-            Authenticated SmartConnect instance. api_key read from
-            smart_connect_obj.api_key. Feed token fetched via getfeedToken().
+            Authenticated SmartConnect instance.
+            api_key read from smart_connect_obj.api_key.
+            Feed token fetched via getfeedToken().
         auth_token : str
-            JWT token from the login response (data['data']['jwtToken']).
+            JWT token from login response (data['data']['jwtToken']).
         user_name : str
             Angel One client code — required by SmartWebSocketV2.__init__().
         """
@@ -102,13 +102,11 @@ class ApolloFeed:
             max_retry_attempt=0   # no auto-reconnect — apollo.py decides
         )
 
-        # Wire callbacks
         self._sws.on_open  = self._on_open
         self._sws.on_data  = self._on_data
         self._sws.on_error = self._on_error
         self._sws.on_close = self._on_close
 
-        # Start feed in a daemon thread — dies automatically if main exits
         self._ws_thread = threading.Thread(
             target=self._sws.connect,
             name="apollo-ws-feed",
@@ -130,29 +128,25 @@ class ApolloFeed:
     def subscribe_options(self, buy_token, sell_token):
         """
         Subscribe to LTP feed for both option legs after entry.
-
-        Parameters
-        ----------
-        buy_token : str
-            Instrument token for the ITM (buy) leg.
-        sell_token : str
-            Instrument token for the OTM (sell) leg.
+        Initialises a fresh OHLC window for each token.
         """
         tokens = [t for t in [buy_token, sell_token]
                   if t not in self._subscribed_options]
         if not tokens:
-            return   # already subscribed — nothing to do
+            return
 
         token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": tokens}]
         self._sws.subscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:
-            self._subscribed_options.update(tokens)
+            for t in tokens:
+                self._subscribed_options.add(t)
+                self._ohlc[t] = self._empty_ohlc()
 
     def unsubscribe_options(self, buy_token, sell_token):
         """
         Unsubscribe option leg tokens after exit.
-        Also clears their LTP entries from shared state.
+        Clears LTP and OHLC entries from shared state.
         """
         tokens = [t for t in [buy_token, sell_token]
                   if t in self._subscribed_options]
@@ -167,21 +161,42 @@ class ApolloFeed:
                 self._subscribed_options.discard(t)
                 self._ltp.pop(t, None)
                 self._tick_count.pop(t, None)
+                self._ohlc.pop(t, None)
 
     def get_ltp(self, token):
         """
         Get the last traded price for a token.
-
-        Returns
-        -------
-        float or None
-            None if no tick has been received yet for this token.
+        Returns float or None if no tick received yet.
         """
         with self._lock:
             return self._ltp.get(token)
 
+    def get_ohlc(self, token):
+        """
+        Get the OHLC aggregated from ticks since the last call for this token,
+        and reset the window for the next interval.
+
+        Returns dict with keys {open, high, low, close} or None if no ticks
+        have been received since the last reset.
+
+        Called every TRADE_UPDATE_INTERVAL seconds from apollo.py.
+        """
+        with self._lock:
+            window = self._ohlc.get(token)
+            if window is None or not window['has_tick']:
+                return None
+            result = {
+                'open':  window['open'],
+                'high':  window['high'],
+                'low':   window['low'],
+                'close': window['close'],
+            }
+            # Reset window for next interval
+            self._ohlc[token] = self._empty_ohlc()
+            return result
+
     def get_tick_count(self, token):
-        """Return the total number of ticks received for a token."""
+        """Return total ticks received for a token."""
         with self._lock:
             return self._tick_count.get(token, 0)
 
@@ -192,10 +207,9 @@ class ApolloFeed:
 
     def resubscribe_all(self):
         """
-        Resubscribe all currently tracked tokens.
-        Call this from apollo.py if a reconnect is needed after a network drop.
-        Uses our own registry — not the SDK's input_request_dict — so only
-        currently-wanted tokens are resubscribed.
+        Resubscribe all currently tracked tokens using our own registry.
+        Call from apollo.py after a reconnect. Fixes SDK RESUBSCRIBE_FLAG bug:
+        only currently-wanted tokens are resubscribed, not stale ones.
         """
         with self._lock:
             index_tokens  = list(self._subscribed_index)
@@ -217,33 +231,29 @@ class ApolloFeed:
         Shut down the WebSocket feed cleanly.
 
         Sequence:
-          1. Close the underlying socket to unblock C-level recv()
-          2. Call close_connection() for the SDK clean path
+          1. Close underlying socket to unblock C-level recv()
+          2. Call close_connection() for SDK clean path
           3. Join thread with 5s timeout
           4. ctypes hard kill as fallback if thread survives
         """
         if self._ws_thread is None:
             return
 
-        # Step 1: Unblock the C recv() call
         try:
             if self._sws.wsapp and self._sws.wsapp.sock:
                 self._sws.wsapp.sock.close()
         except Exception:
             pass
 
-        # Step 2: SDK close
         try:
             self._sws.close_connection()
         except Exception:
             pass
 
-        # Step 3: Wait for clean exit
         self._ws_thread.join(timeout=5)
         if not self._ws_thread.is_alive():
             return
 
-        # Step 4: ctypes hard kill
         self._ctypes_kill(self._ws_thread)
         self._ws_thread.join(timeout=3)
 
@@ -256,34 +266,60 @@ class ApolloFeed:
             self._connected = True
 
         # Subscribe Nifty index and VIX immediately on connect
+        # Initialise OHLC windows for index tokens
         token_list = [{"exchangeType": EXCHANGE_NSE_CM,
                        "tokens": [NIFTY_TOKEN, VIX_TOKEN]}]
         self._sws.subscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:
-            self._subscribed_index.update([NIFTY_TOKEN, VIX_TOKEN])
+            for t in [NIFTY_TOKEN, VIX_TOKEN]:
+                self._subscribed_index.add(t)
+                self._ohlc[t] = self._empty_ohlc()
 
     def _on_data(self, wsapp, message):
         """
-        Tick handler — must be fast, no blocking operations.
+        Tick handler — fast, no blocking.
+        Updates LTP and OHLC window for every tick received.
         Decodes last_traded_price (raw int / 100 = actual price).
         """
         try:
             token = message.get("token")
             raw   = message.get("last_traded_price")
-            if token is not None and raw is not None:
-                ltp = float(raw) / 100.0
-                with self._lock:
-                    self._ltp[token]        = ltp
-                    self._tick_count[token] = self._tick_count.get(token, 0) + 1
+            if token is None or raw is None:
+                return
+
+            ltp = float(raw) / 100.0
+
+            with self._lock:
+                # Update LTP
+                self._ltp[token]        = ltp
+                self._tick_count[token] = self._tick_count.get(token, 0) + 1
+
+                # Update OHLC window
+                if token not in self._ohlc:
+                    self._ohlc[token] = self._empty_ohlc()
+
+                window = self._ohlc[token]
+                if not window['has_tick']:
+                    # First tick in this interval — set open
+                    window['open']     = ltp
+                    window['high']     = ltp
+                    window['low']      = ltp
+                    window['close']    = ltp
+                    window['has_tick'] = True
+                else:
+                    if ltp > window['high']:
+                        window['high'] = ltp
+                    if ltp < window['low']:
+                        window['low']  = ltp
+                    window['close']    = ltp
+
         except Exception:
             pass   # never let a tick handler exception crash the WS thread
 
     def _on_error(self, wsapp, error):
         with self._lock:
             self._connected = False
-        # Caller (apollo.py) detects disconnection via is_connected() == False
-        # and decides whether to attempt a restart. We do not auto-reconnect here.
 
     def _on_close(self, wsapp):
         with self._lock:
@@ -294,11 +330,15 @@ class ApolloFeed:
     # -----------------------------------------------------------------------
 
     @staticmethod
+    def _empty_ohlc():
+        """Return a fresh empty OHLC window."""
+        return {'open': None, 'high': None, 'low': None, 'close': None, 'has_tick': False}
+
+    @staticmethod
     def _ctypes_kill(thread):
         """
         Inject SystemExit into a thread via CPython internals.
-        Only reaches the thread if it is executing Python bytecode —
-        sock.close() above ensures it is no longer blocked in C recv().
+        sock.close() above ensures thread is not blocked in C recv().
         """
         if not thread.is_alive():
             return
@@ -306,6 +346,5 @@ class ApolloFeed:
         res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
             ctypes.c_long(thread.ident), exc)
         if res > 1:
-            # Too many threads affected — undo immediately
             ctypes.pythonapi.PyThreadState_SetAsyncExc(
                 ctypes.c_long(thread.ident), None)

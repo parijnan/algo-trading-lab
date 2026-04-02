@@ -244,3 +244,5 @@ apollo_production/logs/
 
 # Apollo Production — credentials (belt-and-suspenders)
 apollo_production/data/user_credentials.csv
+apollo_production/data/trade_logs/
+apollo_production/data/trade_counter.txt

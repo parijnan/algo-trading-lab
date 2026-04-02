@@ -9,24 +9,24 @@ Run via cron on delos:
 
 Architecture:
     - Apollo class owns login, run loop, entry/exit logic, order placement
-    - websocket_feed.ApolloFeed  — tick feed, LTP access, option subscribe/unsub
-    - supertrend.SupertrendManager — ST seeding and 15-min candle updates
-    - state.ApolloState            — persistent trade state across restarts
+    - websocket_feed.ApolloFeed     — tick feed, LTP/OHLC access, option subscribe/unsub
+    - supertrend.SupertrendManager  — ST seeding and 15-min candle updates
+    - state.ApolloState             — persistent trade state across restarts
+    - functions.py                  — Slack/Telegram messaging, exception handling
 
 Execution model (mirrors backtest exactly):
     - Signal fires on 15-min candle CLOSE
     - Entry/exit executes at OPEN of the next 15-min candle
     - Hard stop and profit target polled every ~1s between candle closes
+    - Every TRADE_UPDATE_INTERVAL seconds: trade log row appended + Slack update
     - Time gate checked once at 09:30 on gate day
     - Trend flip checked at every 15-min candle close
 """
 
 import os
 import sys
-import time
 import pandas as pd
 from io import StringIO
-from math import floor, ceil
 from datetime import datetime, date, timedelta
 from traceback import format_exc
 from urllib.request import urlopen
@@ -36,7 +36,7 @@ from time import sleep
 from SmartApi import SmartConnect
 
 from configs_live import (
-    CREDENTIALS_FILE,
+    api_key, user_name, password, qr_code,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
     VIX_THRESHOLD,
@@ -47,14 +47,15 @@ from configs_live import (
     ENABLE_TIME_GATE, TIME_GATE_DAYS, TIME_GATE_CHECK_TIME, TIME_GATE_MIN_PROFIT_PCT,
     ELM_SECONDS_BEFORE_EXPIRY,
     NO_EXIT_BEFORE,
-    ORDER_TIMEOUT_SEC,
     FO_EXCHANGE_SEGMENT,
+    TRADE_UPDATE_INTERVAL,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     TRADES_FILE, DATA_DIR,
 )
 from websocket_feed import ApolloFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN
 from supertrend import SupertrendManager
 from state import ApolloState, load_state, save_state, init_state, clear_trade_fields
+from functions import slack_bot_sendtext, handle_exception
 
 # ---------------------------------------------------------------------------
 # Rate limit counters — module-level, same pattern as Artemis functions.py
@@ -94,11 +95,14 @@ def _reset_counters():
 # ---------------------------------------------------------------------------
 _SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 
+# Trade log directory
+_TRADE_LOGS_DIR = os.path.join(DATA_DIR, "trade_logs")
+
 
 class Apollo:
     """
     Apollo live execution engine.
-    Owns the full session lifecycle: login → seed → run loop → logout.
+    Owns the full session lifecycle: login -> seed -> run loop -> logout.
     """
 
     # -----------------------------------------------------------------------
@@ -108,7 +112,6 @@ class Apollo:
     def __init__(self):
         self.obj            = None   # SmartConnect instance
         self.auth_token     = None
-        self.user_name      = None
         self.instrument_df  = None   # Nifty options rows from scrip master
         self.holidays       = set()  # set of date objects
 
@@ -120,21 +123,25 @@ class Apollo:
         self._closing_time  = datetime.strptime(MARKET_CLOSE, "%H:%M").time()
         self._no_exit_time  = datetime.strptime(NO_EXIT_BEFORE, "%H:%M").time()
 
-        # Qty freeze for Nifty on NFO — fixed at 1800 units (36 lots of 50)
-        # Update if exchange changes this
+        # Qty freeze for Nifty on NFO — 1800 units (36 lots of 50)
         self._qty_freeze    = 1800
+
+        # Per-trade log state
+        self._trade_log     = []     # list of row dicts for current trade
+        self._trade_counter = self._load_trade_counter()
+        self._update_elapsed = 0    # seconds since last trade update
 
     def login(self):
         """
         Login to Angel One, download scrip master, seed Supertrend,
         start WebSocket feed, and send session-start Slack alert.
-        Exits the process if market is closed or it's a holiday.
+        Exits the process if market is closed or it is a holiday.
         """
         now = datetime.now()
 
         # Market hours check
         if now.time() < self._opening_time or now.time() > self._closing_time:
-            self._send_slack(
+            slack_bot_sendtext(
                 f"APOLLO: Market is closed. Exiting at {now:%Y-%m-%d %H:%M:%S}.",
                 SLACK_TRADEBOT_CHANNEL)
             sys.exit(0)
@@ -142,34 +149,25 @@ class Apollo:
         # Holiday check
         self._load_holidays()
         if now.date() in self.holidays:
-            self._send_slack(
+            slack_bot_sendtext(
                 f"APOLLO: Market holiday today. Exiting at {now:%Y-%m-%d %H:%M:%S}.",
                 SLACK_TRADEBOT_CHANNEL)
             sys.exit(0)
 
-        # Load credentials
-        creds         = pd.read_csv(CREDENTIALS_FILE)
-        row           = creds.iloc[0]
-        api_key       = row['api_key']
-        self.user_name = row['user_name']
-        password      = str(row['password'])
-        qr_code       = row['qr_code']
-        self._slack_token = row['slack_token']
-
-        # Login with retry
+        # Login with retry — credentials imported from configs_live
         self.obj = SmartConnect(api_key=api_key)
         while True:
             try:
-                totp      = TOTP(qr_code).now()
-                data      = self.obj.generateSession(self.user_name, password, totp)
+                totp            = TOTP(qr_code).now()
+                data            = self.obj.generateSession(user_name, password, totp)
                 break
             except Exception as e:
-                self._handle_exception(e)
+                handle_exception(e)
             sleep(1)
 
         self.auth_token = data['data']['jwtToken']
 
-        self._send_slack(
+        slack_bot_sendtext(
             f"APOLLO: Logged in at {datetime.now():%Y-%m-%d %H:%M:%S}.",
             SLACK_TRADEBOT_CHANNEL)
 
@@ -182,31 +180,32 @@ class Apollo:
 
         # Seed Supertrend history
         self.st.seed(self.obj)
-        self._send_slack(
+        slack_bot_sendtext(
             f"APOLLO: Supertrend seeded ({self.st.get_cache().shape[0]} candles).",
             SLACK_TRADEBOT_CHANNEL)
 
         # Start WebSocket feed
-        self.feed.start(self.obj, self.auth_token, self.user_name)
-        self._send_slack(
-            f"APOLLO: WebSocket feed live. Nifty: {self.feed.get_ltp(NIFTY_TOKEN):.2f}  "
+        self.feed.start(self.obj, self.auth_token, user_name)
+        slack_bot_sendtext(
+            f"APOLLO: WebSocket feed live. "
+            f"Nifty: {self.feed.get_ltp(NIFTY_TOKEN):.2f}  "
             f"VIX: {self.feed.get_ltp(FEED_VIX_TOKEN):.2f}",
             SLACK_TRADEBOT_CHANNEL)
 
         # If restarting mid-trade, re-subscribe option tokens
         if self.state.status == 'in_trade':
             self.feed.subscribe_options(self.state.buy_token, self.state.sell_token)
-            self._send_slack(
+            slack_bot_sendtext(
                 f"APOLLO: Restarted — resuming active {self.state.direction.upper()} trade. "
                 f"Buy {self.state.buy_strike} @ {self.state.buy_entry:.1f} | "
                 f"Sell {self.state.sell_strike} @ {self.state.sell_entry:.1f}",
                 SLACK_TRADE_ALERTS)
 
-        # If we crashed during exit, check positions and alert for manual review
+        # If crashed during exit, alert for manual review
         if self.state.status == 'exiting':
-            self._send_slack(
-                f"APOLLO ALERT: Restarted with status=exiting. "
-                f"Check open positions manually and update apollo_state.csv.",
+            slack_bot_sendtext(
+                "APOLLO ALERT: Restarted with status=exiting. "
+                "Check open positions manually and update apollo_state.csv.",
                 SLACK_ERRORS_CHANNEL)
             sys.exit(1)
 
@@ -216,10 +215,13 @@ class Apollo:
 
         Each iteration waits for the next 15-min candle close, updates
         Supertrend, checks exits (if in trade) or entry filters (if idle).
-        Between candle closes, polls LTPs every ~1s for hard stop and PT.
+        Between candle closes, polls LTPs every ~1s for hard stop and PT,
+        and appends a trade log row + sends Slack update every
+        TRADE_UPDATE_INTERVAL seconds.
         """
-        self._send_slack(
-            f"APOLLO: Run loop started. VIX today: {self._get_todays_vix():.2f}  "
+        slack_bot_sendtext(
+            f"APOLLO: Run loop started. "
+            f"VIX today: {self._get_todays_vix():.2f}  "
             f"Threshold: {VIX_THRESHOLD}",
             SLACK_TRADEBOT_CHANNEL)
 
@@ -229,23 +231,31 @@ class Apollo:
                 break
 
             # ------------------------------------------------------------------
-            # Wait for next 15-min candle close
+            # Wait for next 15-min candle close, polling every ~1s
             # ------------------------------------------------------------------
             next_close = self._next_candle_close(now)
             seconds_to_close = (next_close - now).total_seconds()
 
-            # Between candle closes: poll for hard stop and PT every 1s
             elapsed = 0
             while elapsed < seconds_to_close - 2:
                 sleep(1)
                 elapsed += 1
+                self._update_elapsed += 1
+
                 if self.state.status == 'in_trade':
+                    # Tick-by-tick hard stop and PT checks
                     if self._check_hard_stop():
                         continue
                     if self._check_profit_target():
                         continue
 
-            # Sleep the remaining fraction to land close to candle close
+                    # Periodic trade log + Slack update
+                    if self._update_elapsed >= TRADE_UPDATE_INTERVAL:
+                        self._append_trade_log_row()
+                        self._send_trade_update()
+                        self._update_elapsed = 0
+
+            # Sleep remaining fraction to land close to candle close
             remaining = (next_close - datetime.now()).total_seconds()
             if remaining > 0:
                 sleep(remaining)
@@ -255,44 +265,40 @@ class Apollo:
             # ------------------------------------------------------------------
             candle = self._fetch_latest_candle(next_close)
             if candle is None:
-                continue   # data not yet available — skip this candle
+                continue
 
             ts = candle['time_stamp']
             try:
                 trend_15, flip_15, trend_75, flip_75 = self.st.update(candle)
             except Exception as e:
-                self._handle_exception(e)
+                handle_exception(e)
                 continue
 
             if trend_15 is None or trend_75 is None:
-                continue   # ST warmup period — not enough history yet
+                continue   # ST warmup period
 
             # ------------------------------------------------------------------
-            # In-trade exit checks (in priority order per spec)
+            # In-trade exit checks (priority order per spec)
             # ------------------------------------------------------------------
             if self.state.status == 'in_trade':
 
-                # 1. Hard stop and PT already checked tick-by-tick above.
-                #    Run one final check at candle close as safety net.
+                # Final hard stop and PT check at candle close
                 if self._check_hard_stop():
                     continue
                 if self._check_profit_target():
                     continue
 
-                # 2. Time gate — once at TIME_GATE_CHECK_TIME on gate day
+                # Time gate — once at TIME_GATE_CHECK_TIME on gate day
                 if self._check_time_gate(ts):
                     continue
 
-                # 3. Trend flip — primary exit signal
+                # Trend flip — primary exit signal
                 if self._check_trend_flip(trend_15, flip_15):
                     continue
 
-                # 4. Pre-expiry exit — 15:15 day before expiry
+                # Pre-expiry exit — 15:15 day before expiry
                 if self._check_pre_expiry(ts):
                     continue
-
-                # 5. Periodic trade status update to #trade-updates
-                self._send_trade_update()
 
             # ------------------------------------------------------------------
             # Idle entry logic
@@ -307,7 +313,7 @@ class Apollo:
 
                 direction = self._resolve_direction(trend_15, trend_75)
                 if direction is None:
-                    continue   # misaligned timeframes — no trade
+                    continue
 
                 if not self._check_entry_filters(ts):
                     continue
@@ -322,10 +328,10 @@ class Apollo:
         """Stop feed, terminate session, send close alert."""
         self.feed.stop()
         try:
-            self.obj.terminateSession(self.user_name)
+            self.obj.terminateSession(user_name)
         except Exception as e:
-            self._handle_exception(e)
-        self._send_slack(
+            handle_exception(e)
+        slack_bot_sendtext(
             f"APOLLO: Session complete. Logged out at {datetime.now():%Y-%m-%d %H:%M:%S}.",
             SLACK_TRADEBOT_CHANNEL)
 
@@ -334,25 +340,16 @@ class Apollo:
     # -----------------------------------------------------------------------
 
     def _get_todays_vix(self):
-        """
-        Get today's opening VIX from the WebSocket feed.
-        Falls back to VIX_THRESHOLD + 1 (trade allowed) if feed not yet ready.
-        """
         vix = self.feed.get_ltp(FEED_VIX_TOKEN)
         return vix if vix is not None else VIX_THRESHOLD + 1
 
     def _vix_gate_passes(self):
-        """True if today's VIX is above VIX_THRESHOLD."""
         return self._get_todays_vix() > VIX_THRESHOLD
 
     def _check_entry_filters(self, ts):
         """
         D-R-P2c entry filters. Applied to signal candle timestamp.
         Returns True if entry is allowed, False if blocked.
-
-        Filters:
-            1. Day of week — no entries on EXCLUDE_TRADE_DAYS (Tuesday)
-            2. Signal candle time — no entries on EXCLUDE_SIGNAL_CANDLES
         """
         if ts.dayofweek in EXCLUDE_TRADE_DAYS:
             return False
@@ -361,10 +358,6 @@ class Apollo:
         return True
 
     def _resolve_direction(self, trend_15, trend_75):
-        """
-        Resolve entry direction from dual Supertrend alignment.
-        Returns 'bullish', 'bearish', or None if misaligned.
-        """
         if trend_75 is True  and trend_15 is True:
             return 'bullish'
         if trend_75 is False and trend_15 is False:
@@ -382,8 +375,6 @@ class Apollo:
         Returns expiry as a date object, or None if not found.
         """
         today = date.today()
-        # Filter to future expiries from instrument_df
-        # Expiry column in scrip master is a string like '25APR2024'
         expiry_dates = (
             self.instrument_df['expiry']
             .drop_duplicates()
@@ -393,7 +384,6 @@ class Apollo:
         future = expiry_dates[expiry_dates >= today]
         if future.empty:
             return None
-
         current_expiry = future.iloc[0]
         dte = (current_expiry - today).days
         if dte >= MIN_DTE:
@@ -404,8 +394,7 @@ class Apollo:
 
     def _fetch_symbol_and_token(self, strike, option_type, expiry_date):
         """
-        Look up trading symbol and token from instrument_df for a given
-        strike, option type ('ce' or 'pe'), and expiry date.
+        Look up trading symbol and token from instrument_df.
         Returns (symbol, token) or (None, None) if not found.
         """
         expiry_str = expiry_date.strftime('%d%b%Y').upper()
@@ -422,19 +411,9 @@ class Apollo:
         """
         Calculate buy (ITM) and sell (OTM) strikes for an ITM debit spread.
 
-        For a debit spread:
-            Buy leg: ITM option (BUY_LEG_OFFSET = -50 from ATM)
-            Sell leg: HEDGE_POINTS further OTM from buy leg
-
-        Direction mapping:
-            bullish → CE options  (buy ITM CE, sell OTM CE)
-            bearish → PE options  (buy ITM PE, sell OTM PE)
-
-        For CE: ITM means strike < spot → ATM - 50
-        For PE: ITM means strike > spot → ATM + 50
-        BUY_LEG_OFFSET = -50 handles both correctly:
-            CE: atm + (-50) = atm - 50  ✓ ITM
-            PE: atm - (-50) = atm + 50  ✓ ITM
+        BUY_LEG_OFFSET = -50 produces ITM in both directions:
+            bullish CE: atm + (-50) = atm - 50 -> ITM CE (strike < spot)
+            bearish PE: atm - (-50) = atm + 50 -> ITM PE (strike > spot)
 
         Returns (buy_strike, sell_strike, option_type,
                  buy_symbol, buy_token, sell_symbol, sell_token)
@@ -444,10 +423,10 @@ class Apollo:
         atm = round(spot / STRIKE_STEP) * STRIKE_STEP
 
         if direction == 'bullish':
-            buy_strike  = int(atm + BUY_LEG_OFFSET)       # atm - 50 → ITM CE
+            buy_strike  = int(atm + BUY_LEG_OFFSET)       # atm - 50 -> ITM CE
             sell_strike = int(buy_strike + HEDGE_POINTS)   # further OTM CE
         else:
-            buy_strike  = int(atm - BUY_LEG_OFFSET)       # atm + 50 → ITM PE
+            buy_strike  = int(atm - BUY_LEG_OFFSET)       # atm + 50 -> ITM PE
             sell_strike = int(buy_strike - HEDGE_POINTS)   # further OTM PE
 
         buy_symbol,  buy_token  = self._fetch_symbol_and_token(
@@ -470,27 +449,24 @@ class Apollo:
         Execute entry for a new debit spread position.
         Signal fired on candle close at signal_ts — entry executes now
         (next candle open). Always buy first, then sell.
-
-        Populates state and persists to disk. Subscribes option tokens
-        to WebSocket feed. Sends Slack entry alert.
         """
         spot = self.feed.get_ltp(NIFTY_TOKEN)
         if spot is None:
-            self._send_slack(
+            slack_bot_sendtext(
                 "APOLLO ALERT: Entry aborted — no Nifty LTP from feed.",
                 SLACK_ERRORS_CHANNEL)
             return
 
         expiry_date = self._select_expiry()
         if expiry_date is None:
-            self._send_slack(
+            slack_bot_sendtext(
                 "APOLLO ALERT: Entry aborted — no valid expiry found.",
                 SLACK_ERRORS_CHANNEL)
             return
 
         strikes = self._select_strikes(direction, spot, expiry_date)
         if strikes is None:
-            self._send_slack(
+            slack_bot_sendtext(
                 f"APOLLO ALERT: Entry aborted — strike lookup failed "
                 f"(spot={spot:.0f}, direction={direction}).",
                 SLACK_ERRORS_CHANNEL)
@@ -499,7 +475,7 @@ class Apollo:
         (buy_strike, sell_strike, option_type,
          buy_symbol, buy_token, sell_symbol, sell_token) = strikes
 
-        # Always buy first (reduces margin risk on partial fills)
+        # Always buy first
         buy_orderid_list = self._place_order('BUY', buy_symbol, buy_token, 1)
         sleep(1)
         _reset_counters()
@@ -543,19 +519,22 @@ class Apollo:
         self.state.last_sell_ltp     = round(sell_fill, 2)
         save_state(self.state)
 
+        # Initialise per-trade log and update timer
+        self._trade_log      = []
+        self._update_elapsed = 0
+
         # Subscribe option tokens to WebSocket
         self.feed.subscribe_options(buy_token, sell_token)
 
-        msg = (
+        slack_bot_sendtext(
             f"APOLLO ENTRY {direction.upper()} | "
             f"Buy  {buy_strike}{option_type.upper()} @ {buy_fill:.1f} | "
             f"Sell {sell_strike}{option_type.upper()} @ {sell_fill:.1f} | "
             f"Net debit: {net_debit:.1f} | Max profit: {max_profit:.1f} | "
             f"PT level: {profit_target_pts:.1f} pts | "
             f"Hard stop: {HARD_STOP_POINTS} pts | "
-            f"Expiry: {expiry_date} | Spot: {spot:.0f}"
-        )
-        self._send_slack(msg, SLACK_TRADE_ALERTS)
+            f"Expiry: {expiry_date} | Spot: {spot:.0f}",
+            SLACK_TRADE_ALERTS)
 
     # -----------------------------------------------------------------------
     # Exit triggers
@@ -564,8 +543,8 @@ class Apollo:
     def _check_hard_stop(self):
         """
         Exit if unrealised P&L <= -HARD_STOP_POINTS.
-        Called tick-by-tick (every ~1s) and at every candle close.
-        Returns True if exit was triggered.
+        Also updates last LTPs and peak unrealised P&L in state.
+        Returns True if exit triggered.
         """
         if not ENABLE_HARD_STOP or self.state.status != 'in_trade':
             return False
@@ -575,13 +554,12 @@ class Apollo:
         if buy_ltp is None or sell_ltp is None:
             return False
 
-        # Update last known LTPs and peak unrealised P&L in state
         unrealised = (buy_ltp - self.state.buy_entry) - (sell_ltp - self.state.sell_entry)
         self.state.last_buy_ltp  = round(buy_ltp,  2)
         self.state.last_sell_ltp = round(sell_ltp, 2)
         if unrealised > self.state.max_unrealised_pl:
             self.state.max_unrealised_pl = round(unrealised, 2)
-            save_state(self.state)   # persist peak immediately
+            save_state(self.state)
 
         if unrealised <= -HARD_STOP_POINTS:
             self._execute_exit('hard_stop')
@@ -590,9 +568,8 @@ class Apollo:
 
     def _check_profit_target(self):
         """
-        Exit if unrealised P&L >= max_profit * PROFIT_TARGET_PCT.
-        Called tick-by-tick and at every candle close.
-        Returns True if exit was triggered.
+        Exit if unrealised P&L >= profit_target_pts.
+        Returns True if exit triggered.
         """
         if not ENABLE_PROFIT_TARGET or self.state.status != 'in_trade':
             return False
@@ -612,7 +589,7 @@ class Apollo:
         """
         Time gate: exit on gate day at TIME_GATE_CHECK_TIME if
         max_unrealised_pl < max_profit * TIME_GATE_MIN_PROFIT_PCT.
-        Only fires once per trade. Returns True if exit triggered.
+        Fires once per trade. Returns True if exit triggered.
         """
         if not ENABLE_TIME_GATE or self.state.status != 'in_trade':
             return False
@@ -639,7 +616,6 @@ class Apollo:
         """
         if self.state.status != 'in_trade' or not flip_15:
             return False
-
         if self.state.direction == 'bullish' and trend_15 is False:
             self._execute_exit('trend_flip_15')
             return True
@@ -651,8 +627,7 @@ class Apollo:
     def _check_pre_expiry(self, ts):
         """
         Pre-expiry exit: close position at 15:15 the day before expiry,
-        adjusted for holidays (ELM_SECONDS_BEFORE_EXPIRY = 87300s = 24h15m).
-        Returns True if exit triggered.
+        adjusted for holidays. Returns True if exit triggered.
         """
         if self.state.status != 'in_trade' or self.state.expiry is None:
             return False
@@ -660,8 +635,7 @@ class Apollo:
         expiry_dt = datetime.strptime(self.state.expiry, '%Y-%m-%d')
         elm_dt    = expiry_dt - timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
 
-        # Holiday adjustment: if elm day is a holiday, move back one trading day
-        elm_date = elm_dt.date()
+        elm_date  = elm_dt.date()
         while elm_date in self.holidays:
             elm_date -= timedelta(days=1)
         elm_dt = datetime.combine(elm_date, elm_dt.time())
@@ -678,14 +652,12 @@ class Apollo:
     def _execute_exit(self, reason):
         """
         Execute exit for the current debit spread position.
-        Exit sold leg first (reduces margin), then buy leg.
-        Appends trade record to apollo_trades.csv.
-        Sends Slack exit alert. Resets state to idle.
+        Exit sold leg first, then buy leg.
+        Saves final trade log row, appends trade record, resets state.
         """
         if self.state.status not in ('in_trade',):
-            return   # guard against duplicate triggers
+            return
 
-        # Set status to 'exiting' before placing orders — prevents re-entry
         self.state.status = 'exiting'
         save_state(self.state)
 
@@ -705,7 +677,6 @@ class Apollo:
         self._fetch_order_book()
         buy_exit_fill, buy_exit_time = self._fetch_order_details(buy_close_ids)
 
-        # Compute realised P&L
         pl_points = round(
             (buy_exit_fill  - self.state.buy_entry) -
             (sell_exit_fill - self.state.sell_entry), 2)
@@ -714,24 +685,31 @@ class Apollo:
         # Unsubscribe option tokens from feed
         self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
 
-        # Log the trade
-        self._log_trade(
-            reason, buy_exit_fill, sell_exit_fill, pl_points, pl_rupees)
+        # Append final row to trade log and save file
+        self._append_trade_log_row(
+            exit_reason=reason,
+            realised_pl_pts=pl_points,
+            realised_pl_rs=pl_rupees)
+        self._save_trade_log()
 
-        # Slack exit alert
-        emoji = "✓" if pl_points > 0 else "✗"
-        msg = (
-            f"APOLLO EXIT {reason.upper()} {emoji} | "
+        # Append to apollo_trades.csv
+        self._log_trade(reason, buy_exit_fill, sell_exit_fill, pl_points, pl_rupees)
+
+        emoji = "checkmark" if pl_points > 0 else "x"
+        slack_bot_sendtext(
+            f"APOLLO EXIT {reason.upper()} | "
             f"{self.state.direction.upper()} | "
             f"Buy  {self.state.buy_strike} exit @ {buy_exit_fill:.1f} | "
             f"Sell {self.state.sell_strike} exit @ {sell_exit_fill:.1f} | "
-            f"P&L: {pl_points:+.1f} pts ({pl_rupees:+,.0f} ₹)"
-        )
-        self._send_slack(msg, SLACK_TRADE_ALERTS)
+            f"P&L: {pl_points:+.1f} pts ({pl_rupees:+,.0f} Rs)",
+            SLACK_TRADE_ALERTS)
 
-        # Reset state
         clear_trade_fields(self.state)
         save_state(self.state)
+
+        # Reset trade log and counter for next trade
+        self._trade_log      = []
+        self._update_elapsed = 0
 
     # -----------------------------------------------------------------------
     # Order management (ported from Artemis credit_spread.py)
@@ -741,7 +719,6 @@ class Apollo:
         """
         Place a market order, handling qty freeze splits.
         Returns list of order IDs. Retries on failure.
-        Ported from CreditSpread._place_order() in Artemis.
         """
         l_limit = self._qty_freeze / LOT_SIZE
         order_quantities = []
@@ -777,7 +754,7 @@ class Apollo:
                         orderid_list.append(response['data']['orderid'])
                         break
                 except Exception as e:
-                    self._handle_exception(e)
+                    handle_exception(e)
                 sleep(1)
                 _reset_counters()
 
@@ -791,7 +768,7 @@ class Apollo:
                 _increment_poll()
                 break
             except Exception as e:
-                self._handle_exception(e)
+                handle_exception(e)
             sleep(1)
             _reset_counters()
 
@@ -799,7 +776,6 @@ class Apollo:
         """
         Extract average fill price and fill time from order book.
         Loops until all orders have non-zero fill prices.
-        Ported from CreditSpread._fetch_order_details() in Artemis.
         Returns (avg_fill_price: float, fill_time: datetime).
         """
         def get_details(order_book, orderid_list):
@@ -819,6 +795,8 @@ class Apollo:
 
         executed_price = None
         fill_time      = None
+        price_list     = []
+        qty_list       = []
 
         while (executed_price is None or fill_time is None or
                any(p == 0 for p in price_list) or
@@ -842,32 +820,25 @@ class Apollo:
     # -----------------------------------------------------------------------
 
     def _next_candle_close(self, now):
-        """
-        Return the datetime of the next 15-min candle close after `now`.
-        Candles close at :15, :30, :45, :00 of each hour, anchored at 09:15.
-        """
+        """Return datetime of the next 15-min candle close after now."""
         minute    = now.minute
         remainder = minute % 15
         minutes_to_next = 15 - remainder if remainder != 0 else 15
-        next_close = now.replace(second=0, microsecond=0) + timedelta(minutes=minutes_to_next)
-        return next_close
+        return now.replace(second=0, microsecond=0) + timedelta(minutes=minutes_to_next)
 
     def _fetch_latest_candle(self, candle_close_ts):
         """
         Fetch the 15-min candle that just closed at candle_close_ts.
-        Retries up to 3 times with 2s gaps if data not yet available.
-        Returns a dict with OHLCV keys, or None on failure.
+        Retries up to 3 times with 2s gaps.
+        Returns dict with OHLCV keys, or None on failure.
         """
-        candle_open  = candle_close_ts - timedelta(minutes=15)
-        from_str     = candle_open.strftime('%Y-%m-%d %H:%M')
-        to_str       = candle_close_ts.strftime('%Y-%m-%d %H:%M')
-
+        candle_open = candle_close_ts - timedelta(minutes=15)
         params = {
             "exchange":    "NSE",
             "symboltoken": NIFTY_INDEX_TOKEN,
             "interval":    "FIFTEEN_MINUTE",
-            "fromdate":    from_str,
-            "todate":      to_str,
+            "fromdate":    candle_open.strftime('%Y-%m-%d %H:%M'),
+            "todate":      candle_close_ts.strftime('%Y-%m-%d %H:%M'),
         }
 
         for attempt in range(3):
@@ -876,7 +847,7 @@ class Apollo:
                 _increment_poll()
                 data = response.get('data', [])
                 if data:
-                    row = data[-1]   # take the last candle returned
+                    row = data[-1]
                     ts_str = str(row[0]).replace('T', ' ')[:19]
                     return {
                         'time_stamp': pd.Timestamp(ts_str),
@@ -887,15 +858,123 @@ class Apollo:
                         'volume':     float(row[5]),
                     }
             except Exception as e:
-                self._handle_exception(e)
+                handle_exception(e)
             sleep(2)
             _reset_counters()
 
         return None
 
     # -----------------------------------------------------------------------
-    # Trade logging
+    # Per-trade logging
     # -----------------------------------------------------------------------
+
+    def _append_trade_log_row(self, exit_reason=None,
+                               realised_pl_pts=None, realised_pl_rs=None):
+        """
+        Append one row to the in-memory trade log.
+        Called every TRADE_UPDATE_INTERVAL seconds and on exit.
+        OHLC windows are consumed (reset) on each call via feed.get_ohlc().
+
+        Columns mirror the backtest per-trade 1-min log schema for
+        direct comparison, adapted to TRADE_UPDATE_INTERVAL intervals.
+        """
+        if self.state.status not in ('in_trade', 'exiting'):
+            return
+
+        now      = datetime.now()
+        buy_ltp  = self.feed.get_ltp(self.state.buy_token)
+        sell_ltp = self.feed.get_ltp(self.state.sell_token)
+        nifty_ltp = self.feed.get_ltp(NIFTY_TOKEN)
+        vix_ltp   = self.feed.get_ltp(FEED_VIX_TOKEN)
+
+        # Consume OHLC windows — resets for next interval
+        ohlc_nifty = self.feed.get_ohlc(NIFTY_TOKEN)
+        ohlc_vix   = self.feed.get_ohlc(FEED_VIX_TOKEN)
+        ohlc_buy   = self.feed.get_ohlc(self.state.buy_token)
+        ohlc_sell  = self.feed.get_ohlc(self.state.sell_token)
+
+        unrealised_pts = None
+        unrealised_rs  = None
+        if buy_ltp is not None and sell_ltp is not None:
+            unrealised_pts = round(
+                (buy_ltp  - self.state.buy_entry) -
+                (sell_ltp - self.state.sell_entry), 2)
+            unrealised_rs = round(unrealised_pts * LOT_SIZE, 2)
+
+        row = {
+            'time_stamp':           now.strftime('%Y-%m-%d %H:%M:%S'),
+            # Nifty OHLC for the interval
+            'nifty_open':           ohlc_nifty['open']  if ohlc_nifty else nifty_ltp,
+            'nifty_high':           ohlc_nifty['high']  if ohlc_nifty else nifty_ltp,
+            'nifty_low':            ohlc_nifty['low']   if ohlc_nifty else nifty_ltp,
+            'nifty_close':          ohlc_nifty['close'] if ohlc_nifty else nifty_ltp,
+            # VIX OHLC for the interval
+            'vix_open':             ohlc_vix['open']    if ohlc_vix  else vix_ltp,
+            'vix_high':             ohlc_vix['high']    if ohlc_vix  else vix_ltp,
+            'vix_low':              ohlc_vix['low']     if ohlc_vix  else vix_ltp,
+            'vix_close':            ohlc_vix['close']   if ohlc_vix  else vix_ltp,
+            # Buy leg OHLC
+            'buy_open':             ohlc_buy['open']    if ohlc_buy  else buy_ltp,
+            'buy_high':             ohlc_buy['high']    if ohlc_buy  else buy_ltp,
+            'buy_low':              ohlc_buy['low']     if ohlc_buy  else buy_ltp,
+            'buy_ltp':              buy_ltp,
+            # Sell leg OHLC
+            'sell_open':            ohlc_sell['open']   if ohlc_sell else sell_ltp,
+            'sell_high':            ohlc_sell['high']   if ohlc_sell else sell_ltp,
+            'sell_low':             ohlc_sell['low']    if ohlc_sell else sell_ltp,
+            'sell_ltp':             sell_ltp,
+            # P&L
+            'unrealised_pl_pts':    unrealised_pts,
+            'unrealised_pl_rs':     unrealised_rs,
+            'realised_pl_pts':      realised_pl_pts,  # only on exit row
+            'realised_pl_rs':       realised_pl_rs,   # only on exit row
+            'exit_reason':          exit_reason,       # only on exit row
+        }
+        self._trade_log.append(row)
+
+    def _save_trade_log(self):
+        """
+        Save the completed per-trade log to data/trade_logs/.
+        Filename: trade_NNNN_YYYY-MM-DD_HHMM.csv — matches backtest naming.
+        """
+        if not self._trade_log:
+            return
+
+        os.makedirs(_TRADE_LOGS_DIR, exist_ok=True)
+        entry_str = self.state.entry_time.replace(':', '').replace('-', '').replace(' ', '_')
+        # Reformat to YYYY-MM-DD_HHMM
+        try:
+            entry_dt  = datetime.strptime(self.state.entry_time, '%Y-%m-%d %H:%M:%S')
+            entry_str = entry_dt.strftime('%Y-%m-%d_%H%M')
+        except Exception:
+            pass
+
+        self._trade_counter += 1
+        filename = f"trade_{self._trade_counter:04d}_{entry_str}.csv"
+        filepath = os.path.join(_TRADE_LOGS_DIR, filename)
+
+        pd.DataFrame(self._trade_log).to_csv(filepath, index=False)
+        self._save_trade_counter()
+
+    def _load_trade_counter(self):
+        """Load last trade counter from disk to maintain sequential numbering."""
+        counter_file = os.path.join(DATA_DIR, 'trade_counter.txt')
+        if os.path.exists(counter_file):
+            try:
+                with open(counter_file, 'r') as f:
+                    return int(f.read().strip())
+            except Exception:
+                pass
+        return 0
+
+    def _save_trade_counter(self):
+        """Persist trade counter to disk."""
+        counter_file = os.path.join(DATA_DIR, 'trade_counter.txt')
+        try:
+            with open(counter_file, 'w') as f:
+                f.write(str(self._trade_counter))
+        except Exception:
+            pass
 
     def _log_trade(self, exit_reason, buy_exit, sell_exit, pl_points, pl_rupees):
         """
@@ -932,10 +1011,14 @@ class Apollo:
         else:
             df_new.to_csv(TRADES_FILE, index=False)
 
+    # -----------------------------------------------------------------------
+    # Trade update (Slack #trade-updates)
+    # -----------------------------------------------------------------------
+
     def _send_trade_update(self):
         """
-        Send periodic trade status update to #trade-updates (muted channel).
-        Shows current unrealised P&L from live LTPs.
+        Send periodic trade status to #trade-updates (muted channel).
+        Called every TRADE_UPDATE_INTERVAL seconds while in trade.
         """
         if self.state.status != 'in_trade':
             return
@@ -948,34 +1031,28 @@ class Apollo:
         if None in (buy_ltp, sell_ltp):
             return
 
-        unrealised = round(
+        unrealised    = round(
             (buy_ltp  - self.state.buy_entry) -
             (sell_ltp - self.state.sell_entry), 2)
         unrealised_rs = round(unrealised * LOT_SIZE, 2)
 
-        msg = (
+        slack_bot_sendtext(
             f"APOLLO UPDATE | {self.state.direction.upper()} | "
             f"Nifty: {nifty:.2f} | VIX: {vix:.2f} | "
             f"Buy LTP: {buy_ltp:.1f} | Sell LTP: {sell_ltp:.1f} | "
-            f"Unrealised: {unrealised:+.1f} pts ({unrealised_rs:+,.0f} ₹) | "
-            f"Peak: {self.state.max_unrealised_pl:+.1f} pts"
-        )
-        self._send_slack(msg, SLACK_TRADE_UPDATES)
+            f"Unrealised: {unrealised:+.1f} pts ({unrealised_rs:+,.0f} Rs) | "
+            f"Peak: {self.state.max_unrealised_pl:+.1f} pts",
+            SLACK_TRADE_UPDATES)
 
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
 
     def _compute_gate_date(self, expiry_date):
-        """
-        Compute the time gate check date (next trading day after entry).
-        Skips weekends and holidays.
-        Returns date string 'YYYY-MM-DD'.
-        """
+        """Next trading day after today, capped at expiry. Returns 'YYYY-MM-DD'."""
         gate = date.today() + timedelta(days=1)
         while gate.weekday() >= 5 or gate in self.holidays:
             gate += timedelta(days=1)
-        # Gate date must not exceed expiry
         if gate >= expiry_date:
             gate = expiry_date
         return gate.strftime('%Y-%m-%d')
@@ -989,35 +1066,6 @@ class Apollo:
         else:
             self.holidays = set()
 
-    def _send_slack(self, msg, channel):
-        """Send a Slack message. Fails silently — never crashes the run loop."""
-        from requests import post
-        try:
-            creds = pd.read_csv(CREDENTIALS_FILE)
-            token = creds.iloc[0]['slack_token']
-            post(
-                "https://slack.com/api/chat.postMessage",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type":  "application/json",
-                },
-                json={"channel": channel, "text": msg},
-                timeout=5,
-            )
-        except Exception:
-            pass   # Slack failure must never interrupt trading
-
-    def _handle_exception(self, e):
-        """Log exception to console and send Slack error alert."""
-        trace = format_exc()
-        msg   = (f"APOLLO ERROR at {datetime.now():%Y-%m-%d %H:%M:%S}\n"
-                 f"{format(e)}\n{trace}")
-        print(msg)
-        self._send_slack(
-            f"APOLLO ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
-            f"{format(e)} — check logs.",
-            SLACK_ERRORS_CHANNEL)
-
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -1029,6 +1077,6 @@ if __name__ == "__main__":
     try:
         apollo.run()
     except Exception as e:
-        apollo._handle_exception(e)
+        handle_exception(e)
     finally:
         apollo.logout()
