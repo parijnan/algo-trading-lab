@@ -123,36 +123,31 @@ def start_feed():
 
 
 def stop_feed(thread, timeout_sec=5):
-    """
-    Cleanly stop the WebSocket feed.
-
-    Strategy:
-      1. Call sws.close_connection() — sends a close frame to the server.
-         Known issue: this triggers _on_error in the SDK, which normally
-         attempts to reconnect. We pass max_retry_attempt=0 at init to
-         prevent that. close_connection() still sets DISCONNECT_FLAG=True
-         but run_forever() ignores it — the thread may survive.
-      2. Wait up to timeout_sec for the thread to die naturally.
-      3. If still alive: use ctypes.PyThreadState_SetAsyncExc to inject
-         SystemExit into the thread. This is a hard kill — same technique
-         used in anansi_support.py. Safe here because we no longer need
-         the thread for anything after this point.
-
-    Returns True if thread is confirmed dead, False if ctypes also failed.
-    """
     print(f"\n[{_ts()}] Requesting WebSocket shutdown...")
+
+    # Step 1: Close the underlying socket directly.
+    # This unblocks the C-level recv() call immediately, returning
+    # the thread to Python bytecode so ctypes can reach it.
+    try:
+        if sws.wsapp and sws.wsapp.sock:
+            sws.wsapp.sock.close()
+    except Exception as e:
+        print(f"[{_ts()}] sock.close() raised: {e}")
+
+    # Step 2: Now call close_connection() for the clean SDK path
     try:
         sws.close_connection()
     except Exception as e:
         print(f"[{_ts()}] close_connection() raised: {e}")
 
-    # Give the thread a chance to die cleanly
+    # Step 3: Give the thread a moment to die naturally
     thread.join(timeout=timeout_sec)
     if not thread.is_alive():
-        print(f"[{_ts()}] Thread died cleanly after close_connection(). ✓")
+        print(f"[{_ts()}] Thread died cleanly. ✓")
         return True
 
-    # Thread is still alive — use ctypes hard kill
+    # Step 4: ctypes hard kill — thread is now in Python bytecode
+    # (unblocked by sock.close()), so injection will take effect
     print(f"[{_ts()}] Thread still alive after {timeout_sec}s — using ctypes hard kill...")
     _ctypes_kill_thread(thread)
     thread.join(timeout=3)
@@ -165,10 +160,6 @@ def stop_feed(thread, timeout_sec=5):
 
 
 def _ctypes_kill_thread(thread):
-    """
-    Inject SystemExit into a running thread via CPython internals.
-    Only works on CPython. Same approach used in anansi_support.py.
-    """
     if not thread.is_alive():
         return
     exc = ctypes.py_object(SystemExit)
@@ -177,10 +168,9 @@ def _ctypes_kill_thread(thread):
     if res == 0:
         print(f"  ctypes: thread id {thread.ident} not found")
     elif res > 1:
-        # Too many threads affected — undo immediately
         ctypes.pythonapi.PyThreadState_SetAsyncExc(
             ctypes.c_long(thread.ident), None)
-        print(f"  ctypes: PyThreadState_SetAsyncExc affected {res} threads — undone")
+        print(f"  ctypes: affected {res} threads — undone")
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +213,7 @@ def _wait_with_status(seconds, interval=5):
 
 def login():
     print(f"[{_ts()}] Loading credentials...")
-    creds = pd.read_csv("../data/user_credentials.csv")
+    creds = pd.read_csv("/home/parijnan/scripts/algo-trading-lab/apollo_production/data/user_credentials.csv")
     row = creds.iloc[0]
     api_key   = row["api_key"]
     user_name = row["user_name"]
