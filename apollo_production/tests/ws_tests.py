@@ -34,7 +34,7 @@ import pandas as pd
 # Any live Nifty weekly option token from the scrip master.
 # Look up in data/scrip_master.csv filtered on exch_seg=NFO, name=NIFTY.
 # Example: a nearby ATM strike CE or PE.
-TEST_OPTION_TOKEN = "FILL_IN_BEFORE_RUNNING"   # <-- fill this in
+TEST_OPTION_TOKEN = "40732"   # <-- fill this in
 
 # Tokens that are subscribed at connect and stay for the whole session
 NIFTY_TOKEN = "99926000"
@@ -223,7 +223,7 @@ def _wait_with_status(seconds, interval=5):
 
 def login():
     print(f"[{_ts()}] Loading credentials...")
-    creds = pd.read_csv("data/user_credentials.csv")
+    creds = pd.read_csv("../data/user_credentials.csv")
     row = creds.iloc[0]
     api_key   = row["api_key"]
     user_name = row["user_name"]
