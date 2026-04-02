@@ -135,6 +135,10 @@ SLIPPAGE_POINTS         = 1.0
 # Order management
 ORDER_TIMEOUT_SEC       = 10        # Seconds to wait for order fill confirmation
 
+# Dry run mode — no real orders placed. Fill prices sourced from live LTP.
+# Set to False only when ready to go live on delos.
+DRY_RUN                 = True
+
 # Trade update and log interval in seconds.
 # Drives both the #trade-updates Slack message and the trade log append.
 # Every TRADE_UPDATE_INTERVAL seconds: one log row + one Slack update.

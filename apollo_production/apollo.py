@@ -49,6 +49,7 @@ from configs_live import (
     NO_EXIT_BEFORE,
     FO_EXCHANGE_SEGMENT,
     TRADE_UPDATE_INTERVAL,
+    DRY_RUN,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     TRADES_FILE, DATA_DIR,
 )
@@ -719,7 +720,21 @@ class Apollo:
         """
         Place a market order, handling qty freeze splits.
         Returns list of order IDs. Retries on failure.
+
+        In DRY_RUN mode: logs the intended order to Slack and console,
+        returns a synthetic order ID list. No order is sent to the exchange.
         """
+        if DRY_RUN:
+            dry_id = f"DRY_{transaction_type}_{symbol}_{datetime.now():%H%M%S}"
+            slack_bot_sendtext(
+                f"APOLLO DRY RUN | {transaction_type} {lots} lot(s) | "
+                f"{symbol} | token: {token} | "
+                f"Simulated order ID: {dry_id}",
+                SLACK_TRADE_ALERTS)
+            print(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} — "
+                  f"simulated order ID: {dry_id}")
+            return [dry_id]
+
         l_limit = self._qty_freeze / LOT_SIZE
         order_quantities = []
 
@@ -777,7 +792,37 @@ class Apollo:
         Extract average fill price and fill time from order book.
         Loops until all orders have non-zero fill prices.
         Returns (avg_fill_price: float, fill_time: datetime).
+
+        In DRY_RUN mode: returns the current LTP from the feed as the
+        simulated fill price, and current datetime as fill time.
+        The token is inferred from the synthetic order ID format:
+        DRY_{transaction_type}_{symbol}_{HHMMSS} — we use the last known
+        LTP for Nifty as a proxy since we don't store the token here.
+        For the buy leg we use buy LTP, for sell leg we use sell LTP.
+        Since _execute_entry and _execute_exit call this immediately after
+        _place_order, we use the feed's current state LTPs directly.
         """
+        if DRY_RUN:
+            # Use last known LTPs from state as simulated fill prices.
+            # For entry: state.last_buy_ltp and last_sell_ltp are set to
+            # entry prices after fill — use feed LTP at this moment.
+            # We determine which leg this is from the order ID prefix.
+            oid = orderid_list[0] if orderid_list else ''
+            if self.state.status in ('in_trade', 'exiting'):
+                if 'BUY' in oid and self.state.buy_token:
+                    fill = self.feed.get_ltp(self.state.buy_token)
+                elif 'SELL' in oid and self.state.sell_token:
+                    fill = self.feed.get_ltp(self.state.sell_token)
+                else:
+                    fill = self.feed.get_ltp(NIFTY_TOKEN)
+            else:
+                # Entry — derive from Nifty LTP as fallback
+                fill = self.feed.get_ltp(NIFTY_TOKEN)
+            fill = fill if fill is not None else 0.0
+            fill_time = datetime.now()
+            print(f"[DRY RUN] Simulated fill: {fill:.2f} at {fill_time:%H:%M:%S}")
+            return fill, fill_time
+
         def get_details(order_book, orderid_list):
             price_list = []
             qty_list   = []
