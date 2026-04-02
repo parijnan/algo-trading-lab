@@ -142,6 +142,16 @@ SL_0_DTE                = 1.33      # DTE == 0
 EXPIRY_FALLBACK_PRICE   = 0.05      # price assumed for missing expiry candles
 
 # ---------------------------------------------------------------------------
+# Lot count
+# ---------------------------------------------------------------------------
+# Minimum 2 — ensures additional_lots = lots // 2 = 1, which activates the
+# additional lots logic on adjustments before cutoff_time.
+# In the live code this is derived from available margin (lot_calc). Here it
+# is fixed. P&L is normalised to per-base-lot in the summary so results are
+# comparable across runs regardless of this value.
+LOT_COUNT               = 2
+
+# ---------------------------------------------------------------------------
 # 09:15 SL guard
 # ---------------------------------------------------------------------------
 # SLs triggered on the 09:15 candle are deferred: re-check at 09:16 close.

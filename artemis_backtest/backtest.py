@@ -50,6 +50,7 @@ from configs import (
     EXPIRY_FALLBACK_PRICE,
     NO_EXIT_BEFORE,
     ENABLE_TRADE_LOGS,
+    LOT_COUNT,
 )
 from data_loader import (
     load_index_data, load_vix_daily, load_option_data,
@@ -912,7 +913,7 @@ def run_backtest():
             continue
 
         dte  = compute_dte(entry_date, expiry_ts)
-        lots = 1  # fixed at 1 for backtest; live code uses lot_calc
+        lots = LOT_COUNT
 
         # --- Strike selection: scan at 10:30 close price ---
         pe = make_spread('pe')
