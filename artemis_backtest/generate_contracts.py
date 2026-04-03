@@ -37,7 +37,7 @@ NIFTY_LIST_FILE   = os.path.join(PIPELINE_CFG, 'options_list_nf.csv')
 SENSEX_LIST_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'contracts_sensex.csv')
 HOLIDAYS_FILE     = os.path.join(PIPELINE_CFG, 'holidays.csv')
 
-OUTPUT_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'contracts.csv')
+OUTPUT_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'contracts.csv')
 
 
 # ---------------------------------------------------------------------------
