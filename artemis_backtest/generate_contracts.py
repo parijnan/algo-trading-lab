@@ -32,10 +32,9 @@ from datetime import timedelta
 # ---------------------------------------------------------------------------
 REPO_ROOT         = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIPELINE_CFG      = os.path.join(REPO_ROOT, 'data_pipeline', 'config')
-ARTEMIS_DATA      = os.path.join(REPO_ROOT, 'artemis', 'data')
 
 NIFTY_LIST_FILE   = os.path.join(PIPELINE_CFG, 'options_list_nf.csv')
-SENSEX_LIST_FILE  = os.path.join(ARTEMIS_DATA, 'contracts.csv')
+SENSEX_LIST_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'contracts_sensex.csv')
 HOLIDAYS_FILE     = os.path.join(PIPELINE_CFG, 'holidays.csv')
 
 OUTPUT_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'contracts.csv')
