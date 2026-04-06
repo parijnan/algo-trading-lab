@@ -20,8 +20,8 @@ INSTRUMENT              = 'sensex'
 # ---------------------------------------------------------------------------
 # Set to None to use all available contracts for the selected instrument.
 # Dates are inclusive. Format: 'YYYY-MM-DD'.
-BACKTEST_START_DATE     = None
-BACKTEST_END_DATE       = None
+BACKTEST_START_DATE     = '2025-08-31'
+BACKTEST_END_DATE       = '2026-04-03'
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -92,7 +92,7 @@ MINIMUM_GAP_ITERATOR    = _PARAMS['minimum_gap_iterator']
 # ---------------------------------------------------------------------------
 # Artemis runs when VIX < this value. Weeks where vix_open >= threshold
 # are skipped and logged as 'skipped_vix'.
-VIX_THRESHOLD           = 16.0
+VIX_THRESHOLD           = 99.0
 
 # ---------------------------------------------------------------------------
 # Stop loss multipliers — OPTIMISABLE
@@ -142,13 +142,6 @@ EXPIRY_FALLBACK_PRICE   = 0.05      # price assumed for missing expiry candles
 # is fixed. P&L is normalised to per-base-lot in the summary so results are
 # comparable across runs regardless of this value.
 LOT_COUNT               = 2
-
-# ---------------------------------------------------------------------------
-# 09:15 SL guard
-# ---------------------------------------------------------------------------
-# SLs triggered on the 09:15 candle are deferred: re-check at 09:16 close.
-# Only exit if still breached at 09:16. Matches live code behaviour.
-NO_EXIT_BEFORE          = '09:16'
 
 # ---------------------------------------------------------------------------
 # Logging

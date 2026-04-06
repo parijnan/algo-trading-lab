@@ -47,7 +47,6 @@ from configs import (
     VIX_THRESHOLD,
     SL_0_DTE, SL_1_DTE, SL_2_DTE, SL_3_DTE, SL_4_DTE,
     EXPIRY_FALLBACK_PRICE,
-    NO_EXIT_BEFORE,
     ENABLE_TRADE_LOGS,
     LOT_COUNT,
 )
@@ -147,13 +146,21 @@ def make_spread(spread_type: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def set_sl(spread: dict, dte: int):
-    """Compute and set index_sl and option_sl on a spread dict."""
+    """
+    Compute and set index_sl and option_sl on a spread dict.
+    index_sl is the spot level at which the position is cut — 200 points
+    before spot reaches the sell strike (approaching from the OTM side):
+      PE: sell_strike is below spot. SL fires when spot falls to
+          sell_strike + INDEX_SL_OFFSET (200 pts above sell strike).
+      CE: sell_strike is above spot. SL fires when spot rises to
+          sell_strike - INDEX_SL_OFFSET (200 pts below sell strike).
+    """
     mult = get_sl_multiplier(dte)
     spread['option_sl'] = spread['sell_entry'] * mult
     if spread['type'] == 'pe':
-        spread['index_sl'] = spread['sell_strike'] - INDEX_SL_OFFSET
-    else:
         spread['index_sl'] = spread['sell_strike'] + INDEX_SL_OFFSET
+    else:
+        spread['index_sl'] = spread['sell_strike'] - INDEX_SL_OFFSET
 
 
 def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
@@ -162,9 +169,9 @@ def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
     Returns 'index_sl', 'option_sl', or None.
     Does NOT apply the 09:15 guard — caller handles that.
     """
-    if spread['type'] == 'pe' and spot < spread['index_sl']:
+    if spread['type'] == 'pe' and spot >= spread['index_sl']:
         return 'index_sl'
-    if spread['type'] == 'ce' and spot > spread['index_sl']:
+    if spread['type'] == 'ce' and spot <= spread['index_sl']:
         return 'index_sl'
     if spread['sell_ltp'] is not None and spread['sell_ltp'] > spread['option_sl']:
         return 'option_sl'
@@ -863,7 +870,6 @@ def run_backtest():
 
     all_records   = []
     trade_counter = 0
-    NO_EXIT_TS    = dtime(*[int(x) for x in NO_EXIT_BEFORE.split(':')])
 
     # -----------------------------------------------------------------------
     # Outer loop — one iteration per weekly contract
@@ -971,8 +977,22 @@ def run_backtest():
             (index_df.index <= expiry_ts)
         ]
 
+        current_loop_date = None
+
         for ts, idx_row in week_index.iterrows():
             spot = float(idx_row['close'])
+
+            # Refresh option_sl at the start of each new trading day.
+            # DTE decreases each day so the multiplier tightens. The live code
+            # reinitialises the spread object on each script restart (daily),
+            # which recalculates days_to_expiry. The backtest must replicate this.
+            if ts.date() != current_loop_date:
+                current_loop_date = ts.date()
+                current_dte_daily = compute_dte(ts.date(), expiry_ts)
+                if pe['status'] != 'closed' and pe['sell_entry'] is not None:
+                    set_sl(pe, current_dte_daily)
+                if ce['status'] != 'closed' and ce['sell_entry'] is not None:
+                    set_sl(ce, current_dte_daily)
 
             # Refresh LTPs for open spreads
             if pe['status'] != 'closed':
@@ -1018,19 +1038,6 @@ def run_backtest():
             if pe['status'] != 'closed':
                 pe_sl = check_sl(pe, spot, ts)
 
-                # 09:15 guard: defer and re-check at 09:16
-                if pe_sl and ts.time() < NO_EXIT_TS:
-                    recheck_ts   = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
-                    recheck_spot = get_index_price(index_df, recheck_ts, col='close')
-                    if recheck_spot is not None:
-                        update_ltps(pe, recheck_ts)
-                        pe_sl = check_sl(pe, recheck_spot, recheck_ts)
-                        if pe_sl:
-                            ts   = recheck_ts
-                            spot = recheck_spot
-                    else:
-                        pe_sl = None  # cannot confirm — do not exit
-
                 if pe_sl:
                     sl_exec_ts  = ts + pd.Timedelta(minutes=1)
                     current_dte = compute_dte(ts.date(), expiry_ts)
@@ -1060,18 +1067,6 @@ def run_backtest():
             # ---------------------------------------------------------------
             if ce['status'] != 'closed':
                 ce_sl = check_sl(ce, spot, ts)
-
-                if ce_sl and ts.time() < NO_EXIT_TS:
-                    recheck_ts   = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
-                    recheck_spot = get_index_price(index_df, recheck_ts, col='close')
-                    if recheck_spot is not None:
-                        update_ltps(ce, recheck_ts)
-                        ce_sl = check_sl(ce, recheck_spot, recheck_ts)
-                        if ce_sl:
-                            ts   = recheck_ts
-                            spot = recheck_spot
-                    else:
-                        ce_sl = None
 
                 if ce_sl:
                     sl_exec_ts  = ts + pd.Timedelta(minutes=1)
