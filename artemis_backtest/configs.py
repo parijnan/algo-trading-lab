@@ -20,8 +20,8 @@ INSTRUMENT              = 'sensex'
 # ---------------------------------------------------------------------------
 # Set to None to use all available contracts for the selected instrument.
 # Dates are inclusive. Format: 'YYYY-MM-DD'.
-BACKTEST_START_DATE     = '2025-08-31'
-BACKTEST_END_DATE       = '2026-04-03'
+BACKTEST_START_DATE     = None
+BACKTEST_END_DATE       = None
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -92,7 +92,7 @@ MINIMUM_GAP_ITERATOR    = _PARAMS['minimum_gap_iterator']
 # ---------------------------------------------------------------------------
 # Artemis runs when VIX < this value. Weeks where vix_open >= threshold
 # are skipped and logged as 'skipped_vix'.
-VIX_THRESHOLD           = 99.0
+VIX_THRESHOLD           = 16.0
 
 # ---------------------------------------------------------------------------
 # Stop loss multipliers — OPTIMISABLE
@@ -104,6 +104,15 @@ SL_3_DTE                = 2.33      # DTE == 3
 SL_2_DTE                = 2.00      # DTE == 2
 SL_1_DTE                = 1.66      # DTE == 1
 SL_0_DTE                = 1.33      # DTE == 0
+
+# ---------------------------------------------------------------------------
+# SL enable flags
+# ---------------------------------------------------------------------------
+# Set either to False to disable that SL mechanism entirely.
+# Useful for baseline analysis — observing how option prices and spot
+# behave across the week without any intervention.
+ENABLE_INDEX_SL         = True
+ENABLE_OPTION_SL        = True
 
 # ---------------------------------------------------------------------------
 # Index stop loss — OPTIMISABLE

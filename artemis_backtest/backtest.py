@@ -46,6 +46,7 @@ from configs import (
     INDEX_SL_OFFSET, ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
     VIX_THRESHOLD,
     SL_0_DTE, SL_1_DTE, SL_2_DTE, SL_3_DTE, SL_4_DTE,
+    ENABLE_INDEX_SL, ENABLE_OPTION_SL,
     EXPIRY_FALLBACK_PRICE,
     ENABLE_TRADE_LOGS,
     LOT_COUNT,
@@ -170,12 +171,14 @@ def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
       PE fires when spot < index_sl (spot within INDEX_SL_OFFSET of sell strike)
       CE fires when spot > index_sl (spot within INDEX_SL_OFFSET of sell strike)
     """
-    if spread['type'] == 'pe' and spot < spread['index_sl']:
-        return 'index_sl'
-    if spread['type'] == 'ce' and spot > spread['index_sl']:
-        return 'index_sl'
-    if spread['sell_ltp'] is not None and spread['sell_ltp'] > spread['option_sl']:
-        return 'option_sl'
+    if ENABLE_INDEX_SL:
+        if spread['type'] == 'pe' and spot < spread['index_sl']:
+            return 'index_sl'
+        if spread['type'] == 'ce' and spot > spread['index_sl']:
+            return 'index_sl'
+    if ENABLE_OPTION_SL:
+        if spread['sell_ltp'] is not None and spread['sell_ltp'] > spread['option_sl']:
+            return 'option_sl'
     return None
 
 
