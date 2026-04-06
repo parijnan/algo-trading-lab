@@ -60,6 +60,9 @@ class ApolloState:
     buy_entry:            Optional[float] = None
     sell_entry:           Optional[float] = None
 
+    # Lot count — stored so exit always matches entry lots after restart
+    lots:                 int             = 1
+
     # Derived spread metrics — computed at entry, used for exit checks
     net_debit:            Optional[float] = None    # buy_entry - sell_entry
     max_profit:           Optional[float] = None    # HEDGE_POINTS - net_debit
@@ -183,6 +186,7 @@ def clear_trade_fields(state: ApolloState) -> ApolloState:
     state.sell_token        = None
     state.buy_symbol        = None
     state.sell_symbol       = None
+    state.lots              = 1
     state.buy_entry         = None
     state.sell_entry        = None
     state.net_debit         = None

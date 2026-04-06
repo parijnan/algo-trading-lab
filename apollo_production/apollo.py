@@ -43,6 +43,7 @@ from configs_live import (
     MARKET_OPEN, MARKET_CLOSE,
     VIX_THRESHOLD,
     SPREAD_TYPE, BUY_LEG_OFFSET, HEDGE_POINTS, STRIKE_STEP, MIN_DTE, LOT_SIZE,
+    LOT_CALC, LOT_COUNT, LOT_CAPITAL,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
     ENABLE_HARD_STOP, HARD_STOP_POINTS,
     ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT,
@@ -555,6 +556,37 @@ class Apollo:
                 buy_symbol, buy_token, sell_symbol, sell_token)
 
     # -----------------------------------------------------------------------
+    # Lot sizing
+    # -----------------------------------------------------------------------
+
+    def _calculate_lots(self):
+        """
+        Calculate the number of lots to trade.
+
+        LOT_CALC = False: return LOT_COUNT directly (manual control)
+        LOT_CALC = True:  fetch available margin from Angel One rmsLimit(),
+                          compute floor(margin / LOT_CAPITAL), floor at 1.
+
+        Returns int >= 1.
+        """
+        if not LOT_CALC:
+            logger.debug(f"Lot sizing: fixed LOT_COUNT={LOT_COUNT}")
+            return LOT_COUNT
+
+        while True:
+            try:
+                margin = float(self.obj.rmsLimit()['data']['availablecash'])
+                lots   = max(1, int(margin // LOT_CAPITAL))
+                logger.info(
+                    f"Lot sizing: available_margin={margin:.0f}  "
+                    f"LOT_CAPITAL={LOT_CAPITAL}  lots={lots}")
+                return lots
+            except Exception as e:
+                handle_exception(e)
+            sleep(1)
+            _reset_counters()
+
+    # -----------------------------------------------------------------------
     # Entry execution
     # -----------------------------------------------------------------------
 
@@ -586,20 +618,23 @@ class Apollo:
         (buy_strike, sell_strike, option_type,
          buy_symbol, buy_token, sell_symbol, sell_token) = strikes
 
+        # Calculate lot count — fixed or dynamic based on LOT_CALC
+        lots = self._calculate_lots()
+
         logger.info(
             f"Executing entry: {direction.upper()}  "
             f"Buy {buy_strike}{option_type.upper()} ({buy_token})  "
             f"Sell {sell_strike}{option_type.upper()} ({sell_token})  "
-            f"Expiry: {expiry_date}  Spot: {spot:.2f}")
+            f"Expiry: {expiry_date}  Spot: {spot:.2f}  Lots: {lots}")
 
-        buy_orderid_list = self._place_order('BUY', buy_symbol, buy_token, 1)
+        buy_orderid_list = self._place_order('BUY', buy_symbol, buy_token, lots)
         sleep(1)
         _reset_counters()
         self._fetch_order_book()
         buy_fill, buy_time = self._fetch_order_details(buy_orderid_list, buy_token)
         logger.info(f"Buy fill: {buy_fill:.2f} at {buy_time}")
 
-        sell_orderid_list = self._place_order('SELL', sell_symbol, sell_token, 1)
+        sell_orderid_list = self._place_order('SELL', sell_symbol, sell_token, lots)
         sleep(1)
         _reset_counters()
         self._fetch_order_book()
@@ -614,7 +649,9 @@ class Apollo:
             f"Spread metrics: net_debit={net_debit:.2f}  "
             f"max_profit={max_profit:.2f}  "
             f"profit_target={profit_target_pts:.2f}  "
-            f"hard_stop={HARD_STOP_POINTS}")
+            f"hard_stop={HARD_STOP_POINTS}  "
+            f"lots={lots}  lot_size={LOT_SIZE}  "
+            f"max_loss_rs={HARD_STOP_POINTS * lots * LOT_SIZE:.0f}")
 
         self.state.status            = 'in_trade'
         self.state.direction         = direction
@@ -626,6 +663,7 @@ class Apollo:
         self.state.sell_token        = sell_token
         self.state.buy_symbol        = buy_symbol
         self.state.sell_symbol       = sell_symbol
+        self.state.lots              = lots
         self.state.buy_entry         = round(buy_fill,  2)
         self.state.sell_entry        = round(sell_fill, 2)
         self.state.net_debit         = round(net_debit, 2)
@@ -654,7 +692,7 @@ class Apollo:
             f"Net debit: {net_debit:.1f} | Max profit: {max_profit:.1f} | "
             f"PT level: {profit_target_pts:.1f} pts | "
             f"Hard stop: {HARD_STOP_POINTS} pts | "
-            f"Expiry: {expiry_date} | Spot: {spot:.0f}",
+            f"Lots: {lots} | Expiry: {expiry_date} | Spot: {spot:.0f}",
             SLACK_TRADE_ALERTS)
 
     # -----------------------------------------------------------------------
@@ -767,8 +805,10 @@ class Apollo:
         self.state.status = 'exiting'
         save_state(self.state)
 
+        lots = self.state.lots   # always matches entry lot count
+
         sell_close_ids = self._place_order(
-            'BUY', self.state.sell_symbol, self.state.sell_token, 1)
+            'BUY', self.state.sell_symbol, self.state.sell_token, lots)
         sleep(1)
         _reset_counters()
         self._fetch_order_book()
@@ -776,7 +816,7 @@ class Apollo:
         logger.info(f"Sell leg exit fill: {sell_exit_fill:.2f}")
 
         buy_close_ids = self._place_order(
-            'SELL', self.state.buy_symbol, self.state.buy_token, 1)
+            'SELL', self.state.buy_symbol, self.state.buy_token, lots)
         sleep(1)
         _reset_counters()
         self._fetch_order_book()
@@ -786,11 +826,11 @@ class Apollo:
         pl_points = round(
             (buy_exit_fill  - self.state.buy_entry) -
             (sell_exit_fill - self.state.sell_entry), 2)
-        pl_rupees = round(pl_points * LOT_SIZE, 2)
+        pl_rupees = round(pl_points * lots * LOT_SIZE, 2)
 
         logger.info(
             f"Exit P&L: {pl_points:+.2f} pts ({pl_rupees:+,.0f} Rs)  "
-            f"reason={reason}")
+            f"lots={lots}  reason={reason}")
 
         self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
 
@@ -807,6 +847,7 @@ class Apollo:
             f"{self.state.direction.upper()} | "
             f"Buy  {self.state.buy_strike} exit @ {buy_exit_fill:.1f} | "
             f"Sell {self.state.sell_strike} exit @ {sell_exit_fill:.1f} | "
+            f"Lots: {lots} | "
             f"P&L: {pl_points:+.1f} pts ({pl_rupees:+,.0f} Rs)",
             SLACK_TRADE_ALERTS)
 
@@ -1019,7 +1060,7 @@ class Apollo:
             unrealised_pts = round(
                 (buy_ltp  - self.state.buy_entry) -
                 (sell_ltp - self.state.sell_entry), 2)
-            unrealised_rs = round(unrealised_pts * LOT_SIZE, 2)
+            unrealised_rs = round(unrealised_pts * self.state.lots * LOT_SIZE, 2)
 
         logger.debug(
             f"Trade log row: buy_ltp={buy_ltp}  sell_ltp={sell_ltp}  "
@@ -1089,6 +1130,7 @@ class Apollo:
     def _log_trade(self, exit_reason, buy_exit, sell_exit, pl_points, pl_rupees):
         record = {
             'entry_time':        self.state.entry_time,
+            'lots':              self.state.lots,
             'exit_time':         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'direction':         self.state.direction,
             'expiry':            self.state.expiry,
@@ -1134,15 +1176,16 @@ class Apollo:
         unrealised    = round(
             (buy_ltp  - self.state.buy_entry) -
             (sell_ltp - self.state.sell_entry), 2)
-        unrealised_rs = round(unrealised * LOT_SIZE, 2)
+        unrealised_rs = round(unrealised * self.state.lots * LOT_SIZE, 2)
         logger.debug(
             f"Trade update: nifty={nifty:.2f}  vix={vix:.2f}  "
             f"buy_ltp={buy_ltp:.2f}  sell_ltp={sell_ltp:.2f}  "
-            f"unrealised={unrealised:+.2f}")
+            f"unrealised={unrealised:+.2f}  lots={self.state.lots}")
         slack_bot_sendtext(
             f"*Apollo* UPDATE | {self.state.direction.upper()} | "
             f"Nifty: {nifty:.2f} | VIX: {vix:.2f} | "
             f"Buy LTP: {buy_ltp:.1f} | Sell LTP: {sell_ltp:.1f} | "
+            f"Lots: {self.state.lots} | "
             f"Unrealised: {unrealised:+.1f} pts ({unrealised_rs:+,.0f} Rs) | "
             f"Peak: {self.state.max_unrealised_pl:+.1f} pts",
             SLACK_TRADE_UPDATES)
