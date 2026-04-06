@@ -44,7 +44,6 @@ from configs import (
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
     INDEX_SL_OFFSET, ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
-    STRIKE_SCAN_STEPS,
     VIX_THRESHOLD,
     SL_0_DTE, SL_1_DTE, SL_2_DTE, SL_3_DTE, SL_4_DTE,
     EXPIRY_FALLBACK_PRICE,
@@ -191,7 +190,7 @@ def select_sell_strike(spread_type: str, spot: float,
 
     return scan_strikes_for_premium(
         INSTRUMENT, OPTIONS_PATH, expiry_ts, spread_type,
-        atm, STRIKE_INTERVAL, STRIKE_SCAN_STEPS,
+        atm, STRIKE_INTERVAL,
         direction, EXPECTED_PREMIUM, ref_ts)
 
 

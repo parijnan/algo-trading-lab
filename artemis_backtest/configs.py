@@ -20,8 +20,8 @@ INSTRUMENT              = 'sensex'
 # ---------------------------------------------------------------------------
 # Set to None to use all available contracts for the selected instrument.
 # Dates are inclusive. Format: 'YYYY-MM-DD'.
-BACKTEST_START_DATE     = '2025-09-04'
-BACKTEST_END_DATE       = '2026-04-02'
+BACKTEST_START_DATE     = None
+BACKTEST_END_DATE       = None
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -63,7 +63,6 @@ _NIFTY_PARAMS = {
     'adjustment_distance':  200,      # points to move sell strike on adjustment
     'minimum_gap':          350,      # minimum gap between spot and sell strike
     'minimum_gap_iterator': 100,      # fallback gap when resetting sell strike
-    'strike_scan_range':    1000,     # total points to scan for premium target
 }
 
 _SENSEX_PARAMS = {
@@ -75,7 +74,6 @@ _SENSEX_PARAMS = {
     'adjustment_distance':  600,
     'minimum_gap':          1000,
     'minimum_gap_iterator': 400,
-    'strike_scan_range':    1200,
 }
 
 _PARAMS = _NIFTY_PARAMS if INSTRUMENT == 'nifty' else _SENSEX_PARAMS
@@ -88,10 +86,6 @@ INDEX_SL_OFFSET         = _PARAMS['index_sl_offset']
 ADJUSTMENT_DISTANCE     = _PARAMS['adjustment_distance']
 MINIMUM_GAP             = _PARAMS['minimum_gap']
 MINIMUM_GAP_ITERATOR    = _PARAMS['minimum_gap_iterator']
-STRIKE_SCAN_RANGE       = _PARAMS['strike_scan_range']
-
-# Derived: how many strikes to scan (scan range / interval)
-STRIKE_SCAN_STEPS       = STRIKE_SCAN_RANGE // STRIKE_INTERVAL
 
 # ---------------------------------------------------------------------------
 # VIX regime gate

@@ -228,21 +228,24 @@ def scan_strikes_for_premium(
         option_type: str,
         start_strike: int,
         strike_interval: int,
-        strike_scan_steps: int,
         direction: int,
         target_premium: float,
-        ref_timestamp: pd.Timestamp) -> tuple:
+        ref_timestamp: pd.Timestamp,
+        max_steps: int = 200) -> tuple:
     """
     Scan OTM strikes from start_strike in direction (+1 for CE, -1 for PE),
     loading the close price at ref_timestamp for each strike.
-    Returns (strike, close_price) of the strike whose LTP is closest to
-    target_premium. Returns (None, None) if no data found for any strike.
-    """
-    best_strike = None
-    best_price  = None
-    best_diff   = float('inf')
 
-    for step in range(strike_scan_steps + 1):
+    Stops at the first strike whose LTP is <= target_premium and returns it.
+    This is correct because OTM premiums decrease monotonically away from ATM,
+    so the first strike below the target is always the closest from below.
+    No fixed scan range needed — works correctly in high-VIX environments
+    where the target strike may be far OTM.
+
+    max_steps is a safety cap only — should never be reached in practice.
+    Returns (strike, close_price) or (None, None) if not found.
+    """
+    for step in range(max_steps):
         strike = start_strike + direction * step * strike_interval
         df     = load_option_data(
             instrument, options_base_path, expiry_date, strike, option_type)
@@ -251,10 +254,7 @@ def scan_strikes_for_premium(
         price = get_price(df, ref_timestamp, col='close')
         if price is None or price <= 0:
             continue
-        diff = abs(price - target_premium)
-        if diff < best_diff:
-            best_diff   = diff
-            best_strike = strike
-            best_price  = price
+        if price <= target_premium:
+            return strike, price
 
-    return best_strike, best_price
+    return None, None
