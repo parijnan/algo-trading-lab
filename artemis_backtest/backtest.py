@@ -148,12 +148,11 @@ def make_spread(spread_type: str) -> dict:
 def set_sl(spread: dict, dte: int):
     """
     Compute and set index_sl and option_sl on a spread dict.
-    index_sl is the spot level at which the position is cut — 200 points
-    before spot reaches the sell strike (approaching from the OTM side):
-      PE: sell_strike is below spot. SL fires when spot falls to
-          sell_strike + INDEX_SL_OFFSET (200 pts above sell strike).
-      CE: sell_strike is above spot. SL fires when spot rises to
-          sell_strike - INDEX_SL_OFFSET (200 pts below sell strike).
+    Mirrors live Artemis credit_spread.py _set_sl() exactly:
+      PE: index_sl = sell_strike + INDEX_SL_OFFSET
+          SL fires when spot < index_sl (spot falling toward sold PE strike)
+      CE: index_sl = sell_strike - INDEX_SL_OFFSET
+          SL fires when spot > index_sl (spot rising toward sold CE strike)
     """
     mult = get_sl_multiplier(dte)
     spread['option_sl'] = spread['sell_entry'] * mult
@@ -167,11 +166,13 @@ def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
     """
     Check both SL conditions for a spread.
     Returns 'index_sl', 'option_sl', or None.
-    Does NOT apply the 09:15 guard — caller handles that.
+    Mirrors live Artemis credit_spread.py monitor_spread() exactly:
+      PE fires when spot < index_sl (spot within INDEX_SL_OFFSET of sell strike)
+      CE fires when spot > index_sl (spot within INDEX_SL_OFFSET of sell strike)
     """
-    if spread['type'] == 'pe' and spot >= spread['index_sl']:
+    if spread['type'] == 'pe' and spot < spread['index_sl']:
         return 'index_sl'
-    if spread['type'] == 'ce' and spot <= spread['index_sl']:
+    if spread['type'] == 'ce' and spot > spread['index_sl']:
         return 'index_sl'
     if spread['sell_ltp'] is not None and spread['sell_ltp'] > spread['option_sl']:
         return 'option_sl'
