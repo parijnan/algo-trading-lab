@@ -21,7 +21,8 @@ LOGS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs
 
 STATE_FILE      = os.path.join(DATA_DIR, "apollo_state.csv")
 TRADES_FILE     = os.path.join(DATA_DIR, "apollo_trades.csv")
-ST_CACHE_FILE   = os.path.join(DATA_DIR, "supertrend_cache.csv")
+ST_CACHE_FILE         = os.path.join(DATA_DIR, "supertrend_cache.csv")
+NIFTY_15MIN_CACHE_FILE = os.path.join(DATA_DIR, "nifty_15min_cache.csv")
 
 # ---------------------------------------------------------------------------
 # Credentials — loaded once at module level
@@ -60,10 +61,10 @@ VIX_THRESHOLD       = 16.0          # Deploy only when today's opening VIX > thi
 # Must match D-R-P2c exactly — do not change without re-running backtest
 # ---------------------------------------------------------------------------
 ST_75MIN_PERIOD     = 10
-ST_75MIN_MULTIPLIER = 4.5
+ST_75MIN_MULTIPLIER = 3.0
 
 ST_15MIN_PERIOD     = 10
-ST_15MIN_MULTIPLIER = 1.0
+ST_15MIN_MULTIPLIER = 3.0
 
 TF_HIGH             = 75            # Higher timeframe in minutes
 TF_LOW              = 15            # Lower timeframe in minutes
@@ -88,12 +89,12 @@ LOT_SIZE            = 75            # Nifty lot size — update if SEBI changes 
 # ---------------------------------------------------------------------------
 # Days of week to exclude entries: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 # Tuesday = Nifty expiry day. Expiry-day gamma and pinning break ST signal.
-EXCLUDE_TRADE_DAYS      = []
+EXCLUDE_TRADE_DAYS      = [1]
 
 # Signal candle close times to exclude (entry would execute 15 min later).
 # Dead zones where market oscillates rather than trends.
 # 09:45 -> entry 10:00 | 10:00 -> entry 10:15 | 13:45 -> entry 14:00 | 14:00 -> entry 14:15
-EXCLUDE_SIGNAL_CANDLES  = []
+EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']
 
 # ---------------------------------------------------------------------------
 # Exit mechanisms — D-R-P2c (identical to D-R03fg-hs-b)

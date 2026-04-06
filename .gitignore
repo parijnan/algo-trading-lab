@@ -247,6 +247,7 @@ apollo_production/data/user_credentials.csv
 apollo_production/data/trade_logs/
 apollo_production/data/trade_counter.txt
 apollo_production/data/error_log.txt
+apollo_production/data/nifty_15min_cache.csv
 
 # Artemis Backtest — generated and output files
 artemis_backtest/contracts.csv

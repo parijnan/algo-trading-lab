@@ -203,7 +203,7 @@ class Apollo:
         ].copy()
         logger.info(f"Scrip master loaded. Nifty NFO rows: {len(self.instrument_df)}.")
 
-        self.st.seed(self.obj)
+        self.st.seed(self.obj, self.holidays)
         slack_bot_sendtext(
             f"*Apollo*: Supertrend seeded ({self.st.get_cache().shape[0]} candles). "
             f"75-min trend: {'bullish' if self.st.get_current_trend_75() else 'bearish'}.",
@@ -381,6 +381,7 @@ class Apollo:
     def logout(self):
         """Stop feed, terminate session, send close alert."""
         logger.info("Logging out.")
+        self.st.update_candle_cache(self.obj)
         self.feed.stop()
         try:
             self.obj.terminateSession(user_name)
