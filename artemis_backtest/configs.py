@@ -20,8 +20,8 @@ INSTRUMENT              = 'sensex'
 # ---------------------------------------------------------------------------
 # Set to None to use all available contracts for the selected instrument.
 # Dates are inclusive. Format: 'YYYY-MM-DD'.
-BACKTEST_START_DATE     = None
-BACKTEST_END_DATE       = None
+BACKTEST_START_DATE     = '2025-09-04'
+BACKTEST_END_DATE       = '2026-04-02'
 
 # ---------------------------------------------------------------------------
 # Paths
