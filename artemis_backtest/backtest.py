@@ -682,13 +682,13 @@ def _make_log_row(ts: pd.Timestamp, spot: float, vix: float,
     }
 
 
-def _save_trade_log(trade_logs: list, entry_ts: pd.Timestamp,
+def _save_trade_log(trade_logs: list, expiry_ts: pd.Timestamp,
                     trade_counter: int):
     if not trade_logs or not ENABLE_TRADE_LOGS:
         return
     os.makedirs(TRADE_LOGS_DIR, exist_ok=True)
-    entry_str = pd.Timestamp(entry_ts).strftime('%Y-%m-%d_%H%M')
-    filename  = f"trade_{trade_counter:04d}_{entry_str}.csv"
+    expiry_str = pd.Timestamp(expiry_ts).strftime('%Y-%m-%d')
+    filename   = f"trade_{trade_counter:04d}_{expiry_str}.csv"
     pd.DataFrame(trade_logs).to_csv(
         os.path.join(TRADE_LOGS_DIR, filename), index=False)
 
@@ -1105,7 +1105,7 @@ def run_backtest():
         # Week complete — save and record
         # -------------------------------------------------------------------
         trade_counter += 1
-        _save_trade_log(trade_logs, entry_exec_ts, trade_counter)
+        _save_trade_log(trade_logs, expiry_ts, trade_counter)
 
         record = _build_summary_record(
             contract, entry_exec_ts, entry_spot, entry_vix,
