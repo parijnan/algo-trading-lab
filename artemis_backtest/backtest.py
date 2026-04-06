@@ -737,10 +737,9 @@ def _build_summary_record(contract: pd.Series, entry_ts: pd.Timestamp,
     ce_add_pl   = _r(ce['add_pl'])
 
     if pe_base_pl is not None and ce_base_pl is not None:
-        total_pl_pts = (((pe_base_pl + ce_base_pl) * lots
-                         + (pe_add_pl + ce_add_pl) * add_lots)
-                        / lots) if lots > 0 else 0.0
-        total_pl_rs  = total_pl_pts * LOT_SIZE * lots
+        total_pl_pts = ((pe_base_pl + ce_base_pl)
+                        + (pe_add_pl + ce_add_pl) / 2)
+        total_pl_rs  = total_pl_pts * LOT_SIZE
     else:
         total_pl_pts = None
         total_pl_rs  = None
