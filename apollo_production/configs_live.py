@@ -70,7 +70,7 @@ TF_LOW              = 15            # Lower timeframe in minutes
 
 # Number of historical 15-min candles to fetch at session start for ST seeding.
 # 200 candles ~= 10 trading days. Adjustable without code changes.
-ST_HISTORY_CANDLES  = 200
+ST_HISTORY_CANDLES  = 600
 
 # ---------------------------------------------------------------------------
 # Options / spread structure

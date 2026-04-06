@@ -219,7 +219,7 @@ class SupertrendManager:
         Drops the incomplete current candle.
         """
         now       = datetime.now()
-        from_date = now - timedelta(days=12)
+        from_date = now - timedelta(days=60)
 
         params = {
             "exchange":    _EXCHANGE,
