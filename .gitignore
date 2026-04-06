@@ -250,3 +250,6 @@ apollo_production/data/trade_counter.txt
 # Artemis Backtest — generated and output files
 artemis_backtest/contracts.csv
 artemis_backtest/data/
+# Apollo Production — debug log file (logs/ folder already excluded above,
+# but explicit here for clarity)
+apollo_production/logs/debug.log
