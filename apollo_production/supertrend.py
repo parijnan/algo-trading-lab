@@ -5,9 +5,10 @@ Handles seeding and incremental updates for 15-min and 75-min Supertrend.
 Public interface:
     st = SupertrendManager()
     st.seed(smart_connect_obj)              # call once at session start
-    trend_15, flip_15, trend_75, flip_75 = st.update(candle)  # after each 15-min close
+    trend_15, flip_15, trend_75, flip_75 = st.update(candle)
     st.get_cache()                          # returns 15-min DataFrame with ST values
-    st.get_current_trend_75()              # returns current 75-min trend without update
+    st.get_current_trend_75()              # current 75-min trend without update
+    st.get_last_completed_flip()           # most recent today-flip for restart recovery
 
 Design:
     - Seeds from Angel One historical candle API (last ST_HISTORY_CANDLES 15-min candles)
@@ -25,6 +26,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from technical_indicators import SupertrendIndicator
+from logger_setup import get_logger
 
 from configs_live import (
     ST_15MIN_PERIOD, ST_15MIN_MULTIPLIER,
@@ -34,6 +36,8 @@ from configs_live import (
     NIFTY_INDEX_TOKEN,
     ST_CACHE_FILE,
 )
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -63,48 +67,63 @@ class SupertrendManager:
         """
         Seed the Supertrend history from Angel One historical candle API.
         Call once at session start after login.
-
-        Fetches the last ST_HISTORY_CANDLES 15-min candles, drops any
-        incomplete current candle, computes 15-min and 75-min Supertrend
-        on the full series, and persists the cache to disk.
         """
+        logger.info("Seeding Supertrend history...")
         raw_candles = self._fetch_candles(smart_connect_obj)
+        logger.info(f"Fetched {len(raw_candles)} completed 15-min candles for seeding.")
+
         self._df_15 = self._compute_15min_st(raw_candles)
         self._df_75 = self._compute_75min_st(self._df_15)
         self._save_cache()
         self._seeded = True
 
+        # Log last 3 rows of 15-min cache
+        logger.debug("Last 3 rows of 15-min ST cache after seed:")
+        for _, row in self._df_15.tail(3).iterrows():
+            logger.debug(
+                f"  {row['time_stamp']}  close={row['close']:.2f}  "
+                f"ST={row['Supertrend']:.2f}  trend={row['trend']}  "
+                f"flip={row['trend_flip']}")
+
+        # Log last 3 rows of 75-min cache
+        if self._df_75 is not None and not self._df_75.empty:
+            logger.debug("Last 3 rows of 75-min ST cache after seed:")
+            for _, row in self._df_75.tail(3).iterrows():
+                logger.debug(
+                    f"  {row['time_stamp']}  close={row['close']:.2f}  "
+                    f"ST={row['Supertrend']:.2f}  trend={row['trend']}  "
+                    f"flip={row['trend_flip']}")
+
+        logger.info(
+            f"Seed complete. "
+            f"15-min: {len(self._df_15)} candles, "
+            f"current trend: {self._df_15.iloc[-1]['trend']} "
+            f"(ST={self._df_15.iloc[-1]['Supertrend']:.2f}). "
+            f"75-min: {len(self._df_75) if self._df_75 is not None else 0} candles, "
+            f"current trend: {self.get_current_trend_75()}.")
+
     def update(self, candle):
         """
         Incorporate a newly closed 15-min candle and recompute Supertrend.
 
-        Parameters
-        ----------
-        candle : dict
-            Keys: 'time_stamp' (pd.Timestamp), 'open', 'high', 'low',
-                  'close', 'volume' (all numeric).
-
-        Returns
-        -------
-        trend_15 : bool
-            True = bullish, False = bearish on 15-min timeframe.
-        flip_15 : bool
-            True if trend_15 changed from the previous candle.
-        trend_75 : bool or None
-            True = bullish, False = bearish on 75-min timeframe.
-            None if 75-min ST is not yet valid (warmup period).
-        flip_75 : bool
-            True if trend_75 changed from the previous candle.
+        Returns (trend_15, flip_15, trend_75, flip_75).
         """
         if not self._seeded:
             raise RuntimeError("SupertrendManager.seed() must be called before update().")
 
+        ts    = pd.Timestamp(candle['time_stamp'])
+        close = float(candle['close'])
+        logger.debug(
+            f"ST update — candle {ts}  "
+            f"O={candle['open']:.2f} H={candle['high']:.2f} "
+            f"L={candle['low']:.2f} C={close:.2f}")
+
         new_row = pd.DataFrame([{
-            'time_stamp': candle['time_stamp'],
+            'time_stamp': ts,
             'open':       float(candle['open']),
             'high':       float(candle['high']),
             'low':        float(candle['low']),
-            'close':      float(candle['close']),
+            'close':      close,
             'volume':     float(candle.get('volume', 0)),
         }])
 
@@ -118,21 +137,35 @@ class SupertrendManager:
         trend_15 = bool(last_15['trend'])
         flip_15  = bool(last_15['trend_flip'])
 
-        candle_time_str = pd.Timestamp(candle['time_stamp']).strftime('%H:%M')
+        logger.debug(
+            f"15-min result — ST={last_15['Supertrend']:.2f}  "
+            f"trend={trend_15}  flip={flip_15}")
+
+        candle_time_str = ts.strftime('%H:%M')
         trend_75 = None
         flip_75  = False
 
         if candle_time_str in _75MIN_CLOSE_TIMES:
+            logger.debug(f"75-min candle closes at {candle_time_str} — recomputing 75-min ST.")
             self._df_75 = self._compute_75min_st(self._df_15)
             if not self._df_75.empty:
                 last_75  = self._df_75.iloc[-1]
                 trend_75 = bool(last_75['trend']) if pd.notna(last_75['trend']) else None
                 flip_75  = bool(last_75['trend_flip'])
+                logger.debug(
+                    f"75-min result — ST={last_75['Supertrend']:.2f}  "
+                    f"trend={trend_75}  flip={flip_75}")
         else:
             if self._df_75 is not None and not self._df_75.empty:
                 last_75  = self._df_75.iloc[-1]
                 trend_75 = bool(last_75['trend']) if pd.notna(last_75['trend']) else None
                 flip_75  = False
+            logger.debug(f"75-min trend carried forward: {trend_75}")
+
+        logger.info(
+            f"Candle {ts}  close={close:.2f}  "
+            f"trend_15={trend_15} flip_15={flip_15}  "
+            f"trend_75={trend_75} flip_75={flip_75}")
 
         self._save_cache()
         return trend_15, flip_15, trend_75, flip_75
@@ -151,11 +184,15 @@ class SupertrendManager:
         last = self._df_75.iloc[-1]
         return bool(last['trend']) if pd.notna(last['trend']) else None
 
+    def get_75min_cache(self):
+        """Return the current 75-min DataFrame with Supertrend values."""
+        return self._df_75.copy() if self._df_75 is not None else pd.DataFrame()
+
     def get_last_completed_flip(self):
         """
         Return the most recent candle row where trend_flip is True and
-        time_stamp is today, or None if no such candle exists.
-        Used by apollo.py for missed flip recovery on restart.
+        time_stamp is today. Used by apollo.py for missed flip recovery.
+        Returns None if no such candle exists.
         """
         if self._df_15 is None or self._df_15.empty:
             return None
@@ -166,7 +203,11 @@ class SupertrendManager:
         ]
         if today_flips.empty:
             return None
-        return today_flips.iloc[-1]
+        flip_row = today_flips.iloc[-1]
+        logger.debug(
+            f"Last completed flip today: {flip_row['time_stamp']}  "
+            f"trend={flip_row['trend']}")
+        return flip_row
 
     # -----------------------------------------------------------------------
     # Internal helpers
@@ -175,10 +216,7 @@ class SupertrendManager:
     def _fetch_candles(self, smart_connect_obj):
         """
         Fetch the last ST_HISTORY_CANDLES 15-min candles from Angel One.
-        Drops the incomplete current candle if it is still forming.
-
-        Returns a cleaned DataFrame with columns:
-            time_stamp, open, high, low, close, volume
+        Drops the incomplete current candle.
         """
         now       = datetime.now()
         from_date = now - timedelta(days=12)
@@ -191,6 +229,9 @@ class SupertrendManager:
             "todate":      now.strftime('%Y-%m-%d %H:%M'),
         }
 
+        logger.debug(
+            f"Fetching candles from {params['fromdate']} to {params['todate']}")
+
         response = smart_connect_obj.getCandleData(params)
         raw      = response['data']
 
@@ -199,34 +240,42 @@ class SupertrendManager:
             columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume']
         )
 
-        # Clean timestamp
         df['time_stamp'] = df['time_stamp'].str.slice(0, 19).str.replace('T', ' ')
         df['time_stamp'] = pd.to_datetime(df['time_stamp'])
 
-        # Filter to market hours only
         market_open = pd.Timestamp(_MARKET_OPEN).time()
         df = df[df['time_stamp'].dt.time >= market_open].copy()
 
-        # Drop the incomplete current candle — only seed fully closed candles.
-        # The current candle open time is the most recent 15-min boundary before now.
+        # Drop incomplete current candle
         current_minute   = now.minute
         minutes_into_bar = current_minute % 15
         current_bar_open = now.replace(
             minute=current_minute - minutes_into_bar,
             second=0, microsecond=0)
+        before_drop = len(df)
         df = df[df['time_stamp'] < current_bar_open].copy()
+        after_drop = len(df)
 
-        # Trim to last ST_HISTORY_CANDLES candles
+        if before_drop != after_drop:
+            logger.debug(
+                f"Dropped {before_drop - after_drop} incomplete candle(s) "
+                f"(current bar open: {current_bar_open}).")
+
         if len(df) > ST_HISTORY_CANDLES:
             df = df.iloc[-ST_HISTORY_CANDLES:]
 
         df = df.sort_values('time_stamp').reset_index(drop=True)
+
+        logger.debug(
+            f"Candle range after filtering: "
+            f"{df['time_stamp'].iloc[0]} to {df['time_stamp'].iloc[-1]}")
+
         return df
 
     def _compute_15min_st(self, df):
         """
         Compute 15-min Supertrend on a candle DataFrame.
-        Adds columns: Supertrend, trend (bool), trend_flip (bool).
+        Adds columns: Supertrend, trend (object dtype), trend_flip.
         """
         df_st = df.rename(columns={
             'open':  'Open',
@@ -248,8 +297,7 @@ class SupertrendManager:
             'Close': 'close',
         })
 
-        # Use object dtype from the start to avoid FutureWarning when
-        # assigning pd.NA to a bool column
+        # Use object dtype to avoid FutureWarning when assigning pd.NA
         df_st['trend']      = (df_st['close'] > df_st['Supertrend']).astype(object)
         df_st['trend_flip'] = (df_st['trend'] != df_st['trend'].shift(1))
 
@@ -262,7 +310,6 @@ class SupertrendManager:
     def _compute_75min_st(self, df_15):
         """
         Derive 75-min candles from the 15-min DataFrame and compute Supertrend.
-        Groups every 5 x 15-min candles anchored at 09:15 each day.
         """
         candles_75 = []
 
@@ -272,12 +319,10 @@ class SupertrendManager:
 
             while anchor.strftime('%H:%M') in _75MIN_CLOSE_TIMES or anchor == market_open:
                 window_end = anchor + timedelta(minutes=TF_HIGH) - timedelta(minutes=TF_LOW)
-
                 window = day_df[
                     (day_df['time_stamp'] >= anchor) &
                     (day_df['time_stamp'] <= window_end)
                 ]
-
                 if not window.empty:
                     candles_75.append({
                         'time_stamp': anchor,
@@ -287,7 +332,6 @@ class SupertrendManager:
                         'close':      window['close'].iloc[-1],
                         'volume':     window['volume'].sum(),
                     })
-
                 anchor += timedelta(minutes=TF_HIGH)
                 if anchor > pd.Timestamp(f"{date} 15:30"):
                     break
@@ -324,6 +368,13 @@ class SupertrendManager:
         warmup = df_st['Supertrend'].isna()
         df_st.loc[warmup, 'trend']      = pd.NA
         df_st.loc[warmup, 'trend_flip'] = False
+
+        logger.debug(
+            f"75-min ST computed: {len(df_st)} candles. "
+            f"Last: {df_st.iloc[-1]['time_stamp']}  "
+            f"close={df_st.iloc[-1]['close']:.2f}  "
+            f"ST={df_st.iloc[-1]['Supertrend']:.2f}  "
+            f"trend={df_st.iloc[-1]['trend']}")
 
         return df_st.reset_index(drop=True)
 

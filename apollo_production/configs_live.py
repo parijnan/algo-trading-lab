@@ -17,6 +17,7 @@ import pandas as pd
 # Paths
 # ---------------------------------------------------------------------------
 DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+LOGS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 STATE_FILE      = os.path.join(DATA_DIR, "apollo_state.csv")
 TRADES_FILE     = os.path.join(DATA_DIR, "apollo_trades.csv")
@@ -62,7 +63,7 @@ ST_75MIN_PERIOD     = 10
 ST_75MIN_MULTIPLIER = 3.0
 
 ST_15MIN_PERIOD     = 10
-ST_15MIN_MULTIPLIER = 3.0
+ST_15MIN_MULTIPLIER = 1.0
 
 TF_HIGH             = 75            # Higher timeframe in minutes
 TF_LOW              = 15            # Lower timeframe in minutes
@@ -87,12 +88,12 @@ LOT_SIZE            = 75            # Nifty lot size — update if SEBI changes 
 # ---------------------------------------------------------------------------
 # Days of week to exclude entries: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 # Tuesday = Nifty expiry day. Expiry-day gamma and pinning break ST signal.
-EXCLUDE_TRADE_DAYS      = [1]
+EXCLUDE_TRADE_DAYS      = []
 
 # Signal candle close times to exclude (entry would execute 15 min later).
 # Dead zones where market oscillates rather than trends.
 # 09:45 -> entry 10:00 | 10:00 -> entry 10:15 | 13:45 -> entry 14:00 | 14:00 -> entry 14:15
-EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']
+EXCLUDE_SIGNAL_CANDLES  = []
 
 # ---------------------------------------------------------------------------
 # Exit mechanisms — D-R-P2c (identical to D-R03fg-hs-b)
@@ -158,3 +159,11 @@ SLACK_TRADEBOT_CHANNEL  = "#tradebot-updates"   # Login, logout, archival
 SLACK_TRADE_ALERTS      = "#trade-alerts"        # Orders, entries, exits, SL triggers
 SLACK_TRADE_UPDATES     = "#trade-updates"       # Periodic open trade status (muted)
 SLACK_ERRORS_CHANNEL    = "#error-alerts"        # Errors and exceptions
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Set to "DEBUG" during testing, "INFO" for production.
+# DEBUG: all variable values, candle closes, filter decisions, LTP polls
+# INFO:  startup, entries, exits, errors only
+LOG_LEVEL               = "DEBUG"
