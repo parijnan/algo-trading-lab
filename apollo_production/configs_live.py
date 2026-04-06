@@ -60,7 +60,7 @@ VIX_THRESHOLD       = 16.0          # Deploy only when today's opening VIX > thi
 # Must match D-R-P2c exactly — do not change without re-running backtest
 # ---------------------------------------------------------------------------
 ST_75MIN_PERIOD     = 10
-ST_75MIN_MULTIPLIER = 3.0
+ST_75MIN_MULTIPLIER = 4.5
 
 ST_15MIN_PERIOD     = 10
 ST_15MIN_MULTIPLIER = 1.0

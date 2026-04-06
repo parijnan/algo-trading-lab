@@ -318,7 +318,7 @@ class SupertrendManager:
             anchor      = market_open
 
             while anchor.strftime('%H:%M') in _75MIN_CLOSE_TIMES or anchor == market_open:
-                window_end = anchor + timedelta(minutes=TF_HIGH) - timedelta(minutes=TF_LOW)
+                window_end = anchor + timedelta(minutes=TF_HIGH) - timedelta(minutes=1)
                 window = day_df[
                     (day_df['time_stamp'] >= anchor) &
                     (day_df['time_stamp'] <= window_end)
