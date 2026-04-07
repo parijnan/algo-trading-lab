@@ -376,8 +376,16 @@ class Apollo:
                 self._execute_entry(direction, ts)
 
         if self.state.status == 'in_trade':
-            logger.info("Market close with open trade — executing expiry_close exit.")
-            self._execute_exit('expiry_close')
+            # Hold overnight — pre-expiry exit fires at 15:15 on the last
+            # trading day before expiry. We never carry to expiry day itself.
+            logger.info(
+                f"Market close with open trade — holding overnight. "
+                f"Expiry: {self.state.expiry}. Pre-expiry exit will fire at 15:15 "
+                f"on the last trading day before expiry.")
+            slack_bot_sendtext(
+                f"*Apollo*: Market close with open trade. "
+                f"Holding overnight. Expiry: {self.state.expiry}.",
+                SLACK_TRADEBOT_CHANNEL)
 
     def logout(self):
         """Stop feed, terminate session, send close alert."""
@@ -779,7 +787,10 @@ class Apollo:
         expiry_dt = datetime.strptime(self.state.expiry, '%Y-%m-%d')
         elm_dt    = expiry_dt - timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
         elm_date  = elm_dt.date()
-        while elm_date in self.holidays:
+        # Step back through weekends and holidays until we land on a
+        # trading day — ELM_SECONDS gives the time-of-day (15:15),
+        # but the date must be adjusted for non-trading days
+        while elm_date.weekday() >= 5 or elm_date in self.holidays:
             elm_date -= timedelta(days=1)
         elm_dt = datetime.combine(elm_date, elm_dt.time())
         logger.debug(f"Pre-expiry check: elm_time={elm_dt}  now={datetime.now()}")
@@ -1053,17 +1064,22 @@ class Apollo:
                         'close':      float(row[4]),
                         'volume':     float(row[5]),
                     }
-                    # Validate: API sometimes returns the forming candle
-                    # if called exactly at the boundary. Only accept if
-                    # time_stamp matches the expected closed candle.
-                    expected_ts = candle_close_ts - timedelta(minutes=15)
-                    if candle['time_stamp'] != expected_ts:
+                    # Guard: reject if this is the currently forming candle
+                    # (time_stamp >= candle_close_ts means it hasn't closed yet)
+                    if candle['time_stamp'] >= candle_close_ts:
                         logger.debug(
-                            f"Candle timestamp mismatch: got {candle['time_stamp']} "
-                            f"expected {expected_ts} — retrying.")
+                            f"Candle not yet closed: got {candle['time_stamp']} "
+                            f"candle_close_ts={candle_close_ts} — retrying.")
                         sleep(2)
                         _reset_counters()
                         continue
+                    # Warn if timestamp doesn't match expected but still accept —
+                    # API occasionally returns a slightly different window
+                    expected_ts = candle_close_ts - timedelta(minutes=15)
+                    if candle['time_stamp'] != expected_ts:
+                        logger.warning(
+                            f"Candle timestamp mismatch: got {candle['time_stamp']} "
+                            f"expected {expected_ts} — accepting anyway.")
                     logger.debug(
                         f"Candle fetched: {candle['time_stamp']}  "
                         f"O={candle['open']:.2f} H={candle['high']:.2f} "
