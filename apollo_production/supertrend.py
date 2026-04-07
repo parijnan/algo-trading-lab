@@ -157,6 +157,11 @@ class SupertrendManager:
                 self._df_15['time_stamp'].dt.date == today
             ][base_cols].copy()
 
+            # Drop incomplete current candle — script may have been stopped
+            # mid-candle (Ctrl+C or crash), leaving a partially formed candle
+            # in self._df_15 from the last _fetch_latest_candle() call
+            today_candles = self._drop_incomplete(today_candles)
+
             # Drop any today rows already in existing (avoid duplicates)
             existing = existing[
                 existing['time_stamp'].dt.date != today
@@ -574,4 +579,9 @@ class SupertrendManager:
         """Persist 15-min ST cache to disk for intra-session restart recovery."""
         if self._df_15 is not None:
             os.makedirs(os.path.dirname(ST_CACHE_FILE), exist_ok=True)
-            self._df_15.to_csv(ST_CACHE_FILE, index=False)
+            # Trim to ST_HISTORY_CANDLES — ST cache can grow unbounded
+            # as update() appends candles throughout the session
+            df_save = self._df_15
+            if len(df_save) > ST_HISTORY_CANDLES:
+                df_save = df_save.iloc[-ST_HISTORY_CANDLES:]
+            df_save.to_csv(ST_CACHE_FILE, index=False)

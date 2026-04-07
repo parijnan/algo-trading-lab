@@ -1053,6 +1053,17 @@ class Apollo:
                         'close':      float(row[4]),
                         'volume':     float(row[5]),
                     }
+                    # Validate: API sometimes returns the forming candle
+                    # if called exactly at the boundary. Only accept if
+                    # time_stamp matches the expected closed candle.
+                    expected_ts = candle_close_ts - timedelta(minutes=15)
+                    if candle['time_stamp'] != expected_ts:
+                        logger.debug(
+                            f"Candle timestamp mismatch: got {candle['time_stamp']} "
+                            f"expected {expected_ts} — retrying.")
+                        sleep(2)
+                        _reset_counters()
+                        continue
                     logger.debug(
                         f"Candle fetched: {candle['time_stamp']}  "
                         f"O={candle['open']:.2f} H={candle['high']:.2f} "
