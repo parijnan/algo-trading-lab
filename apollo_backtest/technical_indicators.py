@@ -33,13 +33,12 @@ class SupertrendIndicator:
                 trend = True
             elif curr_close < prev_lower:
                 trend = False
-            # Tighten bands regardless of whether a flip occurred.
-            # On a flip candle, the raw band may be wider than the previous
-            # candle's band — without tightening, the ST value is wrong.
-            if trend and df['LowerBand'].iloc[i] < prev_lower:
-                df.loc[df.index[i], 'LowerBand'] = prev_lower
-            if not trend and df['UpperBand'].iloc[i] > prev_upper:
-                df.loc[df.index[i], 'UpperBand'] = prev_upper
+            else:
+                # maintain previous trend, tighten band
+                if trend and df['LowerBand'].iloc[i] < prev_lower:
+                    df.loc[df.index[i], 'LowerBand'] = prev_lower
+                if not trend and df['UpperBand'].iloc[i] > prev_upper:
+                    df.loc[df.index[i], 'UpperBand'] = prev_upper
 
             band_value = df['LowerBand'].iloc[i] if trend else df['UpperBand'].iloc[i]
             supertrend.append(band_value)
