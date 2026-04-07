@@ -832,13 +832,14 @@ class Apollo:
             f"Exit P&L: {pl_points:+.2f} pts ({pl_rupees:+,.0f} Rs)  "
             f"lots={lots}  reason={reason}")
 
-        self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
-
         self._append_trade_log_row(
             exit_reason=reason,
             realised_pl_pts=pl_points,
             realised_pl_rs=pl_rupees)
         self._save_trade_log()
+
+        # Unsubscribe AFTER final log row — LTPs still available for exit snapshot
+        self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
 
         self._log_trade(reason, buy_exit_fill, sell_exit_fill, pl_points, pl_rupees)
 
@@ -939,8 +940,21 @@ class Apollo:
         Dry run: uses feed LTP for the given token directly.
         """
         if DRY_RUN:
+            # Use REST API ltpData for accurate option fill price.
+            # WebSocket feed may not yet have ticks for newly subscribed tokens.
             fill = self.feed.get_ltp(token)
-            fill = fill if fill is not None else 0.0
+            if fill is None or fill == 0.0:
+                try:
+                    row = self.instrument_df[
+                        self.instrument_df['token'].astype(str) == str(token)]
+                    if not row.empty:
+                        symbol = row['symbol'].iloc[0]
+                        fill   = self._fetch_option_ltp(symbol, token)
+                    else:
+                        fill = 0.0
+                except Exception as e:
+                    handle_exception(e)
+                    fill = 0.0
             fill_time = datetime.now()
             logger.info(
                 f"[DRY RUN] Fill for token {token}: {fill:.2f} at {fill_time:%H:%M:%S}")
@@ -983,6 +997,24 @@ class Apollo:
 
         logger.info(f"Order fill: {executed_price:.2f} at {fill_time}")
         return executed_price, fill_time
+
+    def _fetch_option_ltp(self, symbol, token):
+        """
+        Fetch current LTP for an option via REST API (ltpData).
+        Used in dry run to get realistic fill prices at entry/exit.
+        Retries on failure — same pattern as Artemis _fetch_ltp().
+        """
+        while True:
+            try:
+                ltp = self.obj.ltpData(
+                    FO_EXCHANGE_SEGMENT, symbol, token)['data']['ltp']
+                _increment_poll()
+                if ltp is not None:
+                    return float(ltp)
+            except Exception as e:
+                handle_exception(e)
+            sleep(1)
+            _reset_counters()
 
     # -----------------------------------------------------------------------
     # Candle polling
@@ -1130,7 +1162,6 @@ class Apollo:
     def _log_trade(self, exit_reason, buy_exit, sell_exit, pl_points, pl_rupees):
         record = {
             'entry_time':        self.state.entry_time,
-            'lots':              self.state.lots,
             'exit_time':         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'direction':         self.state.direction,
             'expiry':            self.state.expiry,
@@ -1149,6 +1180,7 @@ class Apollo:
             'entry_vix':         self.state.entry_vix,
             'entry_spot':        self.state.entry_spot,
             'max_unrealised_pl': self.state.max_unrealised_pl,
+            'lots':              self.state.lots,
         }
         os.makedirs(DATA_DIR, exist_ok=True)
         df_new = pd.DataFrame([record])

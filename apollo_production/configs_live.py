@@ -97,12 +97,12 @@ LOT_CAPITAL         = 104000        # capital per lot for auto-calculation (Rs)
 # ---------------------------------------------------------------------------
 # Days of week to exclude entries: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 # Tuesday = Nifty expiry day. Expiry-day gamma and pinning break ST signal.
-EXCLUDE_TRADE_DAYS      = [1]
+EXCLUDE_TRADE_DAYS      = []
 
 # Signal candle close times to exclude (entry would execute 15 min later).
 # Dead zones where market oscillates rather than trends.
 # 09:45 -> entry 10:00 | 10:00 -> entry 10:15 | 13:45 -> entry 14:00 | 14:00 -> entry 14:15
-EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']
+EXCLUDE_SIGNAL_CANDLES  = []
 
 # ---------------------------------------------------------------------------
 # Exit mechanisms — D-R-P2c (identical to D-R03fg-hs-b)
