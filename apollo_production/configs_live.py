@@ -64,7 +64,7 @@ ST_75MIN_PERIOD     = 10
 ST_75MIN_MULTIPLIER = 3.0
 
 ST_15MIN_PERIOD     = 10
-ST_15MIN_MULTIPLIER = 3.0
+ST_15MIN_MULTIPLIER = 2.0
 
 TF_HIGH             = 75            # Higher timeframe in minutes
 TF_LOW              = 15            # Lower timeframe in minutes

@@ -1266,7 +1266,8 @@ if __name__ == "__main__":
     apollo.login()
     try:
         apollo.run()
+        apollo.logout()        # normal market close path (15:30)
     except Exception as e:
         handle_exception(e)
-    finally:
-        apollo.logout()
+        apollo.logout()        # exception path
+    # SIGINT/SIGTERM handled by _handle_signal() — no finally needed

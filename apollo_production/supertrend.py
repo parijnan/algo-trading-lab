@@ -140,6 +140,9 @@ class SupertrendManager:
         Wilder's smoothing warmup problem.
         """
         logger.info("Updating 15-min candle cache for next session...")
+        if self._df_15 is None or not self._seeded:
+            logger.info("Candle cache not updated — no seeded data available.")
+            return
         try:
             # Today's completed candles are already in self._df_15
             # Load existing raw cache if it exists
