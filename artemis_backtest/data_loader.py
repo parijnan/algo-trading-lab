@@ -119,6 +119,7 @@ def _load_nifty_option(filepath: str) -> pd.DataFrame:
     df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False)
     df = df[['time_stamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
     df = df.sort_values('time_stamp').reset_index(drop=True)
+    df = df.drop_duplicates(subset='time_stamp', keep='first')
     df = df.set_index('time_stamp')
     return df
 
@@ -157,11 +158,16 @@ def get_price(option_df: pd.DataFrame, timestamp: pd.Timestamp,
     Get option price at an exact timestamp.
     Falls back to the last available price before the timestamp if not found.
     Returns None if no data is available at or before the timestamp.
+    Handles duplicate timestamps (can occur in Nifty ICICI Breeze data) by
+    taking the first matching row.
     """
     if option_df.empty:
         return None
     if timestamp in option_df.index:
         val = option_df.loc[timestamp, col]
+        # loc returns a Series when duplicate timestamps exist — take first value
+        if isinstance(val, pd.Series):
+            val = val.iloc[0]
         return float(val) if pd.notna(val) else None
     prior = option_df[option_df.index < timestamp]
     if not prior.empty:
@@ -176,11 +182,14 @@ def get_index_price(index_df: pd.DataFrame, timestamp: pd.Timestamp,
     Get index price at an exact timestamp from a timestamp-indexed DataFrame.
     Falls back to last available before timestamp.
     Returns None if not found.
+    Handles duplicate timestamps by taking the first matching row.
     """
     if index_df.empty:
         return None
     if timestamp in index_df.index:
         val = index_df.loc[timestamp, col]
+        if isinstance(val, pd.Series):
+            val = val.iloc[0]
         return float(val) if pd.notna(val) else None
     prior = index_df[index_df.index < timestamp]
     if not prior.empty:
