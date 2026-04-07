@@ -710,6 +710,10 @@ class Apollo:
     def _check_hard_stop(self):
         if not ENABLE_HARD_STOP or self.state.status != 'in_trade':
             return False
+        # Do not exit in the first minute — prices are settling.
+        # Re-evaluated on the next tick at 09:16 with current LTPs.
+        if datetime.now().time() < self._no_exit_time:
+            return False
         buy_ltp  = self.feed.get_ltp(self.state.buy_token)
         sell_ltp = self.feed.get_ltp(self.state.sell_token)
         if buy_ltp is None or sell_ltp is None:
@@ -730,6 +734,10 @@ class Apollo:
 
     def _check_profit_target(self):
         if not ENABLE_PROFIT_TARGET or self.state.status != 'in_trade':
+            return False
+        # Do not exit in the first minute — prices are settling.
+        # Re-evaluated on the next tick at 09:16 with current LTPs.
+        if datetime.now().time() < self._no_exit_time:
             return False
         buy_ltp  = self.feed.get_ltp(self.state.buy_token)
         sell_ltp = self.feed.get_ltp(self.state.sell_token)
