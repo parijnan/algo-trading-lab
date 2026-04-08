@@ -290,6 +290,12 @@ class Apollo:
                             f"unrealised={unrealised:+.2f}  "
                             f"hard_stop_level={-HARD_STOP_POINTS:.1f}  "
                             f"pt_level={self.state.profit_target_pts:.1f}")
+                        # Always update LTPs and peak — independent of no-exit guard
+                        self.state.last_buy_ltp  = round(buy_ltp,  2)
+                        self.state.last_sell_ltp = round(sell_ltp, 2)
+                        if unrealised > self.state.max_unrealised_pl:
+                            self.state.max_unrealised_pl = round(unrealised, 2)
+                        save_state(self.state)
 
                     if self._check_hard_stop():
                         continue
@@ -722,9 +728,6 @@ class Apollo:
         unrealised = (buy_ltp - self.state.buy_entry) - (sell_ltp - self.state.sell_entry)
         self.state.last_buy_ltp  = round(buy_ltp,  2)
         self.state.last_sell_ltp = round(sell_ltp, 2)
-        if unrealised > self.state.max_unrealised_pl:
-            self.state.max_unrealised_pl = round(unrealised, 2)
-            save_state(self.state)
         if unrealised <= -HARD_STOP_POINTS:
             logger.warning(
                 f"Hard stop triggered: unrealised={unrealised:.2f} "
