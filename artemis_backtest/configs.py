@@ -59,7 +59,8 @@ _NIFTY_PARAMS = {
     'strike_interval':      100,
     'expected_premium':     30,       # target sell option LTP at entry
     'hedge_points':         300,      # distance from sell to buy strike
-    'index_sl_offset':      50,       # points inside sell strike for index SL
+    'pe_index_sl_offset':   50,       # OPTIMISABLE
+    'ce_index_sl_offset':   50,       # OPTIMISABLE
     'adjustment_distance':  200,      # points to move sell strike on adjustment
     'minimum_gap':          350,      # minimum gap between spot and sell strike
     'minimum_gap_iterator': 100,      # fallback gap when resetting sell strike
@@ -70,7 +71,8 @@ _SENSEX_PARAMS = {
     'strike_interval':      100,
     'expected_premium':     120,
     'hedge_points':         1000,
-    'index_sl_offset':      200,
+    'pe_index_sl_offset':   200,   # OPTIMISABLE
+    'ce_index_sl_offset':   200,   # OPTIMISABLE —- analysis thread will tune
     'adjustment_distance':  600,
     'minimum_gap':          1000,
     'minimum_gap_iterator': 400,
@@ -82,7 +84,8 @@ LOT_SIZE                = _PARAMS['lot_size']
 STRIKE_INTERVAL         = _PARAMS['strike_interval']
 EXPECTED_PREMIUM        = _PARAMS['expected_premium']
 HEDGE_POINTS            = _PARAMS['hedge_points']
-INDEX_SL_OFFSET         = _PARAMS['index_sl_offset']
+PE_INDEX_SL_OFFSET      = _PARAMS['pe_index_sl_offset']   # OPTIMISABLE
+CE_INDEX_SL_OFFSET      = _PARAMS['ce_index_sl_offset']   # OPTIMISABLE
 ADJUSTMENT_DISTANCE     = _PARAMS['adjustment_distance']
 MINIMUM_GAP             = _PARAMS['minimum_gap']
 MINIMUM_GAP_ITERATOR    = _PARAMS['minimum_gap_iterator']
@@ -95,15 +98,28 @@ MINIMUM_GAP_ITERATOR    = _PARAMS['minimum_gap_iterator']
 VIX_THRESHOLD           = 16.0
 
 # ---------------------------------------------------------------------------
-# Stop loss multipliers — OPTIMISABLE
+# Option stop loss multipliers — OPTIMISABLE
 # ---------------------------------------------------------------------------
-# option_sl = sell_entry_price × multiplier
-# DTE = weekday count from entry date to expiry date (busday_count)
-SL_4_DTE                = 2.66      # DTE >= 4
-SL_3_DTE                = 2.33      # DTE == 3
-SL_2_DTE                = 2.00      # DTE == 2
-SL_1_DTE                = 1.66      # DTE == 1
-SL_0_DTE                = 1.33      # DTE == 0
+# option_sl fires when: sell_ltp >= sell_entry_price × multiplier
+# DTE = np.busday_count(candle_date, expiry_date), clamped to [0, 4]
+#
+# PE and CE multipliers are independent sets. Both are currently initialised
+# to the same values (2.66 / 2.33 / 2.00 / 1.66 / 1.33) to replicate the
+# original shared-multiplier behaviour until tuned by the analysis thread.
+
+# PE sell option SL multipliers — OPTIMISABLE
+PE_SL_4_DTE             = 2.66      # DTE >= 4
+PE_SL_3_DTE             = 2.33      # DTE == 3
+PE_SL_2_DTE             = 2.00      # DTE == 2
+PE_SL_1_DTE             = 1.66      # DTE == 1
+PE_SL_0_DTE             = 1.33      # DTE == 0
+
+# CE sell option SL multipliers — OPTIMISABLE
+CE_SL_4_DTE             = 2.66      # DTE >= 4
+CE_SL_3_DTE             = 2.33      # DTE == 3
+CE_SL_2_DTE             = 2.00      # DTE == 2
+CE_SL_1_DTE             = 1.66      # DTE == 1
+CE_SL_0_DTE             = 1.33      # DTE == 0
 
 # ---------------------------------------------------------------------------
 # SL enable flags
@@ -117,11 +133,17 @@ ENABLE_OPTION_SL        = True
 # ---------------------------------------------------------------------------
 # Index stop loss — OPTIMISABLE
 # ---------------------------------------------------------------------------
-# Resolved above from instrument params. Listed here for clarity.
-# INDEX_SL_OFFSET is the distance in points inside the sell strike at which
-# the index SL fires:
-#   PE index SL: spot < sell_strike - INDEX_SL_OFFSET
-#   CE index SL: spot > sell_strike + INDEX_SL_OFFSET
+# PE_INDEX_SL_OFFSET: distance in points inside the PE sell strike at which
+#   the PE index SL fires.
+#   Condition: spot < pe_sell_strike - PE_INDEX_SL_OFFSET
+#
+# CE_INDEX_SL_OFFSET: distance in points inside the CE sell strike at which
+#   the CE index SL fires.
+#   Condition: spot > ce_sell_strike + CE_INDEX_SL_OFFSET
+#
+# Both are independently optimisable per instrument.
+# Currently set equal (200/200 for Sensex, 50/50 for Nifty) to replicate
+# the original single-offset behaviour until tuned by the analysis thread.
 
 # ---------------------------------------------------------------------------
 # Other optimisable parameters — resolved above from instrument params

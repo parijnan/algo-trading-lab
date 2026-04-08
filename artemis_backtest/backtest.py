@@ -43,9 +43,11 @@ from configs import (
     CONTRACTS_FILE, HOLIDAYS_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
-    INDEX_SL_OFFSET, ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
+    PE_INDEX_SL_OFFSET, CE_INDEX_SL_OFFSET,
+    ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
     VIX_THRESHOLD,
-    SL_0_DTE, SL_1_DTE, SL_2_DTE, SL_3_DTE, SL_4_DTE,
+    PE_SL_4_DTE, PE_SL_3_DTE, PE_SL_2_DTE, PE_SL_1_DTE, PE_SL_0_DTE,
+    CE_SL_4_DTE, CE_SL_3_DTE, CE_SL_2_DTE, CE_SL_1_DTE, CE_SL_0_DTE,
     ENABLE_INDEX_SL, ENABLE_OPTION_SL,
     EXPIRY_FALLBACK_PRICE,
     ENABLE_TRADE_LOGS,
@@ -79,17 +81,16 @@ OPTIONS_PATH  = SENSEX_OPTIONS_PATH if INSTRUMENT == 'sensex' else NIFTY_OPTIONS
 # SL multiplier lookup
 # ---------------------------------------------------------------------------
 
-def get_sl_multiplier(dte: int) -> float:
-    if dte >= 4:
-        return SL_4_DTE
-    elif dte == 3:
-        return SL_3_DTE
-    elif dte == 2:
-        return SL_2_DTE
-    elif dte == 1:
-        return SL_1_DTE
-    else:
-        return SL_0_DTE
+# Module-level multiplier lookup dicts — one per spread type
+_PE_OPT_SL_MULTS = {4: PE_SL_4_DTE, 3: PE_SL_3_DTE, 2: PE_SL_2_DTE,
+                    1: PE_SL_1_DTE,  0: PE_SL_0_DTE}
+_CE_OPT_SL_MULTS = {4: CE_SL_4_DTE, 3: CE_SL_3_DTE, 2: CE_SL_2_DTE,
+                    1: CE_SL_1_DTE,  0: CE_SL_0_DTE}
+
+
+def get_sl_multiplier(spread_type: str, dte: int) -> float:
+    mults = _PE_OPT_SL_MULTS if spread_type == 'pe' else _CE_OPT_SL_MULTS
+    return mults.get(min(dte, 4), mults[0])
 
 
 def compute_dte(from_date, expiry_ts: pd.Timestamp) -> int:
@@ -150,17 +151,18 @@ def set_sl(spread: dict, dte: int):
     """
     Compute and set index_sl and option_sl on a spread dict.
     Mirrors live Artemis credit_spread.py _set_sl() exactly:
-      PE: index_sl = sell_strike + INDEX_SL_OFFSET
+      PE: index_sl = sell_strike + PE_INDEX_SL_OFFSET
           SL fires when spot < index_sl (spot falling toward sold PE strike)
-      CE: index_sl = sell_strike - INDEX_SL_OFFSET
+      CE: index_sl = sell_strike - CE_INDEX_SL_OFFSET
           SL fires when spot > index_sl (spot rising toward sold CE strike)
+    PE and CE use independent index SL offsets and option SL multiplier sets.
     """
-    mult = get_sl_multiplier(dte)
+    mult = get_sl_multiplier(spread['type'], dte)
     spread['option_sl'] = spread['sell_entry'] * mult
     if spread['type'] == 'pe':
-        spread['index_sl'] = spread['sell_strike'] + INDEX_SL_OFFSET
+        spread['index_sl'] = spread['sell_strike'] + PE_INDEX_SL_OFFSET
     else:
-        spread['index_sl'] = spread['sell_strike'] - INDEX_SL_OFFSET
+        spread['index_sl'] = spread['sell_strike'] - CE_INDEX_SL_OFFSET
 
 
 def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
@@ -168,8 +170,8 @@ def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
     Check both SL conditions for a spread.
     Returns 'index_sl', 'option_sl', or None.
     Mirrors live Artemis credit_spread.py monitor_spread() exactly:
-      PE fires when spot < index_sl (spot within INDEX_SL_OFFSET of sell strike)
-      CE fires when spot > index_sl (spot within INDEX_SL_OFFSET of sell strike)
+      PE fires when spot < index_sl (spot within PE_INDEX_SL_OFFSET of sell strike)
+      CE fires when spot > index_sl (spot within CE_INDEX_SL_OFFSET of sell strike)
     """
     if ENABLE_INDEX_SL:
         if spread['type'] == 'pe' and spot < spread['index_sl']:
@@ -792,20 +794,28 @@ def _build_summary_record(contract: pd.Series, entry_ts: pd.Timestamp,
 # ---------------------------------------------------------------------------
 
 def print_summary(all_records: list):
-    df = pd.DataFrame(all_records)
-    traded = df[df['week_outcome'] == 'traded']
-    skipped = df[df['week_outcome'] != 'traded']
-
     logger.info('=' * 60)
     logger.info('ARTEMIS BACKTEST SUMMARY')
     logger.info('=' * 60)
     logger.info(f"  Instrument         : {INSTRUMENT.upper()}")
+
+    if not all_records:
+        logger.info("  No contracts found. Check INSTRUMENT, BACKTEST_START_DATE,")
+        logger.info("  BACKTEST_END_DATE, and that contracts.csv has been generated.")
+        logger.info('=' * 60)
+        return
+
+    df = pd.DataFrame(all_records)
+    traded  = df[df['week_outcome'] == 'traded']
+    skipped = df[df['week_outcome'] != 'traded']
+
     logger.info(f"  Total weeks        : {len(df)}")
     logger.info(f"  Skipped (VIX gate) : {len(skipped)}")
     logger.info(f"  Traded weeks       : {len(traded)}")
 
     if traded.empty:
         logger.info("  No traded weeks to analyse.")
+        logger.info('=' * 60)
         return
 
     winners  = traded[traded['total_pl_points'] > 0]
