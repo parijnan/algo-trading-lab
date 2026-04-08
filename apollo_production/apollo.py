@@ -55,6 +55,7 @@ from configs_live import (
     DRY_RUN,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     TRADES_FILE, DATA_DIR,
+    CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL,
 )
 from websocket_feed import ApolloFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN
 from supertrend import SupertrendManager
@@ -313,7 +314,45 @@ class Apollo:
 
             candle = self._fetch_latest_candle(next_close)
             if candle is None:
-                logger.warning(f"No candle data returned for {next_close}. Skipping.")
+                # Retry with longer backoff — API sometimes delays candle
+                # availability, especially for 09:15 after volatile opens
+                logger.warning(
+                    f"No candle data returned for {next_close}. "
+                    f"Retrying up to {CANDLE_FETCH_RETRIES} more times "
+                    f"({CANDLE_FETCH_RETRY_INTERVAL}s apart)...")
+                slack_bot_sendtext(
+                    f"*Apollo* ALERT: No candle data for {next_close:%H:%M}. "
+                    f"Retrying up to {CANDLE_FETCH_RETRIES}x "
+                    f"({CANDLE_FETCH_RETRY_INTERVAL}s apart)...",
+                    SLACK_ERRORS_CHANNEL)
+                for retry in range(CANDLE_FETCH_RETRIES):
+                    sleep(CANDLE_FETCH_RETRY_INTERVAL)
+                    _reset_counters()
+                    candle = self._fetch_latest_candle(next_close)
+                    if candle is not None:
+                        logger.info(
+                            f"Candle data recovered on retry {retry + 1} "
+                            f"for {next_close:%H:%M}.")
+                        slack_bot_sendtext(
+                            f"*Apollo*: Candle data recovered on retry "
+                            f"{retry + 1} for {next_close:%H:%M}. Resuming normally.",
+                            SLACK_ERRORS_CHANNEL)
+                        break
+                    logger.warning(
+                        f"Retry {retry + 1}/{CANDLE_FETCH_RETRIES} — "
+                        f"still no data for {next_close:%H:%M}.")
+                    slack_bot_sendtext(
+                        f"*Apollo* ALERT: Retry {retry + 1}/{CANDLE_FETCH_RETRIES} — "
+                        f"still no candle data for {next_close:%H:%M}.",
+                        SLACK_ERRORS_CHANNEL)
+            if candle is None:
+                logger.error(
+                    f"Candle data unavailable for {next_close:%H:%M} after all retries. "
+                    f"Skipping — ST and signals will not update this bar.")
+                slack_bot_sendtext(
+                    f"*Apollo* ERROR: Candle data unavailable for {next_close:%H:%M} "
+                    f"after all retries. ST and signals will not update this bar.",
+                    SLACK_ERRORS_CHANNEL)
                 continue
 
             ts = candle['time_stamp']

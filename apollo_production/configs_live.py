@@ -144,6 +144,8 @@ SLIPPAGE_POINTS         = 1.0
 
 # Order management
 ORDER_TIMEOUT_SEC       = 10        # Seconds to wait for order fill confirmation
+CANDLE_FETCH_RETRIES        = 5     # Extra retries if candle data unavailable
+CANDLE_FETCH_RETRY_INTERVAL = 10    # Seconds between retries
 
 # Dry run mode — no real orders placed. Fill prices sourced from live LTP.
 # Set to False only when ready to go live on delos.
