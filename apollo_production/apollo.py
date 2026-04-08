@@ -230,6 +230,7 @@ class Apollo:
                 f"Buy: {self.state.buy_strike} @ {self.state.buy_entry}. "
                 f"Sell: {self.state.sell_strike} @ {self.state.sell_entry}.")
             self.feed.subscribe_options(self.state.buy_token, self.state.sell_token)
+            self._load_trade_log()
             slack_bot_sendtext(
                 f"*Apollo*: Restarted — resuming active {self.state.direction.upper()} trade. "
                 f"Buy {self.state.buy_strike} @ {self.state.buy_entry:.1f} | "
@@ -1175,6 +1176,43 @@ class Apollo:
         pd.DataFrame(self._trade_log).to_csv(filepath, index=False)
         logger.info(f"Trade log saved: {filename} ({len(self._trade_log)} rows)")
         self._save_trade_counter()
+
+    def _load_trade_log(self):
+        """
+        On restart with an active trade, load the existing trade log file
+        into self._trade_log so today's rows append to yesterday's.
+        The existing file number is _trade_counter + 1 (counter increments
+        at save time, not at entry time).
+        Strips any final row with a non-null exit_reason — this handles the
+        edge case where a previous session wrote a spurious exit row that
+        was subsequently rolled back via state restore.
+        """
+        try:
+            entry_dt  = datetime.strptime(self.state.entry_time, '%Y-%m-%d %H:%M:%S')
+            entry_str = entry_dt.strftime('%Y-%m-%d_%H%M')
+        except Exception:
+            logger.debug('Could not parse entry_time for trade log load.')
+            return
+
+        filename = f"trade_{self._trade_counter + 1:04d}_{entry_str}.csv"
+        filepath = os.path.join(_TRADE_LOGS_DIR, filename)
+
+        if not os.path.exists(filepath):
+            logger.debug(f'No existing trade log found at {filename}.')
+            return
+
+        try:
+            df = pd.read_csv(filepath)
+            # Strip spurious exit rows (non-null exit_reason) from previous
+            # session — only keep monitoring rows
+            df = df[df['exit_reason'].isna()].copy()
+            self._trade_log = df.to_dict('records')
+            logger.info(
+                f'Loaded {len(self._trade_log)} rows from existing trade log '
+                f'{filename}.')
+        except Exception as e:
+            logger.error(f'Failed to load existing trade log: {e}')
+            self._trade_log = []
 
     def _load_trade_counter(self):
         counter_file = os.path.join(DATA_DIR, 'trade_counter.txt')

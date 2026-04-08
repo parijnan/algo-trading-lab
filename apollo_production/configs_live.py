@@ -64,7 +64,7 @@ ST_75MIN_PERIOD     = 10
 ST_75MIN_MULTIPLIER = 3.0
 
 ST_15MIN_PERIOD     = 10
-ST_15MIN_MULTIPLIER = 2.0
+ST_15MIN_MULTIPLIER = 3.0
 
 TF_HIGH             = 75            # Higher timeframe in minutes
 TF_LOW              = 15            # Lower timeframe in minutes
@@ -97,12 +97,12 @@ LOT_CAPITAL         = 104000        # capital per lot for auto-calculation (Rs)
 # ---------------------------------------------------------------------------
 # Days of week to exclude entries: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 # Tuesday = Nifty expiry day. Expiry-day gamma and pinning break ST signal.
-EXCLUDE_TRADE_DAYS      = []
+EXCLUDE_TRADE_DAYS      = [1]
 
 # Signal candle close times to exclude (entry would execute 15 min later).
 # Dead zones where market oscillates rather than trends.
 # 09:45 -> entry 10:00 | 10:00 -> entry 10:15 | 13:45 -> entry 14:00 | 14:00 -> entry 14:15
-EXCLUDE_SIGNAL_CANDLES  = []
+EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']
 
 # ---------------------------------------------------------------------------
 # Exit mechanisms — D-R-P2c (identical to D-R03fg-hs-b)
@@ -147,7 +147,7 @@ ORDER_TIMEOUT_SEC       = 10        # Seconds to wait for order fill confirmatio
 
 # Dry run mode — no real orders placed. Fill prices sourced from live LTP.
 # Set to False only when ready to go live on delos.
-DRY_RUN                 = True
+DRY_RUN                 = False
 
 # Trade update and log interval in seconds.
 # Drives both the #trade-updates Slack message and the trade log append.
