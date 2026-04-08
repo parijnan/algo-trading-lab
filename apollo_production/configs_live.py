@@ -81,7 +81,7 @@ BUY_LEG_OFFSET      = -50           # ITM: -50 from ATM. Negative = ITM for both
 HEDGE_POINTS        = 300           # OTM sell leg distance from buy leg
 STRIKE_STEP         = 50            # Nifty strike interval
 MIN_DTE             = 2             # Roll to next expiry if DTE < this
-LOT_SIZE            = 75            # Nifty lot size — update if SEBI changes this
+LOT_SIZE            = 65            # Nifty lot size — update if SEBI changes this
 
 # Lot sizing
 # LOT_CALC = False: trade exactly LOT_COUNT lots per signal
@@ -89,7 +89,7 @@ LOT_SIZE            = 75            # Nifty lot size — update if SEBI changes 
 #   lots = floor(available_margin / LOT_CAPITAL), floored at 1
 LOT_CALC            = False
 LOT_COUNT           = 1             # lots per signal when LOT_CALC = False
-LOT_CAPITAL         = 104000        # capital per lot for auto-calculation (Rs)
+LOT_CAPITAL         = 100000        # capital per lot for auto-calculation (Rs)
 
 # ---------------------------------------------------------------------------
 # Entry filters (D-R-P2c)
