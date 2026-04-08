@@ -43,11 +43,12 @@ from configs import (
     CONTRACTS_FILE, HOLIDAYS_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
-    PE_INDEX_SL_OFFSET, CE_INDEX_SL_OFFSET,
+    INDEX_SL_OFFSET, INDEX_SL_OFFSETS,
     ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
     VIX_THRESHOLD,
-    PE_SL_4_DTE, PE_SL_3_DTE, PE_SL_2_DTE, PE_SL_1_DTE, PE_SL_0_DTE,
-    CE_SL_4_DTE, CE_SL_3_DTE, CE_SL_2_DTE, CE_SL_1_DTE, CE_SL_0_DTE,
+    SL_4_DTE, SL_3_DTE, SL_2_DTE, SL_1_DTE, SL_0_DTE,
+    SL_DTE_MULTIPLIERS,
+    VIX_BAND_LT12, VIX_BAND_12_14, VIX_BAND_14_16,
     ENABLE_INDEX_SL, ENABLE_OPTION_SL,
     EXPIRY_FALLBACK_PRICE,
     ENABLE_TRADE_LOGS,
@@ -81,16 +82,22 @@ OPTIONS_PATH  = SENSEX_OPTIONS_PATH if INSTRUMENT == 'sensex' else NIFTY_OPTIONS
 # SL multiplier lookup
 # ---------------------------------------------------------------------------
 
-# Module-level multiplier lookup dicts — one per spread type
-_PE_OPT_SL_MULTS = {4: PE_SL_4_DTE, 3: PE_SL_3_DTE, 2: PE_SL_2_DTE,
-                    1: PE_SL_1_DTE,  0: PE_SL_0_DTE}
-_CE_OPT_SL_MULTS = {4: CE_SL_4_DTE, 3: CE_SL_3_DTE, 2: CE_SL_2_DTE,
-                    1: CE_SL_1_DTE,  0: CE_SL_0_DTE}
+def get_vix_band(vix: float) -> str:
+    """Return VIX band label for a given VIX value."""
+    if vix < VIX_BAND_LT12:
+        return 'vix_lt12'
+    elif vix < VIX_BAND_12_14:
+        return 'vix_12_14'
+    elif vix < VIX_BAND_14_16:
+        return 'vix_14_16'
+    else:
+        return 'vix_gte16'
 
 
-def get_sl_multiplier(spread_type: str, dte: int) -> float:
-    mults = _PE_OPT_SL_MULTS if spread_type == 'pe' else _CE_OPT_SL_MULTS
-    return mults.get(min(dte, 4), mults[0])
+def get_sl_multiplier(vix_band: str, dte: int) -> float:
+    """Return option SL multiplier for the given VIX band and DTE."""
+    band_mults = SL_DTE_MULTIPLIERS[vix_band]
+    return band_mults.get(min(dte, 4), band_mults[0])
 
 
 def compute_dte(from_date, expiry_ts: pd.Timestamp) -> int:
@@ -147,22 +154,23 @@ def make_spread(spread_type: str) -> dict:
 # SL helpers
 # ---------------------------------------------------------------------------
 
-def set_sl(spread: dict, dte: int):
+def set_sl(spread: dict, dte: int, vix_band: str):
     """
     Compute and set index_sl and option_sl on a spread dict.
     Mirrors live Artemis credit_spread.py _set_sl() exactly:
-      PE: index_sl = sell_strike + PE_INDEX_SL_OFFSET
+      PE: index_sl = sell_strike + INDEX_SL_OFFSETS[vix_band]
           SL fires when spot < index_sl (spot falling toward sold PE strike)
-      CE: index_sl = sell_strike - CE_INDEX_SL_OFFSET
+      CE: index_sl = sell_strike - INDEX_SL_OFFSETS[vix_band]
           SL fires when spot > index_sl (spot rising toward sold CE strike)
-    PE and CE use independent index SL offsets and option SL multiplier sets.
+    Both index SL and option SL multiplier are VIX-band-conditional.
     """
-    mult = get_sl_multiplier(spread['type'], dte)
+    idx_sl_offset = INDEX_SL_OFFSETS[vix_band]
+    mult = get_sl_multiplier(vix_band, dte)
     spread['option_sl'] = spread['sell_entry'] * mult
     if spread['type'] == 'pe':
-        spread['index_sl'] = spread['sell_strike'] + PE_INDEX_SL_OFFSET
+        spread['index_sl'] = spread['sell_strike'] + idx_sl_offset
     else:
-        spread['index_sl'] = spread['sell_strike'] - CE_INDEX_SL_OFFSET
+        spread['index_sl'] = spread['sell_strike'] - idx_sl_offset
 
 
 def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
@@ -170,8 +178,8 @@ def check_sl(spread: dict, spot: float, ts: pd.Timestamp) -> str:
     Check both SL conditions for a spread.
     Returns 'index_sl', 'option_sl', or None.
     Mirrors live Artemis credit_spread.py monitor_spread() exactly:
-      PE fires when spot < index_sl (spot within PE_INDEX_SL_OFFSET of sell strike)
-      CE fires when spot > index_sl (spot within CE_INDEX_SL_OFFSET of sell strike)
+      PE fires when spot < index_sl (spot within INDEX_SL_OFFSETS[band] of sell strike)
+      CE fires when spot > index_sl (spot within INDEX_SL_OFFSETS[band] of sell strike)
     """
     if ENABLE_INDEX_SL:
         if spread['type'] == 'pe' and spot < spread['index_sl']:
@@ -258,7 +266,7 @@ def load_spread_dfs(spread: dict, expiry_ts: pd.Timestamp):
 
 def execute_spread_at(spread: dict, exec_ts: pd.Timestamp,
                       expiry_ts: pd.Timestamp, dte: int,
-                      lots: int) -> bool:
+                      lots: int, vix_band: str) -> bool:
     """
     Enter a spread at the open of exec_ts candle.
     Returns True if entry prices were found, False otherwise.
@@ -277,7 +285,7 @@ def execute_spread_at(spread: dict, exec_ts: pd.Timestamp,
     spread['sell_ltp']   = sell_price
     spread['buy_ltp']    = buy_price
     spread['status']     = 'active'
-    set_sl(spread, dte)
+    set_sl(spread, dte, vix_band)
     return True
 
 
@@ -404,7 +412,8 @@ def exit_spread_at_expiry(spread: dict, expiry_ts: pd.Timestamp,
 
 def adjust_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
                   expiry_ts: pd.Timestamp, dte: int, lots: int,
-                  elm_time: pd.Timestamp, cutoff_time: pd.Timestamp):
+                  elm_time: pd.Timestamp, cutoff_time: pd.Timestamp,
+                  vix_band: str):
     """
     Adjust spread sell strike after SL on the other side.
     Mirrors live adjust_spread() logic:
@@ -483,7 +492,7 @@ def adjust_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
     spread['status'] = 'adjusted_additional' if enter_additional else 'adjusted'
 
     # Recompute SL on new sell strike
-    set_sl(spread, dte)
+    set_sl(spread, dte, vix_band)
     _recompute_pl(spread)
 
     logger.info(
@@ -494,7 +503,8 @@ def adjust_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
 
 
 def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
-                   expiry_ts: pd.Timestamp, dte: int, lots: int):
+                   expiry_ts: pd.Timestamp, dte: int, lots: int,
+                   vix_band: str):
     """
     Re-enter a spread that was previously closed (other side triggered SL first).
     Mirrors live initialize_spread() re-entry path.
@@ -544,7 +554,7 @@ def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
     spread['exit_time']     = None
     spread['status']        = 'active'
 
-    set_sl(spread, dte)
+    set_sl(spread, dte, vix_band)
 
     logger.info(
         f"  [{spread['type'].upper()}] Re-entered: "
@@ -956,9 +966,11 @@ def run_backtest():
         load_spread_dfs(pe, expiry_ts)
         load_spread_dfs(ce, expiry_ts)
 
+        vix_band = get_vix_band(entry_vix)
+
         # Execute at 10:31 open
-        pe_ok = execute_spread_at(pe, exec_ts, expiry_ts, dte, lots)
-        ce_ok = execute_spread_at(ce, exec_ts, expiry_ts, dte, lots)
+        pe_ok = execute_spread_at(pe, exec_ts, expiry_ts, dte, lots, vix_band)
+        ce_ok = execute_spread_at(ce, exec_ts, expiry_ts, dte, lots, vix_band)
 
         if not pe_ok or not ce_ok:
             logger.warning(f"  Entry failed — skipping week")
@@ -1004,9 +1016,9 @@ def run_backtest():
                 current_loop_date = ts.date()
                 current_dte_daily = compute_dte(ts.date(), expiry_ts)
                 if pe['status'] != 'closed' and pe['sell_entry'] is not None:
-                    set_sl(pe, current_dte_daily)
+                    set_sl(pe, current_dte_daily, vix_band)
                 if ce['status'] != 'closed' and ce['sell_entry'] is not None:
-                    set_sl(ce, current_dte_daily)
+                    set_sl(ce, current_dte_daily, vix_band)
 
             # Refresh LTPs for open spreads
             if pe['status'] != 'closed':
@@ -1074,7 +1086,8 @@ def run_backtest():
                         # Only adjust if CE has not been touched yet this week.
                         # Re-enter is only if CE was already closed when PE hit SL.
                         adjust_spread(ce, spot, sl_exec_ts, expiry_ts,
-                                      current_dte, lots, elm_time, cutoff_time)
+                                      current_dte, lots, elm_time, cutoff_time,
+                                      vix_band)
 
             # ---------------------------------------------------------------
             # SL checks — CE spread
@@ -1098,7 +1111,8 @@ def run_backtest():
                                           'adjusted_elm', 'active_additional_elm',
                                           'adjusted_additional_elm'):
                         adjust_spread(pe, spot, sl_exec_ts, expiry_ts,
-                                      current_dte, lots, elm_time, cutoff_time)
+                                      current_dte, lots, elm_time, cutoff_time,
+                                      vix_band)
 
             # ---------------------------------------------------------------
             # Re-entry: if one side just closed via SL AND the other side
