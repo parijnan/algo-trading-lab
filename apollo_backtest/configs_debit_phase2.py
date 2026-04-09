@@ -65,7 +65,7 @@ MIN_DTE                     = 2
 # ---------------------------------------------------------------------------
 # Filter 1: Excluded days of week. 0=Mon … 4=Fri
 # Tuesday (1) = Nifty weekly expiry. Confirmed harmful in Phase 1.
-EXCLUDE_TRADE_DAYS          = [1]
+EXCLUDE_TRADE_DAYS          = [0]
 
 # Filter 2: Excluded signal candle close times ('HH:MM').
 # Phase 1 values (09:45, 10:00) were 15-min candle times — do not carry over.
@@ -128,7 +128,7 @@ TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX = 0.33  # VIX >= 23 (optimisable)
 # trades entered after TIME_GATE_CHECK_TIME when TIME_GATE_DAYS=0.
 # Both gates can run simultaneously — first to trigger wins.
 # Exit reason: 'time_gate_hours'
-ENABLE_TIME_GATE_HOURS          = False        # set True to activate
+ENABLE_TIME_GATE_HOURS          = True        # set True to activate
 TIME_GATE_HOURS                 = 3.0          # hours after entry — optimisable
 TIME_GATE_HOURS_MIN_PROFIT_PCT  = 0.10         # % of max_profit required — optimisable
 

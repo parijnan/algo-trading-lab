@@ -287,6 +287,83 @@ def compute_gate_date(entry_time: pd.Timestamp, holidays_set: set):
     return gate_date
 
 
+def compute_gate_hours_ts(entry_time: pd.Timestamp,
+                           gate_hours: float,
+                           holidays_set: set) -> pd.Timestamp:
+    """
+    Compute the gate check timestamp by walking forward through market time
+    only, skipping overnight gaps, weekends, and holidays.
+
+    A trade entered at 14:45 on Monday with a 3-hour gate has consumed
+    45 market minutes by close. The remaining 2h 15m resumes at 09:15
+    Tuesday, placing the gate at 11:30 Tuesday — not 09:20 (wall-clock).
+
+    The result is snapped forward to the next 5-min candle boundary
+    (09:15, 09:20, 09:25 … 15:30) so the gate aligns with candle closes.
+
+    Args:
+        entry_time:   entry execution timestamp (5-min candle open)
+        gate_hours:   TIME_GATE_HOURS — gate budget in hours
+        holidays_set: set of date objects for market holidays
+
+    Returns:
+        pd.Timestamp of the first 5-min candle close at or after the
+        gate fires.
+    """
+    MARKET_OPEN_TIME  = pd.Timestamp('09:15').time()
+    MARKET_CLOSE_TIME = pd.Timestamp('15:30').time()
+    SESSION_MINUTES   = 375   # 09:15 to 15:30 inclusive
+
+    budget = int(round(gate_hours * 60))   # gate budget in whole minutes
+
+    # Remaining market minutes in the entry session
+    entry_date     = entry_time.date()
+    session_close  = pd.Timestamp(f"{entry_date} 15:30:00")
+    minutes_used   = int((entry_time - pd.Timestamp(f"{entry_date} 09:15:00"))
+                         .total_seconds() / 60)
+    remaining_today = SESSION_MINUTES - minutes_used  # minutes left today after entry
+
+    if budget <= remaining_today:
+        # Gate fires within the entry session
+        gate_ts = entry_time + pd.Timedelta(minutes=budget)
+    else:
+        # Burn today's remaining minutes and walk forward day by day
+        budget -= remaining_today
+        current_date = entry_date + timedelta(days=1)
+
+        while True:
+            # Skip weekends and holidays
+            if current_date.weekday() >= 5 or current_date in holidays_set:
+                current_date += timedelta(days=1)
+                continue
+
+            if budget <= SESSION_MINUTES:
+                # Gate fires during this session
+                gate_ts = pd.Timestamp(f"{current_date} 09:15:00") \
+                          + pd.Timedelta(minutes=budget)
+                break
+            else:
+                budget -= SESSION_MINUTES
+                current_date += timedelta(days=1)
+
+    # Snap forward to next 5-min candle boundary (ceiling to nearest 5 min)
+    # so the gate aligns with a 5-min candle close.
+    # e.g. 11:27 → 11:30,  11:30 → 11:30 (already on boundary)
+    minutes_since_open = int(
+        (gate_ts - pd.Timestamp(f"{gate_ts.date()} 09:15:00"))
+        .total_seconds() / 60)
+    remainder = minutes_since_open % 5
+    if remainder != 0:
+        gate_ts += pd.Timedelta(minutes=(5 - remainder))
+
+    # Clamp to session close in case snap pushed past 15:30
+    gate_date_close = pd.Timestamp(f"{gate_ts.date()} 15:30:00")
+    if gate_ts > gate_date_close:
+        gate_ts = gate_date_close
+
+    return gate_ts
+
+
 def check_time_gate_hours(ts: pd.Timestamp, gate_hours_ts: pd.Timestamp,
                            max_unrealised_pl: float, max_profit: float):
     """
@@ -1367,7 +1444,7 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                     entry_vix >= TRAIL_VIX_THRESHOLD
                 )
                 gate_hours_ts            = (
-                    exec_ts + pd.Timedelta(hours=TIME_GATE_HOURS)
+                    compute_gate_hours_ts(exec_ts, TIME_GATE_HOURS, holidays_set)
                     if ENABLE_TIME_GATE_HOURS else None
                 )
                 gate_hours_ts_at_entry   = gate_hours_ts
