@@ -47,6 +47,7 @@ from configs_debit_phase2 import (
     TIME_GATE_DAYS, TIME_GATE_CHECK_TIME,
     TIME_GATE_VIX_THRESHOLD,
     TIME_GATE_MIN_PROFIT_PCT_LOW_VIX, TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX,
+    ENABLE_TIME_GATE_HOURS, TIME_GATE_HOURS, TIME_GATE_HOURS_MIN_PROFIT_PCT,
     TRAIL_VIX_THRESHOLD,
     TRAIL_TRIGGER_1, TRAIL_FLOOR_1,
     TRAIL_TRIGGER_2, TRAIL_FLOOR_2,
@@ -254,13 +255,56 @@ def _calc_pl(buy_entry: float, buy_exit: float,
 # Exit mechanism helpers
 # ---------------------------------------------------------------------------
 
-def get_gate_date(entry_time: pd.Timestamp, gate_days: int,
-                  holidays_set: set):
-    """First trading day on or after entry_date + gate_days calendar days."""
-    gate_date = entry_time.date() + timedelta(days=gate_days)
-    while gate_date.weekday() >= 5 or gate_date in holidays_set:
+def compute_gate_date(entry_time: pd.Timestamp, holidays_set: set):
+    """
+    Compute the gate check date for the calendar-day time gate.
+
+    Advances from entry_date by TIME_GATE_DAYS trading days (skipping
+    weekends and holidays).
+
+    Special case — TIME_GATE_DAYS=0:
+    If entry was at or after TIME_GATE_CHECK_TIME, the same-day gate can
+    never fire (the check time has already passed at entry). In that case,
+    advance automatically to the next trading day to avoid a silent miss.
+    """
+    gate_date = entry_time.date()
+
+    for _ in range(TIME_GATE_DAYS):
         gate_date += timedelta(days=1)
+        while gate_date.weekday() >= 5 or gate_date in holidays_set:
+            gate_date += timedelta(days=1)
+
+    # TIME_GATE_DAYS=0 fix: if entry was at or after check time,
+    # the same-day gate will never see a candle before that time.
+    # Advance one trading day so the gate can still fire.
+    if TIME_GATE_DAYS == 0:
+        check_time = pd.Timestamp(TIME_GATE_CHECK_TIME).time()
+        if entry_time.time() >= check_time:
+            gate_date += timedelta(days=1)
+            while gate_date.weekday() >= 5 or gate_date in holidays_set:
+                gate_date += timedelta(days=1)
+
     return gate_date
+
+
+def check_time_gate_hours(ts: pd.Timestamp, gate_hours_ts: pd.Timestamp,
+                           max_unrealised_pl: float, max_profit: float):
+    """
+    Hours-after-entry time gate. Fires on the first 5-min candle at or after
+    gate_hours_ts if max_unrealised_pl has not reached the threshold.
+
+    Returns 'time_gate_hours' if the gate triggers, None otherwise.
+
+    The caller is responsible for clearing gate_hours_ts = None after this
+    returns (whether it triggers or not) to prevent repeated evaluation.
+    """
+    if not ENABLE_TIME_GATE_HOURS or gate_hours_ts is None:
+        return None
+    if ts < gate_hours_ts:
+        return None
+    if max_unrealised_pl < max_profit * TIME_GATE_HOURS_MIN_PROFIT_PCT:
+        return 'time_gate_hours'
+    return None
 
 
 def update_trailing_profit(trailing_profit_floor: float,
@@ -532,33 +576,35 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
                          entry_vix=None, exit_vix=None,
                          trail_active: bool = False,
                          trend_15_at_entry=None,
-                         trend_75_at_entry=None) -> dict:
+                         trend_75_at_entry=None,
+                         gate_hours_ts_at_entry=None) -> dict:
     record = {
-        'entry_time':         entry_time,
-        'exit_time':          exit_time,
-        'direction':          direction,
-        'expiry':             expiry,
-        'buy_strike':         buy_strike,
-        'sell_strike':        sell_strike,
-        'option_type':        option_type,
-        'spread_type':        SPREAD_TYPE,
-        'signal_tf':          '5min',
-        'entry_spot':         entry_spot,
-        'exit_spot':          exit_spot,
-        'buy_entry':          buy_entry,
-        'sell_entry':         sell_entry,
-        'buy_exit':           buy_exit,
-        'sell_exit':          sell_exit,
-        'net_debit':          round(net_debit,  2),
-        'max_profit':         round(max_profit, 2),
-        'pl_points':          pl_points,
-        'pl_rupees':          pl_rupees,
-        'exit_reason':        exit_reason,
-        'trail_active':       trail_active,
-        'trend_15_at_entry':  trend_15_at_entry,
-        'trend_75_at_entry':  trend_75_at_entry,
-        'entry_vix':          round(entry_vix, 2) if entry_vix is not None else None,
-        'exit_vix':           round(exit_vix,  2) if exit_vix  is not None else None,
+        'entry_time':             entry_time,
+        'exit_time':              exit_time,
+        'direction':              direction,
+        'expiry':                 expiry,
+        'buy_strike':             buy_strike,
+        'sell_strike':            sell_strike,
+        'option_type':            option_type,
+        'spread_type':            SPREAD_TYPE,
+        'signal_tf':              '5min',
+        'entry_spot':             entry_spot,
+        'exit_spot':              exit_spot,
+        'buy_entry':              buy_entry,
+        'sell_entry':             sell_entry,
+        'buy_exit':               buy_exit,
+        'sell_exit':              sell_exit,
+        'net_debit':              round(net_debit,  2),
+        'max_profit':             round(max_profit, 2),
+        'pl_points':              pl_points,
+        'pl_rupees':              pl_rupees,
+        'exit_reason':            exit_reason,
+        'trail_active':           trail_active,
+        'trend_15_at_entry':      trend_15_at_entry,
+        'trend_75_at_entry':      trend_75_at_entry,
+        'gate_hours_ts_at_entry': gate_hours_ts_at_entry,
+        'entry_vix':              round(entry_vix, 2) if entry_vix is not None else None,
+        'exit_vix':               round(exit_vix,  2) if exit_vix  is not None else None,
     }
     null_stats = {
         'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
@@ -805,6 +851,8 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
     trailing_profit_floor    = None
     max_unrealised_pl_so_far = 0.0
     gate_date                = None
+    gate_hours_ts            = None
+    gate_hours_ts_at_entry   = None
     use_trailing             = False
     trade_entry_date         = None
     # Phase 2: trend context at entry (for trade summary)
@@ -836,6 +884,7 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                 trail_active=use_trailing,
                 trend_15_at_entry=trend_15_at_entry,
                 trend_75_at_entry=trend_75_at_entry,
+                gate_hours_ts_at_entry=gate_hours_ts_at_entry,
             )
             trade_counter += 1
             all_trades.append(trade_record)
@@ -913,6 +962,7 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                     trail_active=use_trailing,
                     trend_15_at_entry=trend_15_at_entry,
                     trend_75_at_entry=trend_75_at_entry,
+                gate_hours_ts_at_entry=gate_hours_ts_at_entry,
                 )
                 trade_counter += 1
                 all_trades.append(trade_record)
@@ -931,7 +981,7 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                 add_sell_entry = None; add_buy_ltp = None
                 add_sell_ltp = None; add_booked_pl = 0.0
                 trailing_profit_floor = None; max_unrealised_pl_so_far = 0.0
-                trade_entry_date = None; gate_date = None; use_trailing = False
+                trade_entry_date = None; gate_date = None; gate_hours_ts = None; gate_hours_ts_at_entry = None; use_trailing = False
                 sl_1min_ts = None; sl_1min_type = None
                 trend_15_at_entry = None; trend_75_at_entry = None
             continue
@@ -1026,6 +1076,17 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                     if (direction == 'bullish' and trend_5 == False) or \
                        (direction == 'bearish' and trend_5 == True):
                         exit_reason = 'trend_flip_5'
+
+                # Hours-after-entry time gate — fires once when ts crosses
+                # gate_hours_ts. Cleared whether it triggers or not.
+                if exit_reason is None and gate_hours_ts is not None:
+                    result = check_time_gate_hours(
+                        ts, gate_hours_ts,
+                        max_unrealised_pl_so_far, max_profit)
+                    if result:
+                        exit_reason = result
+                    if ts >= gate_hours_ts:
+                        gate_hours_ts = None   # one-fire: clear after first evaluation
 
                 # 5-min fallback exit check (with 09:15 guard)
                 if exit_reason is None:
@@ -1175,6 +1236,7 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                         trail_active=use_trailing,
                         trend_15_at_entry=trend_15_at_entry,
                         trend_75_at_entry=trend_75_at_entry,
+                gate_hours_ts_at_entry=gate_hours_ts_at_entry,
                     )
                     trade_counter += 1
                     all_trades.append(trade_record)
@@ -1198,6 +1260,8 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                     max_unrealised_pl_so_far = 0.0
                     trade_entry_date         = None
                     gate_date                = None
+                    gate_hours_ts            = None
+                    gate_hours_ts_at_entry   = None
                     use_trailing             = False
                     sl_1min_ts               = None
                     sl_1min_type             = None
@@ -1296,12 +1360,17 @@ def run_backtest(nifty_5: pd.DataFrame, nifty_15: pd.DataFrame,
                 trailing_profit_floor    = None
                 max_unrealised_pl_so_far = 0.0
                 trade_entry_date         = exec_ts.date()
-                gate_date                = get_gate_date(exec_ts, TIME_GATE_DAYS, holidays_set)
+                gate_date                = compute_gate_date(exec_ts, holidays_set)
                 use_trailing             = (
                     ENABLE_TRAILING_PROFIT and
                     entry_vix is not None and
                     entry_vix >= TRAIL_VIX_THRESHOLD
                 )
+                gate_hours_ts            = (
+                    exec_ts + pd.Timedelta(hours=TIME_GATE_HOURS)
+                    if ENABLE_TIME_GATE_HOURS else None
+                )
+                gate_hours_ts_at_entry   = gate_hours_ts
                 trend_15_at_entry = trend_15
                 trend_75_at_entry = trend_75
 
@@ -1405,6 +1474,8 @@ if __name__ == "__main__":
     logger.info(f"  Time gate      : {'ON' if ENABLE_TIME_GATE else 'OFF'} — {TIME_GATE_DAYS}d, from {TIME_GATE_CHECK_TIME}, "
                 f"{TIME_GATE_MIN_PROFIT_PCT_LOW_VIX*100:.0f}%/<VIX{TIME_GATE_VIX_THRESHOLD:.0f} | "
                 f"{TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX*100:.0f}%/≥VIX{TIME_GATE_VIX_THRESHOLD:.0f}")
+    logger.info(f"  Time gate hrs  : {'ON' if ENABLE_TIME_GATE_HOURS else 'OFF'} — "
+                f"{TIME_GATE_HOURS:.1f}h, min {TIME_GATE_HOURS_MIN_PROFIT_PCT*100:.0f}% of max profit")
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — VIX >= {TRAIL_VIX_THRESHOLD}, triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
     logger.info(f"  Excl. days     : {EXCLUDE_TRADE_DAYS if EXCLUDE_TRADE_DAYS else 'none'}")
     logger.info(f"  Excl. candles  : {EXCLUDE_SIGNAL_CANDLES if EXCLUDE_SIGNAL_CANDLES else 'none'}")

@@ -65,7 +65,7 @@ MIN_DTE                     = 2
 # ---------------------------------------------------------------------------
 # Filter 1: Excluded days of week. 0=Mon … 4=Fri
 # Tuesday (1) = Nifty weekly expiry. Confirmed harmful in Phase 1.
-EXCLUDE_TRADE_DAYS          = []
+EXCLUDE_TRADE_DAYS          = [1]
 
 # Filter 2: Excluded signal candle close times ('HH:MM').
 # Phase 1 values (09:45, 10:00) were 15-min candle times — do not carry over.
@@ -89,6 +89,7 @@ ENABLE_HARD_STOP            = False
 ENABLE_PROFIT_TARGET        = False
 ENABLE_DAY0_SPREAD_SL       = False
 ENABLE_TIME_GATE            = False
+ENABLE_TIME_GATE_HOURS      = False
 ENABLE_TRAILING_PROFIT      = False
 
 # ------ Hard Stop Loss -----------------------------------------------------
@@ -119,6 +120,17 @@ TIME_GATE_CHECK_TIME        = '09:30'      # optimisable
 TIME_GATE_VIX_THRESHOLD     = 23.0
 TIME_GATE_MIN_PROFIT_PCT_LOW_VIX  = 0.33  # VIX < 23  (optimisable)
 TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX = 0.33  # VIX >= 23 (optimisable)
+
+# ------ Hours-After-Entry Time Gate ----------------------------------------
+# Fires N hours after the specific entry timestamp if max unrealised P&L has
+# not reached the threshold. Works for entries at any time of day — unlike
+# the calendar-day gate which fires at a fixed clock time and silently misses
+# trades entered after TIME_GATE_CHECK_TIME when TIME_GATE_DAYS=0.
+# Both gates can run simultaneously — first to trigger wins.
+# Exit reason: 'time_gate_hours'
+ENABLE_TIME_GATE_HOURS          = False        # set True to activate
+TIME_GATE_HOURS                 = 3.0          # hours after entry — optimisable
+TIME_GATE_HOURS_MIN_PROFIT_PCT  = 0.10         # % of max_profit required — optimisable
 
 # ------ Trailing Profit Lock -----------------------------------------------
 # Ratchet on unrealised P&L as % of max_profit.
