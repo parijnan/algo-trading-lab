@@ -220,6 +220,8 @@ apollo_backtest/data/trade_logs/
 apollo_backtest/data/trade_logs_debit/
 apollo_backtest/data/trade_summary.csv
 apollo_backtest/data/trade_summary_debit.csv
+apollo_backtest/data/trade_logs_phase2/
+apollo_backtest/data/trade_summary_phase2.csv
 
 # Raw historical data — stored separately
 data/indices/
