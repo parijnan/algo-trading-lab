@@ -65,7 +65,7 @@ MIN_DTE                     = 2
 # ---------------------------------------------------------------------------
 # Filter 1: Excluded days of week. 0=Mon … 4=Fri
 # Tuesday (1) = Nifty weekly expiry. Confirmed harmful in Phase 1.
-EXCLUDE_TRADE_DAYS          = [1]
+EXCLUDE_TRADE_DAYS          = []
 
 # Filter 2: Excluded signal candle close times ('HH:MM').
 # Phase 1 values (09:45, 10:00) were 15-min candle times — do not carry over.

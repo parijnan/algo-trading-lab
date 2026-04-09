@@ -210,6 +210,10 @@ __marimo__/
 apollo_backtest/data/nifty_15min.csv
 apollo_backtest/data/nifty_75min.csv
 apollo_backtest/data/vix_daily.csv
+apollo_backtest/data/vix_daily_phase2.csv
+apollo_backtest/data/nifty_5min_phase2.csv
+apollo_backtest/data/nifty_15min_phase2.csv
+apollo_backtest/data/nifty_75min_phase2.csv
 
 # Trade output
 apollo_backtest/data/trade_logs/
