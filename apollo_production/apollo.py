@@ -1268,6 +1268,33 @@ class Apollo:
         }
         self._trade_log.append(row)
 
+        # Flush to disk on every monitoring row so the log survives
+        # a mid-session restart. Exit rows are handled by _save_trade_log().
+        if exit_reason is None:
+            self._flush_trade_log()
+
+    def _flush_trade_log(self):
+        """
+        Periodically persist the in-memory trade log to disk without
+        incrementing the trade counter. Uses trade_counter + 1 as the
+        file number — same as _load_trade_log() — so the file is always
+        findable on restart. Overwrites the file on every call.
+        Called after every _append_trade_log_row() for monitoring rows
+        (not exit rows — those are handled by _save_trade_log()).
+        """
+        if not self._trade_log:
+            return
+        try:
+            os.makedirs(_TRADE_LOGS_DIR, exist_ok=True)
+            entry_dt  = datetime.strptime(self.state.entry_time, '%Y-%m-%d %H:%M:%S')
+            entry_str = entry_dt.strftime('%Y-%m-%d_%H%M')
+            filename  = f"trade_{self._trade_counter + 1:04d}_{entry_str}.csv"
+            filepath  = os.path.join(_TRADE_LOGS_DIR, filename)
+            pd.DataFrame(self._trade_log).to_csv(filepath, index=False)
+            logger.debug(f"Trade log flushed: {filename} ({len(self._trade_log)} rows)")
+        except Exception as e:
+            logger.error(f"Failed to flush trade log: {e}")
+
     def _save_trade_log(self):
         if not self._trade_log:
             return
