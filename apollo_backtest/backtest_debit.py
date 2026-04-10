@@ -189,23 +189,39 @@ def get_1min_value(indexed_df: pd.DataFrame, timestamp: pd.Timestamp,
 # Expiry selection  (identical to credit spread)
 # ---------------------------------------------------------------------------
 
-def get_expiry(signal_time: pd.Timestamp,
-               contracts_df: pd.DataFrame) -> pd.Timestamp:
+def compute_elm_date(expiry_end_date: pd.Timestamp, holidays_set: set):
     """
-    Select appropriate expiry:
-    - Use current weekly expiry if DTE >= MIN_DTE
-    - Roll to next weekly expiry if DTE < MIN_DTE
+    Return the last trading day before expiry (the ELM date).
+    Steps back from expiry_end_date - ELM_SECONDS_BEFORE_EXPIRY, then
+    walks back further if that day is a weekend or holiday.
+    """
+    elm_dt   = expiry_end_date - pd.Timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
+    elm_date = elm_dt.date()
+    while elm_date.weekday() >= 5 or elm_date in holidays_set:
+        elm_date -= timedelta(days=1)
+    return elm_date
+
+
+def get_expiry(signal_time: pd.Timestamp,
+               contracts_df: pd.DataFrame,
+               holidays_set: set) -> pd.Timestamp:
+    """
+    Select the nearest expiry whose ELM date is strictly after signal_date.
+
+    A calendar DTE check is insufficient — an expiry whose ELM date falls on
+    signal_date would force a same-day pre-expiry exit, leaving no useful
+    trade life. Iterating candidates and selecting the first where
+    elm_date > signal_date ensures the trade has at least one full session
+    before the pre-expiry exit fires.
     """
     signal_date = signal_time.date()
     future = contracts_df[contracts_df['expiry_date'].dt.date >= signal_date]
     if future.empty:
         return None
-    current_row = future.iloc[0]
-    dte = (current_row['expiry_date'].date() - signal_date).days
-    if dte >= MIN_DTE:
-        return current_row['end_date']
-    elif len(future) > 1:
-        return future.iloc[1]['end_date']
+    for _, row in future.iterrows():
+        elm_date = compute_elm_date(row['end_date'], holidays_set)
+        if elm_date > signal_date:
+            return row['end_date']
     return None
 
 
@@ -1243,7 +1259,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
 
                 exec_spot = next_row['open']
 
-                selected_expiry = get_expiry(exec_ts, contracts_df)
+                selected_expiry = get_expiry(exec_ts, contracts_df, holidays_set)
                 if selected_expiry is None:
                     logger.warning(f"  No expiry found for {exec_ts} — skipping")
                     continue
