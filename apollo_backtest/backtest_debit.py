@@ -53,6 +53,11 @@ from configs_debit import (
     TRAIL_TRIGGER_3, TRAIL_FLOOR_3,
     ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY, ENABLE_ADDITIONAL_LOTS,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
+    PROFIT_TARGET_PCT_BULL, PROFIT_TARGET_PCT_BEAR,
+    TIME_GATE_MIN_PROFIT_PCT_BULL, TIME_GATE_MIN_PROFIT_PCT_BEAR,
+    TIME_GATE_DAYS_BULL, TIME_GATE_DAYS_BEAR,
+    HARD_STOP_POINTS_BULL, HARD_STOP_POINTS_BEAR,
+    EXCLUDE_BULLISH_VIX_ABOVE,
     SLIPPAGE_POINTS, LOT_SIZE,
     SPREAD_TYPE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -334,42 +339,39 @@ def check_exits(unrealised_pl: float, max_profit: float,
                 use_trailing: bool = False,
                 days_in_trade: int = 0,
                 net_debit: float = 0.0,
-                entry_vix: float = None) -> str:
+                active_pt_pct: float = None,
+                active_gate_pct: float = None,
+                active_hard_stop: float = None) -> str:
     """
     Check all toggleable exit conditions for a debit spread.
     Returns the triggered exit type string, or None.
     trend_flip and expiry are handled by the caller — not checked here.
 
+    active_pt_pct, active_gate_pct, active_hard_stop are pre-resolved at
+    entry time via resolve_param() — direction-specific overrides already
+    applied. Falls back to base config values if None.
+
     Exit evaluation order (first to trigger wins):
-    1. hard_stop        — unconditional floor: unrealised_pl <= -HARD_STOP_POINTS
-    2. profit_target    — VIX-sensitive threshold on unrealised_pl vs max_profit
+    1. hard_stop        — unrealised_pl <= -active_hard_stop
+    2. profit_target    — unrealised_pl >= max_profit * active_pt_pct
     3. day0_spread_sl   — Day 0 only: unrealised_pl < -net_debit * DAY0_SPREAD_SL_PCT
     4. time_gate        — past gate_date, past TIME_GATE_CHECK_TIME,
-                          VIX-sensitive min profit threshold never reached
-    5. trailing_profit  — unrealised_pl < trailing_profit_floor (once active, VIX-gated)
+                          max_unrealised never reached active_gate_pct * max_profit
+    5. trailing_profit  — unrealised_pl < trailing_profit_floor (VIX-gated)
     """
-    # VIX-sensitive profit target threshold
-    if entry_vix is not None and entry_vix >= PROFIT_TARGET_VIX_HIGH:
-        profit_target_pct = PROFIT_TARGET_PCT_HIGH_VIX
-    elif entry_vix is not None and entry_vix >= PROFIT_TARGET_VIX_LOW:
-        profit_target_pct = PROFIT_TARGET_PCT_MID_VIX
-    else:
-        profit_target_pct = PROFIT_TARGET_PCT_LOW_VIX
-
-    # VIX-sensitive time gate min profit threshold
-    if entry_vix is not None and entry_vix < TIME_GATE_VIX_THRESHOLD:
-        gate_min_profit_pct = TIME_GATE_MIN_PROFIT_PCT_LOW_VIX
-    else:
-        gate_min_profit_pct = TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX
+    # Use pre-resolved values; fall back to base config if not provided
+    hard_stop_pts    = active_hard_stop if active_hard_stop is not None else HARD_STOP_POINTS
+    pt_pct           = active_pt_pct    if active_pt_pct    is not None else PROFIT_TARGET_PCT_LOW_VIX
+    gate_min_pct     = active_gate_pct  if active_gate_pct  is not None else TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX
 
     # 1. Hard stop — unconditional floor, fires before all other exits
     if ENABLE_HARD_STOP:
-        if unrealised_pl <= -HARD_STOP_POINTS:
+        if unrealised_pl <= -hard_stop_pts:
             return 'hard_stop'
 
     # 2. Profit target
     if ENABLE_PROFIT_TARGET:
-        if unrealised_pl >= max_profit * profit_target_pct:
+        if unrealised_pl >= max_profit * pt_pct:
             return 'profit_target'
 
     # 3. Day 0 spread SL — only active on entry day
@@ -380,20 +382,37 @@ def check_exits(unrealised_pl: float, max_profit: float,
     # 4. Time gate — three conditions must all be true simultaneously:
     #    a. current date is on or after gate_date (pre-computed at entry)
     #    b. current time is at or after TIME_GATE_CHECK_TIME (avoids 09:15 noise)
-    #    c. trade has never reached the VIX-sensitive minimum profit threshold
+    #    c. trade has never reached active_gate_pct * max_profit
     if ENABLE_TIME_GATE and gate_date is not None:
         if (ts.date() >= gate_date and
                 ts.time() >= pd.Timestamp(TIME_GATE_CHECK_TIME).time() and
-                max_unrealised_pl_so_far < gate_min_profit_pct * max_profit):
+                max_unrealised_pl_so_far < gate_min_pct * max_profit):
             return 'time_gate'
 
     # 5. Trailing profit lock — only active when use_trailing is True
-    # use_trailing is pre-computed at entry: ENABLE_TRAILING_PROFIT and entry_vix >= TRAIL_VIX_THRESHOLD
     if use_trailing and trailing_profit_floor is not None:
         if unrealised_pl < trailing_profit_floor:
             return 'trailing_profit'
 
     return None
+
+
+def resolve_param(direction: str, bull_val, bear_val, base_val):
+    """
+    Return the direction-specific parameter value if set, else the base value.
+    Called once at entry time — result stored in trade state, not re-resolved
+    on every candle.
+
+    direction: 'bullish' or 'bearish'
+    bull_val:  PARAM_BULL config value (None if not overriding)
+    bear_val:  PARAM_BEAR config value (None if not overriding)
+    base_val:  base PARAM config value (always set)
+    """
+    if direction == 'bullish' and bull_val is not None:
+        return bull_val
+    if direction == 'bearish' and bear_val is not None:
+        return bear_val
+    return base_val
 
 
 # ---------------------------------------------------------------------------
@@ -558,30 +577,38 @@ def _build_trade_record(entry_time, exit_time, direction, expiry,
                          pl_points, pl_rupees, exit_reason,
                          trade_stats: dict = None,
                          entry_vix=None, exit_vix=None,
-                         trail_active: bool = False) -> dict:
+                         trail_active: bool = False,
+                         active_pt_pct: float = None,
+                         active_gate_pct: float = None,
+                         active_gate_days=None,
+                         active_hard_stop: float = None) -> dict:
     record = {
-        'entry_time':  entry_time,
-        'exit_time':   exit_time,
-        'direction':   direction,
-        'expiry':      expiry,
-        'buy_strike':  buy_strike,
-        'sell_strike': sell_strike,
-        'option_type': option_type,
-        'spread_type': SPREAD_TYPE,
-        'entry_spot':  entry_spot,
-        'exit_spot':   exit_spot,
-        'buy_entry':   buy_entry,
-        'sell_entry':  sell_entry,
-        'buy_exit':    buy_exit,
-        'sell_exit':   sell_exit,
-        'net_debit':   round(net_debit,  2),
-        'max_profit':  round(max_profit, 2),
-        'pl_points':   pl_points,
-        'pl_rupees':   pl_rupees,
-        'exit_reason': exit_reason,
-        'trail_active': trail_active,
-        'entry_vix':   round(entry_vix, 2) if entry_vix is not None else None,
-        'exit_vix':    round(exit_vix,  2) if exit_vix  is not None else None,
+        'entry_time':      entry_time,
+        'exit_time':       exit_time,
+        'direction':       direction,
+        'expiry':          expiry,
+        'buy_strike':      buy_strike,
+        'sell_strike':     sell_strike,
+        'option_type':     option_type,
+        'spread_type':     SPREAD_TYPE,
+        'entry_spot':      entry_spot,
+        'exit_spot':       exit_spot,
+        'buy_entry':       buy_entry,
+        'sell_entry':      sell_entry,
+        'buy_exit':        buy_exit,
+        'sell_exit':       sell_exit,
+        'net_debit':       round(net_debit,  2),
+        'max_profit':      round(max_profit, 2),
+        'pl_points':       pl_points,
+        'pl_rupees':       pl_rupees,
+        'exit_reason':     exit_reason,
+        'trail_active':    trail_active,
+        'active_pt_pct':   round(active_pt_pct,    4) if active_pt_pct    is not None else None,
+        'active_gate_pct': round(active_gate_pct,  4) if active_gate_pct  is not None else None,
+        'active_gate_days': active_gate_days,
+        'active_hard_stop': round(active_hard_stop, 2) if active_hard_stop is not None else None,
+        'entry_vix':       round(entry_vix, 2) if entry_vix is not None else None,
+        'exit_vix':        round(exit_vix,  2) if exit_vix  is not None else None,
     }
     null_stats = {
         'max_unrealised_pl_pts': None, 'max_unrealised_pl_ts': None,
@@ -634,11 +661,17 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                    trade_entry_date=None,
                                    gate_date=None,
                                    use_trailing: bool = False,
-                                   entry_vix: float = None):
+                                   entry_vix: float = None,
+                                   active_pt_pct: float = None,
+                                   active_gate_pct: float = None,
+                                   active_hard_stop: float = None):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
     Checks all exit conditions on every 1-min candle.
     Updates trailing_profit_floor ratchet and max_unrealised_pl_so_far.
+
+    active_pt_pct, active_gate_pct, active_hard_stop are pre-resolved at
+    entry time and passed through to check_exits unchanged.
 
     Returns:
       (last_buy_ltp, last_sell_ltp, exit_ts, exit_type,
@@ -672,7 +705,6 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         unrealised    = _calc_pl(buy_entry, running_buy_ltp, sell_entry, running_sell_ltp)
         days_in_trade = (ts.date() - trade_entry_date).days if trade_entry_date else 0
 
-        # Update ratchet and running max before snapshot and exit check
         running_trail  = update_trailing_profit(running_trail, unrealised, max_profit, use_trailing)
         if unrealised > running_max_pl:
             running_max_pl = unrealised
@@ -696,7 +728,9 @@ def _append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 unrealised, max_profit, running_trail,
                 ts, gate_date, running_max_pl, use_trailing,
                 days_in_trade=days_in_trade, net_debit=net_debit,
-                entry_vix=entry_vix)
+                active_pt_pct=active_pt_pct,
+                active_gate_pct=active_gate_pct,
+                active_hard_stop=active_hard_stop)
             if ex:
                 exit_hit_ts   = ts
                 exit_hit_type = ex
@@ -721,7 +755,10 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
                             trade_entry_date=None,
                             gate_date=None,
                             use_trailing: bool = False,
-                            entry_vix: float = None):
+                            entry_vix: float = None,
+                            active_pt_pct: float = None,
+                            active_gate_pct: float = None,
+                            active_hard_stop: float = None):
     """Append all 1-min snapshots for a full day (overnight-held trades)."""
     day_start = pd.Timestamp(f"{day_date} 09:15:00")
     day_end   = pd.Timestamp(f"{day_date} 15:30:00")
@@ -736,6 +773,8 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
         last_buy_ltp, last_sell_ltp,
         trailing_profit_floor, max_unrealised_pl_so_far,
         trade_entry_date, gate_date, use_trailing, entry_vix,
+                    active_pt_pct, active_gate_pct, active_hard_stop,
+        active_pt_pct, active_gate_pct, active_hard_stop,
     )
 
 
@@ -743,7 +782,9 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
 # Entry filter
 # ---------------------------------------------------------------------------
 
-def entry_allowed(signal_ts: pd.Timestamp) -> bool:
+def entry_allowed(signal_ts: pd.Timestamp,
+                  entry_direction: str = None,
+                  entry_vix: float = None) -> bool:
     """
     Returns True if a new entry is permitted at this signal timestamp.
 
@@ -754,7 +795,8 @@ def entry_allowed(signal_ts: pd.Timestamp) -> bool:
     A Monday signal that enters at Tuesday open is a Monday signal and will
     NOT be blocked by a Tuesday day-of-week exclusion.
 
-    Does not affect in-trade management — only the entry decision.
+    entry_direction and entry_vix are used for the EXCLUDE_BULLISH_VIX_ABOVE
+    filter. Does not affect in-trade management — only the entry decision.
     """
     # Filter 1: excluded day of week
     if EXCLUDE_TRADE_DAYS and signal_ts.dayofweek in EXCLUDE_TRADE_DAYS:
@@ -771,6 +813,16 @@ def entry_allowed(signal_ts: pd.Timestamp) -> bool:
                 f"  Entry blocked — excluded signal candle "
                 f"({signal_hhmm}): {signal_ts}")
             return False
+
+    # Filter 3: bullish VIX exclusion
+    if (EXCLUDE_BULLISH_VIX_ABOVE is not None
+            and entry_direction == 'bullish'
+            and entry_vix is not None
+            and entry_vix > EXCLUDE_BULLISH_VIX_ABOVE):
+        logger.debug(
+            f"  Entry blocked — bullish signal above VIX threshold "
+            f"(VIX {entry_vix:.1f} > {EXCLUDE_BULLISH_VIX_ABOVE}): {signal_ts}")
+        return False
 
     return True
 
@@ -857,6 +909,11 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
     gate_date                = None   # pre-computed at entry, never changes during trade
     use_trailing             = False  # pre-computed at entry from entry_vix >= TRAIL_VIX_THRESHOLD
     trade_entry_date         = None
+    # Direction-specific resolved parameters — computed once at entry via resolve_param()
+    active_pt_pct            = None   # resolved profit target PCT for this trade
+    active_gate_pct          = None   # resolved time gate min profit PCT for this trade
+    active_gate_days         = None   # resolved time gate days for this trade
+    active_hard_stop         = None   # resolved hard stop points for this trade
 
     for day_date in trading_days:
 
@@ -884,6 +941,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 trade_stats=trade_stats,
                 entry_vix=entry_vix, exit_vix=expiry_exit_vix,
                 trail_active=use_trailing,
+                active_pt_pct=active_pt_pct,
+                active_gate_pct=active_gate_pct,
+                active_gate_days=active_gate_days,
+                active_hard_stop=active_hard_stop,
             )
             trade_counter += 1
             all_trades.append(trade_record)
@@ -912,6 +973,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     snap_buy_ltp, snap_sell_ltp,
                     trailing_profit_floor, max_unrealised_pl_so_far,
                     trade_entry_date, gate_date, use_trailing, entry_vix,
+                    active_pt_pct, active_gate_pct, active_hard_stop,
                 )
 
             if sl_1min_ts is not None and in_trade:
@@ -959,7 +1021,12 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     _pl_pts, _pl_rs, sl_1min_type,
                     trade_stats=trade_stats,
                     entry_vix=entry_vix, exit_vix=_exit_vix,
-                    trail_active=use_trailing)
+                    trail_active=use_trailing,
+                    active_pt_pct=active_pt_pct,
+                    active_gate_pct=active_gate_pct,
+                    active_gate_days=active_gate_days,
+                    active_hard_stop=active_hard_stop,
+                )
                 trade_counter += 1
                 all_trades.append(trade_record)
                 _log_exit(trade_record)
@@ -976,6 +1043,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 add_buy_ltp = None; add_sell_ltp = None; add_booked_pl = 0.0
                 trailing_profit_floor = None; max_unrealised_pl_so_far = 0.0
                 trade_entry_date = None; gate_date = None; use_trailing = False
+                active_pt_pct = None; active_gate_pct = None; active_gate_days = None; active_hard_stop = None
                 sl_1min_ts = None; sl_1min_type = None
             continue
 
@@ -1033,6 +1101,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         snap_buy_ltp, snap_sell_ltp,
                         trailing_profit_floor, max_unrealised_pl_so_far,
                         trade_entry_date, gate_date, use_trailing, entry_vix,
+                    active_pt_pct, active_gate_pct, active_hard_stop,
                     )
 
             last_15min_ts = ts
@@ -1077,7 +1146,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         unrealised_15, max_profit, trailing_profit_floor,
                         ts, gate_date, max_unrealised_pl_so_far, use_trailing,
                         days_in_trade=days_in_trade_15, net_debit=net_debit,
-                        entry_vix=entry_vix)
+                        active_pt_pct=active_pt_pct,
+                        active_gate_pct=active_gate_pct,
+                        active_hard_stop=active_hard_stop)
                     if ex_15:
                         if ts.time() < pd.Timestamp(NO_EXIT_BEFORE).time():
                             recheck_ts       = pd.Timestamp(f"{ts.date()} {NO_EXIT_BEFORE}:00")
@@ -1092,7 +1163,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                     recheck_unreal, max_profit, trailing_profit_floor,
                                     recheck_ts, gate_date, max_unrealised_pl_so_far, use_trailing,
                                     days_in_trade=days_in_trade_15, net_debit=net_debit,
-                                    entry_vix=entry_vix)
+                                    active_pt_pct=active_pt_pct,
+                                    active_gate_pct=active_gate_pct,
+                                    active_hard_stop=active_hard_stop)
                                 if ex_recheck:
                                     exit_reason  = ex_recheck
                                     exec_ts      = recheck_ts
@@ -1133,6 +1206,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                                 snap_buy_ltp, snap_sell_ltp,
                                 trailing_profit_floor, max_unrealised_pl_so_far,
                                 trade_entry_date, gate_date, use_trailing, entry_vix,
+                    active_pt_pct, active_gate_pct, active_hard_stop,
                             )
                         if _gf_exit_ts is not None:
                             exec_ts     = _gf_exit_ts + pd.Timedelta(minutes=1)
@@ -1213,6 +1287,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         trade_stats=trade_stats,
                         entry_vix=entry_vix, exit_vix=exit_vix,
                         trail_active=use_trailing,
+                active_pt_pct=active_pt_pct,
+                active_gate_pct=active_gate_pct,
+                active_gate_days=active_gate_days,
+                active_hard_stop=active_hard_stop,
                     )
                     trade_counter += 1
                     all_trades.append(trade_record)
@@ -1237,6 +1315,10 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     trade_entry_date         = None
                     gate_date                = None
                     use_trailing             = False
+                    active_pt_pct            = None
+                    active_gate_pct          = None
+                    active_gate_days         = None
+                    active_hard_stop         = None
                     sl_1min_ts               = None
                     sl_1min_type             = None
 
@@ -1254,7 +1336,9 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                     continue
 
                 # Entry filters — evaluated on signal candle time (ts), not exec_ts
-                if not entry_allowed(ts):
+                # VIX is read at signal time for the bullish VIX exclusion filter
+                _signal_vix = get_1min_value(vix_1m, ts, 'close')
+                if not entry_allowed(ts, entry_direction, _signal_vix):
                     continue
 
                 exec_spot = next_row['open']
@@ -1300,6 +1384,41 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 expiry_row   = contracts_df[contracts_df['end_date'] == selected_expiry]
                 sel_elm_time = expiry_row['elm_time'].iloc[0] if not expiry_row.empty else None
 
+                # Resolve direction-specific parameters once at entry.
+                # entry_vix for resolution uses exec_ts (same as PT/gate lookups).
+                _entry_vix_for_resolve = get_1min_value(vix_1m, exec_ts, 'close')
+
+                # VIX-band base PT PCT (used when no directional override)
+                if _entry_vix_for_resolve is not None and _entry_vix_for_resolve >= PROFIT_TARGET_VIX_HIGH:
+                    _base_pt_pct = PROFIT_TARGET_PCT_HIGH_VIX
+                elif _entry_vix_for_resolve is not None and _entry_vix_for_resolve >= PROFIT_TARGET_VIX_LOW:
+                    _base_pt_pct = PROFIT_TARGET_PCT_MID_VIX
+                else:
+                    _base_pt_pct = PROFIT_TARGET_PCT_LOW_VIX
+
+                # VIX-band base gate PCT (used when no directional override)
+                if _entry_vix_for_resolve is not None and _entry_vix_for_resolve < TIME_GATE_VIX_THRESHOLD:
+                    _base_gate_pct = TIME_GATE_MIN_PROFIT_PCT_LOW_VIX
+                else:
+                    _base_gate_pct = TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX
+
+                _sel_active_pt_pct    = resolve_param(entry_direction,
+                                            PROFIT_TARGET_PCT_BULL,
+                                            PROFIT_TARGET_PCT_BEAR,
+                                            _base_pt_pct)
+                _sel_active_gate_pct  = resolve_param(entry_direction,
+                                            TIME_GATE_MIN_PROFIT_PCT_BULL,
+                                            TIME_GATE_MIN_PROFIT_PCT_BEAR,
+                                            _base_gate_pct)
+                _sel_active_gate_days = resolve_param(entry_direction,
+                                            TIME_GATE_DAYS_BULL,
+                                            TIME_GATE_DAYS_BEAR,
+                                            TIME_GATE_DAYS)
+                _sel_active_hard_stop = resolve_param(entry_direction,
+                                            HARD_STOP_POINTS_BULL,
+                                            HARD_STOP_POINTS_BEAR,
+                                            HARD_STOP_POINTS)
+
                 in_trade      = True
                 direction     = entry_direction
                 buy_strike    = sel_buy_strike
@@ -1309,7 +1428,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 elm_time      = sel_elm_time
                 entry_time    = exec_ts
                 entry_spot    = exec_spot
-                entry_vix     = get_1min_value(vix_1m, exec_ts, 'close')
+                entry_vix     = _entry_vix_for_resolve
                 buy_entry     = sel_buy_entry
                 sell_entry    = sel_sell_entry
                 net_debit     = sel_net_debit
@@ -1331,7 +1450,11 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 trailing_profit_floor    = None
                 max_unrealised_pl_so_far = 0.0
                 trade_entry_date         = exec_ts.date()
-                gate_date                = get_gate_date(exec_ts, TIME_GATE_DAYS, holidays_set)
+                active_pt_pct            = _sel_active_pt_pct
+                active_gate_pct          = _sel_active_gate_pct
+                active_gate_days         = _sel_active_gate_days
+                active_hard_stop         = _sel_active_hard_stop
+                gate_date                = get_gate_date(exec_ts, active_gate_days, holidays_set)
                 use_trailing             = (
                     ENABLE_TRAILING_PROFIT and
                     entry_vix is not None and
@@ -1368,6 +1491,7 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                         snap_buy_ltp, snap_sell_ltp,
                         trailing_profit_floor, max_unrealised_pl_so_far,
                         trade_entry_date, gate_date, use_trailing, entry_vix,
+                    active_pt_pct, active_gate_pct, active_hard_stop,
                     )
 
     logger.info(f"Backtest complete. Total trades: {len(all_trades)}")
@@ -1441,6 +1565,10 @@ if __name__ == "__main__":
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — VIX >= {TRAIL_VIX_THRESHOLD}, triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
     logger.info(f"  Excl. days     : {EXCLUDE_TRADE_DAYS if EXCLUDE_TRADE_DAYS else 'none'}")
     logger.info(f"  Excl. candles  : {EXCLUDE_SIGNAL_CANDLES if EXCLUDE_SIGNAL_CANDLES else 'none'}")
+    logger.info(f"  Excl. bull VIX : {EXCLUDE_BULLISH_VIX_ABOVE if EXCLUDE_BULLISH_VIX_ABOVE is not None else 'none'}")
+    logger.info(f"  PT  bull/bear  : {PROFIT_TARGET_PCT_BULL}/{PROFIT_TARGET_PCT_BEAR} (None=use base)")
+    logger.info(f"  Gate bull/bear : pct {TIME_GATE_MIN_PROFIT_PCT_BULL}/{TIME_GATE_MIN_PROFIT_PCT_BEAR} | days {TIME_GATE_DAYS_BULL}/{TIME_GATE_DAYS_BEAR}")
+    logger.info(f"  Stop bull/bear : {HARD_STOP_POINTS_BULL}/{HARD_STOP_POINTS_BEAR} pts (None=use base)")
 
     nifty_15, nifty_75, vix_daily = load_precomputed()
     nifty_1m, vix_1m              = load_1min_data()

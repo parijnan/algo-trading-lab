@@ -218,7 +218,7 @@ LOT_SIZE                = 75       # Nifty lot size
 # Set to [] to disable.
 # Tuesday (1) = Nifty weekly expiry day. Expiry-day dynamics break trend-following.
 #   39 trades, 38.5% WR, -Rs 18,709 — only day with negative P&L.
-EXCLUDE_TRADE_DAYS      = [1]          # e.g. [1] to exclude Tuesday
+EXCLUDE_TRADE_DAYS      = []          # e.g. [1] to exclude Tuesday
 
 # Filter 2: Excluded signal candle close times.
 # Apollo signals fire on 15-min candle CLOSE; entry executes at NEXT candle OPEN.
@@ -226,4 +226,41 @@ EXCLUDE_TRADE_DAYS      = [1]          # e.g. [1] to exclude Tuesday
 #   Signal '09:45' close → entry at 10:00 open  (market re-settling, 40% WR)
 #   Signal '10:00' close → entry at 10:15 open  (dead zone, 0% WR historically)
 # Format: list of 'HH:MM' strings. Set to [] to disable.
-EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']          # e.g. ['09:45', '10:00']
+EXCLUDE_SIGNAL_CANDLES  = []          # e.g. ['09:45', '10:00']
+
+# ---------------------------------------------------------------------------
+# Direction-Specific Parameter Overrides
+# When set (not None), these override the corresponding base parameter for
+# that direction only. When None, the base parameter applies to both.
+# Resolution happens once at entry time — not re-evaluated per candle.
+# Validation: all None must reproduce identical results to base config.
+# ---------------------------------------------------------------------------
+
+# Profit Target — direction-specific PCT override.
+# Overrides PROFIT_TARGET_PCT_LOW/MID/HIGH_VIX for that direction.
+# None = use the VIX-band base PT for both directions.
+PROFIT_TARGET_PCT_BULL      = None   # e.g. 0.30
+PROFIT_TARGET_PCT_BEAR      = None   # e.g. 0.50
+
+# Time Gate — direction-specific threshold override.
+# Overrides TIME_GATE_MIN_PROFIT_PCT_LOW/HIGH_VIX for that direction.
+# None = use the VIX-band base gate PCT for both directions.
+TIME_GATE_MIN_PROFIT_PCT_BULL = None  # e.g. 0.20
+TIME_GATE_MIN_PROFIT_PCT_BEAR = None  # e.g. 0.33
+
+# Time Gate — direction-specific days override.
+# Overrides TIME_GATE_DAYS for that direction only.
+# None = use TIME_GATE_DAYS for both directions.
+TIME_GATE_DAYS_BULL         = None   # e.g. 2
+TIME_GATE_DAYS_BEAR         = None   # e.g. 1
+
+# Hard Stop — direction-specific points override.
+# Overrides HARD_STOP_POINTS for that direction only.
+# None = use HARD_STOP_POINTS for both directions.
+HARD_STOP_POINTS_BULL       = None   # e.g. 50.0
+HARD_STOP_POINTS_BEAR       = None   # e.g. 67.5
+
+# Bullish VIX exclusion — skip bullish entry signals when entry_vix exceeds
+# this level. Checked at entry time using the same VIX value as PT/gate lookups.
+# None = trade all VIX bands for bullish signals.
+EXCLUDE_BULLISH_VIX_ABOVE   = None   # e.g. 20.0
