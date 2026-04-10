@@ -139,6 +139,9 @@ class Apollo:
         self._trade_counter  = self._load_trade_counter()
         self._update_elapsed = 0
 
+        # Missed candle recovery — timestamps of bars skipped due to API failure
+        self._missed_candle_ts_list = []
+
         # Register signal handlers for clean shutdown
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -347,13 +350,48 @@ class Apollo:
                         SLACK_ERRORS_CHANNEL)
             if candle is None:
                 logger.error(
-                    f"Candle data unavailable for {next_close:%H:%M} after all retries. "
-                    f"Skipping — ST and signals will not update this bar.")
+                    f"Candle data unavailable for {next_close:%H:%M} after all "
+                    f"retries. ST and signals will not update this bar. "
+                    f"Will try again next bar. Please monitor manually till then.")
                 slack_bot_sendtext(
                     f"*Apollo* ERROR: Candle data unavailable for {next_close:%H:%M} "
-                    f"after all retries. ST and signals will not update this bar.",
+                    f"after all retries. ST and signals will not update this bar. "
+                    f"Will try again next bar. Please monitor manually till then.",
                     SLACK_ERRORS_CHANNEL)
+                self._missed_candle_ts_list.append(next_close)
                 continue
+
+            # Recover any missed candles before processing current bar
+            if self._missed_candle_ts_list:
+                recovered = []
+                for missed_ts in self._missed_candle_ts_list:
+                    logger.info(
+                        f"Attempting recovery fetch for missed bar {missed_ts:%H:%M}.")
+                    missed_candle = self._fetch_latest_candle(missed_ts)
+                    if missed_candle is not None:
+                        logger.info(
+                            f"Recovered missed candle {missed_ts:%H:%M}. "
+                            f"Processing into ST.")
+                        slack_bot_sendtext(
+                            f"*Apollo*: Recovered missed candle {missed_ts:%H:%M}. "
+                            f"Processing into ST before current bar.",
+                            SLACK_ERRORS_CHANNEL)
+                        try:
+                            self.st.update(missed_candle)
+                        except Exception as e:
+                            handle_exception(e)
+                        recovered.append(missed_ts)
+                    else:
+                        logger.warning(
+                            f"Still no data for missed bar {missed_ts:%H:%M}. "
+                            f"Skipping — ST will remain incomplete for this bar.")
+                        slack_bot_sendtext(
+                            f"*Apollo* ALERT: Still no data for missed bar "
+                            f"{missed_ts:%H:%M}. ST remains incomplete.",
+                            SLACK_ERRORS_CHANNEL)
+                # Remove successfully recovered timestamps
+                for ts in recovered:
+                    self._missed_candle_ts_list.remove(ts)
 
             ts = candle['time_stamp']
             logger.info(
