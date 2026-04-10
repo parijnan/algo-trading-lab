@@ -537,6 +537,21 @@ class Apollo:
     # Strike and expiry selection
     # -----------------------------------------------------------------------
 
+    def _compute_elm_date(self, expiry_date):
+        """
+        Compute the ELM exit date for a given expiry — the last trading
+        day before expiry (after stepping back through weekends and holidays).
+        This is the day the pre-expiry exit fires at 15:15.
+        """
+        expiry_dt = datetime.combine(
+            expiry_date,
+            datetime.strptime('15:30', '%H:%M').time())
+        elm_dt   = expiry_dt - timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
+        elm_date = elm_dt.date()
+        while elm_date.weekday() >= 5 or elm_date in self.holidays:
+            elm_date -= timedelta(days=1)
+        return elm_date
+
     def _select_expiry(self):
         today = date.today()
         expiry_dates = (
@@ -549,17 +564,23 @@ class Apollo:
         if future.empty:
             logger.warning("No future expiries found in scrip master.")
             return None
-        current_expiry = future.iloc[0]
-        dte = (current_expiry - today).days
-        logger.debug(f"Expiry selection: nearest={current_expiry} DTE={dte}")
-        if dte >= MIN_DTE:
-            logger.debug(f"Using current expiry: {current_expiry}")
-            return current_expiry
-        elif len(future) > 1:
-            next_expiry = future.iloc[1]
+        for expiry in future:
+            elm_date     = self._compute_elm_date(expiry)
+            calendar_dte = (expiry - today).days
             logger.debug(
-                f"DTE={dte} < MIN_DTE={MIN_DTE}. Rolling to next: {next_expiry}")
-            return next_expiry
+                f"Expiry selection: candidate={expiry} "
+                f"calendar_DTE={calendar_dte} ELM={elm_date}")
+            if elm_date > today:
+                # ELM is after today — trade has at least one full session
+                logger.debug(
+                    f"Using expiry: {expiry} "
+                    f"(ELM={elm_date} is after today={today})")
+                return expiry
+            else:
+                logger.debug(
+                    f"Skipping expiry {expiry} — ELM={elm_date} is today. "
+                    f"Rolling to next.")
+        logger.warning("No valid expiry found after ELM check.")
         return None
 
     def _fetch_symbol_and_token(self, strike, option_type, expiry_date):
@@ -835,15 +856,14 @@ class Apollo:
     def _check_pre_expiry(self, ts):
         if self.state.status != 'in_trade' or self.state.expiry is None:
             return False
-        expiry_dt = datetime.strptime(self.state.expiry, '%Y-%m-%d')
-        elm_dt    = expiry_dt - timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
-        elm_date  = elm_dt.date()
-        # Step back through weekends and holidays until we land on a
-        # trading day — ELM_SECONDS gives the time-of-day (15:15),
-        # but the date must be adjusted for non-trading days
-        while elm_date.weekday() >= 5 or elm_date in self.holidays:
-            elm_date -= timedelta(days=1)
-        elm_dt = datetime.combine(elm_date, elm_dt.time())
+        expiry_date = datetime.strptime(self.state.expiry, '%Y-%m-%d').date()
+        elm_date    = self._compute_elm_date(expiry_date)
+        # ELM time-of-day is derived from ELM_SECONDS_BEFORE_EXPIRY
+        expiry_dt   = datetime.combine(
+            expiry_date,
+            datetime.strptime('15:30', '%H:%M').time())
+        elm_time    = (expiry_dt - timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)).time()
+        elm_dt      = datetime.combine(elm_date, elm_time)
         logger.debug(f"Pre-expiry check: elm_time={elm_dt}  now={datetime.now()}")
         if datetime.now() >= elm_dt:
             logger.info(f"Pre-expiry exit triggered at {datetime.now():%H:%M:%S}.")
@@ -1115,22 +1135,30 @@ class Apollo:
                         'close':      float(row[4]),
                         'volume':     float(row[5]),
                     }
-                    # Guard: reject if this is the currently forming candle
-                    # (time_stamp >= candle_close_ts means it hasn't closed yet)
-                    if candle['time_stamp'] >= candle_close_ts:
+                    # Angel One historical API uses open-time timestamps
+                    # (e.g. 09:30 candle = timestamp 09:30).
+                    # Real-time API uses close-time timestamps
+                    # (e.g. 09:30-09:45 candle = timestamp 09:45).
+                    # Normalise to open-time by subtracting 15 min if needed.
+                    expected_open_ts = candle_close_ts - timedelta(minutes=15)
+                    if candle['time_stamp'] == candle_close_ts:
+                        # Close-time format — normalise to open-time
+                        candle['time_stamp'] = expected_open_ts
+                        logger.debug(
+                            f"Normalised close-time timestamp "
+                            f"{candle_close_ts} -> {expected_open_ts}")
+                    elif candle['time_stamp'] > candle_close_ts:
+                        # Future candle — forming, not yet closed. Retry.
                         logger.debug(
                             f"Candle not yet closed: got {candle['time_stamp']} "
-                            f"candle_close_ts={candle_close_ts} — retrying.")
+                            f"> candle_close_ts={candle_close_ts} — retrying.")
                         sleep(2)
                         _reset_counters()
                         continue
-                    # Warn if timestamp doesn't match expected but still accept —
-                    # API occasionally returns a slightly different window
-                    expected_ts = candle_close_ts - timedelta(minutes=15)
-                    if candle['time_stamp'] != expected_ts:
+                    elif candle['time_stamp'] != expected_open_ts:
                         logger.warning(
-                            f"Candle timestamp mismatch: got {candle['time_stamp']} "
-                            f"expected {expected_ts} — accepting anyway.")
+                            f"Unexpected candle timestamp: got {candle['time_stamp']} "
+                            f"expected {expected_open_ts} — accepting anyway.")
                     logger.debug(
                         f"Candle fetched: {candle['time_stamp']}  "
                         f"O={candle['open']:.2f} H={candle['high']:.2f} "
