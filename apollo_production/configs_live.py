@@ -22,7 +22,6 @@ LOGS_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs
 STATE_FILE      = os.path.join(DATA_DIR, "apollo_state.csv")
 TRADES_FILE     = os.path.join(DATA_DIR, "apollo_trades.csv")
 ST_CACHE_FILE         = os.path.join(DATA_DIR, "supertrend_cache.csv")
-NIFTY_15MIN_CACHE_FILE = os.path.join(DATA_DIR, "nifty_15min_cache.csv")
 
 # ---------------------------------------------------------------------------
 # Credentials — loaded once at module level
@@ -81,7 +80,7 @@ BUY_LEG_OFFSET      = -50           # ITM: -50 from ATM. Negative = ITM for both
 HEDGE_POINTS        = 300           # OTM sell leg distance from buy leg
 STRIKE_STEP         = 50            # Nifty strike interval
 MIN_DTE             = 2             # Roll to next expiry if DTE < this
-LOT_SIZE            = 65            # Nifty lot size — update if SEBI changes this
+LOT_SIZE            = 75            # Nifty lot size — update if SEBI changes this
 
 # Lot sizing
 # LOT_CALC = False: trade exactly LOT_COUNT lots per signal
@@ -89,7 +88,7 @@ LOT_SIZE            = 65            # Nifty lot size — update if SEBI changes 
 #   lots = floor(available_margin / LOT_CAPITAL), floored at 1
 LOT_CALC            = False
 LOT_COUNT           = 1             # lots per signal when LOT_CALC = False
-LOT_CAPITAL         = 100000        # capital per lot for auto-calculation (Rs)
+LOT_CAPITAL         = 104000        # capital per lot for auto-calculation (Rs)
 
 # ---------------------------------------------------------------------------
 # Entry filters (D-R-P2c)
@@ -149,7 +148,7 @@ CANDLE_FETCH_RETRY_INTERVAL = 10    # Seconds between retries
 
 # Dry run mode — no real orders placed. Fill prices sourced from live LTP.
 # Set to False only when ready to go live on delos.
-DRY_RUN                 = False
+DRY_RUN                 = True
 
 # Trade update and log interval in seconds.
 # Drives both the #trade-updates Slack message and the trade log append.

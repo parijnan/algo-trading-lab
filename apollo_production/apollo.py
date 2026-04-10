@@ -208,7 +208,7 @@ class Apollo:
         ].copy()
         logger.info(f"Scrip master loaded. Nifty NFO rows: {len(self.instrument_df)}.")
 
-        self.st.seed(self.obj, self.holidays)
+        self.st.seed(self.obj)
         slack_bot_sendtext(
             f"*Apollo*: Supertrend seeded ({self.st.get_cache().shape[0]} candles). "
             f"75-min trend: {'bullish' if self.st.get_current_trend_75() else 'bearish'}.",
@@ -474,7 +474,6 @@ class Apollo:
     def logout(self):
         """Stop feed, terminate session, send close alert."""
         logger.info("Logging out.")
-        self.st.update_candle_cache(self.obj)
         self.feed.stop()
         try:
             self.obj.terminateSession(user_name)
@@ -1147,15 +1146,33 @@ class Apollo:
         return now.replace(second=0, microsecond=0) + timedelta(minutes=minutes_to_next)
 
     def _fetch_latest_candle(self, candle_close_ts):
-        candle_open = candle_close_ts - timedelta(minutes=15)
+        """
+        Fetch the completed candle for the window ending at candle_close_ts.
+
+        Fetches a 45-minute window (3 candles) to reliably identify the target
+        candle regardless of whether the API uses open-time or close-time
+        timestamps. The target candle is identified by matching its timestamp
+        against expected_open_ts (open-time) or candle_close_ts (close-time).
+        The forming candle (time_stamp > candle_close_ts) is always rejected.
+
+        Timestamp formats observed from Angel One:
+          Historical API: open-time (10:30-10:45 candle -> 10:30)
+          Real-time API:  close-time (10:30-10:45 candle -> 10:45)
+        Both are handled by checking both expected timestamps.
+        """
+        expected_open_ts  = candle_close_ts - timedelta(minutes=15)
+        # Fetch 45-min window to get at least 2-3 candles
+        fetch_from = candle_close_ts - timedelta(minutes=45)
         params = {
             "exchange":    "NSE",
             "symboltoken": NIFTY_INDEX_TOKEN,
             "interval":    "FIFTEEN_MINUTE",
-            "fromdate":    candle_open.strftime('%Y-%m-%d %H:%M'),
+            "fromdate":    fetch_from.strftime('%Y-%m-%d %H:%M'),
             "todate":      candle_close_ts.strftime('%Y-%m-%d %H:%M'),
         }
-        logger.debug(f"Fetching candle: {params['fromdate']} to {params['todate']}")
+        logger.debug(
+            f"Fetching candle: {expected_open_ts.strftime('%Y-%m-%d %H:%M')} "
+            f"to {candle_close_ts.strftime('%Y-%m-%d %H:%M')}")
 
         for attempt in range(3):
             try:
@@ -1163,45 +1180,48 @@ class Apollo:
                 _increment_poll()
                 data = response.get('data', [])
                 if data:
-                    row = data[-1]
-                    ts_str = str(row[0]).replace('T', ' ')[:19]
-                    candle = {
-                        'time_stamp': pd.Timestamp(ts_str),
-                        'open':       float(row[1]),
-                        'high':       float(row[2]),
-                        'low':        float(row[3]),
-                        'close':      float(row[4]),
-                        'volume':     float(row[5]),
-                    }
-                    # Angel One historical API uses open-time timestamps
-                    # (e.g. 09:30 candle = timestamp 09:30).
-                    # Real-time API uses close-time timestamps
-                    # (e.g. 09:30-09:45 candle = timestamp 09:45).
-                    # Normalise to open-time by subtracting 15 min if needed.
-                    expected_open_ts = candle_close_ts - timedelta(minutes=15)
-                    if candle['time_stamp'] == candle_close_ts:
-                        # Close-time format — normalise to open-time
-                        candle['time_stamp'] = expected_open_ts
+                    # Parse all returned candles and find the target one
+                    candles = []
+                    for row in data:
+                        ts_str = str(row[0]).replace('T', ' ')[:19]
+                        candles.append({
+                            'time_stamp': pd.Timestamp(ts_str),
+                            'open':       float(row[1]),
+                            'high':       float(row[2]),
+                            'low':        float(row[3]),
+                            'close':      float(row[4]),
+                            'volume':     float(row[5]),
+                        })
+
+                    # Find the target candle — match by open-time or close-time
+                    target = None
+                    for c in candles:
+                        if c['time_stamp'] == expected_open_ts:
+                            # Open-time format (historical API)
+                            target = c
+                            break
+                        elif c['time_stamp'] == candle_close_ts:
+                            # Close-time format (real-time API) — normalise
+                            c['time_stamp'] = expected_open_ts
+                            logger.debug(
+                                f"Normalised close-time timestamp "
+                                f"{candle_close_ts} -> {expected_open_ts}")
+                            target = c
+                            break
+
+                    if target is not None:
                         logger.debug(
-                            f"Normalised close-time timestamp "
-                            f"{candle_close_ts} -> {expected_open_ts}")
-                    elif candle['time_stamp'] > candle_close_ts:
-                        # Future candle — forming, not yet closed. Retry.
-                        logger.debug(
-                            f"Candle not yet closed: got {candle['time_stamp']} "
-                            f"> candle_close_ts={candle_close_ts} — retrying.")
-                        sleep(2)
-                        _reset_counters()
-                        continue
-                    elif candle['time_stamp'] != expected_open_ts:
-                        logger.warning(
-                            f"Unexpected candle timestamp: got {candle['time_stamp']} "
-                            f"expected {expected_open_ts} — accepting anyway.")
+                            f"Candle fetched: {target['time_stamp']}  "
+                            f"O={target['open']:.2f} H={target['high']:.2f} "
+                            f"L={target['low']:.2f} C={target['close']:.2f}")
+                        return target
+
+                    # Target not found — log what we got for diagnosis
+                    got_ts = [str(c['time_stamp']) for c in candles]
                     logger.debug(
-                        f"Candle fetched: {candle['time_stamp']}  "
-                        f"O={candle['open']:.2f} H={candle['high']:.2f} "
-                        f"L={candle['low']:.2f} C={candle['close']:.2f}")
-                    return candle
+                        f"Target candle {expected_open_ts} not found. "
+                        f"Got timestamps: {got_ts}. Retrying.")
+
             except Exception as e:
                 handle_exception(e)
             logger.debug(f"Candle fetch attempt {attempt+1} failed. Retrying in 2s.")
