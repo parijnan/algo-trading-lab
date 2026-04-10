@@ -773,7 +773,6 @@ def _append_1min_snapshots(day_date, nifty_1m, vix_1m,
         last_buy_ltp, last_sell_ltp,
         trailing_profit_floor, max_unrealised_pl_so_far,
         trade_entry_date, gate_date, use_trailing, entry_vix,
-                    active_pt_pct, active_gate_pct, active_hard_stop,
         active_pt_pct, active_gate_pct, active_hard_stop,
     )
 
