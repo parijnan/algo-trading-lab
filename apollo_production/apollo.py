@@ -799,7 +799,7 @@ class Apollo:
         self.state.entry_time          = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.state.entry_spot          = round(spot, 2)
         self.state.entry_vix           = round(self.feed.get_ltp(FEED_VIX_TOKEN) or 0, 2)
-        self.state.gate_date           = self._compute_gate_date(expiry_date)
+        self.state.gate_date           = self._compute_gate_date(expiry_date, direction)
         self.state.gate_checked        = False
         self.state.gate_min_profit_pct = round(gate_min_pct, 4)
         self.state.max_unrealised_pl   = 0.0
@@ -1471,13 +1471,16 @@ class Apollo:
     # Helpers
     # -----------------------------------------------------------------------
 
-    def _compute_gate_date(self, expiry_date):
-        gate = date.today() + timedelta(days=1)
+    def _compute_gate_date(self, expiry_date, direction):
+        gate_days = TIME_GATE_DAYS_BULL if direction == 'bullish' else TIME_GATE_DAYS_BEAR
+        gate = date.today() + timedelta(days=gate_days)
         while gate.weekday() >= 5 or gate in self.holidays:
             gate += timedelta(days=1)
         if gate >= expiry_date:
             gate = expiry_date
-        logger.debug(f"Gate date computed: {gate}")
+        logger.debug(
+            f"Gate date computed: {gate} "
+            f"(days={gate_days}, direction={direction})")
         return gate.strftime('%Y-%m-%d')
 
     def _load_holidays(self):
