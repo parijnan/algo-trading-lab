@@ -45,9 +45,12 @@ from configs_live import (
     SPREAD_TYPE, BUY_LEG_OFFSET, HEDGE_POINTS, STRIKE_STEP, MIN_DTE, LOT_SIZE,
     LOT_CALC, LOT_COUNT, LOT_CAPITAL,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
-    ENABLE_HARD_STOP, HARD_STOP_POINTS,
-    ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT,
-    ENABLE_TIME_GATE, TIME_GATE_DAYS, TIME_GATE_CHECK_TIME, TIME_GATE_MIN_PROFIT_PCT,
+    EXCLUDE_BEARISH_DAYS, EXCLUDE_BULLISH_DAYS,
+    ENABLE_HARD_STOP, HARD_STOP_POINTS_BULL, HARD_STOP_POINTS_BEAR,
+    ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT_BULL, PROFIT_TARGET_PCT_BEAR,
+    ENABLE_TIME_GATE, TIME_GATE_DAYS_BULL, TIME_GATE_DAYS_BEAR,
+    TIME_GATE_CHECK_TIME,
+    TIME_GATE_MIN_PROFIT_PCT_BULL, TIME_GATE_MIN_PROFIT_PCT_BEAR,
     ELM_SECONDS_BEFORE_EXPIRY,
     NO_EXIT_BEFORE,
     FO_EXCHANGE_SEGMENT,
@@ -292,7 +295,7 @@ class Apollo:
                         logger.debug(
                             f"Poll — buy_ltp={buy_ltp:.2f}  sell_ltp={sell_ltp:.2f}  "
                             f"unrealised={unrealised:+.2f}  "
-                            f"hard_stop_level={-HARD_STOP_POINTS:.1f}  "
+                            f"hard_stop_level={-self.state.hard_stop_pts:.1f}  "
                             f"pt_level={self.state.profit_target_pts:.1f}")
                         # Always update LTPs and peak — independent of no-exit guard
                         self.state.last_buy_ltp  = round(buy_ltp,  2)
@@ -448,9 +451,9 @@ class Apollo:
                         f"trend_15={trend_15} trend_75={trend_75}")
                     continue
 
-                if not self._check_entry_filters(ts):
+                if not self._check_entry_filters(ts, direction):
                     logger.info(
-                        f"Entry filter blocked signal at {ts}. "
+                        f"Entry filter blocked {direction} signal at {ts}. "
                         f"day={ts.dayofweek} time={ts.strftime('%H:%M')}")
                     continue
 
@@ -527,10 +530,11 @@ class Apollo:
                 f"(flip_trend={flip_trend} trend_75={trend_75}). Skipping.")
             return
 
-        if not self._check_entry_filters(flip_ts):
+        if not self._check_entry_filters(flip_ts, direction):
             logger.info(
                 f"Missed flip at {flip_ts:%H:%M} — blocked by entry filter "
-                f"(day={flip_ts.dayofweek} time={flip_ts.strftime('%H:%M')}). Skipping.")
+                f"(direction={direction} day={flip_ts.dayofweek} "
+                f"time={flip_ts.strftime('%H:%M')}). Skipping.")
             return
 
         logger.info(
@@ -556,10 +560,15 @@ class Apollo:
     def _vix_gate_passes(self):
         return self._get_todays_vix() > VIX_THRESHOLD
 
-    def _check_entry_filters(self, ts):
+    def _check_entry_filters(self, ts, direction=None):
+        """Check entry filters. direction='bullish'|'bearish'|None (None skips direction check)."""
         if ts.dayofweek in EXCLUDE_TRADE_DAYS:
             return False
         if ts.strftime('%H:%M') in EXCLUDE_SIGNAL_CANDLES:
+            return False
+        if direction == 'bearish' and ts.dayofweek in EXCLUDE_BEARISH_DAYS:
+            return False
+        if direction == 'bullish' and ts.dayofweek in EXCLUDE_BULLISH_DAYS:
             return False
         return True
 
@@ -755,41 +764,47 @@ class Apollo:
 
         net_debit         = buy_fill - sell_fill
         max_profit        = HEDGE_POINTS - net_debit
-        profit_target_pts = max_profit * PROFIT_TARGET_PCT
+
+        # Resolve direction-specific exit parameters at entry time
+        pt_pct            = PROFIT_TARGET_PCT_BULL if direction == 'bullish' else PROFIT_TARGET_PCT_BEAR
+        hard_stop_pts     = HARD_STOP_POINTS_BULL  if direction == 'bullish' else HARD_STOP_POINTS_BEAR
+        gate_min_pct      = TIME_GATE_MIN_PROFIT_PCT_BULL if direction == 'bullish' else TIME_GATE_MIN_PROFIT_PCT_BEAR
+        profit_target_pts = max_profit * pt_pct
 
         logger.info(
             f"Spread metrics: net_debit={net_debit:.2f}  "
             f"max_profit={max_profit:.2f}  "
-            f"profit_target={profit_target_pts:.2f}  "
-            f"hard_stop={HARD_STOP_POINTS}  "
+            f"pt_pct={pt_pct:.0%}  profit_target={profit_target_pts:.2f}  "
+            f"hard_stop={hard_stop_pts}  gate_min_pct={gate_min_pct:.0%}  "
             f"lots={lots}  lot_size={LOT_SIZE}  "
-            f"max_loss_rs={HARD_STOP_POINTS * lots * LOT_SIZE:.0f}")
+            f"max_loss_rs={hard_stop_pts * lots * LOT_SIZE:.0f}")
 
-        self.state.status            = 'in_trade'
-        self.state.direction         = direction
-        self.state.buy_strike        = buy_strike
-        self.state.sell_strike       = sell_strike
-        self.state.option_type       = option_type
-        self.state.expiry            = expiry_date.strftime('%Y-%m-%d')
-        self.state.buy_token         = buy_token
-        self.state.sell_token        = sell_token
-        self.state.buy_symbol        = buy_symbol
-        self.state.sell_symbol       = sell_symbol
-        self.state.lots              = lots
-        self.state.buy_entry         = round(buy_fill,  2)
-        self.state.sell_entry        = round(sell_fill, 2)
-        self.state.net_debit         = round(net_debit, 2)
-        self.state.max_profit        = round(max_profit, 2)
-        self.state.profit_target_pts = round(profit_target_pts, 2)
-        self.state.hard_stop_pts     = HARD_STOP_POINTS
-        self.state.entry_time        = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.state.entry_spot        = round(spot, 2)
-        self.state.entry_vix         = round(self.feed.get_ltp(FEED_VIX_TOKEN) or 0, 2)
-        self.state.gate_date         = self._compute_gate_date(expiry_date)
-        self.state.gate_checked      = False
-        self.state.max_unrealised_pl = 0.0
-        self.state.last_buy_ltp      = round(buy_fill,  2)
-        self.state.last_sell_ltp     = round(sell_fill, 2)
+        self.state.status              = 'in_trade'
+        self.state.direction           = direction
+        self.state.buy_strike          = buy_strike
+        self.state.sell_strike         = sell_strike
+        self.state.option_type         = option_type
+        self.state.expiry              = expiry_date.strftime('%Y-%m-%d')
+        self.state.buy_token           = buy_token
+        self.state.sell_token          = sell_token
+        self.state.buy_symbol          = buy_symbol
+        self.state.sell_symbol         = sell_symbol
+        self.state.lots                = lots
+        self.state.buy_entry           = round(buy_fill,  2)
+        self.state.sell_entry          = round(sell_fill, 2)
+        self.state.net_debit           = round(net_debit, 2)
+        self.state.max_profit          = round(max_profit, 2)
+        self.state.profit_target_pts   = round(profit_target_pts, 2)
+        self.state.hard_stop_pts       = hard_stop_pts
+        self.state.entry_time          = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.state.entry_spot          = round(spot, 2)
+        self.state.entry_vix           = round(self.feed.get_ltp(FEED_VIX_TOKEN) or 0, 2)
+        self.state.gate_date           = self._compute_gate_date(expiry_date)
+        self.state.gate_checked        = False
+        self.state.gate_min_profit_pct = round(gate_min_pct, 4)
+        self.state.max_unrealised_pl   = 0.0
+        self.state.last_buy_ltp        = round(buy_fill,  2)
+        self.state.last_sell_ltp       = round(sell_fill, 2)
         save_state(self.state)
 
         self._trade_log      = []
@@ -802,8 +817,9 @@ class Apollo:
             f"Buy  {buy_strike}{option_type.upper()} @ {buy_fill:.1f} | "
             f"Sell {sell_strike}{option_type.upper()} @ {sell_fill:.1f} | "
             f"Net debit: {net_debit:.1f} | Max profit: {max_profit:.1f} | "
-            f"PT level: {profit_target_pts:.1f} pts | "
-            f"Hard stop: {HARD_STOP_POINTS} pts | "
+            f"PT: {profit_target_pts:.1f} pts ({pt_pct:.0%}) | "
+            f"Hard stop: {hard_stop_pts} pts | "
+            f"Gate: {gate_min_pct:.0%} | "
             f"Lots: {lots} | Expiry: {expiry_date} | Spot: {spot:.0f}",
             SLACK_TRADE_ALERTS)
 
@@ -825,10 +841,10 @@ class Apollo:
         unrealised = (buy_ltp - self.state.buy_entry) - (sell_ltp - self.state.sell_entry)
         self.state.last_buy_ltp  = round(buy_ltp,  2)
         self.state.last_sell_ltp = round(sell_ltp, 2)
-        if unrealised <= -HARD_STOP_POINTS:
+        if unrealised <= -self.state.hard_stop_pts:
             logger.warning(
                 f"Hard stop triggered: unrealised={unrealised:.2f} "
-                f"<= -{HARD_STOP_POINTS}")
+                f"<= -{self.state.hard_stop_pts}")
             self._execute_exit('hard_stop')
             return True
         return False
@@ -866,10 +882,11 @@ class Apollo:
         self.state.gate_checked = True
         save_state(self.state)
 
-        threshold = self.state.max_profit * TIME_GATE_MIN_PROFIT_PCT
+        gate_pct  = self.state.gate_min_profit_pct or TIME_GATE_MIN_PROFIT_PCT_BULL
+        threshold = self.state.max_profit * gate_pct
         logger.info(
             f"Time gate check: max_unrealised_pl={self.state.max_unrealised_pl:.2f}  "
-            f"threshold={threshold:.2f}  "
+            f"threshold={threshold:.2f} ({gate_pct:.0%})  "
             f"gate_passes={self.state.max_unrealised_pl >= threshold}")
 
         if self.state.max_unrealised_pl < threshold:

@@ -77,6 +77,7 @@ class ApolloState:
     # Time gate
     gate_date:            Optional[str]   = None    # 'YYYY-MM-DD' — Day 1 gate check date
     gate_checked:         bool            = False   # True once gate has been evaluated
+    gate_min_profit_pct:  Optional[float] = None    # resolved at entry from direction
 
     # Peak unrealised P&L — updated tick-by-tick, persisted for restart recovery
     max_unrealised_pl:    float           = 0.0
@@ -196,8 +197,9 @@ def clear_trade_fields(state: ApolloState) -> ApolloState:
     state.entry_time        = None
     state.entry_spot        = None
     state.entry_vix         = None
-    state.gate_date         = None
-    state.gate_checked      = False
+    state.gate_date           = None
+    state.gate_checked        = False
+    state.gate_min_profit_pct = None
     state.max_unrealised_pl = 0.0
     state.last_buy_ltp      = None
     state.last_sell_ltp     = None

@@ -2,9 +2,9 @@
 configs_live.py — Apollo Production Configuration
 All parameters in one place. Tweak here, nothing else needs to change.
 
-Frozen production config: D-R-P2c
-Strategy: ITM debit spread, PT 50%, time gate 1d/33%, hard stop 67.5 pts
-Entry filters: no Tuesday trades, four excluded signal candle times
+Frozen production config: D-R-D06g
+Strategy: ITM debit spread, direction-split PT/gate/hard stop
+Entry filters: no Tuesday trades, direction-specific day and candle exclusions
 
 Credentials are loaded once at module level from data/user_credentials.csv.
 All other modules import from here — credentials are never loaded twice.
@@ -91,36 +91,42 @@ LOT_COUNT           = 1             # lots per signal when LOT_CALC = False
 LOT_CAPITAL         = 104000        # capital per lot for auto-calculation (Rs)
 
 # ---------------------------------------------------------------------------
-# Entry filters (D-R-P2c)
+# Entry filters (D-R-D06g)
 # Applied to signal candle timestamp. In-trade management unaffected.
 # ---------------------------------------------------------------------------
-# Days of week to exclude entries: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+# Days of week to exclude entries for BOTH directions: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 # Tuesday = Nifty expiry day. Expiry-day gamma and pinning break ST signal.
 EXCLUDE_TRADE_DAYS      = [1]
 
+# Direction-specific day exclusions (in addition to EXCLUDE_TRADE_DAYS)
+EXCLUDE_BEARISH_DAYS    = [0]       # Monday bearish excluded
+EXCLUDE_BULLISH_DAYS    = []
+
 # Signal candle close times to exclude (entry would execute 15 min later).
-# Dead zones where market oscillates rather than trends.
-# 09:45 -> entry 10:00 | 10:00 -> entry 10:15 | 13:45 -> entry 14:00 | 14:00 -> entry 14:15
-EXCLUDE_SIGNAL_CANDLES  = ['09:45', '10:00', '13:45', '14:00']
+EXCLUDE_SIGNAL_CANDLES  = ['10:00', '10:15', '14:15', '14:30']
 
 # ---------------------------------------------------------------------------
-# Exit mechanisms — D-R-P2c (identical to D-R03fg-hs-b)
+# Exit mechanisms — D-R-D06g
 # ---------------------------------------------------------------------------
 
-# Hard stop: exit when unrealised P&L <= -HARD_STOP_POINTS
-ENABLE_HARD_STOP        = True
-HARD_STOP_POINTS        = 67.5
+# Hard stop: exit when unrealised P&L <= -hard_stop_pts (resolved at entry)
+ENABLE_HARD_STOP            = True
+HARD_STOP_POINTS_BULL       = 40.0
+HARD_STOP_POINTS_BEAR       = 67.5
 
-# Profit target: exit when unrealised P&L >= max_profit * PROFIT_TARGET_PCT
-ENABLE_PROFIT_TARGET    = True
-PROFIT_TARGET_PCT       = 0.50      # Uniform across all VIX bands
+# Profit target: exit when unrealised P&L >= max_profit * pt_pct (resolved at entry)
+ENABLE_PROFIT_TARGET        = True
+PROFIT_TARGET_PCT_BULL      = 0.35
+PROFIT_TARGET_PCT_BEAR      = 0.60
 
 # Time gate: exit at TIME_GATE_CHECK_TIME on gate day if max unrealised P&L
-# since entry < max_profit * TIME_GATE_MIN_PROFIT_PCT
-ENABLE_TIME_GATE        = True
-TIME_GATE_DAYS          = 1         # Gate fires on Day 1 (next trading day after entry)
-TIME_GATE_CHECK_TIME    = '09:30'   # Check time on gate day
-TIME_GATE_MIN_PROFIT_PCT = 0.33     # Uniform across all VIX bands
+# since entry < max_profit * gate_min_profit_pct (resolved at entry)
+ENABLE_TIME_GATE            = True
+TIME_GATE_DAYS_BULL         = 1
+TIME_GATE_DAYS_BEAR         = 1
+TIME_GATE_CHECK_TIME        = '09:30'
+TIME_GATE_MIN_PROFIT_PCT_BULL = 0.25
+TIME_GATE_MIN_PROFIT_PCT_BEAR = 0.35
 
 # Trend flip: exit when 15-min ST flips against position direction
 # Always active — not toggled by a flag
