@@ -154,7 +154,7 @@ CANDLE_FETCH_RETRY_INTERVAL = 10    # Seconds between retries
 
 # Dry run mode — no real orders placed. Fill prices sourced from live LTP.
 # Set to False only when ready to go live on delos.
-DRY_RUN                 = True
+DRY_RUN                 = False
 
 # Trade update and log interval in seconds.
 # Drives both the #trade-updates Slack message and the trade log append.
