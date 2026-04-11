@@ -224,7 +224,7 @@ EXCLUDE_TRADE_DAYS      = [1]          # e.g. [1] to exclude Tuesday
 # EXCLUDE_TRADE_DAYS blocks both directions; these block one direction only.
 # Day encoding: 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday
 # Evaluated on exec_ts.dayofweek (entry execution candle day).
-EXCLUDE_BEARISH_DAYS    = []          # e.g. [0] excludes bearish entries on Monday
+EXCLUDE_BEARISH_DAYS    = [0]          # e.g. [0] excludes bearish entries on Monday
 EXCLUDE_BULLISH_DAYS    = []          # e.g. [0] excludes bullish entries on Monday
 
 # Filter 2: Excluded signal candle close times.
@@ -233,7 +233,7 @@ EXCLUDE_BULLISH_DAYS    = []          # e.g. [0] excludes bullish entries on Mon
 #   Signal '09:45' close → entry at 10:00 open  (market re-settling, 40% WR)
 #   Signal '10:00' close → entry at 10:15 open  (dead zone, 0% WR historically)
 # Format: list of 'HH:MM' strings. Set to [] to disable.
-EXCLUDE_SIGNAL_CANDLES  = []          # e.g. ['09:45', '10:00']
+EXCLUDE_SIGNAL_CANDLES  = ['10:00', '10:15', '14:15', '14:30']          # e.g. ['09:45', '10:00']
 
 # ---------------------------------------------------------------------------
 # Direction-Specific Parameter Overrides
