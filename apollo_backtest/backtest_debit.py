@@ -53,6 +53,7 @@ from configs_debit import (
     TRAIL_TRIGGER_3, TRAIL_FLOOR_3,
     ADDITIONAL_LOT_MULTIPLIER, ELM_SECONDS_BEFORE_EXPIRY, ENABLE_ADDITIONAL_LOTS,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
+    EXCLUDE_BEARISH_DAYS, EXCLUDE_BULLISH_DAYS,
     PROFIT_TARGET_PCT_BULL, PROFIT_TARGET_PCT_BEAR,
     TIME_GATE_MIN_PROFIT_PCT_BULL, TIME_GATE_MIN_PROFIT_PCT_BEAR,
     TIME_GATE_DAYS_BULL, TIME_GATE_DAYS_BEAR,
@@ -1334,6 +1335,14 @@ def run_backtest(nifty_15: pd.DataFrame, nifty_75: pd.DataFrame,
                 if entry_direction is None or not has_next:
                     continue
 
+                # Direction-specific day exclusion (checked after direction is known)
+                # Uses exec_ts day — the candle where entry executes
+                _entry_dow = exec_ts.dayofweek
+                if entry_direction == 'bearish' and _entry_dow in EXCLUDE_BEARISH_DAYS:
+                    continue
+                if entry_direction == 'bullish' and _entry_dow in EXCLUDE_BULLISH_DAYS:
+                    continue
+
                 # Entry filters — evaluated on signal candle time (ts), not exec_ts
                 # VIX is read at signal time for the bullish VIX exclusion filter
                 _signal_vix = get_1min_value(vix_1m, ts, 'close')
@@ -1563,6 +1572,8 @@ if __name__ == "__main__":
                 f"{TIME_GATE_MIN_PROFIT_PCT_HIGH_VIX*100:.0f}%/≥VIX{TIME_GATE_VIX_THRESHOLD:.0f}")
     logger.info(f"  Trailing profit: {'ON' if ENABLE_TRAILING_PROFIT else 'OFF'} — VIX >= {TRAIL_VIX_THRESHOLD}, triggers {TRAIL_TRIGGER_1}/{TRAIL_TRIGGER_2}/{TRAIL_TRIGGER_3}")
     logger.info(f"  Excl. days     : {EXCLUDE_TRADE_DAYS if EXCLUDE_TRADE_DAYS else 'none'}")
+    logger.info(f"  Excl. bear days: {EXCLUDE_BEARISH_DAYS if EXCLUDE_BEARISH_DAYS else 'none'}")
+    logger.info(f"  Excl. bull days: {EXCLUDE_BULLISH_DAYS if EXCLUDE_BULLISH_DAYS else 'none'}")
     logger.info(f"  Excl. candles  : {EXCLUDE_SIGNAL_CANDLES if EXCLUDE_SIGNAL_CANDLES else 'none'}")
     logger.info(f"  Excl. bull VIX : {EXCLUDE_BULLISH_VIX_ABOVE if EXCLUDE_BULLISH_VIX_ABOVE is not None else 'none'}")
     logger.info(f"  PT  bull/bear  : {PROFIT_TARGET_PCT_BULL}/{PROFIT_TARGET_PCT_BEAR} (None=use base)")
