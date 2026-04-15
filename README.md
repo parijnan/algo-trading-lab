@@ -64,7 +64,7 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 Single cron entry replaces all previous per-strategy crons:
 
 ```
-14 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +\%Y\%m\%d).log 2>&1
+15 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +\%Y\%m\%d).log 2>&1
 ```
 
 ## Data Pipeline
