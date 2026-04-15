@@ -10,7 +10,7 @@ Responsibilities:
   - Session teardown (terminateSession) after strategy returns
 
 Cron on delos (replaces both existing strategy crons):
-    15 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
+    14 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
     /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +%%Y%%m%%d).log 2>&1
 
 Strategy interfaces:
@@ -241,18 +241,48 @@ def _apollo_trade_open():
         return False
 
 
+def _artemis_trade_open():
+    """
+    Return True if either pe_trade_params.csv or ce_trade_params.csv records
+    an active Artemis position (spread_status not 'open' or 'closed').
+    Used to force Artemis routing when VIX has risen above threshold overnight
+    but an open Artemis position still needs to be managed.
+    """
+    active_statuses = {
+        'active', 'active_additional', 'adjusted', 'adjusted_additional',
+        'adjusted_elm', 'adjusted_additional_elm', 'active_additional_elm',
+        'active_elm',
+    }
+    for filename in ('pe_trade_params.csv', 'ce_trade_params.csv'):
+        filepath = os.path.join(ARTEMIS_DIR, 'data', filename)
+        if not os.path.exists(filepath):
+            continue
+        try:
+            df = pd.read_csv(filepath)
+            if df.empty:
+                continue
+            if str(df.iloc[0].get('spread_status', 'closed')) in active_statuses:
+                return True
+        except Exception as e:
+            logger.error(f"Could not read Artemis state file {filename}: {e}")
+    return False
+
+
 def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     """
     Decide which strategy to run, then run it.
 
     Routing priority:
-      1. If an Apollo trade is already open (status = in_trade or exiting),
-         always route to Apollo — regardless of current VIX. An open position
-         entered on a high-VIX day must be managed to completion even if VIX
-         has since dropped below the threshold.
-      2. Otherwise route on current VIX:
+      1. If an active Apollo trade is detected, route to Apollo regardless of
+         VIX — an open position entered on a high-VIX day must be managed to
+         completion even if VIX has since dropped below the threshold.
+      2. If an active Artemis trade is detected, route to Artemis regardless of
+         VIX — an open position entered on a low-VIX day must be managed to
+         completion even if VIX has since risen above the threshold.
+      3. Otherwise route on current VIX:
            VIX > VIX_THRESHOLD  → Apollo
            VIX <= VIX_THRESHOLD → Artemis
+      4. If VIX fetch fails — default to Artemis.
     """
     if APOLLO_DIR not in sys.path:
         sys.path.insert(0, APOLLO_DIR)
@@ -271,7 +301,20 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         _run_apollo(obj, auth_token, instrument_df_nifty)
         return
 
-    # Priority 2: route on current VIX
+    # Priority 2: resume open Artemis trade unconditionally
+    if _artemis_trade_open():
+        vix = _get_vix(obj)
+        vix_str = f"{vix:.2f}" if vix is not None else "unavailable"
+        logger.info(
+            f"Open Artemis trade detected in state file. "
+            f"Routing to Artemis regardless of VIX ({vix_str}).")
+        _slack(
+            f"*Leto*: Open Artemis trade detected. "
+            f"Routing to Artemis (VIX: {vix_str}, threshold: {VIX_THRESHOLD}).")
+        _run_artemis(obj, instrument_df_sensex)
+        return
+
+    # Priority 3: route on current VIX
     vix = _get_vix(obj)
 
     if vix is None:
