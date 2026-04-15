@@ -620,7 +620,7 @@ class IronCondor:
                 remove('data/instrument_master.csv')
             if path_exists('data/scrip_master.csv'):
                 remove('data/scrip_master.csv')
-            msg_txt = f"Trade has been archived at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
+            msg_txt = f"*Artemis:*\nTrade has been archived at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
             print(msg_txt)
             slack_bot_sendtext(msg_txt, "#tradebot-updates")
         else:
@@ -642,12 +642,12 @@ class IronCondor:
         else:
             index_ltp = self.ce_spread.index_ltp
             current_datetime = self.ce_spread.current_datetime
-        msg_txt = f"*Time:* _{current_datetime:%Y-%m-%d %H:%M:%S}_\n*Index Value:* _{index_ltp}_\n*PE Spread PL:* _{self.pe_spread.pl*lot_size:.2f}_\n*PE Spread Status:* _{self._format_status(self.pe_spread.spread_status)}_\n*Additional PE Spread PL:* _{self.pe_spread.additional_pl*lot_size*self.pe_spread.additional_lots/self.pe_spread.lots:.2f}_\n*CE Spread PL:* _{self.ce_spread.pl*lot_size:.2f}_\n*CE Spread Status:* _{self._format_status(self.ce_spread.spread_status)}_\n*Additional CE Spread PL:* _{self.ce_spread.additional_pl*lot_size*self.ce_spread.additional_lots/self.ce_spread.lots:.2f}_\n*Lots:* _{self.pe_spread.lots}_\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
+        msg_txt = f"*Artemis:*\n*Time:* _{current_datetime:%Y-%m-%d %H:%M:%S}_\n*Index Value:* _{index_ltp}_\n*PE Spread PL:* _{self.pe_spread.pl*lot_size:.2f}_\n*PE Spread Status:* _{self._format_status(self.pe_spread.spread_status)}_\n*Additional PE Spread PL:* _{self.pe_spread.additional_pl*lot_size*self.pe_spread.additional_lots/self.pe_spread.lots:.2f}_\n*CE Spread PL:* _{self.ce_spread.pl*lot_size:.2f}_\n*CE Spread Status:* _{self._format_status(self.ce_spread.spread_status)}_\n*Additional CE Spread PL:* _{self.ce_spread.additional_pl*lot_size*self.ce_spread.additional_lots/self.ce_spread.lots:.2f}_\n*Lots:* _{self.pe_spread.lots}_\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
         slack_bot_sendtext(msg_txt, "#trade-updates")
 
     # Private method to send message if trade is closed
     def _communicate_closed_status(self):
-        msg_txt = f"This trade is closed.\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
+        msg_txt = f"*Artemis:*\nThis trade is closed.\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
         print(msg_txt)
         slack_bot_sendtext(msg_txt, "#trade-updates")
 

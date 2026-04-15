@@ -401,7 +401,7 @@ class CreditSpread:
         else:
             # Update index ltp even if spread is not initialized to ensure trade_log is updated
             self.index_ltp = self._fetch_ltp(exchange_segment, instrument, underlying_token)
-            msg_txt = f"{self.spread_type.upper()} Spread wont be initialized after ELM cutoff time.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be initialized after ELM cutoff time.\n*Lots:* _{self.lots}_"
             print(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
@@ -431,14 +431,14 @@ class CreditSpread:
             # Update the class variables and save to file
             if not self.additional_flag:
                 self.spread_status = 'active'
-                msg_txt = f"{self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
+                msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
             else:
                 self.spread_status = 'active_additional'
                 self.additional_buy_entry = self.buy_entry
                 self.additional_buy_ltp = self.buy_entry
                 self.trade_params_df.iloc[0, 30] = self.additional_buy_entry
                 self.trade_params_df.iloc[0, 31] = self.additional_buy_ltp
-                msg_txt = f"{self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
+                msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
             self.buy_ltp = self.buy_entry
             self.sell_ltp = self.sell_entry
             self.trade_params_df.iloc[0, 2] = self.entry
@@ -456,7 +456,7 @@ class CreditSpread:
             #telegram_bot_sendtext(msg_txt, 'bot')
             slack_bot_sendtext(msg_txt, "#trade-alerts")
         else:
-            msg_txt = f"{self.spread_type.upper()} Spread wont be executed after ELM cutoff time.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be executed after ELM cutoff time.\n*Lots:* _{self.lots}_"
             print(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
@@ -474,7 +474,7 @@ class CreditSpread:
             self._fetch_order_book()
             self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list)
             self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list)
-            msg_txt = f"{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         # Code to exit trade if it has additional lots
         else:    
             # Exit sold option first
@@ -512,7 +512,7 @@ class CreditSpread:
             self.trade_params_df.iloc[0, 32] = self.additional_buy_exit
             self.trade_params_df.iloc[0, 33] = self.additional_booked_pl
             self.trade_params_df.iloc[0, 34] = self.additional_pl
-            msg_txt = f"{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
         self.spread_status = 'closed'
         self.booked_pl = self.booked_pl + self.buy_exit - self.buy_entry + self.sell_entry - self.sell_exit
         self.pl = self.booked_pl
@@ -563,7 +563,7 @@ class CreditSpread:
             # Update spread status
             self.spread_status = 'adjusted'
             # Update msg_txt
-            msg_txt = f"{self.spread_type.upper()} Spread adjusted at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread adjusted at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         # Code to make adjustment and enter additional spread
         if self.current_datetime < self.elm_time and self.current_datetime < self.cutoff_time:
             self.additional_lots = self.lots//2
@@ -590,9 +590,9 @@ class CreditSpread:
             # Update spread status
             self.spread_status = 'adjusted_additional'
             # Update msg_txt
-            msg_txt = f"{self.spread_type.upper()} Spread adjusted at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread adjusted at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
         if self.current_datetime > self.elm_time:
-            msg_txt = f"{self.spread_type.upper()} Spread wont be adjusted after ELM cutoff time.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be adjusted after ELM cutoff time.\n*Lots:* _{self.lots}_"
             print(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
@@ -662,7 +662,7 @@ class CreditSpread:
             # Update spread status
             self.spread_status = 'adjusted_elm'
             # Update msg_txt
-            msg_txt = f"{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
+            msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         if self.spread_status == 'adjusted_additional':
             # Exit additional sold options
             additional_sell_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.additional_lots)
@@ -683,7 +683,7 @@ class CreditSpread:
             self.spread_status = 'adjusted_additional_elm'
             self.additional_buy_exit = self.new_buy_entry
             # Update msg_txt
-            msg_txt = f"Additional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_\n{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"     
+            msg_txt = f"*Artemis:*\nAdditional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_\n{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"     
         if self.spread_status == 'active_additional':
             # Exit additional sold options
             additional_sell_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.additional_lots)
@@ -699,7 +699,7 @@ class CreditSpread:
             # Update spread status
             self.spread_status = 'active_additional_elm'
             # Update msg_txt
-            msg_txt = f"Additional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
+            msg_txt = f"*Artemis:*\nAdditional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
         # Update variables, trade_params and save to file
         if self.spread_status == 'adjusted_elm' or self.spread_status == 'adjusted_additional_elm':
             self.booked_pl = self.booked_pl + self.buy_exit - self.buy_entry
@@ -752,7 +752,7 @@ class CreditSpread:
             if self.current_datetime.time() > time(9,16):
                 return 'index_sl'
             else:
-                msg_txt = f"{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
+                msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
                 print(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
@@ -768,7 +768,7 @@ class CreditSpread:
             if self.current_datetime.time() > time(9,16):
                 return 'index_sl'
             else:
-                msg_txt = f"{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
+                msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
                 print(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
@@ -784,7 +784,7 @@ class CreditSpread:
             if self.current_datetime.time() > time(9,16):
                 return 'option_sl'
             else:
-                msg_txt = f"{self.spread_type.upper()} Spread Option SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
+                msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Option SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
                 print(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
