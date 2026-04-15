@@ -250,6 +250,7 @@ apollo_production/logs/
 
 # Apollo Production — credentials (belt-and-suspenders)
 apollo_production/data/user_credentials.csv
+apollo_production/data/holidays.csv
 apollo_production/data/trade_logs/
 apollo_production/data/trade_counter.txt
 apollo_production/data/error_log.txt
@@ -260,3 +261,24 @@ artemis_backtest/data/
 # Apollo Production — debug log file (logs/ folder already excluded above,
 # but explicit here for clarity)
 apollo_production/logs/debug.log
+apollo_production/data/holidays.csv
+
+# =============================================================================
+# Leto runtime
+# =============================================================================
+logs/
+data/leto_error_log.txt
+data/holidays.csv
+
+# =============================================================================
+# Artemis production — runtime data
+# =============================================================================
+artemis_production/data/pe_trade_params.csv
+artemis_production/data/ce_trade_params.csv
+artemis_production/data/trade_book.csv
+artemis_production/data/trade_log.csv
+artemis_production/data/error_log.txt
+artemis_production/data/instrument_master.csv
+artemis_production/data/scrip_master.csv
+artemis_production/data/archived/
+artemis_production/logs/

@@ -3,19 +3,19 @@
 Live execution module for the Apollo debit spread strategy.
 Part of the **Algo Trading Lab** project.
 
-Production config: **D-R-P2c** (ITM debit spread, PT 50%, time gate 1d/33%,
-hard stop 67.5 pts, entry filters: no Tuesday trades, four excluded signal
-candle times). See `APOLLO_PROJECT_CONTEXT.md` in the project root for full
-backtest history and design decisions.
+Production config: **D-R-D06g** (ITM debit spread, direction-split PT/gate/hard stop,
+entry filters: no Tuesday trades, direction-specific day and candle exclusions).
+See `APOLLO_PROJECT_CONTEXT.md` in the project root for full backtest history
+and design decisions.
 
 ## Module structure
 
 | File | Purpose |
 |---|---|
-| `apollo.py` | Main entry point — Apollo class and run loop |
+| `apollo.py` | Entry point — `Apollo(obj, auth_token, instrument_df)` called by Leto |
 | `configs_live.py` | All parameters — strategy + live execution |
 | `websocket_feed.py` | WebSocket wrapper — connect, subscribe, OHLC aggregation, shutdown |
-| `supertrend.py` | Supertrend seeding (cache-first), incremental updates, logout cache write |
+| `supertrend.py` | Supertrend seeding and incremental updates |
 | `state.py` | Atomic trade state persistence |
 | `functions.py` | Slack/Telegram messaging and exception handling |
 | `logger_setup.py` | Dual console + file logging (logs/debug.log), level from configs_live |
@@ -25,20 +25,25 @@ backtest history and design decisions.
 ## Setup on delos
 
 ```bash
-cd /home/parijnan/scripts/algo-trading-lab
-git pull
-cd apollo_production
-# Copy data/user_credentials.csv and data/holidays.csv into data/
-# Verify configs_live.py — DRY_RUN = True for paper trading, False for live
-/home/parijnan/anaconda3/bin/python apollo.py
+cd /home/parijnan/scripts/algo-trading-lab/apollo_production
+# Ensure data/ symlinks are in place:
+#   data/user_credentials.csv -> ../../data/user_credentials.csv
+#   data/holidays.csv         -> ../../data/holidays.csv
+# Verify configs_live.py — DRY_RUN = False for live
+# Apollo is launched via Leto — not run directly
 ```
 
-## Cron (delos)
+## Session model
 
-```
-# Apollo — start at 09:14, Mon-Fri
-14 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab/apollo_production && /home/parijnan/anaconda3/bin/python apollo.py >> logs/apollo_$(date +\\%Y\\%m\\%d).log 2>&1
-```
+Apollo does not manage its own Angel One session. Leto owns login, market/holiday
+checks, scrip master download, and session teardown. Apollo receives:
+- `obj` — authenticated `SmartConnect` instance
+- `auth_token` — JWT token from `generateSession` response (required for WebSocket feed)
+- `instrument_df` — Nifty NFO rows filtered from the scrip master
+
+Apollo owns everything else: Supertrend seeding, WebSocket feed start/stop,
+the run loop, and all entry/exit logic. `apollo.run()` returns to Leto with the
+feed already stopped. Leto then calls `terminateSession`.
 
 ## Key config flags
 
@@ -46,32 +51,49 @@ cd apollo_production
 |---|---|---|
 | `DRY_RUN` | `True` | `False` |
 | `LOG_LEVEL` | `"DEBUG"` | `"INFO"` |
+| `LOT_CALC` | `False` | `False` |
+| `LOT_COUNT` | `1` | as required |
 | `ST_75MIN_MULTIPLIER` | any | `3.0` |
 | `ST_15MIN_MULTIPLIER` | any | `3.0` |
-| `EXCLUDE_TRADE_DAYS` | `[]` | `[1]` |
-| `EXCLUDE_SIGNAL_CANDLES` | `[]` | `['09:45', '10:00', '13:45', '14:00']` |
+| `EXCLUDE_TRADE_DAYS` | `[]` | `[1]` (no Tuesday) |
+| `EXCLUDE_BEARISH_DAYS` | `[]` | `[0]` (no Monday bearish) |
+| `EXCLUDE_SIGNAL_CANDLES` | `[]` | `['10:00', '10:15', '14:15', '14:30']` |
+
+## Exit mechanism stack (D-R-D06g)
+
+| Priority | Mechanism | Bullish | Bearish |
+|---|---|---|---|
+| 1 | Hard stop | 40.0 pts | 67.5 pts |
+| 2 | Profit target | 35% of max profit | 60% of max profit |
+| 3 | Time gate (Day 1 09:30) | 25% of max profit | 35% of max profit |
+| 4 | Trend flip | 15-min ST flips against position | — |
+| 5 | Pre-expiry exit | 15:15 day before expiry | — |
+
+## Trade state
+
+`data/apollo_state.csv` — one row, atomically overwritten on every state change.
+`status` field values: `idle` / `in_trade` / `exiting`.
+
+On restart with `status = in_trade`, Apollo re-subscribes the option tokens
+to the WebSocket feed and resumes monitoring from where it left off.
+
+Leto checks this file before routing — if `status = in_trade` or `exiting`,
+Leto routes to Apollo regardless of current VIX.
 
 ## Seeding strategy
 
-On first run (or after a long absence), `supertrend.py` fetches 600 15-min
-candles (60-day window) from the API and saves them to `data/nifty_15min_cache.csv`.
-On subsequent runs it loads from cache and reconciles with the last few API
-candles, accounting for weekends and holidays. At logout, today's candles are
-appended to the cache and it is trimmed back to 600 rows.
-
-This avoids the Wilder's smoothing warmup problem — 600 candles of history
-ensures the ST values match the backtest and charting platform exactly.
+On session start, `supertrend.py` fetches 600 15-min candles (60-day window)
+from the Angel One API and saves them to `data/supertrend_cache.csv`. The cache
+is updated after every 15-min candle close. This ensures Wilder's smoothing
+warmup is always complete and ST values match the backtest exactly.
 
 ## Status
 
-- [x] WebSocket layer (`websocket_feed.py`) — validated in live market
-- [x] Supertrend seeding and update (`supertrend.py`) — validated
-- [x] State management (`state.py`) — validated
-- [x] Entry/exit execution (`apollo.py`) — dry run validated
-- [x] Signal generation — dry run validated (D-R-P2c filters confirmed)
-- [x] Dry run fill prices — validated (correct option LTPs used)
+- [x] WebSocket layer — validated in live market
+- [x] Supertrend seeding and update — validated
+- [x] State management — validated
+- [x] Entry/exit execution — live
+- [x] Signal generation (D-R-D06g filters) — live
 - [x] Clean shutdown (Ctrl+C / kill) — validated
 - [x] Missed flip recovery on restart — implemented
-- [x] 15-min candle cache — validated (cache-first seeding confirmed)
-- [ ] Full session dry run with entry + exit + trade log — pending
-- [ ] Live (1 lot on delos) — pending
+- [x] Leto integration — session management moved to Leto

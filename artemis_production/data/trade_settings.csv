@@ -1,0 +1,2 @@
+qty_freeze,lot_size,lot_count,lot_capital,lot_calc,expected_premium,strike_iterator,monitor_frequency,order_limit,poll_limit,strike_iteration_interval,hedge_points,sl_0_dte,sl_1_dte,sl_2_dte,sl_3_dte,sl_4_dte,adj_dist,instrument,underlying_token,exch_seg,fo_exch_seg,min_gap,min_gap_iterator,index_sl_offset
+1000,20,63,104000,true,120,1200,20,9,10,100,1000,1.33,1.66,2,2.33,2.66,600,SENSEX,99919000,BSE,BFO,1000,400,200
