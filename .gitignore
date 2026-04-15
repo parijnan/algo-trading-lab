@@ -285,3 +285,8 @@ artemis_production/data/user_credentials.csv
 artemis_production/data/holidays.csv
 artemis_production/data/archived/
 artemis_production/logs/
+
+# Athena backtest — generated output
+athena_backtest/data/trade_summary.csv
+athena_backtest/data/trade_logs/
+athena_backtest/data/

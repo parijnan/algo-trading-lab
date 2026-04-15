@@ -29,6 +29,19 @@ A directional ITM debit spread strategy deployed when India VIX > 16. Uses dual-
 | Production config | D-R-D06g |
 | Status | Live |
 
+### [Athena](./athena_backtest/) — Nifty Double Calendar Spread
+A market-neutral, theta-positive double calendar spread strategy on Nifty weekly options. Sells 20-delta CE and PE on the near-term weekly expiry and buys the same strikes on the monthly expiry. Long-vega profile benefits from IV expansion. Currently in backtesting.
+
+| | |
+|---|---|
+| Instrument | Nifty weekly options |
+| Structure | Double calendar spread (CE + PE, two expiries) |
+| Entry | Monday 10:30 AM |
+| Sell expiry | Next Tuesday (7 DTE) |
+| Buy expiry | Last Tuesday of current month (rolled if DTE < 14) |
+| Broker | TBD |
+| Status | In development — backtesting |
+
 ## Session Router
 
 ### [Leto](./leto.py) — Strategy Router and Session Manager
@@ -201,6 +214,13 @@ algo-trading-lab/
 │       ├── nifty_15min.csv         (generated — gitignored)
 │       ├── nifty_75min.csv         (generated — gitignored)
 │       ├── vix_daily.csv           (generated — gitignored)
+│       └── trade_logs/             (generated — gitignored)
+├── athena_backtest/                # Athena double calendar backtesting
+│   ├── README.md
+│   ├── configs.py
+│   ├── backtest.py
+│   └── data/
+│       ├── trade_summary.csv       (generated — gitignored)
 │       └── trade_logs/             (generated — gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
