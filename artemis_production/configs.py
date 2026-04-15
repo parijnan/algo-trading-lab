@@ -63,6 +63,8 @@ fo_exchange_segment      = trade_settings_df.iloc[0].loc['fo_exch_seg']
 minimum_gap              = trade_settings_df.iloc[0].loc['min_gap']
 minimum_gap_iterator     = trade_settings_df.iloc[0].loc['min_gap_iterator']
 index_sl_offset          = trade_settings_df.iloc[0].loc['index_sl_offset']
+vix_threshold            = trade_settings_df.iloc[0].loc['vix_threshold']
+entry_window_minutes     = int(trade_settings_df.iloc[0].loc['entry_window_minutes'])
 
 poll_counter  = 0
 order_counter = 0

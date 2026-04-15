@@ -12,10 +12,10 @@ Changes from original:
 """
 
 from credit_spread import CreditSpread
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import floor
 from functions import sleep, exists, handle_exception, slack_bot_sendtext, reset_counters
-from configs import pd, lot_size, monitor_frequency, lot_calc, lot_capital
+from configs import pd, lot_size, monitor_frequency, lot_calc, lot_capital, vix_threshold, entry_window_minutes, exchange_segment, instrument, underlying_token
 
 # IronCondor class consisting of pe and ce credit spreads
 class IronCondor:
@@ -132,6 +132,46 @@ class IronCondor:
 
     # Method to execute trade
     def execute_trade(self):
+        """
+        Entry gate: checks entry window and VIX before executing either spread.
+        If either check fails, cleans up state files and returns immediately —
+        artemis.run() detects the 'open' status and skips the monitoring loop.
+        """
+        # Only run for a fresh trade (both spreads still waiting for entry)
+        if self.pe_spread.spread_status == 'open' and self.ce_spread.spread_status == 'open':
+            self._set_current_datetime()
+
+            # Wait until entry time — so that VIX check happens at entry, not at 09:15
+            if self.current_datetime < self.pe_spread.entry:
+                msg_txt = (f"Waiting till {self.pe_spread.entry:%H:%M} to execute trade. "
+                           f"*Lots that will be traded:* _{self.lots}_")
+                print(msg_txt)
+                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                sleep(int((self.pe_spread.entry - datetime.now()).total_seconds()))
+                reset_counters()
+                self._set_current_datetime()
+
+            # Gate 1: entry window check — sit out the week if window has passed
+            entry_by = self.pe_spread.entry + timedelta(minutes=entry_window_minutes)
+            if self.current_datetime > entry_by:
+                msg_txt = (f"Entry window closed at {entry_by:%H:%M}. "
+                           f"Standing down for the week.")
+                print(msg_txt)
+                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                self._cleanup_state_files()
+                return
+
+            # Gate 2: VIX check at entry time
+            vix = self.pe_spread._fetch_ltp(exchange_segment, instrument, underlying_token)
+            if vix > vix_threshold:
+                msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
+                           f"Standing down for the week.")
+                print(msg_txt)
+                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                self._cleanup_state_files()
+                return
+
+        # Both gates passed — execute both spreads
         while self.pe_spread.spread_status == 'open' or self.ce_spread.spread_status == 'open':
             try:
                 for spread in [self.pe_spread, self.ce_spread]:
@@ -143,6 +183,23 @@ class IronCondor:
             except Exception as e:
                 handle_exception(e)
                 continue
+
+    # Private method to clean up state files when standing down before entry
+    def _cleanup_state_files(self):
+        """
+        Remove state files created during __init__ when Artemis stands down
+        before executing any trade. Leaves data/ clean for next week.
+        Called when the entry window has passed or VIX check fails.
+        """
+        from os import remove
+        from os.path import exists as path_exists
+        for filepath in [
+            'data/pe_trade_params.csv',
+            'data/ce_trade_params.csv',
+            'data/trade_book.csv',
+        ]:
+            if path_exists(filepath):
+                remove(filepath)
 
     # Private method to update trade log at chosen interval
     def _update_trade_log(self):

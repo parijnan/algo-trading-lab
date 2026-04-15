@@ -306,14 +306,6 @@ class CreditSpread:
             if self.current_datetime.time() < time(9, 16):
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - self.current_datetime).total_seconds())
                 reset_counters()
-            if self.current_datetime < self.entry:
-                msg_txt = f"Waiting till {self.entry} to execute trade.\n*Lots that will be traded:* _{self.lots}_"
-                print(msg_txt)
-                #telegram_bot_sendtext(msg_txt)
-                #telegram_bot_sendtext(msg_txt, 'bot')
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
-                sleep(int((self.entry - datetime.now()).total_seconds()))
-                reset_counters()
             if self.spread_status != 'closed':
                 self.index_entry = self._fetch_ltp(exchange_segment, instrument, underlying_token)
                 if self.spread_type == 'pe':

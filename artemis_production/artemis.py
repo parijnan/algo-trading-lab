@@ -27,6 +27,13 @@ def run(obj, instrument_df):
     # Trade entry block — executes only if spreads are not yet active
     iron_condor.execute_trade()
 
+    # If both spreads are still 'open' after execute_trade() returns, the entry
+    # window or VIX check failed — stand down cleanly without monitoring.
+    if (iron_condor.pe_spread.spread_status == 'open' and
+            iron_condor.ce_spread.spread_status == 'open'):
+        iron_condor.logout()
+        return
+
     # Trade monitoring loop
     while iron_condor.current_time > opening_time and iron_condor.current_time < closing_time:
         try:
