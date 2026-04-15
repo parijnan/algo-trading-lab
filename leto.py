@@ -274,19 +274,21 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
 
     Routing priority:
       1. If an active Apollo trade is detected, route to Apollo regardless of
-         VIX — an open position entered on a high-VIX day must be managed to
-         completion even if VIX has since dropped below the threshold.
+         VIX or day — an open position must always be managed to completion.
       2. If an active Artemis trade is detected, route to Artemis regardless of
-         VIX — an open position entered on a low-VIX day must be managed to
-         completion even if VIX has since risen above the threshold.
-      3. Otherwise route on current VIX:
+         VIX or day — covers the edge case of a Thursday position held to Friday.
+      3. If today is Friday and no open position exists, Artemis cannot enter a
+         new trade. Route to Apollo if VIX > threshold, otherwise stand down.
+      4. Otherwise route on current VIX:
            VIX > VIX_THRESHOLD  → Apollo
            VIX <= VIX_THRESHOLD → Artemis
-      4. If VIX fetch fails — default to Artemis.
+      5. If VIX fetch fails — default to Artemis (Mon–Thu) or stand down (Fri).
     """
     if APOLLO_DIR not in sys.path:
         sys.path.insert(0, APOLLO_DIR)
     from configs_live import VIX_THRESHOLD  # type: ignore
+
+    is_friday = datetime.now().weekday() == 4
 
     # Priority 1: resume open Apollo trade unconditionally
     if _apollo_trade_open():
@@ -301,34 +303,56 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         _run_apollo(obj, auth_token, instrument_df_nifty)
         return
 
-    # Priority 2: resume open Artemis trade unconditionally
+    # Priority 2: resume open Artemis trade unconditionally (including Friday)
     if _artemis_trade_open():
         vix = _get_vix(obj)
         vix_str = f"{vix:.2f}" if vix is not None else "unavailable"
         logger.info(
             f"Open Artemis trade detected in state file. "
-            f"Routing to Artemis regardless of VIX ({vix_str}).")
+            f"Routing to Artemis regardless of VIX ({vix_str}) "
+            f"{'(Friday — managing existing position only)' if is_friday else ''}.")
         _slack(
             f"*Leto*: Open Artemis trade detected. "
-            f"Routing to Artemis (VIX: {vix_str}, threshold: {VIX_THRESHOLD}).")
+            f"Routing to Artemis (VIX: {vix_str}"
+            f"{', Friday — existing position only' if is_friday else ''}).")
         _run_artemis(obj, instrument_df_sensex)
         return
 
-    # Priority 3: route on current VIX
+    # Priority 3: no open positions — check day before routing on VIX
     vix = _get_vix(obj)
 
     if vix is None:
-        logger.warning(
-            "Could not fetch VIX. Defaulting to Artemis as a safe fallback.")
-        _slack(
-            "*Leto* ALERT: Could not fetch VIX. "
-            "Defaulting to Artemis.")
+        logger.warning("Could not fetch VIX.")
+        if is_friday:
+            logger.info("Friday and no open positions — standing down.")
+            _slack("*Leto*: Friday, no open positions. Standing down.")
+            return
+        logger.warning("Could not fetch VIX. Defaulting to Artemis.")
+        _slack("*Leto* ALERT: Could not fetch VIX. Defaulting to Artemis.")
         vix = 0.0
 
+    if is_friday:
+        # Artemis does not run on Fridays — only Apollo if VIX warrants it
+        if vix > VIX_THRESHOLD:
+            logger.info(
+                f"Friday. VIX: {vix:.2f} > {VIX_THRESHOLD}. Routing to Apollo.")
+            _slack(
+                f"*Leto*: Friday. VIX {vix:.2f} > {VIX_THRESHOLD}. "
+                f"Routing to Apollo.")
+            _run_apollo(obj, auth_token, instrument_df_nifty)
+        else:
+            logger.info(
+                f"Friday. VIX: {vix:.2f} <= {VIX_THRESHOLD}. "
+                f"No strategy active today.")
+            _slack(
+                f"*Leto*: Friday. VIX {vix:.2f} <= {VIX_THRESHOLD}. "
+                f"No strategy active today.")
+        return
+
+    # Priority 4: Mon–Thu, no open positions — route on VIX
     logger.info(
         f"VIX: {vix:.2f}. Threshold: {VIX_THRESHOLD}. "
         f"Routing to: {'Apollo' if vix > VIX_THRESHOLD else 'Artemis'}.")
-
     _slack(
         f"*Leto*: VIX {vix:.2f} vs threshold {VIX_THRESHOLD}. "
         f"Routing to *{'Apollo' if vix > VIX_THRESHOLD else 'Artemis'}*.")
