@@ -262,6 +262,7 @@ artemis_backtest/data/
 # but explicit here for clarity)
 apollo_production/logs/debug.log
 apollo_production/data/holidays.csv
+apollo_production/data/user_credentials.csv
 
 # =============================================================================
 # Leto runtime
@@ -280,5 +281,7 @@ artemis_production/data/trade_log.csv
 artemis_production/data/error_log.txt
 artemis_production/data/instrument_master.csv
 artemis_production/data/scrip_master.csv
+artemis_production/data/user_credentials.csv
+artemis_production/data/holidays.csv
 artemis_production/data/archived/
 artemis_production/logs/
