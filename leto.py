@@ -10,7 +10,7 @@ Responsibilities:
   - Session teardown (terminateSession) after strategy returns
 
 Cron on delos (replaces both existing strategy crons):
-    14 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
+    15 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
     /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +%%Y%%m%%d).log 2>&1
 
 Strategy interfaces:
