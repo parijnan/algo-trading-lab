@@ -45,7 +45,6 @@ from configs import (
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_PCT,
-    ELM_SECONDS_BEFORE_EXPIRY,
     ENABLE_ADJUSTMENT, ADJUSTMENT_CUTOFF_TIME,
     MAX_ADJUSTMENTS_PER_SIDE,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
@@ -63,6 +62,26 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Trading day helper — used by load_contracts and run_backtest
+# ---------------------------------------------------------------------------
+
+def last_trading_day_before(target_date: date, holidays_set: set) -> date:
+    """
+    Return the last trading day strictly before target_date.
+    Steps back one calendar day at a time, skipping weekends and holidays.
+    Returns None if no valid trading day found within 10 calendar days.
+    Used for both elm_time computation (last trading day before sell expiry)
+    and entry date computation (last trading day before prior expiry).
+    """
+    d = target_date - timedelta(days=1)
+    for _ in range(10):
+        if d.weekday() < 5 and d not in holidays_set:
+            return d
+        d -= timedelta(days=1)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -102,22 +121,27 @@ def load_index_data():
 def load_contracts(holidays_df: pd.DataFrame = None) -> pd.DataFrame:
     """
     Load Nifty weekly expiry contract list.
-    Computes elm_time (15:15 day before expiry, holiday-adjusted) for each expiry.
+    Computes elm_time = 15:15 on the last trading day before each expiry.
+    Holiday-adjusted via last_trading_day_before() — handles any number of
+    consecutive holidays or weekend bridges correctly.
     """
     df = pd.read_csv(CONTRACT_LIST_FILE)
     df['expiry_date'] = pd.to_datetime(df['expiry_date'], utc=False).dt.tz_localize(None)
     df['end_date']    = pd.to_datetime(df['end_date'],    utc=False).dt.tz_localize(None)
 
+    holidays_set = set()
+    if holidays_df is not None:
+        holidays_set = set(holidays_df['date'].values)
+
     elm_times = []
     for _, row in df.iterrows():
-        elm = row['end_date'] - pd.Timedelta(seconds=ELM_SECONDS_BEFORE_EXPIRY)
-        if holidays_df is not None:
-            day_before = (row['end_date'] - pd.Timedelta(days=1)).date()
-            if day_before in holidays_df['date'].values:
-                elm -= pd.Timedelta(days=1)
-                two_before = (row['end_date'] - pd.Timedelta(days=2)).date()
-                if two_before in holidays_df['date'].values:
-                    elm -= pd.Timedelta(days=1)
+        expiry_date = row['expiry_date'].date()
+        last_trading = last_trading_day_before(expiry_date, holidays_set)
+        if last_trading is not None:
+            elm = pd.Timestamp(f"{last_trading} 15:15:00")
+        else:
+            # Fallback: should never happen with a valid contract list
+            elm = row['end_date'] - pd.Timedelta(seconds=87300)
         elm_times.append(elm)
 
     df['elm_time'] = elm_times
@@ -197,18 +221,10 @@ def compute_entry_date(prior_expiry_date: date,
                        holidays_set: set) -> date:
     """
     Return the trading day immediately before prior_expiry_date.
-    Steps back one calendar day at a time, skipping weekends and holidays.
-
-    Example: sell_expiry=14 Aug, prior_expiry=7 Aug → entry=6 Aug (Wed before 7 Aug Thu)
-
-    Returns None if no valid trading day found within 10 calendar days.
+    Entry = last trading day before the expiry preceding the sell expiry.
+    Example: sell_expiry=14 Aug, prior_expiry=7 Aug → entry=6 Aug.
     """
-    d = prior_expiry_date - timedelta(days=1)
-    for _ in range(10):
-        if d.weekday() < 5 and d not in holidays_set:
-            return d
-        d -= timedelta(days=1)
-    return None
+    return last_trading_day_before(prior_expiry_date, holidays_set)
 
 
 def select_buy_expiry(entry_date: date,

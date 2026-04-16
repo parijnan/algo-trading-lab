@@ -66,10 +66,11 @@ SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)
-# Exit all legs at 15:15 on Monday before sell leg's Tuesday expiry.
-# elm_time derived from contract list — holiday-adjusted.
+# Exit all legs at 15:15 on the last trading day before the sell expiry.
+# Computed in load_contracts() via last_trading_day_before() — handles
+# any number of consecutive holidays or weekend bridges correctly.
+# No configurable parameter needed.
 # ---------------------------------------------------------------------------
-ELM_SECONDS_BEFORE_EXPIRY = 87300       # 24h 15min in seconds → gives 15:15 day before expiry
 
 # ---------------------------------------------------------------------------
 # Adjustment (re-enter one-sided calendar on breached side after SL exit)
