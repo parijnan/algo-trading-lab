@@ -42,7 +42,7 @@ from configs import (
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     ENTRY_TIME, DELTA_TARGET, STRIKE_STEP, BUY_LEG_MIN_DTE,
     ENABLE_VIX_FILTER, VIX_FILTER_LOW, VIX_FILTER_HIGH,
-    ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT,
+    ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT_NET_DEBIT,
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_PCT,
@@ -529,16 +529,17 @@ def check_spread_sl(combined_pl: float, total_net_debit: float) -> bool:
     return combined_pl <= -(SPREAD_SL_PCT * total_net_debit)
 
 
-def check_profit_target(combined_pl: float, max_theoretical_profit: float) -> bool:
+def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
     """
-    Check profit target: combined unrealised P&L >= PROFIT_TARGET_PCT * max_theoretical_profit.
+    Check profit target: combined unrealised P&L >= PROFIT_TARGET_PCT_NET_DEBIT * total net debit paid.
+    Denominator is net debit (capital at risk), not max theoretical profit.
     Returns True if target reached.
     """
     if not ENABLE_PROFIT_TARGET:
         return False
-    if max_theoretical_profit <= 0:
+    if total_net_debit <= 0:
         return False
-    return combined_pl >= PROFIT_TARGET_PCT * max_theoretical_profit
+    return combined_pl >= PROFIT_TARGET_PCT_NET_DEBIT * total_net_debit
 
 
 def determine_breached_side(spot: float, entry_spot: float) -> str:
@@ -690,7 +691,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'option_sl'
             break
 
-        if check_profit_target(combined_pl, max_theoretical_profit):
+        if check_profit_target(combined_pl, total_net_debit):
             sl_hit_ts     = ts
             sl_hit_reason = 'profit_target'
             break
@@ -1358,7 +1359,7 @@ if __name__ == "__main__":
     logger.info(f"  Spread SL    : {'ON' if ENABLE_SPREAD_SL else 'OFF'} "
                 f"({SPREAD_SL_PCT * 100:.0f}% of net debit)")
     logger.info(f"  Profit target: {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} "
-                f"({PROFIT_TARGET_PCT * 100:.0f}% of max theoretical)")
+                f"({PROFIT_TARGET_PCT_NET_DEBIT * 100:.0f}% of net debit)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}")
 
     all_trades = run_backtest(nifty_1m, vix_1m, contracts_df, holidays_df)

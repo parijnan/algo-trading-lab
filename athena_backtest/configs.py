@@ -43,9 +43,11 @@ VIX_FILTER_HIGH         = 25.0          # Skip entry if VIX above this
 
 # ---------------------------------------------------------------------------
 # Exit — profit target
+# Denominator is total net debit paid (ce + pe combined) — the capital at risk.
+# Consistent with SPREAD_SL_PCT which also uses net debit as denominator.
 # ---------------------------------------------------------------------------
-ENABLE_PROFIT_TARGET    = False
-PROFIT_TARGET_PCT       = 0.50          # % of max theoretical profit at entry (combined both sides)
+ENABLE_PROFIT_TARGET            = False
+PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of total net debit paid
 
 # ---------------------------------------------------------------------------
 # Exit — index SL
