@@ -3,20 +3,23 @@ backtest.py — Athena Backtest Engine
 Double calendar spread strategy on Nifty weekly options.
 
 Structure:
-  - Sell 20-delta CE and PE on the nearest upcoming expiry (sell leg)
+  - Sell 20-delta CE and PE on the near-term expiry (sell leg)
   - Buy same strikes on the last expiry of the current month (buy leg)
-  - Entry: Monday 10:30 AM
+  - Entry: trading day immediately before the expiry preceding the sell expiry
+    e.g. sell=14 Aug, prior expiry=7 Aug, entry=6 Aug
   - Strike rounding: nearest 100 points
 
 Execution model:
-  - Entry at open price at entry time on Mondays
+  - Entry at ENTRY_TIME on the day before sell expiry
+  - Pre-expiry exit at 15:15 on the day before sell expiry (elm_time)
   - SL fires on 1-min candle close → exit at open of next 1-min candle
   - Pre-expiry exit uses close price at elm_time (no slippage)
   - All four legs always exit simultaneously on any trigger
   - Adjustment: re-enter fresh one-sided calendar on breached side if within cutoff
 
-Expiry selection is contract-list-driven — regime-agnostic across Thursday
-(pre-Sep 2025) and Tuesday (post-Sep 2025) expiry schedules.
+Entry day is derived from the contract list and holiday calendar —
+fully regime-agnostic across Thursday (pre-Sep 2025) and Tuesday
+(post-Sep 2025) expiry schedules, and any future changes.
 
 Run after Tuesday night data pipeline cron has completed.
 """
@@ -43,7 +46,7 @@ from configs import (
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_PCT,
     ELM_SECONDS_BEFORE_EXPIRY,
-    ENABLE_ADJUSTMENT, ADJUSTMENT_CUTOFF_DAY, ADJUSTMENT_CUTOFF_TIME,
+    ENABLE_ADJUSTMENT, ADJUSTMENT_CUTOFF_TIME,
     MAX_ADJUSTMENTS_PER_SIDE,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -177,54 +180,70 @@ def get_1min_value(indexed_df: pd.DataFrame, timestamp: pd.Timestamp,
 # Expiry helpers
 # ---------------------------------------------------------------------------
 
-def select_expiries(entry_date: date, contracts_df: pd.DataFrame) -> tuple:
+def get_prior_expiry(sell_expiry_date: date,
+                     contracts_df: pd.DataFrame) -> date:
     """
-    Select sell and buy expiries from the contract list for a given entry date.
-    Regime-agnostic — works for Thursday expiries (pre-Sep 2025) and Tuesday
-    expiries (post-Sep 2025) without any arithmetic date assumptions.
+    Return the expiry immediately before sell_expiry_date in the contract list.
+    This is the expiry whose option data is being sold.
+    Entry = trading day before this prior expiry.
+    Returns None if no prior expiry exists.
+    """
+    expiry_dates = sorted(contracts_df['expiry_date'].dt.date.unique())
+    prior = [d for d in expiry_dates if d < sell_expiry_date]
+    return prior[-1] if prior else None
 
-    Sell expiry: the nearest expiry in the contract list strictly after entry_date.
 
-    Buy expiry: the LAST expiry of the current calendar month in the contract
-    list. If DTE < BUY_LEG_MIN_DTE at entry, roll to the last expiry of the
-    next calendar month. Must be strictly after sell expiry.
+def compute_entry_date(prior_expiry_date: date,
+                       holidays_set: set) -> date:
+    """
+    Return the trading day immediately before prior_expiry_date.
+    Steps back one calendar day at a time, skipping weekends and holidays.
 
-    Returns (sell_expiry_date, buy_expiry_date) as date objects.
-    Returns (None, None) if a valid pair cannot be formed.
+    Example: sell_expiry=14 Aug, prior_expiry=7 Aug → entry=6 Aug (Wed before 7 Aug Thu)
+
+    Returns None if no valid trading day found within 10 calendar days.
+    """
+    d = prior_expiry_date - timedelta(days=1)
+    for _ in range(10):
+        if d.weekday() < 5 and d not in holidays_set:
+            return d
+        d -= timedelta(days=1)
+    return None
+
+
+def select_buy_expiry(entry_date: date,
+                      sell_expiry_date: date,
+                      contracts_df: pd.DataFrame) -> date:
+    """
+    Select the buy leg expiry from the contract list.
+    Buy expiry = last expiry of the current calendar month.
+    If DTE from entry_date < BUY_LEG_MIN_DTE, roll to last expiry of next month.
+    Must be strictly after sell_expiry_date.
+    Returns buy_expiry_date, or None if not found.
     """
     expiry_dates = sorted(contracts_df['expiry_date'].dt.date.unique())
 
-    # Sell expiry: first expiry strictly after entry_date
-    future = [d for d in expiry_dates if d > entry_date]
-    if not future:
-        return None, None
-    sell_expiry = future[0]
-
-    # Buy expiry: last expiry of current month
-    current_month_expiries = [
-        d for d in expiry_dates
-        if d.year == entry_date.year and d.month == entry_date.month
-    ]
-    buy_expiry = max(current_month_expiries) if current_month_expiries else None
+    # Last expiry of current month
+    current_month = [d for d in expiry_dates
+                     if d.year == entry_date.year and d.month == entry_date.month]
+    buy_expiry = max(current_month) if current_month else None
 
     # Roll to next month if DTE too short or not found
     if buy_expiry is None or (buy_expiry - entry_date).days < BUY_LEG_MIN_DTE:
-        next_month       = entry_date.month % 12 + 1
-        next_month_year  = entry_date.year + (1 if entry_date.month == 12 else 0)
-        next_month_expiries = [
-            d for d in expiry_dates
-            if d.year == next_month_year and d.month == next_month
-        ]
+        next_month      = entry_date.month % 12 + 1
+        next_month_year = entry_date.year + (1 if entry_date.month == 12 else 0)
+        next_month_expiries = [d for d in expiry_dates
+                               if d.year == next_month_year and d.month == next_month]
         buy_expiry = max(next_month_expiries) if next_month_expiries else None
 
     if buy_expiry is None:
-        return None, None
+        return None
 
     # Buy expiry must be strictly after sell expiry
-    if buy_expiry <= sell_expiry:
-        return None, None
+    if buy_expiry <= sell_expiry_date:
+        return None
 
-    return sell_expiry, buy_expiry
+    return buy_expiry
 
 
 def get_end_date(expiry_date: date, contracts_df: pd.DataFrame) -> pd.Timestamp:
@@ -813,12 +832,13 @@ def save_trade_summary(all_trades: list):
 # ---------------------------------------------------------------------------
 
 def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
-                 contracts_df: pd.DataFrame):
+                 contracts_df: pd.DataFrame,
+                 holidays_df: pd.DataFrame = None):
     """
     Main backtest loop.
-    Iterates through every Monday in the dataset.
-    Attempts entry at 10:30 each Monday.
-    Manages the trade through the week via 1-min candle scanning.
+    Iterates through every sell expiry in the contract list.
+    Entry date = trading day immediately before the sell expiry (holiday-adjusted).
+    Manages the trade through to elm_time / sell expiry via 1-min candle scanning.
     Handles adjustment logic if SL fires within the cutoff window.
     """
     os.makedirs(TRADE_LOGS_DIR, exist_ok=True)
@@ -827,32 +847,56 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
     opt_df_cache  = {}
     trade_counter = 0
 
-    # Collect all Mondays in the dataset
-    all_dates = nifty_1m.index.normalize().unique()
-    if BACKTEST_START_DATE:
-        all_dates = all_dates[all_dates >= pd.Timestamp(BACKTEST_START_DATE)]
-    if BACKTEST_END_DATE:
-        all_dates = all_dates[all_dates <= pd.Timestamp(BACKTEST_END_DATE)]
+    # Build holiday set for fast lookup
+    holidays_set = set()
+    if holidays_df is not None:
+        holidays_set = set(holidays_df['date'].values)
 
-    mondays = sorted([d.date() for d in all_dates if d.weekday() == 0])
-    logger.info(f"Mondays in scope: {len(mondays)}")
+    # Collect all sell expiry dates from contract list, filtered to backtest scope
+    all_expiry_dates = sorted(contracts_df['expiry_date'].dt.date.unique())
+    if BACKTEST_START_DATE:
+        start = pd.Timestamp(BACKTEST_START_DATE).date()
+        all_expiry_dates = [d for d in all_expiry_dates if d >= start]
+    if BACKTEST_END_DATE:
+        end = pd.Timestamp(BACKTEST_END_DATE).date()
+        all_expiry_dates = [d for d in all_expiry_dates if d <= end]
+
+    logger.info(f"Sell expiries in scope: {len(all_expiry_dates)}")
 
     entry_ts_str = f" {ENTRY_TIME}:00"
 
     # Skip reason counters — logged at end to show where entries are failing
     skip_counts = {
+        'no_entry_day':   0,
         'no_spot':        0,
-        'no_expiry_pair': 0,
+        'no_buy_expiry':  0,
         'expiry_not_in_contracts': 0,
         'strike_failed':  0,
         'missing_price':  0,
     }
 
-    for monday_idx, entry_date in enumerate(mondays, 1):
+    for expiry_idx, sell_expiry_date in enumerate(all_expiry_dates, 1):
 
-        if monday_idx % 50 == 0 or monday_idx == len(mondays):
-            logger.info(f"  Progress: {monday_idx}/{len(mondays)} Mondays | "
+        if expiry_idx % 50 == 0 or expiry_idx == len(all_expiry_dates):
+            logger.info(f"  Progress: {expiry_idx}/{len(all_expiry_dates)} expiries | "
                         f"Trades so far: {trade_counter}")
+
+        # ----------------------------------------------------------------
+        # Compute entry date: trading day before the prior expiry
+        # Entry day = day before the expiry immediately preceding sell_expiry
+        # e.g. sell=14 Aug, prior_expiry=7 Aug, entry=6 Aug
+        # ----------------------------------------------------------------
+        prior_expiry_date = get_prior_expiry(sell_expiry_date, contracts_df)
+        if prior_expiry_date is None:
+            skip_counts['no_entry_day'] += 1
+            logger.debug(f"  {sell_expiry_date}: No prior expiry in contract list — skipping")
+            continue
+
+        entry_date = compute_entry_date(prior_expiry_date, holidays_set)
+        if entry_date is None:
+            skip_counts['no_entry_day'] += 1
+            logger.debug(f"  {sell_expiry_date}: Cannot find trading day before prior expiry {prior_expiry_date} — skipping")
+            continue
 
         entry_ts = pd.Timestamp(f"{entry_date}{entry_ts_str}")
 
@@ -860,7 +904,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         spot = get_1min_value(nifty_1m, entry_ts, 'close')
         if spot is None:
             skip_counts['no_spot'] += 1
-            logger.debug(f"  {entry_date}: No spot data at {ENTRY_TIME} — skipping")
+            logger.debug(f"  {sell_expiry_date}: No spot data at {entry_date} {ENTRY_TIME} — skipping")
             continue
 
         entry_vix = get_1min_value(vix_1m, entry_ts, 'close')
@@ -868,21 +912,21 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Expiry selection
         # ----------------------------------------------------------------
-        sell_expiry_date, buy_expiry_date = select_expiries(entry_date, contracts_df)
-        if sell_expiry_date is None:
-            skip_counts['no_expiry_pair'] += 1
-            logger.debug(f"  {entry_date}: No valid expiry pair — skipping")
+        sell_expiry_end = get_end_date(sell_expiry_date, contracts_df)
+        elm_time        = get_elm_time(sell_expiry_date, contracts_df)
+
+        buy_expiry_date = select_buy_expiry(entry_date, sell_expiry_date, contracts_df)
+        if buy_expiry_date is None:
+            skip_counts['no_buy_expiry'] += 1
+            logger.debug(f"  {sell_expiry_date}: No valid buy expiry found — skipping")
             continue
 
-        sell_expiry_end = get_end_date(sell_expiry_date, contracts_df)
-        buy_expiry_end  = get_end_date(buy_expiry_date,  contracts_df)
-        elm_time        = get_elm_time(sell_expiry_date, contracts_df)
+        buy_expiry_end = get_end_date(buy_expiry_date, contracts_df)
 
         if sell_expiry_end is None or buy_expiry_end is None:
             skip_counts['expiry_not_in_contracts'] += 1
-            logger.info(f"  {entry_date}: sell_expiry={sell_expiry_date} "
-                        f"(end={sell_expiry_end}) buy_expiry={buy_expiry_date} "
-                        f"(end={buy_expiry_end}) — expiry not in contract list, skipping")
+            logger.info(f"  {sell_expiry_date}: end_date lookup failed — "
+                        f"sell_end={sell_expiry_end} buy_end={buy_expiry_end} — skipping")
             continue
 
         # ----------------------------------------------------------------
@@ -895,8 +939,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
         if ce_sell_strike is None or pe_sell_strike is None:
             skip_counts['strike_failed'] += 1
-            logger.info(f"  {entry_date}: Strike selection failed — "
-                        f"spot={spot:.0f} sell_exp={sell_expiry_date} "
+            logger.info(f"  {sell_expiry_date}: Strike selection failed — "
+                        f"entry={entry_date} spot={spot:.0f} "
                         f"CE={ce_sell_strike} PE={pe_sell_strike} — skipping")
             continue
 
@@ -1074,10 +1118,11 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 and sl_reason != 'profit_target'
                 and sl_reason != 'pre_expiry'):
 
-            # Check adjustment cutoff
+            # Check adjustment cutoff — based on sell expiry, not entry date.
+            # Only attempt adjustment if SL fires strictly before the sell expiry day
+            # at ADJUSTMENT_CUTOFF_TIME (no point re-entering on expiry day itself).
             cutoff_dt = pd.Timestamp(
-                f"{entry_date + timedelta(days=ADJUSTMENT_CUTOFF_DAY)} "
-                f"{ADJUSTMENT_CUTOFF_TIME}:00")
+                f"{sell_expiry_date} {ADJUSTMENT_CUTOFF_TIME}:00")
             adj_entry_ts = exit_ts  # adjustment enters immediately after base exit
 
             if adj_entry_ts < cutoff_dt:
@@ -1261,7 +1306,7 @@ if __name__ == "__main__":
 
     contracts_df = load_contracts(holidays_df)
     logger.info(f"  Contracts    : {len(contracts_df)} expiries")
-    logger.info(f"  Entry time   : {ENTRY_TIME} on Mondays")
+    logger.info(f"  Entry time   : {ENTRY_TIME} on day before sell expiry")
     logger.info(f"  Delta target : {DELTA_TARGET}")
     logger.info(f"  Buy min DTE  : {BUY_LEG_MIN_DTE}")
     logger.info(f"  Index SL     : {'ON' if ENABLE_INDEX_SL else 'OFF'} "
@@ -1269,12 +1314,12 @@ if __name__ == "__main__":
     logger.info(f"  Option SL    : {'ON' if ENABLE_OPTION_SL else 'OFF'} "
                 f"({OPTION_SL_MULTIPLIER}x entry)")
     logger.info(f"  Spread SL    : {'ON' if ENABLE_SPREAD_SL else 'OFF'} "
-                f"({SPREAD_SL_PCT * 100:.0f}% of net prem)")
+                f"({SPREAD_SL_PCT * 100:.0f}% of net debit)")
     logger.info(f"  Profit target: {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} "
                 f"({PROFIT_TARGET_PCT * 100:.0f}% of max theoretical)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}")
 
-    all_trades = run_backtest(nifty_1m, vix_1m, contracts_df)
+    all_trades = run_backtest(nifty_1m, vix_1m, contracts_df, holidays_df)
     save_trade_summary(all_trades)
 
     logger.info("=== Athena Backtest complete ===")

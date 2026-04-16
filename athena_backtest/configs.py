@@ -27,7 +27,7 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
-ENTRY_TIME              = '15:20'       # Monday entry time (HH:MM)
+ENTRY_TIME              = '15:20'       # Entry time on the day before the prior expiry (see backtest.py) (HH:MM)
 DELTA_TARGET            = 0.20          # Sell leg target delta (abs value)
 STRIKE_STEP             = 100           # Nifty strike rounding interval — liquidity constraint
 BUY_LEG_MIN_DTE         = 14            # Roll buy leg to next month if DTE below this at entry
