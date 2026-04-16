@@ -839,13 +839,28 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
     entry_ts_str = f" {ENTRY_TIME}:00"
 
-    for entry_date in mondays:
+    # Skip reason counters — logged at end to show where entries are failing
+    skip_counts = {
+        'no_spot':        0,
+        'no_expiry_pair': 0,
+        'expiry_not_in_contracts': 0,
+        'strike_failed':  0,
+        'missing_price':  0,
+        'zero_net_prem':  0,
+    }
+
+    for monday_idx, entry_date in enumerate(mondays, 1):
+
+        if monday_idx % 50 == 0 or monday_idx == len(mondays):
+            logger.info(f"  Progress: {monday_idx}/{len(mondays)} Mondays | "
+                        f"Trades so far: {trade_counter}")
 
         entry_ts = pd.Timestamp(f"{entry_date}{entry_ts_str}")
 
         # Check data availability at entry time
         spot = get_1min_value(nifty_1m, entry_ts, 'close')
         if spot is None:
+            skip_counts['no_spot'] += 1
             logger.debug(f"  {entry_date}: No spot data at {ENTRY_TIME} — skipping")
             continue
 
@@ -856,6 +871,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         sell_expiry_date, buy_expiry_date = select_expiries(entry_date, contracts_df)
         if sell_expiry_date is None:
+            skip_counts['no_expiry_pair'] += 1
             logger.debug(f"  {entry_date}: No valid expiry pair — skipping")
             continue
 
@@ -864,7 +880,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         elm_time        = get_elm_time(sell_expiry_date, contracts_df)
 
         if sell_expiry_end is None or buy_expiry_end is None:
-            logger.debug(f"  {entry_date}: Expiry not in contract list — skipping")
+            skip_counts['expiry_not_in_contracts'] += 1
+            logger.info(f"  {entry_date}: sell_expiry={sell_expiry_date} "
+                        f"(end={sell_expiry_end}) buy_expiry={buy_expiry_date} "
+                        f"(end={buy_expiry_end}) — expiry not in contract list, skipping")
             continue
 
         # ----------------------------------------------------------------
@@ -876,7 +895,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache)
 
         if ce_sell_strike is None or pe_sell_strike is None:
-            logger.debug(f"  {entry_date}: Strike selection failed — skipping")
+            skip_counts['strike_failed'] += 1
+            logger.info(f"  {entry_date}: Strike selection failed — "
+                        f"spot={spot:.0f} sell_exp={sell_expiry_date} "
+                        f"CE={ce_sell_strike} PE={pe_sell_strike} — skipping")
             continue
 
         # ----------------------------------------------------------------
@@ -907,7 +929,12 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         pe_buy_raw = get_option_price(pe_buy_df, entry_ts, 'open')
 
         if any(v is None for v in [ce_sell_raw, ce_buy_raw, pe_sell_raw, pe_buy_raw]):
-            logger.debug(f"  {entry_date}: Missing option price at entry — skipping")
+            skip_counts['missing_price'] += 1
+            logger.info(f"  {entry_date}: Missing option price — "
+                        f"ce_sell={ce_sell_raw} ce_buy={ce_buy_raw} "
+                        f"pe_sell={pe_sell_raw} pe_buy={pe_buy_raw} "
+                        f"sell_exp={sell_expiry_date} buy_exp={buy_expiry_date} "
+                        f"ce_strike={ce_sell_strike} pe_strike={pe_sell_strike} — skipping")
             continue
 
         # Sell legs: we sell → apply_slippage(is_buy=False)
@@ -922,7 +949,9 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         total_net_premium = round(net_premium_ce + net_premium_pe, 2)
 
         if total_net_premium <= 0:
-            logger.debug(f"  {entry_date}: Net premium <= 0 — skipping")
+            skip_counts['zero_net_prem'] += 1
+            logger.info(f"  {entry_date}: Net premium <= 0 "
+                        f"(ce={net_premium_ce:.1f} pe={net_premium_pe:.1f}) — skipping")
             continue
 
         # ----------------------------------------------------------------
@@ -1212,6 +1241,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         all_trades.append(record)
         save_trade_log(trade_counter, entry_ts, trade_log)
 
+    logger.info("Skip reason summary:")
+    for reason, count in skip_counts.items():
+        if count > 0:
+            logger.info(f"  {reason:30s}: {count}")
     logger.info(f"Backtest complete. Total trades: {len(all_trades)}")
     return all_trades
 
