@@ -483,17 +483,17 @@ def check_option_sl(ce_sell_ltp: float, ce_sell_entry: float,
     return ce_breached or pe_breached
 
 
-def check_spread_sl(combined_pl: float, total_net_premium: float) -> bool:
+def check_spread_sl(combined_pl: float, total_net_debit: float) -> bool:
     """
-    Check spread SL: combined unrealised P&L <= -SPREAD_SL_PCT * total net premium.
-    total_net_premium = (ce_sell_entry - ce_buy_entry) + (pe_sell_entry - pe_buy_entry)
-    Returns True if breached.
+    Check spread SL: combined unrealised P&L <= -SPREAD_SL_PCT * total net debit paid.
+    A double calendar is a net debit strategy — total_net_debit is positive (what you paid).
+    Returns True if loss exceeds the threshold.
     """
     if not ENABLE_SPREAD_SL:
         return False
-    if total_net_premium <= 0:
+    if total_net_debit <= 0:
         return False
-    return combined_pl <= -(SPREAD_SL_PCT * total_net_premium)
+    return combined_pl <= -(SPREAD_SL_PCT * total_net_debit)
 
 
 def check_profit_target(combined_pl: float, max_theoretical_profit: float) -> bool:
@@ -528,7 +528,7 @@ def build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
                    pe_sell_ltp: float, pe_buy_ltp: float,
                    ce_sell_entry: float, ce_buy_entry: float,
                    pe_sell_entry: float, pe_buy_entry: float,
-                   total_net_premium: float,
+                   total_net_debit: float,
                    max_theoretical_profit: float,
                    realised_pl_pts: float = None,
                    realised_pl_rs: float = None) -> dict:
@@ -574,7 +574,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   ce_sell_strike: int, pe_sell_strike: int,
                                   ce_sell_entry: float, ce_buy_entry: float,
                                   pe_sell_entry: float, pe_buy_entry: float,
-                                  total_net_premium: float,
+                                  total_net_debit: float,
                                   max_theoretical_profit: float,
                                   entry_spot: float,
                                   elm_time: pd.Timestamp,
@@ -628,7 +628,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             running_pe_sell, running_pe_buy,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
-            total_net_premium, max_theoretical_profit,
+            total_net_debit, max_theoretical_profit,
         ))
 
         if sl_hit_ts is not None:
@@ -641,7 +641,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             break
 
         # Exit checks in priority order
-        if check_spread_sl(combined_pl, total_net_premium):
+        if check_spread_sl(combined_pl, total_net_debit):
             sl_hit_ts     = ts
             sl_hit_reason = 'spread_sl'
             break
@@ -676,7 +676,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         ce_sell_entry, ce_buy_entry,
                         pe_sell_entry, pe_buy_entry,
                         ce_sell_delta, pe_sell_delta,
-                        net_premium_ce, net_premium_pe,
+                        net_debit_ce, net_debit_pe,
                         max_theoretical_profit,
                         # Exit fields
                         exit_time, exit_reason,
@@ -714,8 +714,8 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'pe_buy_entry':            round(pe_buy_entry,  2),
         'ce_sell_delta':           round(ce_sell_delta, 4) if ce_sell_delta else None,
         'pe_sell_delta':           round(pe_sell_delta, 4) if pe_sell_delta else None,
-        'net_premium_ce':          round(net_premium_ce, 2),
-        'net_premium_pe':          round(net_premium_pe, 2),
+        'net_debit_ce':            round(net_debit_ce, 2),
+        'net_debit_pe':            round(net_debit_pe, 2),
         'max_theoretical_profit':  round(max_theoretical_profit, 2),
         'exit_time':               exit_time,
         'exit_reason':             exit_reason,
@@ -846,7 +846,6 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         'expiry_not_in_contracts': 0,
         'strike_failed':  0,
         'missing_price':  0,
-        'zero_net_prem':  0,
     }
 
     for monday_idx, entry_date in enumerate(mondays, 1):
@@ -944,15 +943,11 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         pe_sell_entry = apply_slippage(pe_sell_raw, is_buy=False)
         pe_buy_entry  = apply_slippage(pe_buy_raw,  is_buy=True)
 
-        net_premium_ce = round(ce_sell_entry - ce_buy_entry, 2)
-        net_premium_pe = round(pe_sell_entry - pe_buy_entry, 2)
-        total_net_premium = round(net_premium_ce + net_premium_pe, 2)
-
-        if total_net_premium <= 0:
-            skip_counts['zero_net_prem'] += 1
-            logger.info(f"  {entry_date}: Net premium <= 0 "
-                        f"(ce={net_premium_ce:.1f} pe={net_premium_pe:.1f}) — skipping")
-            continue
+        # Net debit per side = what you pay (buy leg cost − sell leg premium received)
+        # Always positive for a calendar — far-term option is worth more than near-term
+        net_debit_ce = round(ce_buy_entry - ce_sell_entry, 2)
+        net_debit_pe = round(pe_buy_entry - pe_sell_entry, 2)
+        total_net_debit = round(net_debit_ce + net_debit_pe, 2)
 
         # ----------------------------------------------------------------
         # Delta and max theoretical profit at entry
@@ -974,7 +969,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             f"  ENTRY {entry_date} | Spot: {spot:.0f} | "
             f"CE sell {ce_sell_strike} @ {ce_sell_entry:.1f} | "
             f"PE sell {pe_sell_strike} @ {pe_sell_entry:.1f} | "
-            f"Net prem: {total_net_premium:.1f} | "
+            f"Net debit: {total_net_debit:.1f} | "
             f"Sell exp: {sell_expiry_date} | Buy exp: {buy_expiry_date}"
         )
 
@@ -999,7 +994,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_sell_strike, pe_sell_strike,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
-            total_net_premium, max_theoretical_profit,
+            total_net_debit, max_theoretical_profit,
             spot,  # entry_spot for breached side determination
             elm_time, trade_log,
             ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp)
@@ -1051,7 +1046,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             pe_sell_exit_raw, pe_buy_exit_raw,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
-            total_net_premium, max_theoretical_profit,
+            total_net_debit, max_theoretical_profit,
             realised_pl_pts=base_pl,
             realised_pl_rs=round(base_pl * LOT_SIZE, 2),
         ))
@@ -1139,7 +1134,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     adj_buy_entry,  adj_buy_entry)
                                 adj_max_profit = round(adj_max_profit / 2, 2)
 
-                            adj_total_net_prem = adj_net_prem  # one-sided
+                            adj_total_net_debit = adj_net_prem  # one-sided debit
 
                             logger.info(
                                 f"  ADJUSTMENT {adj_opt_type.upper()} | "
@@ -1164,7 +1159,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                 adj_strike, adj_strike,
                                 adj_sell_entry, adj_buy_entry,
                                 adj_sell_entry, adj_buy_entry,
-                                adj_total_net_prem, adj_max_profit,
+                                adj_total_net_debit, adj_max_profit,
                                 exit_spot_for_adj,
                                 elm_time, adj_trade_log,
                                 adj_sell_ltp, adj_buy_ltp,
@@ -1223,7 +1218,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
             ce_sell_delta, pe_sell_delta,
-            net_premium_ce, net_premium_pe,
+            net_debit_ce, net_debit_pe,
             max_theoretical_profit,
             exit_ts, sl_reason,
             ce_sell_exit, ce_buy_exit,

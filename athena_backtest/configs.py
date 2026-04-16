@@ -57,10 +57,12 @@ OPTION_SL_MULTIPLIER    = 2.0
 
 # ---------------------------------------------------------------------------
 # Exit — spread SL (combined both sides, hard floor)
-# Fires when combined unrealised P&L <= -SPREAD_SL_PCT * total net premium collected.
+# A double calendar is a net debit strategy — you pay more for the far leg
+# than you receive for the near leg. Spread SL fires when combined P&L loss
+# exceeds SPREAD_SL_PCT of the total net debit paid at entry.
 # ---------------------------------------------------------------------------
 ENABLE_SPREAD_SL        = False
-SPREAD_SL_PCT           = 0.75          # % of total net premium collected at entry
+SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)
