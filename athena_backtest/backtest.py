@@ -3,17 +3,20 @@ backtest.py — Athena Backtest Engine
 Double calendar spread strategy on Nifty weekly options.
 
 Structure:
-  - Sell 20-delta CE and PE on next Tuesday's expiry (7 DTE from Monday entry)
-  - Buy same strikes on last Tuesday of current month ("monthly" expiry)
+  - Sell 20-delta CE and PE on the nearest upcoming expiry (sell leg)
+  - Buy same strikes on the last expiry of the current month (buy leg)
   - Entry: Monday 10:30 AM
   - Strike rounding: nearest 100 points
 
 Execution model:
-  - Entry at open price at 10:30 on entry Monday
+  - Entry at open price at entry time on Mondays
   - SL fires on 1-min candle close → exit at open of next 1-min candle
   - Pre-expiry exit uses close price at elm_time (no slippage)
   - All four legs always exit simultaneously on any trigger
   - Adjustment: re-enter fresh one-sided calendar on breached side if within cutoff
+
+Expiry selection is contract-list-driven — regime-agnostic across Thursday
+(pre-Sep 2025) and Tuesday (post-Sep 2025) expiry schedules.
 
 Run after Tuesday night data pipeline cron has completed.
 """
@@ -22,7 +25,6 @@ import os
 import sys
 import logging
 import warnings
-import calendar
 from datetime import date, timedelta
 
 import pandas as pd
@@ -175,45 +177,48 @@ def get_1min_value(indexed_df: pd.DataFrame, timestamp: pd.Timestamp,
 # Expiry helpers
 # ---------------------------------------------------------------------------
 
-def last_tuesday_of_month(year: int, month: int) -> date:
-    """Return the last Tuesday of the given month."""
-    # Find last day of month, walk back to Tuesday (weekday=1)
-    last_day = calendar.monthrange(year, month)[1]
-    d = date(year, month, last_day)
-    while d.weekday() != 1:  # 1 = Tuesday
-        d -= timedelta(days=1)
-    return d
-
-
-def next_tuesday(from_date: date) -> date:
-    """Return the next Tuesday strictly after from_date."""
-    d = from_date + timedelta(days=1)
-    while d.weekday() != 1:
-        d += timedelta(days=1)
-    return d
-
-
-def select_expiries(entry_date: date) -> tuple:
+def select_expiries(entry_date: date, contracts_df: pd.DataFrame) -> tuple:
     """
-    Select sell and buy expiries for a given entry date.
+    Select sell and buy expiries from the contract list for a given entry date.
+    Regime-agnostic — works for Thursday expiries (pre-Sep 2025) and Tuesday
+    expiries (post-Sep 2025) without any arithmetic date assumptions.
 
-    sell_expiry: next Tuesday after entry_date
-    buy_expiry:  last Tuesday of current month;
-                 roll to last Tuesday of next month if DTE < BUY_LEG_MIN_DTE
+    Sell expiry: the nearest expiry in the contract list strictly after entry_date.
+
+    Buy expiry: the LAST expiry of the current calendar month in the contract
+    list. If DTE < BUY_LEG_MIN_DTE at entry, roll to the last expiry of the
+    next calendar month. Must be strictly after sell expiry.
 
     Returns (sell_expiry_date, buy_expiry_date) as date objects.
     Returns (None, None) if a valid pair cannot be formed.
     """
-    sell_expiry = next_tuesday(entry_date)
+    expiry_dates = sorted(contracts_df['expiry_date'].dt.date.unique())
 
-    buy_expiry = last_tuesday_of_month(entry_date.year, entry_date.month)
-    buy_dte    = (buy_expiry - entry_date).days
-    if buy_dte < BUY_LEG_MIN_DTE:
-        # Roll to next month
-        if entry_date.month == 12:
-            buy_expiry = last_tuesday_of_month(entry_date.year + 1, 1)
-        else:
-            buy_expiry = last_tuesday_of_month(entry_date.year, entry_date.month + 1)
+    # Sell expiry: first expiry strictly after entry_date
+    future = [d for d in expiry_dates if d > entry_date]
+    if not future:
+        return None, None
+    sell_expiry = future[0]
+
+    # Buy expiry: last expiry of current month
+    current_month_expiries = [
+        d for d in expiry_dates
+        if d.year == entry_date.year and d.month == entry_date.month
+    ]
+    buy_expiry = max(current_month_expiries) if current_month_expiries else None
+
+    # Roll to next month if DTE too short or not found
+    if buy_expiry is None or (buy_expiry - entry_date).days < BUY_LEG_MIN_DTE:
+        next_month       = entry_date.month % 12 + 1
+        next_month_year  = entry_date.year + (1 if entry_date.month == 12 else 0)
+        next_month_expiries = [
+            d for d in expiry_dates
+            if d.year == next_month_year and d.month == next_month
+        ]
+        buy_expiry = max(next_month_expiries) if next_month_expiries else None
+
+    if buy_expiry is None:
+        return None, None
 
     # Buy expiry must be strictly after sell expiry
     if buy_expiry <= sell_expiry:
@@ -849,7 +854,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Expiry selection
         # ----------------------------------------------------------------
-        sell_expiry_date, buy_expiry_date = select_expiries(entry_date)
+        sell_expiry_date, buy_expiry_date = select_expiries(entry_date, contracts_df)
         if sell_expiry_date is None:
             logger.debug(f"  {entry_date}: No valid expiry pair — skipping")
             continue

@@ -27,7 +27,7 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
-ENTRY_TIME              = '10:30'       # Monday entry time (HH:MM)
+ENTRY_TIME              = '15:20'       # Monday entry time (HH:MM)
 DELTA_TARGET            = 0.20          # Sell leg target delta (abs value)
 STRIKE_STEP             = 100           # Nifty strike rounding interval — liquidity constraint
 BUY_LEG_MIN_DTE         = 14            # Roll buy leg to next month if DTE below this at entry
@@ -35,7 +35,7 @@ BUY_LEG_MIN_DTE         = 14            # Roll buy leg to next month if DTE belo
 # ---------------------------------------------------------------------------
 # Exit — profit target
 # ---------------------------------------------------------------------------
-ENABLE_PROFIT_TARGET    = True
+ENABLE_PROFIT_TARGET    = False
 PROFIT_TARGET_PCT       = 0.50          # % of max theoretical profit at entry (combined both sides)
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ PROFIT_TARGET_PCT       = 0.50          # % of max theoretical profit at entry (
 # PE side: exit when spot <= pe_sell_strike + INDEX_SL_OFFSET  (approaching from above)
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
-ENABLE_INDEX_SL         = True
+ENABLE_INDEX_SL         = False
 INDEX_SL_OFFSET         = 50            # Points before sell strike reaches ATM (Nifty)
 
 # ---------------------------------------------------------------------------
@@ -52,14 +52,14 @@ INDEX_SL_OFFSET         = 50            # Points before sell strike reaches ATM 
 # Fires when sell leg LTP > OPTION_SL_MULTIPLIER * sell_entry on either side.
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
-ENABLE_OPTION_SL        = True
+ENABLE_OPTION_SL        = False
 OPTION_SL_MULTIPLIER    = 2.0
 
 # ---------------------------------------------------------------------------
 # Exit — spread SL (combined both sides, hard floor)
 # Fires when combined unrealised P&L <= -SPREAD_SL_PCT * total net premium collected.
 # ---------------------------------------------------------------------------
-ENABLE_SPREAD_SL        = True
+ENABLE_SPREAD_SL        = False
 SPREAD_SL_PCT           = 0.75          # % of total net premium collected at entry
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ ELM_SECONDS_BEFORE_EXPIRY = 87300       # 24h 15min in seconds → gives 15:15 d
 # Breached side: spot above entry_spot → CE breached; spot below → PE breached.
 # Adjustment is evaluated independently — its own P&L vs its own max theoretical profit.
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT           = True
+ENABLE_ADJUSTMENT           = False
 ADJUSTMENT_CUTOFF_DAY       = 2         # Wednesday (0=Mon, 1=Tue, 2=Wed)
 ADJUSTMENT_CUTOFF_TIME      = '15:00'   # No adjustment after this time on cutoff day
 MAX_ADJUSTMENTS_PER_SIDE    = 1         # Maximum one adjustment per trade week
