@@ -46,8 +46,7 @@ from configs import (
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_PCT,
-    ENABLE_ADJUSTMENT, ADJUSTMENT_CUTOFF_TIME,
-    MAX_ADJUSTMENTS_PER_SIDE,
+    ENABLE_ADJUSTMENT, ADJUSTMENT_MIN_DAYS_REMAINING,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
 )
@@ -739,13 +738,20 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         # Adjustment fields
                         adjustment_made=False,
                         adj_side=None,
-                        adj_sell_strike=None,
-                        adj_sell_entry=None,
-                        adj_buy_entry=None,
-                        adj_sell_exit=None,
-                        adj_buy_exit=None,
+                        adj_ce_sell_strike=None,
+                        adj_pe_sell_strike=None,
+                        adj_ce_sell_entry=None,
+                        adj_ce_buy_entry=None,
+                        adj_pe_sell_entry=None,
+                        adj_pe_buy_entry=None,
+                        adj_ce_sell_exit=None,
+                        adj_ce_buy_exit=None,
+                        adj_pe_sell_exit=None,
+                        adj_pe_buy_exit=None,
                         adj_exit_reason=None,
-                        adj_pl_points=None) -> dict:
+                        adj_pl_points=None,
+                        adj_entry_spot=None,
+                        adj_days_remaining=None) -> dict:
     """Build a complete trade summary record."""
     ce_pl = _calc_exit_pl(ce_sell_entry, ce_sell_exit, ce_buy_entry, ce_buy_exit)
     pe_pl = _calc_exit_pl(pe_sell_entry, pe_sell_exit, pe_buy_entry, pe_buy_exit)
@@ -792,16 +798,23 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'untouched_net_value_at_sl':   round(untouched_net_value_at_sl, 2) if untouched_net_value_at_sl is not None else None,
         'days_remaining_at_sl':        days_remaining_at_sl,
         'adjustment_made':             adjustment_made,
-        'adj_side':                adj_side,
-        'adj_sell_strike':         adj_sell_strike,
-        'adj_sell_entry':          round(adj_sell_entry, 2) if adj_sell_entry else None,
-        'adj_buy_entry':           round(adj_buy_entry,  2) if adj_buy_entry  else None,
-        'adj_sell_exit':           round(adj_sell_exit,  2) if adj_sell_exit  else None,
-        'adj_buy_exit':            round(adj_buy_exit,   2) if adj_buy_exit   else None,
-        'adj_exit_reason':         adj_exit_reason,
-        'adj_pl_points':           round(adj_pl_points, 2) if adj_pl_points is not None else None,
-        'total_pl_points':         total_pl,
-        'total_pl_rupees':         total_rs,
+        'adj_side':                    adj_side,
+        'adj_ce_sell_strike':          adj_ce_sell_strike,
+        'adj_pe_sell_strike':          adj_pe_sell_strike,
+        'adj_ce_sell_entry':           round(adj_ce_sell_entry, 2) if adj_ce_sell_entry else None,
+        'adj_ce_buy_entry':            round(adj_ce_buy_entry,  2) if adj_ce_buy_entry  else None,
+        'adj_pe_sell_entry':           round(adj_pe_sell_entry, 2) if adj_pe_sell_entry else None,
+        'adj_pe_buy_entry':            round(adj_pe_buy_entry,  2) if adj_pe_buy_entry  else None,
+        'adj_ce_sell_exit':            round(adj_ce_sell_exit,  2) if adj_ce_sell_exit  else None,
+        'adj_ce_buy_exit':             round(adj_ce_buy_exit,   2) if adj_ce_buy_exit   else None,
+        'adj_pe_sell_exit':            round(adj_pe_sell_exit,  2) if adj_pe_sell_exit  else None,
+        'adj_pe_buy_exit':             round(adj_pe_buy_exit,   2) if adj_pe_buy_exit   else None,
+        'adj_exit_reason':             adj_exit_reason,
+        'adj_pl_points':               round(adj_pl_points, 2) if adj_pl_points is not None else None,
+        'adj_entry_spot':              round(adj_entry_spot, 2) if adj_entry_spot is not None else None,
+        'adj_days_remaining':          adj_days_remaining,
+        'total_pl_points':             total_pl,
+        'total_pl_rupees':             total_rs,
     }
 
 
@@ -1159,152 +1172,188 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Adjustment logic
         # ----------------------------------------------------------------
-        adj_made        = False
-        adj_side        = None
-        adj_sell_strike = None
-        adj_sell_entry  = None
-        adj_buy_entry   = None
-        adj_sell_exit   = None
-        adj_buy_exit    = None
-        adj_exit_reason = None
-        adj_pl_points   = None
+        adj_made           = False
+        adj_side           = None
+        adj_ce_sell_strike = None
+        adj_pe_sell_strike = None
+        adj_ce_sell_entry  = None
+        adj_ce_buy_entry   = None
+        adj_pe_sell_entry  = None
+        adj_pe_buy_entry   = None
+        adj_ce_sell_exit   = None
+        adj_ce_buy_exit    = None
+        adj_pe_sell_exit   = None
+        adj_pe_buy_exit    = None
+        adj_exit_reason    = None
+        adj_pl_points      = None
+        adj_entry_spot_val = None
+        adj_days_remaining_val = None
 
-        if (ENABLE_ADJUSTMENT
-                and sl_reason in ('index_sl', 'option_sl', 'spread_sl')
-                and sl_reason != 'profit_target'
-                and sl_reason != 'pre_expiry'):
+        is_sl_exit = sl_reason in ('index_sl', 'option_sl', 'spread_sl')
 
-            # Check adjustment cutoff — based on sell expiry, not entry date.
-            # Only attempt adjustment if SL fires strictly before the sell expiry day
-            # at ADJUSTMENT_CUTOFF_TIME (no point re-entering on expiry day itself).
-            cutoff_dt = pd.Timestamp(
-                f"{sell_expiry_date} {ADJUSTMENT_CUTOFF_TIME}:00")
-            adj_entry_ts = exit_ts  # adjustment enters immediately after base exit
+        if ENABLE_ADJUSTMENT and is_sl_exit and sl_ts is not None:
 
-            if adj_entry_ts < cutoff_dt:
-                # Determine breached side
-                exit_spot_for_adj = get_1min_value(nifty_1m, exit_ts, 'close') or spot
-                adj_side = determine_breached_side(exit_spot_for_adj, spot)
+            # Check days remaining: calendar days from SL trigger to elm_time
+            adj_days_remaining_val = (elm_time.date() - sl_ts.date()).days \
+                if elm_time is not None else 0
 
-                adj_opt_type = adj_side  # 'ce' or 'pe'
+            if adj_days_remaining_val >= ADJUSTMENT_MIN_DAYS_REMAINING:
 
-                # Fresh strike selection at current spot
-                adj_strike, adj_sell_raw = select_strike(
-                    exit_spot_for_adj, sell_expiry_end,
-                    adj_entry_ts, adj_opt_type, opt_df_cache)
+                adj_entry_ts       = exit_ts   # enter at open of candle after base exit
+                adj_entry_spot_val = get_1min_value(nifty_1m, adj_entry_ts, 'close') or spot
 
-                if adj_strike is not None:
-                    # Load buy leg for adjustment (same buy expiry)
-                    adj_buy_key = (buy_expiry_end, adj_strike, adj_opt_type)
-                    if adj_buy_key not in opt_df_cache:
-                        opt_df_cache[adj_buy_key] = load_option_data(
-                            buy_expiry_end, adj_strike, adj_opt_type)
-                    adj_buy_df  = opt_df_cache[adj_buy_key]
-                    adj_sell_df = opt_df_cache.get(
-                        (sell_expiry_end, adj_strike, adj_opt_type),
-                        load_option_data(sell_expiry_end, adj_strike, adj_opt_type))
+                # Fresh strike selection on both sides at current spot
+                adj_ce_strike, adj_ce_sell_raw = select_strike(
+                    adj_entry_spot_val, sell_expiry_end,
+                    adj_entry_ts, 'ce', opt_df_cache)
+                adj_pe_strike, adj_pe_sell_raw = select_strike(
+                    adj_entry_spot_val, sell_expiry_end,
+                    adj_entry_ts, 'pe', opt_df_cache)
 
-                    adj_buy_raw = get_option_price(adj_buy_df, adj_entry_ts, 'open')
+                if adj_ce_strike is None or adj_pe_strike is None:
+                    logger.info(
+                        f"  ADJ SKIP | Strike selection failed at spot "
+                        f"{adj_entry_spot_val:.0f} — no re-entry")
+                else:
+                    # Load all four option files for adjustment
+                    # Sell legs: same sell expiry as original
+                    adj_ce_sell_df = opt_df_cache.get(
+                        (sell_expiry_end, adj_ce_strike, 'ce'),
+                        load_option_data(sell_expiry_end, adj_ce_strike, 'ce'))
+                    adj_pe_sell_df = opt_df_cache.get(
+                        (sell_expiry_end, adj_pe_strike, 'pe'),
+                        load_option_data(sell_expiry_end, adj_pe_strike, 'pe'))
+                    opt_df_cache.setdefault(
+                        (sell_expiry_end, adj_ce_strike, 'ce'), adj_ce_sell_df)
+                    opt_df_cache.setdefault(
+                        (sell_expiry_end, adj_pe_strike, 'pe'), adj_pe_sell_df)
 
-                    if adj_sell_raw is not None and adj_buy_raw is not None:
-                        adj_sell_entry = apply_slippage(adj_sell_raw, is_buy=False)
-                        adj_buy_entry  = apply_slippage(adj_buy_raw,  is_buy=True)
-                        adj_net_prem   = round(adj_sell_entry - adj_buy_entry, 2)
+                    # Buy legs: same buy expiry as original
+                    adj_ce_buy_key = (buy_expiry_end, adj_ce_strike, 'ce')
+                    adj_pe_buy_key = (buy_expiry_end, adj_pe_strike, 'pe')
+                    if adj_ce_buy_key not in opt_df_cache:
+                        opt_df_cache[adj_ce_buy_key] = load_option_data(
+                            buy_expiry_end, adj_ce_strike, 'ce')
+                    if adj_pe_buy_key not in opt_df_cache:
+                        opt_df_cache[adj_pe_buy_key] = load_option_data(
+                            buy_expiry_end, adj_pe_strike, 'pe')
+                    adj_ce_buy_df = opt_df_cache[adj_ce_buy_key]
+                    adj_pe_buy_df = opt_df_cache[adj_pe_buy_key]
 
-                        if adj_net_prem > 0:
-                            # Compute max theoretical profit for adjustment independently
-                            if adj_opt_type == 'ce':
-                                adj_max_profit = compute_max_theoretical_profit(
-                                    exit_spot_for_adj,
-                                    adj_strike, adj_strike,   # placeholder PE = CE strike
-                                    sell_expiry_end, buy_expiry_end, adj_entry_ts,
-                                    adj_sell_df, adj_sell_df,
-                                    adj_buy_df,  adj_buy_df,
-                                    adj_sell_entry, adj_sell_entry,
-                                    adj_buy_entry,  adj_buy_entry)
-                                # one-sided: halve the symmetric result
-                                adj_max_profit = round(adj_max_profit / 2, 2)
-                            else:
-                                adj_max_profit = compute_max_theoretical_profit(
-                                    exit_spot_for_adj,
-                                    adj_strike, adj_strike,
-                                    sell_expiry_end, buy_expiry_end, adj_entry_ts,
-                                    adj_sell_df, adj_sell_df,
-                                    adj_buy_df,  adj_buy_df,
-                                    adj_sell_entry, adj_sell_entry,
-                                    adj_buy_entry,  adj_buy_entry)
-                                adj_max_profit = round(adj_max_profit / 2, 2)
+                    # Entry prices
+                    adj_ce_buy_raw = get_option_price(adj_ce_buy_df, adj_entry_ts, 'open')
+                    adj_pe_buy_raw = get_option_price(adj_pe_buy_df, adj_entry_ts, 'open')
 
-                            adj_total_net_debit = adj_net_prem  # one-sided debit
+                    if any(v is None for v in [
+                            adj_ce_sell_raw, adj_ce_buy_raw,
+                            adj_pe_sell_raw, adj_pe_buy_raw]):
+                        logger.info(
+                            f"  ADJ SKIP | Missing option price at re-entry — "
+                            f"ce_sell={adj_ce_sell_raw} ce_buy={adj_ce_buy_raw} "
+                            f"pe_sell={adj_pe_sell_raw} pe_buy={adj_pe_buy_raw}")
+                    else:
+                        adj_ce_sell_entry = apply_slippage(adj_ce_sell_raw, is_buy=False)
+                        adj_ce_buy_entry  = apply_slippage(adj_ce_buy_raw,  is_buy=True)
+                        adj_pe_sell_entry = apply_slippage(adj_pe_sell_raw, is_buy=False)
+                        adj_pe_buy_entry  = apply_slippage(adj_pe_buy_raw,  is_buy=True)
 
-                            logger.info(
-                                f"  ADJUSTMENT {adj_opt_type.upper()} | "
-                                f"Strike {adj_strike} | "
-                                f"Sell @ {adj_sell_entry:.1f} | "
-                                f"Buy @ {adj_buy_entry:.1f}"
-                            )
+                        adj_net_debit_ce  = round(adj_ce_buy_entry - adj_ce_sell_entry, 2)
+                        adj_net_debit_pe  = round(adj_pe_buy_entry - adj_pe_sell_entry, 2)
+                        adj_total_net_debit = round(adj_net_debit_ce + adj_net_debit_pe, 2)
 
-                            # Scan 1-min candles for adjustment
-                            adj_trade_log   = []
-                            adj_sell_ltp    = adj_sell_entry
-                            adj_buy_ltp     = adj_buy_entry
+                        adj_mtp = compute_max_theoretical_profit(
+                            adj_entry_spot_val,
+                            adj_ce_strike, adj_pe_strike,
+                            sell_expiry_end, buy_expiry_end, adj_entry_ts,
+                            adj_ce_sell_df, adj_pe_sell_df,
+                            adj_ce_buy_df,  adj_pe_buy_df,
+                            adj_ce_sell_entry, adj_pe_sell_entry,
+                            adj_ce_buy_entry,  adj_pe_buy_entry)
 
-                            # For adjustment, we only monitor one side
-                            # Reuse the two-sided scanner with same strike on both slots
-                            (adj_sell_ltp, adj_buy_ltp, _, _,
-                             adj_sl_ts, adj_sl_reason) = append_1min_snapshots_window(
-                                adj_entry_ts, scan_end,
-                                nifty_1m, vix_1m,
-                                adj_sell_df, adj_sell_df,
-                                adj_buy_df,  adj_buy_df,
-                                adj_strike, adj_strike,
-                                adj_sell_entry, adj_buy_entry,
-                                adj_sell_entry, adj_buy_entry,
-                                adj_total_net_debit, adj_max_profit,
-                                exit_spot_for_adj,
-                                elm_time, adj_trade_log,
-                                adj_sell_ltp, adj_buy_ltp,
-                                adj_sell_ltp, adj_buy_ltp)
+                        logger.info(
+                            f"  ADJUSTMENT BOTH | spot {adj_entry_spot_val:.0f} | "
+                            f"CE sell {adj_ce_strike} @ {adj_ce_sell_entry:.1f} | "
+                            f"PE sell {adj_pe_strike} @ {adj_pe_sell_entry:.1f} | "
+                            f"Net debit: {adj_total_net_debit:.1f} | "
+                            f"Days remaining: {adj_days_remaining_val}")
 
-                            if adj_sl_ts is None:
-                                adj_sl_ts     = scan_end
-                                adj_sl_reason = 'pre_expiry'
+                        # Scan 1-min candles for adjustment — full double calendar
+                        adj_trade_log    = []
+                        adj_ce_sell_ltp  = adj_ce_sell_entry
+                        adj_ce_buy_ltp   = adj_ce_buy_entry
+                        adj_pe_sell_ltp  = adj_pe_sell_entry
+                        adj_pe_buy_ltp   = adj_pe_buy_entry
 
-                            # Exit adjustment
-                            if adj_sl_reason == 'pre_expiry':
-                                adj_exit_ts  = elm_time if elm_time is not None else scan_end
-                                adj_use_col  = 'close'
-                                adj_slip     = False
-                            else:
-                                adj_exit_ts  = adj_sl_ts + pd.Timedelta(minutes=1)
-                                adj_use_col  = 'open'
-                                adj_slip     = True
+                        (adj_ce_sell_ltp, adj_ce_buy_ltp,
+                         adj_pe_sell_ltp, adj_pe_buy_ltp,
+                         adj_sl_ts, adj_sl_reason) = append_1min_snapshots_window(
+                            adj_entry_ts, scan_end,
+                            nifty_1m, vix_1m,
+                            adj_ce_sell_df, adj_pe_sell_df,
+                            adj_ce_buy_df,  adj_pe_buy_df,
+                            adj_ce_strike, adj_pe_strike,
+                            adj_ce_sell_entry, adj_ce_buy_entry,
+                            adj_pe_sell_entry, adj_pe_buy_entry,
+                            adj_total_net_debit, adj_mtp,
+                            adj_entry_spot_val,
+                            elm_time, adj_trade_log,
+                            adj_ce_sell_ltp, adj_ce_buy_ltp,
+                            adj_pe_sell_ltp, adj_pe_buy_ltp)
 
-                            def get_adj_exit(opt_df, ltp_fb, is_buy):
-                                raw = get_option_price(opt_df, adj_exit_ts, adj_use_col) or ltp_fb
-                                if adj_slip:
-                                    return apply_slippage(raw, is_buy=is_buy), raw
-                                return raw, raw
+                        if adj_sl_ts is None:
+                            adj_sl_ts     = scan_end
+                            adj_sl_reason = 'pre_expiry'
 
-                            adj_sell_exit, _ = get_adj_exit(
-                                adj_sell_df, adj_sell_ltp, is_buy=True)
-                            adj_buy_exit, _  = get_adj_exit(
-                                adj_buy_df,  adj_buy_ltp,  is_buy=False)
+                        # Exit adjustment
+                        if adj_sl_reason == 'pre_expiry':
+                            adj_exit_ts  = elm_time if elm_time is not None else scan_end
+                            adj_use_col  = 'close'
+                            adj_slip     = False
+                        else:
+                            adj_exit_ts  = adj_sl_ts + pd.Timedelta(minutes=1)
+                            adj_use_col  = 'open'
+                            adj_slip     = True
 
-                            adj_pl_points = _calc_exit_pl(
-                                adj_sell_entry, adj_sell_exit,
-                                adj_buy_entry,  adj_buy_exit)
-                            adj_exit_reason = adj_sl_reason
-                            adj_made        = True
-                            adj_sell_strike = adj_strike
+                        def get_adj_exit_price(opt_df, ltp_fb, is_buy):
+                            raw = get_option_price(opt_df, adj_exit_ts, adj_use_col) or ltp_fb
+                            if adj_slip:
+                                return apply_slippage(raw, is_buy=is_buy), raw
+                            return raw, raw
 
-                            # Append adjustment log to main trade log
-                            trade_log.extend(adj_trade_log)
+                        adj_ce_sell_exit, _ = get_adj_exit_price(
+                            adj_ce_sell_df, adj_ce_sell_ltp, is_buy=True)
+                        adj_ce_buy_exit,  _ = get_adj_exit_price(
+                            adj_ce_buy_df,  adj_ce_buy_ltp,  is_buy=False)
+                        adj_pe_sell_exit, _ = get_adj_exit_price(
+                            adj_pe_sell_df, adj_pe_sell_ltp, is_buy=True)
+                        adj_pe_buy_exit,  _ = get_adj_exit_price(
+                            adj_pe_buy_df,  adj_pe_buy_ltp,  is_buy=False)
 
-                            logger.info(
-                                f"  ADJ EXIT {adj_exit_reason:20s} | {adj_exit_ts} | "
-                                f"P&L: {adj_pl_points:+.1f} pts"
-                            )
+                        adj_ce_pl = _calc_exit_pl(
+                            adj_ce_sell_entry, adj_ce_sell_exit,
+                            adj_ce_buy_entry,  adj_ce_buy_exit)
+                        adj_pe_pl = _calc_exit_pl(
+                            adj_pe_sell_entry, adj_pe_sell_exit,
+                            adj_pe_buy_entry,  adj_pe_buy_exit)
+                        adj_pl_points   = round(adj_ce_pl + adj_pe_pl, 2)
+                        adj_exit_reason = adj_sl_reason
+                        adj_made        = True
+                        adj_side        = 'both'
+                        adj_ce_sell_strike = adj_ce_strike
+                        adj_pe_sell_strike = adj_pe_strike
+
+                        # Append adjustment log to main trade log
+                        trade_log.extend(adj_trade_log)
+
+                        logger.info(
+                            f"  ADJ EXIT {adj_exit_reason:20s} | {adj_exit_ts} | "
+                            f"P&L: {adj_pl_points:+.1f} pts "
+                            f"({adj_pl_points * LOT_SIZE:+,.0f})"
+                        )
+            else:
+                logger.debug(
+                    f"  ADJ SKIP | days_remaining={adj_days_remaining_val} < "
+                    f"{ADJUSTMENT_MIN_DAYS_REMAINING} — no re-entry")
 
         # ----------------------------------------------------------------
         # Build final trade record
@@ -1372,13 +1421,20 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             untouched_net_val,  days_remaining_val,
             adjustment_made=adj_made,
             adj_side=adj_side,
-            adj_sell_strike=adj_sell_strike,
-            adj_sell_entry=adj_sell_entry,
-            adj_buy_entry=adj_buy_entry,
-            adj_sell_exit=adj_sell_exit,
-            adj_buy_exit=adj_buy_exit,
+            adj_ce_sell_strike=adj_ce_sell_strike,
+            adj_pe_sell_strike=adj_pe_sell_strike,
+            adj_ce_sell_entry=adj_ce_sell_entry,
+            adj_ce_buy_entry=adj_ce_buy_entry,
+            adj_pe_sell_entry=adj_pe_sell_entry,
+            adj_pe_buy_entry=adj_pe_buy_entry,
+            adj_ce_sell_exit=adj_ce_sell_exit,
+            adj_ce_buy_exit=adj_ce_buy_exit,
+            adj_pe_sell_exit=adj_pe_sell_exit,
+            adj_pe_buy_exit=adj_pe_buy_exit,
             adj_exit_reason=adj_exit_reason,
             adj_pl_points=adj_pl_points,
+            adj_entry_spot=adj_entry_spot_val,
+            adj_days_remaining=adj_days_remaining_val,
         )
         all_trades.append(record)
         save_trade_log(trade_counter, entry_ts, trade_log)

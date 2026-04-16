@@ -47,7 +47,7 @@ VIX_FILTER_HIGH         = 25.0          # Skip entry if VIX above this
 # Consistent with SPREAD_SL_PCT which also uses net debit as denominator.
 # ---------------------------------------------------------------------------
 ENABLE_PROFIT_TARGET            = False
-PROFIT_TARGET_PCT_NET_DEBIT     = 0.45      # Exit when combined P&L >= 20% of total net debit paid
+PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of total net debit paid
 
 # ---------------------------------------------------------------------------
 # Exit — index SL
@@ -56,7 +56,7 @@ PROFIT_TARGET_PCT_NET_DEBIT     = 0.45      # Exit when combined P&L >= 20% of t
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
 ENABLE_INDEX_SL         = True
-INDEX_SL_OFFSET         = 50            # Points before sell strike reaches ATM (Nifty)
+INDEX_SL_OFFSET         = 100            # Points before sell strike reaches ATM (Nifty)
 
 # ---------------------------------------------------------------------------
 # Exit — option SL
@@ -84,14 +84,17 @@ SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Adjustment (re-enter one-sided calendar on breached side after SL exit)
-# Breached side: spot above entry_spot → CE breached; spot below → PE breached.
-# Adjustment is evaluated independently — its own P&L vs its own max theoretical profit.
+# Adjustment (re-enter fresh double calendar at current spot after any SL exit)
+# Fires on any SL exit (index_sl, option_sl, spread_sl) if days remaining
+# at SL trigger >= ADJUSTMENT_MIN_DAYS_REMAINING.
+# Re-entry uses same sell and buy expiry as original trade.
+# Both CE and PE sides re-entered at current spot and target delta.
+# Maximum one adjustment per trade — hardcoded, no config parameter.
+# Evaluated independently: own P&L vs own net debit (not original trade's).
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT           = False
-ADJUSTMENT_CUTOFF_DAY       = 2         # Wednesday (0=Mon, 1=Tue, 2=Wed)
-ADJUSTMENT_CUTOFF_TIME      = '15:00'   # No adjustment after this time on cutoff day
-MAX_ADJUSTMENTS_PER_SIDE    = 1         # Maximum one adjustment per trade week
+ENABLE_ADJUSTMENT               = True
+ADJUSTMENT_MIN_DAYS_REMAINING   = 3     # minimum calendar days from SL trigger to elm_time
+                                        # for re-entry to be attempted
 
 # ---------------------------------------------------------------------------
 # Execution
@@ -104,4 +107,4 @@ RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibi
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = None          # None = full available data
+BACKTEST_END_DATE       = '2026-04-15'          # None = full available data
