@@ -30,7 +30,16 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 ENTRY_TIME              = '15:20'       # Entry time on the day before the prior expiry (see backtest.py) (HH:MM)
 DELTA_TARGET            = 0.20          # Sell leg target delta (abs value)
 STRIKE_STEP             = 100           # Nifty strike rounding interval — liquidity constraint
-BUY_LEG_MIN_DTE         = 14            # Roll buy leg to next month if DTE below this at entry
+BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE below this at entry
+
+# ---------------------------------------------------------------------------
+# Entry — VIX filter
+# Enter trades only when VIX_FILTER_LOW <= entry_vix <= VIX_FILTER_HIGH.
+# Set ENABLE_VIX_FILTER = False to trade across all VIX regimes.
+# ---------------------------------------------------------------------------
+ENABLE_VIX_FILTER       = True
+VIX_FILTER_LOW          = 16.0          # Skip entry if VIX below this
+VIX_FILTER_HIGH         = 25.0          # Skip entry if VIX above this
 
 # ---------------------------------------------------------------------------
 # Exit — profit target

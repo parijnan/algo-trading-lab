@@ -41,6 +41,7 @@ from configs import (
     NIFTY_OPTIONS_PATH, CONTRACT_LIST_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     ENTRY_TIME, DELTA_TARGET, STRIKE_STEP, BUY_LEG_MIN_DTE,
+    ENABLE_VIX_FILTER, VIX_FILTER_LOW, VIX_FILTER_HIGH,
     ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT,
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
@@ -714,6 +715,8 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         exit_time, exit_reason,
                         ce_sell_exit, ce_buy_exit,
                         pe_sell_exit, pe_buy_exit,
+                        # Trade duration stats
+                        max_spot, min_spot, max_vix, min_vix,
                         # Adjustment fields
                         adjustment_made=False,
                         adj_side=None,
@@ -757,6 +760,10 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'pe_buy_exit':             round(pe_buy_exit,  2) if pe_buy_exit  else None,
         'ce_pl_points':            round(ce_pl, 2),
         'pe_pl_points':            round(pe_pl, 2),
+        'max_spot':                max_spot,
+        'min_spot':                min_spot,
+        'max_vix':                 max_vix,
+        'min_vix':                 min_vix,
         'adjustment_made':         adjustment_made,
         'adj_side':                adj_side,
         'adj_sell_strike':         adj_sell_strike,
@@ -882,6 +889,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
     skip_counts = {
         'no_entry_day':   0,
         'no_spot':        0,
+        'vix_filtered':   0,
         'no_buy_expiry':  0,
         'expiry_not_in_contracts': 0,
         'strike_failed':  0,
@@ -921,6 +929,14 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             continue
 
         entry_vix = get_1min_value(vix_1m, entry_ts, 'close')
+
+        # VIX filter
+        if ENABLE_VIX_FILTER:
+            if entry_vix is None or not (VIX_FILTER_LOW <= entry_vix <= VIX_FILTER_HIGH):
+                skip_counts['vix_filtered'] += 1
+                logger.debug(f"  {sell_expiry_date}: VIX {entry_vix} outside "
+                             f"[{VIX_FILTER_LOW}, {VIX_FILTER_HIGH}] — skipping")
+                continue
 
         # ----------------------------------------------------------------
         # Expiry selection
@@ -1266,6 +1282,15 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Build final trade record
         # ----------------------------------------------------------------
+        # Compute min/max spot and VIX across full trade duration
+        # (including adjustment if any) from the completed trade_log
+        spots = [s['spot'] for s in trade_log if s.get('spot') is not None]
+        vixes = [s['vix']  for s in trade_log if s.get('vix')  is not None]
+        trade_max_spot = round(max(spots), 2) if spots else None
+        trade_min_spot = round(min(spots), 2) if spots else None
+        trade_max_vix  = round(max(vixes), 2) if vixes else None
+        trade_min_vix  = round(min(vixes), 2) if vixes else None
+
         total_pl = round(base_pl + (adj_pl_points or 0.0), 2)
         trade_counter += 1
 
@@ -1281,6 +1306,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             exit_ts, sl_reason,
             ce_sell_exit, ce_buy_exit,
             pe_sell_exit, pe_buy_exit,
+            trade_max_spot, trade_min_spot,
+            trade_max_vix,  trade_min_vix,
             adjustment_made=adj_made,
             adj_side=adj_side,
             adj_sell_strike=adj_sell_strike,
@@ -1322,6 +1349,8 @@ if __name__ == "__main__":
     logger.info(f"  Entry time   : {ENTRY_TIME} on day before sell expiry")
     logger.info(f"  Delta target : {DELTA_TARGET}")
     logger.info(f"  Buy min DTE  : {BUY_LEG_MIN_DTE}")
+    logger.info(f"  VIX filter   : {'ON' if ENABLE_VIX_FILTER else 'OFF'}"
+                + (f" ({VIX_FILTER_LOW}–{VIX_FILTER_HIGH})" if ENABLE_VIX_FILTER else ""))
     logger.info(f"  Index SL     : {'ON' if ENABLE_INDEX_SL else 'OFF'} "
                 f"({INDEX_SL_OFFSET} pts)")
     logger.info(f"  Option SL    : {'ON' if ENABLE_OPTION_SL else 'OFF'} "
