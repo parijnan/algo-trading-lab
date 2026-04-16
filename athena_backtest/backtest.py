@@ -359,37 +359,38 @@ def compute_max_theoretical_profit(spot: float,
     """
     Approximate max theoretical profit of the double calendar at entry.
 
+    Max profit of a calendar occurs when spot pins exactly at the sell strike
+    at sell expiry. At that point:
+      - Sell leg expires worthless (full premium received is kept)
+      - Buy leg has remaining DTE and is ATM — maximum time value
+
     For each side:
-      1. Back out IV from sell leg market price
-      2. Project buy leg theoretical value at sell expiry using sell leg IV
-         and buy leg remaining DTE after sell expiry
-      3. Max profit per side = projected_buy_value - buy_entry + sell_entry
-         (sell premium kept + buy leg value at sell expiry - cost of buy leg)
+      1. Back out IV from sell leg market price (using current spot, OTM)
+      2. Project buy leg value at sell expiry assuming spot = sell_strike (ATM pin)
+         This uses sell leg IV and buy leg remaining DTE after sell expiry
+      3. Max profit per side = sell_entry + proj_buy - buy_entry
+         (sell premium kept + buy leg ATM value at sell expiry - cost of buy leg)
 
     Combined = CE side + PE side.
-    Returns combined max theoretical profit, or fallback (net premium * 2) on failure.
+    Returns combined max theoretical profit, or fallback (total net debit) on failure.
     """
     sell_dte = max((sell_expiry.date() - entry_ts.date()).days, 0.5)
-    buy_dte  = max((buy_expiry.date()  - entry_ts.date()).days, 0.5)
     # Remaining DTE of buy leg after sell expiry
     buy_dte_at_sell_expiry = max((buy_expiry.date() - sell_expiry.date()).days, 0.5)
 
-    def side_max_profit(sell_strike, sell_entry_raw, buy_entry_raw, opt_type,
-                        sell_df, buy_df):
-        # Raw entries (pre-slippage) needed for IV computation
-        # Back out IV from sell leg
+    def side_max_profit(sell_strike, sell_entry_raw, buy_entry_raw, opt_type):
+        # Back out IV from sell leg at current spot (OTM)
         iv = compute_iv(spot, sell_strike, sell_dte, sell_entry_raw, opt_type)
         if iv is None:
             return None
-        # Project buy leg value at sell expiry
+        # Project buy leg value at sell expiry with spot pinned at sell_strike (ATM)
+        # This is the scenario that maximises calendar P&L
         proj_buy = compute_theoretical_value(
-            spot, sell_strike, buy_dte_at_sell_expiry, iv, opt_type)
+            sell_strike, sell_strike, buy_dte_at_sell_expiry, iv, opt_type)
         if proj_buy is None:
             return None
-        # Max profit = sell_entry + (proj_buy - buy_entry)
-        # Use slippage-adjusted entries since that is our actual cost basis
-        # but IV must be computed from raw market prices — use raw entries here
-        return sell_entry_raw + (proj_buy - buy_entry_raw)
+        # Max profit = sell premium kept + buy leg ATM value - cost of buy leg
+        return sell_entry_raw + proj_buy - buy_entry_raw
 
     # Fetch raw (pre-slippage) entry prices for IV computation
     ce_sell_raw = get_option_price(ce_sell_df, entry_ts, 'open')
@@ -401,22 +402,18 @@ def compute_max_theoretical_profit(spot: float,
     pe_max = None
 
     if ce_sell_raw and ce_buy_raw:
-        ce_max = side_max_profit(
-            ce_sell_strike, ce_sell_raw, ce_buy_raw, 'ce',
-            ce_sell_df, ce_buy_df)
+        ce_max = side_max_profit(ce_sell_strike, ce_sell_raw, ce_buy_raw, 'ce')
 
     if pe_sell_raw and pe_buy_raw:
-        pe_max = side_max_profit(
-            pe_sell_strike, pe_sell_raw, pe_buy_raw, 'pe',
-            pe_sell_df, pe_buy_df)
+        pe_max = side_max_profit(pe_sell_strike, pe_sell_raw, pe_buy_raw, 'pe')
 
     if ce_max is not None and pe_max is not None:
         return round(ce_max + pe_max, 2)
 
-    # Fallback: use net premium collected as proxy
-    net_ce = (ce_sell_entry - ce_buy_entry) if ce_sell_entry and ce_buy_entry else 0
-    net_pe = (pe_sell_entry - pe_buy_entry) if pe_sell_entry and pe_buy_entry else 0
-    return round((net_ce + net_pe), 2)
+    # Fallback: use total net debit as conservative proxy
+    net_ce = (ce_buy_entry - ce_sell_entry) if ce_buy_entry and ce_sell_entry else 0
+    net_pe = (pe_buy_entry - pe_sell_entry) if pe_buy_entry and pe_sell_entry else 0
+    return round(net_ce + net_pe, 2)
 
 
 # ---------------------------------------------------------------------------
