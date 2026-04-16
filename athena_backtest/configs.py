@@ -28,7 +28,7 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 # Entry
 # ---------------------------------------------------------------------------
 ENTRY_TIME              = '15:20'       # Entry time on the day before the prior expiry (see backtest.py) (HH:MM)
-DELTA_TARGET            = 0.20          # Sell leg target delta (abs value)
+DELTA_TARGET            = 0.25          # Sell leg target delta (abs value)
 STRIKE_STEP             = 100           # Nifty strike rounding interval — liquidity constraint
 BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE below this at entry
 
@@ -47,7 +47,7 @@ VIX_FILTER_HIGH         = 25.0          # Skip entry if VIX above this
 # Consistent with SPREAD_SL_PCT which also uses net debit as denominator.
 # ---------------------------------------------------------------------------
 ENABLE_PROFIT_TARGET            = False
-PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of total net debit paid
+PROFIT_TARGET_PCT_NET_DEBIT     = 0.45      # Exit when combined P&L >= 20% of total net debit paid
 
 # ---------------------------------------------------------------------------
 # Exit — index SL
@@ -55,7 +55,7 @@ PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of t
 # PE side: exit when spot <= pe_sell_strike + INDEX_SL_OFFSET  (approaching from above)
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
-ENABLE_INDEX_SL         = False
+ENABLE_INDEX_SL         = True
 INDEX_SL_OFFSET         = 50            # Points before sell strike reaches ATM (Nifty)
 
 # ---------------------------------------------------------------------------

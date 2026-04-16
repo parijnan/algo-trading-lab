@@ -552,6 +552,19 @@ def determine_breached_side(spot: float, entry_spot: float) -> str:
     return 'ce' if spot >= entry_spot else 'pe'
 
 
+def determine_sl_triggered_side(exit_reason: str, spot: float,
+                                 entry_spot: float) -> str:
+    """
+    Determine which side triggered the SL for SL exits.
+    For index_sl and option_sl: CE if spot above entry, PE if below.
+    For spread_sl: same spot-vs-entry logic (combined breach, side by direction).
+    For profit_target and pre_expiry: returns 'none' — no SL fired.
+    """
+    if exit_reason in ('index_sl', 'option_sl', 'spread_sl'):
+        return determine_breached_side(spot, entry_spot)
+    return 'none'
+
+
 # ---------------------------------------------------------------------------
 # Per-trade 1-min snapshot
 # ---------------------------------------------------------------------------
@@ -718,6 +731,11 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         pe_sell_exit, pe_buy_exit,
                         # Trade duration stats
                         max_spot, min_spot, max_vix, min_vix,
+                        # SL detail columns
+                        sl_triggered_side, sl_trigger_time, sl_trigger_spot,
+                        sl_trigger_day,
+                        untouched_sell_ltp_at_sl, untouched_buy_ltp_at_sl,
+                        untouched_net_value_at_sl, days_remaining_at_sl,
                         # Adjustment fields
                         adjustment_made=False,
                         adj_side=None,
@@ -737,35 +755,43 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
     total_rs  = round(total_pl * LOT_SIZE, 2)
 
     return {
-        'entry_time':              entry_time,
-        'entry_spot':              entry_spot,
-        'entry_vix':               round(entry_vix, 2) if entry_vix is not None else None,
-        'sell_expiry':             sell_expiry,
-        'buy_expiry':              buy_expiry,
-        'ce_sell_strike':          ce_sell_strike,
-        'pe_sell_strike':          pe_sell_strike,
-        'ce_sell_entry':           round(ce_sell_entry, 2),
-        'ce_buy_entry':            round(ce_buy_entry,  2),
-        'pe_sell_entry':           round(pe_sell_entry, 2),
-        'pe_buy_entry':            round(pe_buy_entry,  2),
-        'ce_sell_delta':           round(ce_sell_delta, 4) if ce_sell_delta else None,
-        'pe_sell_delta':           round(pe_sell_delta, 4) if pe_sell_delta else None,
-        'net_debit_ce':            round(net_debit_ce, 2),
-        'net_debit_pe':            round(net_debit_pe, 2),
-        'max_theoretical_profit':  round(max_theoretical_profit, 2),
-        'exit_time':               exit_time,
-        'exit_reason':             exit_reason,
-        'ce_sell_exit':            round(ce_sell_exit, 2) if ce_sell_exit else None,
-        'ce_buy_exit':             round(ce_buy_exit,  2) if ce_buy_exit  else None,
-        'pe_sell_exit':            round(pe_sell_exit, 2) if pe_sell_exit else None,
-        'pe_buy_exit':             round(pe_buy_exit,  2) if pe_buy_exit  else None,
-        'ce_pl_points':            round(ce_pl, 2),
-        'pe_pl_points':            round(pe_pl, 2),
-        'max_spot':                max_spot,
-        'min_spot':                min_spot,
-        'max_vix':                 max_vix,
-        'min_vix':                 min_vix,
-        'adjustment_made':         adjustment_made,
+        'entry_time':                  entry_time,
+        'entry_spot':                  entry_spot,
+        'entry_vix':                   round(entry_vix, 2) if entry_vix is not None else None,
+        'sell_expiry':                 sell_expiry,
+        'buy_expiry':                  buy_expiry,
+        'ce_sell_strike':              ce_sell_strike,
+        'pe_sell_strike':              pe_sell_strike,
+        'ce_sell_entry':               round(ce_sell_entry, 2),
+        'ce_buy_entry':                round(ce_buy_entry,  2),
+        'pe_sell_entry':               round(pe_sell_entry, 2),
+        'pe_buy_entry':                round(pe_buy_entry,  2),
+        'ce_sell_delta':               round(ce_sell_delta, 4) if ce_sell_delta else None,
+        'pe_sell_delta':               round(pe_sell_delta, 4) if pe_sell_delta else None,
+        'net_debit_ce':                round(net_debit_ce, 2),
+        'net_debit_pe':                round(net_debit_pe, 2),
+        'max_theoretical_profit':      round(max_theoretical_profit, 2),
+        'exit_time':                   exit_time,
+        'exit_reason':                 exit_reason,
+        'ce_sell_exit':                round(ce_sell_exit, 2) if ce_sell_exit else None,
+        'ce_buy_exit':                 round(ce_buy_exit,  2) if ce_buy_exit  else None,
+        'pe_sell_exit':                round(pe_sell_exit, 2) if pe_sell_exit else None,
+        'pe_buy_exit':                 round(pe_buy_exit,  2) if pe_buy_exit  else None,
+        'ce_pl_points':                round(ce_pl, 2),
+        'pe_pl_points':                round(pe_pl, 2),
+        'max_spot':                    max_spot,
+        'min_spot':                    min_spot,
+        'max_vix':                     max_vix,
+        'min_vix':                     min_vix,
+        'sl_triggered_side':           sl_triggered_side,
+        'sl_trigger_time':             sl_trigger_time,
+        'sl_trigger_spot':             round(sl_trigger_spot, 2) if sl_trigger_spot is not None else None,
+        'sl_trigger_day':              sl_trigger_day,
+        'untouched_sell_ltp_at_sl':    round(untouched_sell_ltp_at_sl, 2) if untouched_sell_ltp_at_sl is not None else None,
+        'untouched_buy_ltp_at_sl':     round(untouched_buy_ltp_at_sl,  2) if untouched_buy_ltp_at_sl  is not None else None,
+        'untouched_net_value_at_sl':   round(untouched_net_value_at_sl, 2) if untouched_net_value_at_sl is not None else None,
+        'days_remaining_at_sl':        days_remaining_at_sl,
+        'adjustment_made':             adjustment_made,
         'adj_side':                adj_side,
         'adj_sell_strike':         adj_sell_strike,
         'adj_sell_entry':          round(adj_sell_entry, 2) if adj_sell_entry else None,
@@ -1292,6 +1318,37 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         trade_max_vix  = round(max(vixes), 2) if vixes else None
         trade_min_vix  = round(min(vixes), 2) if vixes else None
 
+        # Compute SL detail columns
+        # sl_ts is the 1-min candle close that fired the SL (None for profit_target/pre_expiry)
+        is_sl_exit = sl_reason in ('index_sl', 'option_sl', 'spread_sl')
+        if is_sl_exit and sl_ts is not None:
+            sl_trigger_spot_val = get_1min_value(nifty_1m, sl_ts, 'close') or spot
+            sl_triggered_side_val = determine_sl_triggered_side(
+                sl_reason, sl_trigger_spot_val, spot)
+            sl_trigger_day_val = (sl_ts.date() - entry_date).days
+            days_remaining_val = (elm_time.date() - sl_ts.date()).days \
+                if elm_time is not None else None
+            # Untouched side LTPs at SL moment — from the running LTPs
+            # returned by the scanner (values at sl_ts candle close)
+            if sl_triggered_side_val == 'ce':
+                u_sell = pe_sell_ltp
+                u_buy  = pe_buy_ltp
+            else:
+                u_sell = ce_sell_ltp
+                u_buy  = ce_buy_ltp
+            untouched_sell_val = u_sell
+            untouched_buy_val  = u_buy
+            untouched_net_val  = round(u_buy - u_sell, 2) \
+                if u_buy is not None and u_sell is not None else None
+        else:
+            sl_triggered_side_val = 'none'
+            sl_trigger_spot_val   = None
+            sl_trigger_day_val    = None
+            days_remaining_val    = None
+            untouched_sell_val    = None
+            untouched_buy_val     = None
+            untouched_net_val     = None
+
         total_pl = round(base_pl + (adj_pl_points or 0.0), 2)
         trade_counter += 1
 
@@ -1309,6 +1366,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             pe_sell_exit, pe_buy_exit,
             trade_max_spot, trade_min_spot,
             trade_max_vix,  trade_min_vix,
+            sl_triggered_side_val, sl_ts, sl_trigger_spot_val,
+            sl_trigger_day_val,
+            untouched_sell_val, untouched_buy_val,
+            untouched_net_val,  days_remaining_val,
             adjustment_made=adj_made,
             adj_side=adj_side,
             adj_sell_strike=adj_sell_strike,
