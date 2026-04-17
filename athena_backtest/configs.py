@@ -37,9 +37,9 @@ BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE belo
 # Falls back to the last band's delta if entry_vix exceeds all bounds.
 # To use a flat delta across all VIX levels, set all bands to the same value.
 VIX_DELTA_BANDS         = [
-    (18.0, 0.25),   # VIX up to 18:   0.25 delta
-    (20.0, 0.25),   # VIX 18–20:      0.25 delta
-    (22.0, 0.25),   # VIX 20–22:      0.25 delta
+    (18.0, 0.30),   # VIX up to 18:   0.25 delta
+    (20.0, 0.30),   # VIX 18–20:      0.25 delta
+    (22.0, 0.30),   # VIX 20–22:      0.25 delta
     (25.0, 0.30),   # VIX 22–25:      0.30 delta
 ]
 
@@ -90,9 +90,9 @@ SPREAD_SL_POINTS        = 100           # Exit when combined P&L <= -X points
 # Fires when P&L drops more than TRAIL_POINTS from its peak.
 # Set ENABLE_TRAIL_STOP = False to disable entirely.
 # ---------------------------------------------------------------------------
-ENABLE_TRAIL_STOP       = True
-TRAIL_ACTIVATION_POINTS = 20            # Trail arms once peak P&L reaches this
-TRAIL_POINTS            = 10            # Exit if P&L falls this far from peak
+ENABLE_TRAIL_STOP       = False
+TRAIL_ACTIVATION_POINTS = 25            # Trail arms once peak P&L reaches this
+TRAIL_POINTS            = 15            # Exit if P&L falls this far from peak
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)

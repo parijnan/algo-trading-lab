@@ -779,6 +779,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         # Trade duration stats
                         max_spot, min_spot, max_vix, min_vix,
                         max_pl_points, min_pl_points,
+                        max_pl_time, min_pl_time,
                         trail_activation_reached,
                         # SL detail columns
                         sl_triggered_side, sl_trigger_time, sl_trigger_spot,
@@ -842,6 +843,8 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'min_vix':                     min_vix,
         'max_pl_points':               max_pl_points,
         'min_pl_points':               min_pl_points,
+        'max_pl_time':                 max_pl_time,
+        'min_pl_time':                 min_pl_time,
         'trail_activation_reached':    trail_activation_reached,
         'sl_triggered_side':           sl_triggered_side,
         'sl_trigger_time':             sl_trigger_time,
@@ -1424,16 +1427,45 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Compute min/max spot and VIX across full trade duration
         # (including adjustment if any) from the completed trade_log
-        spots = [s['spot'] for s in trade_log if s.get('spot') is not None]
-        vixes = [s['vix']  for s in trade_log if s.get('vix')  is not None]
-        pls   = [s['combined_unrealised_pl'] for s in trade_log
-                 if s.get('combined_unrealised_pl') is not None]
-        trade_max_spot = round(max(spots), 2) if spots else None
-        trade_min_spot = round(min(spots), 2) if spots else None
-        trade_max_vix  = round(max(vixes), 2) if vixes else None
-        trade_min_vix  = round(min(vixes), 2) if vixes else None
-        trade_max_pl   = round(max(pls),   2) if pls   else None
-        trade_min_pl   = round(min(pls),   2) if pls   else None
+        # Single pass over full trade_log (base + adjustment) to compute
+        # min/max spot, VIX, P&L and their timestamps
+        trade_max_spot = trade_min_spot = None
+        trade_max_vix  = trade_min_vix  = None
+        trade_max_pl   = trade_min_pl   = None
+        trade_max_pl_time = trade_min_pl_time = None
+
+        for snap in trade_log:
+            s_spot = snap.get('spot')
+            s_vix  = snap.get('vix')
+            s_pl   = snap.get('combined_unrealised_pl')
+            s_ts   = snap.get('time_stamp')
+
+            if s_spot is not None:
+                if trade_max_spot is None or s_spot > trade_max_spot:
+                    trade_max_spot = s_spot
+                if trade_min_spot is None or s_spot < trade_min_spot:
+                    trade_min_spot = s_spot
+
+            if s_vix is not None:
+                if trade_max_vix is None or s_vix > trade_max_vix:
+                    trade_max_vix = s_vix
+                if trade_min_vix is None or s_vix < trade_min_vix:
+                    trade_min_vix = s_vix
+
+            if s_pl is not None:
+                if trade_max_pl is None or s_pl > trade_max_pl:
+                    trade_max_pl      = s_pl
+                    trade_max_pl_time = s_ts
+                if trade_min_pl is None or s_pl < trade_min_pl:
+                    trade_min_pl      = s_pl
+                    trade_min_pl_time = s_ts
+
+        trade_max_spot = round(trade_max_spot, 2) if trade_max_spot is not None else None
+        trade_min_spot = round(trade_min_spot, 2) if trade_min_spot is not None else None
+        trade_max_vix  = round(trade_max_vix,  2) if trade_max_vix  is not None else None
+        trade_min_vix  = round(trade_min_vix,  2) if trade_min_vix  is not None else None
+        trade_max_pl   = round(trade_max_pl,   2) if trade_max_pl   is not None else None
+        trade_min_pl   = round(trade_min_pl,   2) if trade_min_pl   is not None else None
         # Trail activation: True if peak ever reached the activation threshold
         # Uses max_pl from trade_log which covers base + adjustment
         trail_activation_reached = (trade_max_pl is not None and
@@ -1489,6 +1521,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             trade_max_spot, trade_min_spot,
             trade_max_vix,  trade_min_vix,
             trade_max_pl,   trade_min_pl,
+            trade_max_pl_time, trade_min_pl_time,
             trail_activation_reached,
             sl_triggered_side_val, sl_ts, sl_trigger_spot_val,
             sl_trigger_day_val,
