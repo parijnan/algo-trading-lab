@@ -47,6 +47,7 @@ from configs import (
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
+    ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUSTMENT_MIN_DAYS_REMAINING,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
@@ -548,6 +549,20 @@ def check_spread_sl(combined_pl: float) -> bool:
     return combined_pl <= -SPREAD_SL_POINTS
 
 
+def check_trail_stop(combined_pl: float, running_peak_pl: float) -> bool:
+    """
+    Check trailing stop.
+    Trail activates once running_peak_pl >= TRAIL_ACTIVATION_POINTS.
+    Fires when combined_pl <= running_peak_pl - TRAIL_POINTS.
+    Returns True if trail fires.
+    """
+    if not ENABLE_TRAIL_STOP:
+        return False
+    if running_peak_pl < TRAIL_ACTIVATION_POINTS:
+        return False
+    return combined_pl <= running_peak_pl - TRAIL_POINTS
+
+
 def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
     """
     Check profit target: combined unrealised P&L >= PROFIT_TARGET_PCT_NET_DEBIT * total net debit paid.
@@ -648,20 +663,23 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   last_ce_sell_ltp: float,
                                   last_ce_buy_ltp:  float,
                                   last_pe_sell_ltp: float,
-                                  last_pe_buy_ltp:  float):
+                                  last_pe_buy_ltp:  float,
+                                  running_peak_pl: float = 0.0):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
-    Checks all SL conditions and pre-expiry on every candle.
+    Checks all exit conditions on every candle in priority order.
+    Tracks running_peak_pl for the trail stop mechanism.
+
     Returns (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-             sl_hit_ts, sl_hit_reason).
-    sl_hit_ts is None if no SL fired in this window.
+             sl_hit_ts, sl_hit_reason, running_peak_pl).
+    sl_hit_ts is None if no exit fired in this window.
     """
-    running_ce_sell = last_ce_sell_ltp
-    running_ce_buy  = last_ce_buy_ltp
-    running_pe_sell = last_pe_sell_ltp
-    running_pe_buy  = last_pe_buy_ltp
-    sl_hit_ts       = None
-    sl_hit_reason   = None
+    running_ce_sell  = last_ce_sell_ltp
+    running_ce_buy   = last_ce_buy_ltp
+    running_pe_sell  = last_pe_sell_ltp
+    running_pe_buy   = last_pe_buy_ltp
+    sl_hit_ts        = None
+    sl_hit_reason    = None
 
     window = nifty_1m[
         (nifty_1m.index > from_ts) & (nifty_1m.index <= to_ts)
@@ -687,6 +705,10 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                        pe_buy_entry,  running_pe_buy)
         combined_pl = round(ce_pl + pe_pl, 2)
 
+        # Update running peak before any exit checks
+        if combined_pl > running_peak_pl:
+            running_peak_pl = combined_pl
+
         trade_log.append(build_snapshot(
             ts, spot, vix,
             ce_sell_strike, pe_sell_strike,
@@ -698,9 +720,9 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         ))
 
         if sl_hit_ts is not None:
-            break  # already found SL — stop scanning
+            break  # already found exit — stop scanning
 
-        # Pre-expiry check
+        # Pre-expiry check (always first — mandatory time-based exit)
         if elm_time is not None and ts >= elm_time:
             sl_hit_ts     = ts
             sl_hit_reason = 'pre_expiry'
@@ -723,13 +745,18 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'option_sl'
             break
 
+        if check_trail_stop(combined_pl, running_peak_pl):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'trail_stop'
+            break
+
         if check_profit_target(combined_pl, total_net_debit):
             sl_hit_ts     = ts
             sl_hit_reason = 'profit_target'
             break
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
-            sl_hit_ts, sl_hit_reason)
+            sl_hit_ts, sl_hit_reason, running_peak_pl)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +779,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         # Trade duration stats
                         max_spot, min_spot, max_vix, min_vix,
                         max_pl_points, min_pl_points,
+                        trail_activation_reached,
                         # SL detail columns
                         sl_triggered_side, sl_trigger_time, sl_trigger_spot,
                         sl_trigger_day,
@@ -814,6 +842,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'min_vix':                     min_vix,
         'max_pl_points':               max_pl_points,
         'min_pl_points':               min_pl_points,
+        'trail_activation_reached':    trail_activation_reached,
         'sl_triggered_side':           sl_triggered_side,
         'sl_trigger_time':             sl_trigger_time,
         'sl_trigger_spot':             round(sl_trigger_spot, 2) if sl_trigger_spot is not None else None,
@@ -1126,9 +1155,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         ce_buy_ltp  = ce_buy_entry
         pe_sell_ltp = pe_sell_entry
         pe_buy_ltp  = pe_buy_entry
+        running_peak_pl = 0.0
 
         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-         sl_ts, sl_reason) = append_1min_snapshots_window(
+         sl_ts, sl_reason, running_peak_pl) = append_1min_snapshots_window(
             scan_start, scan_end,
             nifty_1m, vix_1m,
             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
@@ -1136,9 +1166,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
-            spot,  # entry_spot for breached side determination
+            spot,
             elm_time, trade_log,
-            ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp)
+            ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+            running_peak_pl)
 
         # ----------------------------------------------------------------
         # Exit the base position
@@ -1307,15 +1338,18 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             f"Days remaining: {adj_days_remaining_val}")
 
                         # Scan 1-min candles for adjustment — full double calendar
+                        # running_peak_pl reset to 0.0 at adjustment re-entry
                         adj_trade_log    = []
                         adj_ce_sell_ltp  = adj_ce_sell_entry
                         adj_ce_buy_ltp   = adj_ce_buy_entry
                         adj_pe_sell_ltp  = adj_pe_sell_entry
                         adj_pe_buy_ltp   = adj_pe_buy_entry
+                        adj_running_peak_pl = 0.0
 
                         (adj_ce_sell_ltp, adj_ce_buy_ltp,
                          adj_pe_sell_ltp, adj_pe_buy_ltp,
-                         adj_sl_ts, adj_sl_reason) = append_1min_snapshots_window(
+                         adj_sl_ts, adj_sl_reason,
+                         adj_running_peak_pl) = append_1min_snapshots_window(
                             adj_entry_ts, scan_end,
                             nifty_1m, vix_1m,
                             adj_ce_sell_df, adj_pe_sell_df,
@@ -1327,7 +1361,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             adj_entry_spot_val,
                             elm_time, adj_trade_log,
                             adj_ce_sell_ltp, adj_ce_buy_ltp,
-                            adj_pe_sell_ltp, adj_pe_buy_ltp)
+                            adj_pe_sell_ltp, adj_pe_buy_ltp,
+                            adj_running_peak_pl)
 
                         if adj_sl_ts is None:
                             adj_sl_ts     = scan_end
@@ -1399,6 +1434,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         trade_min_vix  = round(min(vixes), 2) if vixes else None
         trade_max_pl   = round(max(pls),   2) if pls   else None
         trade_min_pl   = round(min(pls),   2) if pls   else None
+        # Trail activation: True if peak ever reached the activation threshold
+        # Uses max_pl from trade_log which covers base + adjustment
+        trail_activation_reached = (trade_max_pl is not None and
+                                    trade_max_pl >= TRAIL_ACTIVATION_POINTS)
 
         # Compute SL detail columns
         # sl_ts is the 1-min candle close that fired the SL (None for profit_target/pre_expiry)
@@ -1450,6 +1489,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             trade_max_spot, trade_min_spot,
             trade_max_vix,  trade_min_vix,
             trade_max_pl,   trade_min_pl,
+            trail_activation_reached,
             sl_triggered_side_val, sl_ts, sl_trigger_spot_val,
             sl_trigger_day_val,
             untouched_sell_val, untouched_buy_val,
@@ -1513,6 +1553,9 @@ if __name__ == "__main__":
     logger.info(f"  Profit target: {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} "
                 f"({PROFIT_TARGET_PCT_NET_DEBIT * 100:.0f}% of net debit)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}")
+    logger.info(f"  Trail stop   : {'ON' if ENABLE_TRAIL_STOP else 'OFF'}"
+                + (f" (activate={TRAIL_ACTIVATION_POINTS} pts, trail={TRAIL_POINTS} pts)"
+                   if ENABLE_TRAIL_STOP else ""))
 
     all_trades = run_backtest(nifty_1m, vix_1m, contracts_df, holidays_df)
     save_trade_summary(all_trades)

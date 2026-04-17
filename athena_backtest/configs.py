@@ -81,8 +81,18 @@ OPTION_SL_MULTIPLIER    = 2.0
 # Fires when combined unrealised P&L drops below -SPREAD_SL_POINTS.
 # Set SPREAD_SL_POINTS = None to disable.
 # ---------------------------------------------------------------------------
-ENABLE_SPREAD_SL        = True
-SPREAD_SL_POINTS        = 80           # Exit when combined P&L <= -X points
+ENABLE_SPREAD_SL        = False
+SPREAD_SL_POINTS        = 100           # Exit when combined P&L <= -X points
+
+# ---------------------------------------------------------------------------
+# Exit — trailing stop
+# Activates once unrealised P&L >= TRAIL_ACTIVATION_POINTS.
+# Fires when P&L drops more than TRAIL_POINTS from its peak.
+# Set ENABLE_TRAIL_STOP = False to disable entirely.
+# ---------------------------------------------------------------------------
+ENABLE_TRAIL_STOP       = True
+TRAIL_ACTIVATION_POINTS = 20            # Trail arms once peak P&L reaches this
+TRAIL_POINTS            = 10            # Exit if P&L falls this far from peak
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)
