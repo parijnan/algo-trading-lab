@@ -730,6 +730,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         pe_sell_exit, pe_buy_exit,
                         # Trade duration stats
                         max_spot, min_spot, max_vix, min_vix,
+                        max_pl_points, min_pl_points,
                         # SL detail columns
                         sl_triggered_side, sl_trigger_time, sl_trigger_spot,
                         sl_trigger_day,
@@ -789,6 +790,8 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'min_spot':                    min_spot,
         'max_vix':                     max_vix,
         'min_vix':                     min_vix,
+        'max_pl_points':               max_pl_points,
+        'min_pl_points':               min_pl_points,
         'sl_triggered_side':           sl_triggered_side,
         'sl_trigger_time':             sl_trigger_time,
         'sl_trigger_spot':             round(sl_trigger_spot, 2) if sl_trigger_spot is not None else None,
@@ -1362,10 +1365,14 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # (including adjustment if any) from the completed trade_log
         spots = [s['spot'] for s in trade_log if s.get('spot') is not None]
         vixes = [s['vix']  for s in trade_log if s.get('vix')  is not None]
+        pls   = [s['combined_unrealised_pl'] for s in trade_log
+                 if s.get('combined_unrealised_pl') is not None]
         trade_max_spot = round(max(spots), 2) if spots else None
         trade_min_spot = round(min(spots), 2) if spots else None
         trade_max_vix  = round(max(vixes), 2) if vixes else None
         trade_min_vix  = round(min(vixes), 2) if vixes else None
+        trade_max_pl   = round(max(pls),   2) if pls   else None
+        trade_min_pl   = round(min(pls),   2) if pls   else None
 
         # Compute SL detail columns
         # sl_ts is the 1-min candle close that fired the SL (None for profit_target/pre_expiry)
@@ -1415,6 +1422,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             pe_sell_exit, pe_buy_exit,
             trade_max_spot, trade_min_spot,
             trade_max_vix,  trade_min_vix,
+            trade_max_pl,   trade_min_pl,
             sl_triggered_side_val, sl_ts, sl_trigger_spot_val,
             sl_trigger_day_val,
             untouched_sell_val, untouched_buy_val,

@@ -55,7 +55,7 @@ PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of t
 # PE side: exit when spot <= pe_sell_strike + INDEX_SL_OFFSET  (approaching from above)
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
-ENABLE_INDEX_SL         = True
+ENABLE_INDEX_SL         = False
 INDEX_SL_OFFSET         = 100            # Points before sell strike reaches ATM (Nifty)
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
 # Maximum one adjustment per trade — hardcoded, no config parameter.
 # Evaluated independently: own P&L vs own net debit (not original trade's).
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT               = True
+ENABLE_ADJUSTMENT               = False
 ADJUSTMENT_MIN_DAYS_REMAINING   = 3     # minimum calendar days from SL trigger to elm_time
                                         # for re-entry to be attempted
 
