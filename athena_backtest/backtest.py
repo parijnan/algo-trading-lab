@@ -40,7 +40,8 @@ from configs import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
     NIFTY_OPTIONS_PATH, CONTRACT_LIST_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
-    ENTRY_TIME, DELTA_TARGET, STRIKE_STEP, BUY_LEG_MIN_DTE,
+    ENTRY_TIME, STRIKE_STEP, BUY_LEG_MIN_DTE,
+    VIX_DELTA_BANDS,
     ENABLE_VIX_FILTER, VIX_FILTER_LOW, VIX_FILTER_HIGH,
     ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT_NET_DEBIT,
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
@@ -421,17 +422,35 @@ def compute_max_theoretical_profit(spot: float,
 # Strike selection
 # ---------------------------------------------------------------------------
 
+def get_target_delta(entry_vix: float) -> float:
+    """
+    Return the target delta for the given entry VIX level.
+    Selects the first band in VIX_DELTA_BANDS where entry_vix <= vix_upper_bound.
+    Falls back to the last band's delta if entry_vix exceeds all bounds.
+    """
+    for vix_upper, delta in VIX_DELTA_BANDS:
+        if entry_vix <= vix_upper:
+            return delta
+    return VIX_DELTA_BANDS[-1][1]
+
+
 def select_strike(spot: float, sell_expiry: pd.Timestamp,
                   entry_ts: pd.Timestamp, option_type: str,
-                  opt_df_cache: dict) -> tuple:
+                  opt_df_cache: dict,
+                  target_delta: float = None) -> tuple:
     """
-    Scan strikes from ATM outward and select first with abs(delta) <= DELTA_TARGET.
+    Scan strikes from ATM outward and select first with abs(delta) <= target_delta.
     ATM rounded to nearest STRIKE_STEP (100 for Nifty).
     CE: scan upward from ATM. PE: scan downward from ATM.
+
+    target_delta: the delta threshold to use. If None, falls back to last
+    band in VIX_DELTA_BANDS (should always be provided by caller).
 
     Returns (strike, entry_price_raw) or (None, None) if no valid strike found.
     entry_price_raw is before slippage.
     """
+    if target_delta is None:
+        target_delta = VIX_DELTA_BANDS[-1][1]
     dte_days = max((sell_expiry.date() - entry_ts.date()).days, 0.5)
     atm      = int(round(spot / STRIKE_STEP) * STRIKE_STEP)
 
@@ -455,7 +474,7 @@ def select_strike(spot: float, sell_expiry: pd.Timestamp,
         if delta is None:
             continue
 
-        if delta <= DELTA_TARGET:
+        if delta <= target_delta:
             return strike, price
 
     return None, None
@@ -725,6 +744,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         ce_sell_delta, pe_sell_delta,
                         net_debit_ce, net_debit_pe,
                         max_theoretical_profit,
+                        target_delta_used,
                         # Exit fields
                         exit_time, exit_reason,
                         ce_sell_exit, ce_buy_exit,
@@ -776,6 +796,7 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'pe_buy_entry':                round(pe_buy_entry,  2),
         'ce_sell_delta':               round(ce_sell_delta, 4) if ce_sell_delta else None,
         'pe_sell_delta':               round(pe_sell_delta, 4) if pe_sell_delta else None,
+        'target_delta_used':           round(target_delta_used, 4),
         'net_debit_ce':                round(net_debit_ce, 2),
         'net_debit_pe':                round(net_debit_pe, 2),
         'max_theoretical_profit':      round(max_theoretical_profit, 2),
@@ -1005,15 +1026,18 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Strike selection — CE and PE simultaneously
         # ----------------------------------------------------------------
+        target_delta_used = get_target_delta(entry_vix) if entry_vix is not None \
+            else VIX_DELTA_BANDS[-1][1]
+
         ce_sell_strike, ce_sell_raw = select_strike(
-            spot, sell_expiry_end, entry_ts, 'ce', opt_df_cache)
+            spot, sell_expiry_end, entry_ts, 'ce', opt_df_cache, target_delta_used)
         pe_sell_strike, pe_sell_raw = select_strike(
-            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache)
+            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache, target_delta_used)
 
         if ce_sell_strike is None or pe_sell_strike is None:
             skip_counts['strike_failed'] += 1
             logger.info(f"  {sell_expiry_date}: Strike selection failed — "
-                        f"entry={entry_date} spot={spot:.0f} "
+                        f"entry={entry_date} spot={spot:.0f} delta={target_delta_used} "
                         f"CE={ce_sell_strike} PE={pe_sell_strike} — skipping")
             continue
 
@@ -1207,12 +1231,13 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 adj_entry_spot_val = get_1min_value(nifty_1m, adj_entry_ts, 'close') or spot
 
                 # Fresh strike selection on both sides at current spot
+                # Uses same delta target as original entry — no VIX re-check at adjustment
                 adj_ce_strike, adj_ce_sell_raw = select_strike(
                     adj_entry_spot_val, sell_expiry_end,
-                    adj_entry_ts, 'ce', opt_df_cache)
+                    adj_entry_ts, 'ce', opt_df_cache, target_delta_used)
                 adj_pe_strike, adj_pe_sell_raw = select_strike(
                     adj_entry_spot_val, sell_expiry_end,
-                    adj_entry_ts, 'pe', opt_df_cache)
+                    adj_entry_ts, 'pe', opt_df_cache, target_delta_used)
 
                 if adj_ce_strike is None or adj_pe_strike is None:
                     logger.info(
@@ -1418,6 +1443,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_sell_delta, pe_sell_delta,
             net_debit_ce, net_debit_pe,
             max_theoretical_profit,
+            target_delta_used,
             exit_ts, sl_reason,
             ce_sell_exit, ce_buy_exit,
             pe_sell_exit, pe_buy_exit,
@@ -1474,7 +1500,7 @@ if __name__ == "__main__":
     contracts_df = load_contracts(holidays_df)
     logger.info(f"  Contracts    : {len(contracts_df)} expiries")
     logger.info(f"  Entry time   : {ENTRY_TIME} on day before sell expiry")
-    logger.info(f"  Delta target : {DELTA_TARGET}")
+    logger.info(f"  Delta bands  : {VIX_DELTA_BANDS}")
     logger.info(f"  Buy min DTE  : {BUY_LEG_MIN_DTE}")
     logger.info(f"  VIX filter   : {'ON' if ENABLE_VIX_FILTER else 'OFF'}"
                 + (f" ({VIX_FILTER_LOW}–{VIX_FILTER_HIGH})" if ENABLE_VIX_FILTER else ""))
