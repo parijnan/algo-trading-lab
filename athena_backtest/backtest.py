@@ -46,6 +46,7 @@ from configs import (
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_PCT,
+    ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUSTMENT_MIN_DAYS_REMAINING,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -138,7 +139,7 @@ def load_contracts(holidays_df: pd.DataFrame = None) -> pd.DataFrame:
         expiry_date = row['expiry_date'].date()
         last_trading = last_trading_day_before(expiry_date, holidays_set)
         if last_trading is not None:
-            elm = pd.Timestamp(f"{last_trading} 15:15:00")
+            elm = pd.Timestamp(f"{last_trading} {ELM_EXIT_TIME}:00")
         else:
             # Fallback: should never happen with a valid contract list
             elm = row['end_date'] - pd.Timedelta(seconds=87300)

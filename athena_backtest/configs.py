@@ -27,10 +27,10 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
-ENTRY_TIME              = '15:20'       # Entry time on the day before the prior expiry (see backtest.py) (HH:MM)
-DELTA_TARGET            = 0.25          # Sell leg target delta (abs value)
+ENTRY_TIME              = '10:30'       # Entry time on the day before the prior expiry (see backtest.py) (HH:MM)
+DELTA_TARGET            = 0.20          # Sell leg target delta (abs value)
 STRIKE_STEP             = 100           # Nifty strike rounding interval — liquidity constraint
-BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE below this at entry
+BUY_LEG_MIN_DTE         = 14            # Roll buy leg to next month if DTE below this at entry
 
 # ---------------------------------------------------------------------------
 # Entry — VIX filter
@@ -56,7 +56,7 @@ PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of t
 # Both sides exit simultaneously on trigger.
 # ---------------------------------------------------------------------------
 ENABLE_INDEX_SL         = False
-INDEX_SL_OFFSET         = 100            # Points before sell strike reaches ATM (Nifty)
+INDEX_SL_OFFSET         = 50            # Points before sell strike reaches ATM (Nifty)
 
 # ---------------------------------------------------------------------------
 # Exit — option SL
@@ -77,11 +77,10 @@ SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)
-# Exit all legs at 15:15 on the last trading day before the sell expiry.
-# Computed in load_contracts() via last_trading_day_before() — handles
-# any number of consecutive holidays or weekend bridges correctly.
-# No configurable parameter needed.
+# Exit all legs at ELM_EXIT_TIME on the last trading day before the sell expiry.
+# Day is computed via last_trading_day_before() — holiday-adjusted.
 # ---------------------------------------------------------------------------
+ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before sell expiry
 
 # ---------------------------------------------------------------------------
 # Adjustment (re-enter fresh double calendar at current spot after any SL exit)
@@ -107,4 +106,4 @@ RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibi
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = '2026-04-15'          # None = full available data
+BACKTEST_END_DATE       = '2026-04-16'          # None = full available data
