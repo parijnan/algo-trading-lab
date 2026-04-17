@@ -55,7 +55,6 @@ VIX_FILTER_HIGH         = 25.0          # Skip entry if VIX above this
 # ---------------------------------------------------------------------------
 # Exit — profit target
 # Denominator is total net debit paid (ce + pe combined) — the capital at risk.
-# Consistent with SPREAD_SL_PCT which also uses net debit as denominator.
 # ---------------------------------------------------------------------------
 ENABLE_PROFIT_TARGET            = False
 PROFIT_TARGET_PCT_NET_DEBIT     = 0.20      # Exit when combined P&L >= 20% of total net debit paid
@@ -79,12 +78,11 @@ OPTION_SL_MULTIPLIER    = 2.0
 
 # ---------------------------------------------------------------------------
 # Exit — spread SL (combined both sides, hard floor)
-# A double calendar is a net debit strategy — you pay more for the far leg
-# than you receive for the near leg. Spread SL fires when combined P&L loss
-# exceeds SPREAD_SL_PCT of the total net debit paid at entry.
+# Fires when combined unrealised P&L drops below -SPREAD_SL_POINTS.
+# Set SPREAD_SL_POINTS = None to disable.
 # ---------------------------------------------------------------------------
-ENABLE_SPREAD_SL        = False
-SPREAD_SL_PCT           = 0.75          # % of total net debit paid at entry
+ENABLE_SPREAD_SL        = True
+SPREAD_SL_POINTS        = 80           # Exit when combined P&L <= -X points
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)

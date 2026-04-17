@@ -46,7 +46,7 @@ from configs import (
     ENABLE_PROFIT_TARGET, PROFIT_TARGET_PCT_NET_DEBIT,
     ENABLE_INDEX_SL, INDEX_SL_OFFSET,
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
-    ENABLE_SPREAD_SL, SPREAD_SL_PCT,
+    ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUSTMENT_MIN_DAYS_REMAINING,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
@@ -535,17 +535,17 @@ def check_option_sl(ce_sell_ltp: float, ce_sell_entry: float,
     return ce_breached or pe_breached
 
 
-def check_spread_sl(combined_pl: float, total_net_debit: float) -> bool:
+def check_spread_sl(combined_pl: float) -> bool:
     """
-    Check spread SL: combined unrealised P&L <= -SPREAD_SL_PCT * total net debit paid.
-    A double calendar is a net debit strategy — total_net_debit is positive (what you paid).
-    Returns True if loss exceeds the threshold.
+    Check spread SL: exit when combined unrealised P&L <= -SPREAD_SL_POINTS.
+    SPREAD_SL_POINTS = None disables this check entirely.
+    Returns True if threshold breached.
     """
     if not ENABLE_SPREAD_SL:
         return False
-    if total_net_debit <= 0:
+    if SPREAD_SL_POINTS is None:
         return False
-    return combined_pl <= -(SPREAD_SL_PCT * total_net_debit)
+    return combined_pl <= -SPREAD_SL_POINTS
 
 
 def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
@@ -707,7 +707,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             break
 
         # Exit checks in priority order
-        if check_spread_sl(combined_pl, total_net_debit):
+        if check_spread_sl(combined_pl):
             sl_hit_ts     = ts
             sl_hit_reason = 'spread_sl'
             break
@@ -1509,7 +1509,7 @@ if __name__ == "__main__":
     logger.info(f"  Option SL    : {'ON' if ENABLE_OPTION_SL else 'OFF'} "
                 f"({OPTION_SL_MULTIPLIER}x entry)")
     logger.info(f"  Spread SL    : {'ON' if ENABLE_SPREAD_SL else 'OFF'} "
-                f"({SPREAD_SL_PCT * 100:.0f}% of net debit)")
+                f"({SPREAD_SL_POINTS} pts)")
     logger.info(f"  Profit target: {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} "
                 f"({PROFIT_TARGET_PCT_NET_DEBIT * 100:.0f}% of net debit)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}")
