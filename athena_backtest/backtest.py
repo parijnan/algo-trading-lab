@@ -1215,6 +1215,27 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             adjustment_already_made=False)
 
         # ----------------------------------------------------------------
+        # Initialise adjustment state — must be before exit pricing
+        # ----------------------------------------------------------------
+        adj_made           = False
+        adj_side           = None
+        adj_ce_sell_strike = None
+        adj_pe_sell_strike = None
+        adj_ce_sell_entry  = None   # new sell leg proceeds on rolled side
+        adj_ce_buy_entry   = None   # buyback cost of old sell leg on rolled side
+        adj_pe_sell_entry  = None
+        adj_pe_buy_entry   = None
+        adj_ce_sell_exit   = None
+        adj_ce_buy_exit    = None
+        adj_pe_sell_exit   = None
+        adj_pe_buy_exit    = None
+        adj_exit_reason    = None
+        adj_pl_points      = None
+        adj_entry_spot_val = None
+        adj_days_remaining_val = None
+        adj_trigger_day_val    = None
+
+        # ----------------------------------------------------------------
         # Exit the base position
         # ----------------------------------------------------------------
         if sl_ts is None:
@@ -1251,30 +1272,6 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     pe_buy_entry,  pe_buy_exit)
         base_pl = round(ce_pl_base + pe_pl_base, 2)
 
-        # If adjustment was made, compute adj_pl_points:
-        # Roll P&L = (original sell entry - buyback cost) + (new sell entry - new sell exit)
-        # Original sell entry is captured in adj_ce/pe_sell_entry (new proceeds)
-        # Buyback cost is in adj_ce/pe_buy_entry
-        # New sell exit is the current ce/pe_sell_exit on the rolled side
-        if adj_made and adj_side is not None:
-            if adj_side == 'ce' and adj_ce_sell_entry is not None and adj_ce_buy_entry is not None:
-                orig_sell_entry_before_roll = net_debit_ce + ce_buy_entry  # = original ce_sell_entry
-                # orig_sell_entry is not tracked directly; use buyback + new sell structure:
-                # adj_pl = -buyback_cost + new_sell_entry - new_sell_exit + (new_sell_exit already in ce_sell_exit)
-                # Simplification: adj_pl = (new_sell_entry - new_sell_exit) - buyback_cost
-                adj_pl_points = round(
-                    (adj_ce_sell_entry - ce_sell_exit) - adj_ce_buy_entry, 2)
-            elif adj_side == 'pe' and adj_pe_sell_entry is not None and adj_pe_buy_entry is not None:
-                adj_pl_points = round(
-                    (adj_pe_sell_entry - pe_sell_exit) - adj_pe_buy_entry, 2)
-            # Populate exit prices for rolled side into adj columns
-            if adj_side == 'ce':
-                adj_ce_sell_exit = ce_sell_exit
-                adj_ce_buy_exit  = ce_buy_exit
-            else:
-                adj_pe_sell_exit = pe_sell_exit
-                adj_pe_buy_exit  = pe_buy_exit
-
         # Add exit snapshot to trade log
         exit_spot = get_1min_value(nifty_1m, exit_ts, 'close') or spot
         exit_vix  = get_1min_value(vix_1m,   exit_ts, 'close')
@@ -1299,24 +1296,6 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # Winning side roll adjustment
         # adj_trigger_ts is set if the scanner detected a roll trigger
         # ----------------------------------------------------------------
-        adj_made           = False
-        adj_side           = None
-        adj_ce_sell_strike = None
-        adj_pe_sell_strike = None
-        adj_ce_sell_entry  = None   # new sell leg proceeds on rolled side
-        adj_ce_buy_entry   = None   # buyback cost of old sell leg on rolled side
-        adj_pe_sell_entry  = None
-        adj_pe_buy_entry   = None
-        adj_ce_sell_exit   = None
-        adj_ce_buy_exit    = None
-        adj_pe_sell_exit   = None
-        adj_pe_buy_exit    = None
-        adj_exit_reason    = None
-        adj_pl_points      = None
-        adj_entry_spot_val = None
-        adj_days_remaining_val = None
-        adj_trigger_day_val    = None
-
         if adj_trigger_ts is not None and adj_winning_side is not None:
 
             # Roll execution timestamp: open of next 1-min candle
@@ -1438,6 +1417,54 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
                 adj_exit_reason = sl_reason if sl_reason is not None else 'pre_expiry'
                 adj_made = True
+
+        # ----------------------------------------------------------------
+        # Re-price exit if adjustment was made (sl_ts/sl_reason may have
+        # changed from the second scanner call inside the adjustment block)
+        # ----------------------------------------------------------------
+        if adj_made:
+            if sl_ts is None:
+                sl_ts     = scan_end
+                sl_reason = 'pre_expiry'
+            if sl_reason == 'pre_expiry':
+                exit_ts  = elm_time if elm_time is not None else scan_end
+                use_col  = 'close'
+                slip     = False
+            else:
+                exit_ts  = sl_ts + pd.Timedelta(minutes=1)
+                use_col  = 'open'
+                slip     = True
+
+            ce_sell_exit, ce_sell_exit_raw = get_exit_price(
+                ce_sell_df, ce_sell_ltp, is_buy=True)
+            ce_buy_exit,  ce_buy_exit_raw  = get_exit_price(
+                ce_buy_df,  ce_buy_ltp,  is_buy=False)
+            pe_sell_exit, pe_sell_exit_raw = get_exit_price(
+                pe_sell_df, pe_sell_ltp, is_buy=True)
+            pe_buy_exit,  pe_buy_exit_raw  = get_exit_price(
+                pe_buy_df,  pe_buy_ltp,  is_buy=False)
+
+            ce_pl_base = _calc_exit_pl(ce_sell_entry, ce_sell_exit,
+                                        ce_buy_entry,  ce_buy_exit)
+            pe_pl_base = _calc_exit_pl(pe_sell_entry, pe_sell_exit,
+                                        pe_buy_entry,  pe_buy_exit)
+            base_pl = round(ce_pl_base + pe_pl_base, 2)
+
+            # adj_pl_points: roll P&L only = new sell proceeds - new sell exit - buyback cost
+            if adj_side == 'ce' and adj_ce_sell_entry is not None and adj_ce_buy_entry is not None:
+                adj_pl_points    = round((adj_ce_sell_entry - ce_sell_exit) - adj_ce_buy_entry, 2)
+                adj_ce_sell_exit = ce_sell_exit
+                adj_ce_buy_exit  = ce_buy_exit
+            elif adj_side == 'pe' and adj_pe_sell_entry is not None and adj_pe_buy_entry is not None:
+                adj_pl_points    = round((adj_pe_sell_entry - pe_sell_exit) - adj_pe_buy_entry, 2)
+                adj_pe_sell_exit = pe_sell_exit
+                adj_pe_buy_exit  = pe_buy_exit
+
+            logger.info(
+                f"  ADJ EXIT {adj_exit_reason:20s} | {exit_ts} | "
+                f"Roll P&L: {adj_pl_points:+.1f} pts | "
+                f"Total P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
+            )
 
         # ----------------------------------------------------------------
         # Build final trade record

@@ -37,9 +37,9 @@ BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE belo
 # Falls back to the last band's delta if entry_vix exceeds all bounds.
 # To use a flat delta across all VIX levels, set all bands to the same value.
 VIX_DELTA_BANDS         = [
-    (18.0, 0.30),   # VIX up to 18:   0.25 delta
-    (20.0, 0.30),   # VIX 18–20:      0.25 delta
-    (22.0, 0.30),   # VIX 20–22:      0.25 delta
+    (18.0, 0.25),   # VIX up to 18:   0.25 delta
+    (20.0, 0.25),   # VIX 18–20:      0.25 delta
+    (22.0, 0.25),   # VIX 20–22:      0.25 delta
     (25.0, 0.30),   # VIX 22–25:      0.30 delta
 ]
 
@@ -110,9 +110,9 @@ ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before s
 ENABLE_ADJUSTMENT               = True
 ADJUSTMENT_TRIGGER_DAY_MIN      = 4     # earliest trade day adjustment can fire (0 = entry day)
 ADJUSTMENT_TRIGGER_DAY_MAX      = 5     # latest trade day adjustment can fire
-ADJUSTMENT_WIN_SELL_LTP_MAX     = 10    # winning side sold option LTP must be <= this (pts)
 ADJUSTMENT_LOSE_PL_THRESHOLD    = -30   # losing side unrealised P&L must be <= this (pts)
-ADJUSTMENT_NEW_STRIKE_DISTANCE  = 200   # new sell strike distance from current spot (pts)
+ADJUSTMENT_WIN_SELL_LTP_MAX     = 7    # winning side sold option LTP must be <= this (pts)
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 150   # new sell strike distance from current spot (pts)
 ADJUSTMENT_MIN_DAYS_REMAINING   = 1     # minimum calendar days remaining to sell expiry
 
 # ---------------------------------------------------------------------------
