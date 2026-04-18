@@ -63,7 +63,7 @@ warnings.filterwarnings('ignore')
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -772,6 +772,26 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 and entry_time is not None and sell_expiry_end is not None):
             days_in_trade       = (ts.date() - entry_time.date()).days
             days_to_sell_expiry = (sell_expiry_end.date() - ts.date()).days
+
+            # Debug log for specific trade — remove after diagnosis
+            _debug_trade = (entry_time is not None and
+                            entry_time.date().strftime('%Y-%m-%d') == '2022-01-19')
+            if _debug_trade and days_in_trade >= ADJUSTMENT_TRIGGER_DAY_MIN - 1:
+                winning_side_dbg = 'ce' if ce_pl >= pe_pl else 'pe'
+                win_ltp_dbg = running_ce_sell if winning_side_dbg == 'ce' else running_pe_sell
+                lose_pl_dbg = pe_pl if winning_side_dbg == 'ce' else ce_pl
+                import logging as _log
+                _log.getLogger(__name__).debug(
+                    f"  [ADJ-DEBUG] {ts} | day={days_in_trade} "
+                    f"days_to_exp={days_to_sell_expiry} | "
+                    f"ce_pl={ce_pl:.1f} pe_pl={pe_pl:.1f} | "
+                    f"win={winning_side_dbg} win_ltp={win_ltp_dbg:.2f} "
+                    f"(need<={ADJUSTMENT_WIN_SELL_LTP_MAX}) | "
+                    f"lose_pl={lose_pl_dbg:.1f} "
+                    f"(need<={ADJUSTMENT_LOSE_PL_THRESHOLD}) | "
+                    f"day_ok={ADJUSTMENT_TRIGGER_DAY_MIN<=days_in_trade<=ADJUSTMENT_TRIGGER_DAY_MAX} "
+                    f"exp_ok={days_to_sell_expiry>=ADJUSTMENT_MIN_DAYS_REMAINING}"
+                )
 
             if (ADJUSTMENT_TRIGGER_DAY_MIN <= days_in_trade <= ADJUSTMENT_TRIGGER_DAY_MAX
                     and days_to_sell_expiry >= ADJUSTMENT_MIN_DAYS_REMAINING):
