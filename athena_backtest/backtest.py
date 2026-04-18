@@ -1300,18 +1300,15 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             win  = adj_winning_side   # side being rolled ('ce' or 'pe')
             lose = 'pe' if win == 'ce' else 'ce'  # untouched side
 
-            # Step 1: compute new sell strike at fixed distance from spot, OTM
-            # CE roll (Trigger B fired): new CE sell above spot (OTM call)
-            # PE roll (Trigger A fired): new PE sell below spot (OTM put)
+            # Step 1: compute new sell strike — step existing sell strike toward spot
+            # CE roll (Trigger B): new CE sell = ce_sell_strike - distance (moves down toward spot)
+            # PE roll (Trigger A): new PE sell = pe_sell_strike + distance (moves up toward spot)
+            # OTM check: new CE must be > roll_spot; new PE must be < roll_spot
             if win == 'ce':
-                new_sell_strike = int(round(
-                    (roll_spot + ADJUSTMENT_NEW_STRIKE_DISTANCE) / STRIKE_STEP
-                ) * STRIKE_STEP)
+                new_sell_strike = ce_sell_strike - ADJUSTMENT_NEW_STRIKE_DISTANCE
                 otm_ok = new_sell_strike > roll_spot
             else:
-                new_sell_strike = int(round(
-                    (roll_spot - ADJUSTMENT_NEW_STRIKE_DISTANCE) / STRIKE_STEP
-                ) * STRIKE_STEP)
+                new_sell_strike = pe_sell_strike + ADJUSTMENT_NEW_STRIKE_DISTANCE
                 otm_ok = new_sell_strike < roll_spot
 
             if not otm_ok:
@@ -1321,7 +1318,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                  sl_ts, sl_reason, running_peak_pl, _, _) = \
                     append_1min_snapshots_window(
-                        roll_ts, scan_end,
+                        roll_ts - pd.Timedelta(minutes=1), scan_end,
                         nifty_1m, vix_1m,
                         ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                         ce_sell_strike, pe_sell_strike,
@@ -1373,7 +1370,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                     (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                      sl_ts, sl_reason, running_peak_pl, _, _) = \
                         append_1min_snapshots_window(
-                            roll_ts, scan_end,
+                            roll_ts - pd.Timedelta(minutes=1), scan_end,
                             nifty_1m, vix_1m,
                             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                             ce_sell_strike, pe_sell_strike,
@@ -1445,10 +1442,11 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         (pe_buy_entry - pe_sell_entry), 2)
 
                     # Step 5: re-run scanner from roll_ts for remainder of week
+                    # from_ts uses strict > so pass roll_ts - 1min to include roll_ts itself
                     (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                      sl_ts, sl_reason, running_peak_pl, _, _) = \
                         append_1min_snapshots_window(
-                            roll_ts, scan_end,
+                            roll_ts - pd.Timedelta(minutes=1), scan_end,
                             nifty_1m, vix_1m,
                             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                             ce_sell_strike, pe_sell_strike,
