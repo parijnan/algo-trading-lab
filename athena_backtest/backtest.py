@@ -51,7 +51,7 @@ from configs import (
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT,
     ADJUSTMENT_TRIGGER_DAY_MIN, ADJUSTMENT_TRIGGER_DAY_MAX,
-    ADJUSTMENT_WIN_SELL_LTP_MAX, ADJUSTMENT_LOSE_PL_THRESHOLD,
+    ADJUSTMENT_WIN_SELL_DECAY_PCT, ADJUSTMENT_LOSE_PL_THRESHOLD,
     ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_MIN_DAYS_REMAINING,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
@@ -778,15 +778,19 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                             entry_time.date().strftime('%Y-%m-%d') == '2022-01-19')
             if _debug_trade and days_in_trade >= ADJUSTMENT_TRIGGER_DAY_MIN - 1:
                 winning_side_dbg = 'ce' if ce_pl >= pe_pl else 'pe'
-                win_ltp_dbg = running_ce_sell if winning_side_dbg == 'ce' else running_pe_sell
-                lose_pl_dbg = pe_pl if winning_side_dbg == 'ce' else ce_pl
+                win_ltp_dbg   = running_ce_sell if winning_side_dbg == 'ce' else running_pe_sell
+                win_entry_dbg = ce_sell_entry   if winning_side_dbg == 'ce' else pe_sell_entry
+                lose_pl_dbg   = pe_pl if winning_side_dbg == 'ce' else ce_pl
+                decay_dbg     = (win_ltp_dbg / win_entry_dbg) if win_entry_dbg > 0 else 1.0
                 import logging as _log
                 _log.getLogger(__name__).debug(
                     f"  [ADJ-DEBUG] {ts} | day={days_in_trade} "
                     f"days_to_exp={days_to_sell_expiry} | "
                     f"ce_pl={ce_pl:.1f} pe_pl={pe_pl:.1f} | "
                     f"win={winning_side_dbg} win_ltp={win_ltp_dbg:.2f} "
-                    f"(need<={ADJUSTMENT_WIN_SELL_LTP_MAX}) | "
+                    f"win_entry={win_entry_dbg:.2f} "
+                    f"decay={decay_dbg:.2f} "
+                    f"(need<={ADJUSTMENT_WIN_SELL_DECAY_PCT}) | "
                     f"lose_pl={lose_pl_dbg:.1f} "
                     f"(need<={ADJUSTMENT_LOSE_PL_THRESHOLD}) | "
                     f"day_ok={ADJUSTMENT_TRIGGER_DAY_MIN<=days_in_trade<=ADJUSTMENT_TRIGGER_DAY_MAX} "
@@ -799,10 +803,15 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 winning_side = 'ce' if ce_pl >= pe_pl else 'pe'
                 losing_side  = 'pe' if winning_side == 'ce' else 'ce'
 
-                win_sell_ltp  = running_ce_sell if winning_side == 'ce' else running_pe_sell
-                lose_pl       = pe_pl           if losing_side  == 'pe' else ce_pl
+                win_sell_ltp   = running_ce_sell if winning_side == 'ce' else running_pe_sell
+                win_sell_entry = ce_sell_entry   if winning_side == 'ce' else pe_sell_entry
+                lose_pl        = pe_pl           if losing_side  == 'pe' else ce_pl
 
-                if (win_sell_ltp  <= ADJUSTMENT_WIN_SELL_LTP_MAX
+                # Decay check: sold option must have decayed to <= X% of entry price
+                # Excludes cases where spot moved toward the sell strike (LTP inflated)
+                win_sell_decay = (win_sell_ltp / win_sell_entry) if win_sell_entry > 0 else 1.0
+
+                if (win_sell_decay <= ADJUSTMENT_WIN_SELL_DECAY_PCT
                         and lose_pl <= ADJUSTMENT_LOSE_PL_THRESHOLD):
                     adj_trigger_ts   = ts
                     adj_winning_side = winning_side
@@ -1652,7 +1661,7 @@ if __name__ == "__main__":
                 f"({PROFIT_TARGET_PCT_NET_DEBIT * 100:.0f}% of net debit)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}"
                 + (f" (days {ADJUSTMENT_TRIGGER_DAY_MIN}–{ADJUSTMENT_TRIGGER_DAY_MAX}, "
-                   f"win_ltp<={ADJUSTMENT_WIN_SELL_LTP_MAX}, "
+                   f"win_decay<={ADJUSTMENT_WIN_SELL_DECAY_PCT}, "
                    f"lose_pl<={ADJUSTMENT_LOSE_PL_THRESHOLD}, "
                    f"dist={ADJUSTMENT_NEW_STRIKE_DISTANCE})"
                    if ENABLE_ADJUSTMENT else ""))
