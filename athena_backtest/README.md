@@ -4,42 +4,49 @@ Part of the **Algo Trading Lab** project.
 
 ## Strategy Overview
 
-A market-neutral, theta-positive double calendar spread on Nifty weekly options. Sells 20-delta CE and PE on the near-term Tuesday expiry and buys the same strikes on the monthly expiry (last Tuesday of the current month). The long-vega profile benefits from IV expansion; the time decay differential between the two expiries drives profit in stable markets.
+A market-neutral, theta-positive double calendar spread on Nifty weekly options. Sells near-delta CE and PE on the next Tuesday expiry (~8 days out) and buys the same strikes on the monthly expiry. The long-vega profile benefits from IV expansion; the time decay differential between the two expiries drives profit in range-bound weeks.
 
 | Parameter | Value |
 |---|---|
 | Instrument | Nifty weekly options |
 | Structure | Double calendar (CE + PE, near-term sell / monthly buy) |
-| Entry | Monday 10:30 AM |
-| Sell expiry | Next Tuesday from entry (~7 DTE) |
-| Buy expiry | Last Tuesday of current month; rolled to next month if DTE < 14 |
-| Strike selection | 20-delta sell leg, rounded to nearest 100 points |
+| Entry | Day before previous Tuesday expiry, 10:30 AM |
+| Exit | Day before sell expiry, 10:25 AM (pre-expiry exit) |
+| Sell expiry | Next Tuesday from entry (~8 DTE) |
+| Buy expiry | Nearest monthly expiry with DTE ≥ 16; rolls to next month if below threshold |
+| Strike selection | Delta-targeted sell leg, rounded to nearest 100 points |
 | Delta computation | mibian Black-Scholes (IV backed out from market price) |
+| VIX filter | Entry only when 16 ≤ India VIX ≤ 25 |
+
+## Delta Targeting
+
+Delta target is VIX-conditional:
+
+| VIX Band | Target Delta |
+|---|---|
+| 16–22 | 0.25 |
+| 22–25 | 0.30 |
 
 ## Exit Mechanisms
 
-All four legs always exit simultaneously. Priority order (checked on every 1-min candle):
+All four legs always exit simultaneously. Only the pre-expiry exit is active in the current production baseline. Additional mechanisms are under calibration.
 
-| Priority | Mechanism | Default | Toggle |
-|---|---|---|---|
-| 1 | Pre-expiry exit | 15:15 Monday before sell expiry | Always active |
-| 2 | Spread SL | Combined P&L ≤ −75% of net premium | `ENABLE_SPREAD_SL` |
-| 3 | Index SL | Spot within 50 pts of either sell strike | `ENABLE_INDEX_SL` |
-| 4 | Option SL | Sell LTP > 2× sell entry (either side) | `ENABLE_OPTION_SL` |
-| 5 | Profit target | Combined P&L ≥ 50% of max theoretical profit | `ENABLE_PROFIT_TARGET` |
+| Priority | Mechanism | Status |
+|---|---|---|
+| 1 | Pre-expiry exit at 10:25 AM day before sell expiry | Always active |
+| 2 | Spread SL — combined P&L ≤ −N points | Under calibration |
+| 3 | Adjustment — winning side tightening | Under development |
 
 ## Adjustment Logic
 
-When a SL fires within the cutoff window (Wednesday 15:00), the position closes and a fresh one-sided calendar is entered on the breached side:
+Under active development. Preliminary design based on trade log analysis:
 
-- Breached side: spot above entry → CE; spot below entry → PE
-- New entry: current 20-delta strike at next 1-min open, same buy expiry
-- Evaluated independently — own P&L vs own max theoretical profit
+- Trigger window: day 2–3 of the trade
+- Condition: losing side unrealised P&L ≤ −30 pts AND momentum confirmed
+- Action: tighten the winning side's sell strike closer to current spot (roll sell leg only; buy leg unchanged)
+- Constraint: new sell strike must remain ≥ 150 pts from current spot
 - Maximum one adjustment per trade week
-
-## Max Theoretical Profit
-
-Approximated at entry using mibian: IV is backed out from the sell leg's market price, then used to project the buy leg's theoretical value at sell expiry. This adapts the profit target to IV conditions at the time of entry.
+- Losing side is never touched
 
 ## Project Structure
 
@@ -59,14 +66,17 @@ athena_backtest/
 2. Update `BACKTEST_START_DATE` / `BACKTEST_END_DATE` in `configs.py` if needed
 3. Run: `python backtest.py`
 
-No precompute step required — Athena reads 1-min data directly.
-
 ## Output
 
 **`data/trade_summary.csv`** — one row per trade week:
-- Entry details: time, spot, VIX, strikes, deltas, net premium per side, max theoretical profit
-- Exit details: time, reason, per-side and total P&L
-- Adjustment details: side, strikes, entry/exit prices, P&L, exit reason
+
+| Column group | Contents |
+|---|---|
+| Entry | time, spot, VIX, strikes, deltas, net debit per side, max theoretical profit, target delta used |
+| Exit | time, reason, per-side and total P&L |
+| Intraweek | max/min spot, max/min VIX, max/min unrealised P&L with timestamps |
+| SL context | triggered side, trigger time/spot/day, untouched side values at SL, days remaining at SL |
+| Adjustment | side, strikes, entry/exit prices, P&L, exit reason, entry spot, days remaining |
 
 **`data/trade_logs/trade_NNNN_YYYY-MM-DD.csv`** — one row per minute while in trade:
 - Spot, VIX, all four leg LTPs
@@ -75,22 +85,40 @@ No precompute step required — Athena reads 1-min data directly.
 
 ## Key Parameters
 
-| Parameter | Default | Notes |
+| Parameter | Current value | Notes |
 |---|---|---|
-| `ENTRY_TIME` | `10:30` | Monday entry |
-| `DELTA_TARGET` | `0.20` | Sell leg abs delta |
+| `ENTRY_TIME` | `10:30` | Monday equivalent entry |
+| `EXIT_TIME` | `10:25` | Day before sell expiry |
+| `VIX_FILTER_LOW` | `16.0` | No entry below this |
+| `VIX_FILTER_HIGH` | `25.0` | No entry above this |
+| `VIX_DELTA_BANDS` | `[(22.0, 0.25), (25.0, 0.30)]` | VIX-conditional delta |
 | `STRIKE_STEP` | `100` | Rounding interval |
-| `BUY_LEG_MIN_DTE` | `14` | Roll threshold |
-| `PROFIT_TARGET_PCT` | `0.50` | % of max theoretical profit |
-| `INDEX_SL_OFFSET` | `50` | Points before sell strike goes ATM |
-| `OPTION_SL_MULTIPLIER` | `2.0` | × sell entry |
-| `SPREAD_SL_PCT` | `0.75` | % of total net premium |
+| `BUY_LEG_MIN_DTE` | `16` | Roll threshold |
 | `SLIPPAGE_POINTS` | `1.0` | Per leg |
+| `SPREAD_SL_POINTS` | `None` | Absolute point floor — under calibration |
+| `ENABLE_ADJUSTMENT` | `False` | Pending development |
+
+## Relationship to Artemis and Apollo
+
+Athena is the third strategy in the Algo Trading Lab. It complements Artemis (Sensex iron condor, short vega, low VIX) and Apollo (Nifty directional debit spread, high VIX). At 10:30 AM every Monday, the system reads VIX and routes to the appropriate strategy:
+
+| VIX | Strategy |
+|---|---|
+| < 16 | Artemis |
+| 16–25 | Athena |
+| > 25 | Apollo (if trending) |
+
+Artemis always closes by Thursday. Athena closes by Monday 10:25 AM. The margin handoff is clean with no overlap.
 
 ## Status
 
 - [x] configs.py
 - [x] backtest.py
-- [ ] Backtest run and Phase 1 calibration
-- [ ] Optimisation
+- [x] VIX filter (16–25)
+- [x] VIX-conditional delta targeting
+- [x] Configurable entry/exit time
+- [x] Spread SL (absolute points)
+- [x] Max/min P&L with timestamps in trade summary
+- [ ] Adjustment mechanism (spec written, pending implementation)
+- [ ] Final parameter calibration
 - [ ] Live execution module
