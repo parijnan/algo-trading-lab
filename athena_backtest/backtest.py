@@ -63,7 +63,7 @@ warnings.filterwarnings('ignore')
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -773,30 +773,6 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             days_in_trade       = (ts.date() - entry_time.date()).days
             days_to_sell_expiry = (sell_expiry_end.date() - ts.date()).days
 
-            # Debug log for specific trade — remove after diagnosis
-            _debug_trade = (entry_time is not None and
-                            entry_time.date().strftime('%Y-%m-%d') == '2022-01-19')
-            if _debug_trade and days_in_trade >= ADJUSTMENT_TRIGGER_DAY_MIN - 1:
-                winning_side_dbg = 'ce' if ce_pl >= pe_pl else 'pe'
-                win_ltp_dbg   = running_ce_sell if winning_side_dbg == 'ce' else running_pe_sell
-                win_entry_dbg = ce_sell_entry   if winning_side_dbg == 'ce' else pe_sell_entry
-                lose_pl_dbg   = pe_pl if winning_side_dbg == 'ce' else ce_pl
-                decay_dbg     = (win_ltp_dbg / win_entry_dbg) if win_entry_dbg > 0 else 1.0
-                import logging as _log
-                _log.getLogger(__name__).debug(
-                    f"  [ADJ-DEBUG] {ts} | day={days_in_trade} "
-                    f"days_to_exp={days_to_sell_expiry} | "
-                    f"ce_pl={ce_pl:.1f} pe_pl={pe_pl:.1f} | "
-                    f"win={winning_side_dbg} win_ltp={win_ltp_dbg:.2f} "
-                    f"win_entry={win_entry_dbg:.2f} "
-                    f"decay={decay_dbg:.2f} "
-                    f"(need<={ADJUSTMENT_WIN_SELL_DECAY_PCT}) | "
-                    f"lose_pl={lose_pl_dbg:.1f} "
-                    f"(need<={ADJUSTMENT_LOSE_PL_THRESHOLD}) | "
-                    f"day_ok={ADJUSTMENT_TRIGGER_DAY_MIN<=days_in_trade<=ADJUSTMENT_TRIGGER_DAY_MAX} "
-                    f"exp_ok={days_to_sell_expiry>=ADJUSTMENT_MIN_DAYS_REMAINING}"
-                )
-
             if (ADJUSTMENT_TRIGGER_DAY_MIN <= days_in_trade <= ADJUSTMENT_TRIGGER_DAY_MAX
                     and days_to_sell_expiry >= ADJUSTMENT_MIN_DAYS_REMAINING):
 
@@ -810,6 +786,16 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 # Decay check: sold option must have decayed to <= X% of entry price
                 # Excludes cases where spot moved toward the sell strike (LTP inflated)
                 win_sell_decay = (win_sell_ltp / win_sell_entry) if win_sell_entry > 0 else 1.0
+
+                # Log decay snapshot once per trade at first candle of trigger window
+                # for distribution analysis — remove after calibration
+                if days_in_trade == ADJUSTMENT_TRIGGER_DAY_MIN and ts.time() == pd.Timestamp('09:15').time():
+                    logger.info(
+                        f"  [DECAY-DIST] {entry_time.date()} day={days_in_trade} | "
+                        f"win={winning_side} decay={win_sell_decay:.3f} "
+                        f"(ltp={win_sell_ltp:.1f}/entry={win_sell_entry:.1f}) | "
+                        f"lose_pl={lose_pl:.1f}"
+                    )
 
                 if (win_sell_decay <= ADJUSTMENT_WIN_SELL_DECAY_PCT
                         and lose_pl <= ADJUSTMENT_LOSE_PL_THRESHOLD):
@@ -1362,8 +1348,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 logger.info(
                     f"  ADJ SKIP | No data for new sell strike {new_sell_strike}{win} "
                     f"at {roll_ts} — roll aborted")
-                # scanner already stopped — need to re-run from roll_ts to scan_end
-                # with adjustment_already_made=True so no further trigger is detected
+                # scanner already stopped — re-run remainder with adjustment disabled
                 (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                  sl_ts, sl_reason, running_peak_pl, _, _) = \
                     append_1min_snapshots_window(
@@ -1380,6 +1365,25 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         entry_time=entry_ts,
                         sell_expiry_end=sell_expiry_end,
                         adjustment_already_made=True)
+                # Re-price exit with updated sl_ts/sl_reason from resumed scan
+                if sl_ts is None:
+                    sl_ts     = scan_end
+                    sl_reason = 'pre_expiry'
+                if sl_reason == 'pre_expiry':
+                    exit_ts  = elm_time if elm_time is not None else scan_end
+                    use_col  = 'close'
+                    slip     = False
+                else:
+                    exit_ts  = sl_ts + pd.Timedelta(minutes=1)
+                    use_col  = 'open'
+                    slip     = True
+                ce_sell_exit, ce_sell_exit_raw = get_exit_price(ce_sell_df, ce_sell_ltp, is_buy=True)
+                ce_buy_exit,  ce_buy_exit_raw  = get_exit_price(ce_buy_df,  ce_buy_ltp,  is_buy=False)
+                pe_sell_exit, pe_sell_exit_raw = get_exit_price(pe_sell_df, pe_sell_ltp, is_buy=True)
+                pe_buy_exit,  pe_buy_exit_raw  = get_exit_price(pe_buy_df,  pe_buy_ltp,  is_buy=False)
+                ce_pl_base = _calc_exit_pl(ce_sell_entry, ce_sell_exit, ce_buy_entry,  ce_buy_exit)
+                pe_pl_base = _calc_exit_pl(pe_sell_entry, pe_sell_exit, pe_buy_entry,  pe_buy_exit)
+                base_pl    = round(ce_pl_base + pe_pl_base, 2)
             else:
                 new_sell_entry = apply_slippage(new_sell_raw, is_buy=False)
 
