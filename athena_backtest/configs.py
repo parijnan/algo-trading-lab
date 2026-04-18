@@ -91,8 +91,8 @@ SPREAD_SL_POINTS        = 100           # Exit when combined P&L <= -X points
 # Set ENABLE_TRAIL_STOP = False to disable entirely.
 # ---------------------------------------------------------------------------
 ENABLE_TRAIL_STOP       = False
-TRAIL_ACTIVATION_POINTS = 25            # Trail arms once peak P&L reaches this
-TRAIL_POINTS            = 15            # Exit if P&L falls this far from peak
+TRAIL_ACTIVATION_POINTS = 20            # Trail arms once peak P&L reaches this
+TRAIL_POINTS            = 10            # Exit if P&L falls this far from peak
 
 # ---------------------------------------------------------------------------
 # Pre-expiry exit (mandatory — always active, not toggleable)
@@ -102,17 +102,18 @@ TRAIL_POINTS            = 15            # Exit if P&L falls this far from peak
 ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before sell expiry
 
 # ---------------------------------------------------------------------------
-# Adjustment (re-enter fresh double calendar at current spot after any SL exit)
-# Fires on any SL exit (index_sl, option_sl, spread_sl) if days remaining
-# at SL trigger >= ADJUSTMENT_MIN_DAYS_REMAINING.
-# Re-entry uses same sell and buy expiry as original trade.
-# Both CE and PE sides re-entered at current spot and target delta.
-# Maximum one adjustment per trade — hardcoded, no config parameter.
-# Evaluated independently: own P&L vs own net debit (not original trade's).
+# Adjustment — winning side roll
+# When conditions are met mid-trade, roll the winning side's sell leg to a
+# closer strike to collect additional premium. Buy legs are never touched.
+# Losing side is never touched. Maximum one adjustment per trade.
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT               = False
-ADJUSTMENT_MIN_DAYS_REMAINING   = 3     # minimum calendar days from SL trigger to elm_time
-                                        # for re-entry to be attempted
+ENABLE_ADJUSTMENT               = True
+ADJUSTMENT_TRIGGER_DAY_MIN      = 4     # earliest trade day adjustment can fire (0 = entry day)
+ADJUSTMENT_TRIGGER_DAY_MAX      = 5     # latest trade day adjustment can fire
+ADJUSTMENT_WIN_SELL_LTP_MAX     = 10    # winning side sold option LTP must be <= this (pts)
+ADJUSTMENT_LOSE_PL_THRESHOLD    = -30   # losing side unrealised P&L must be <= this (pts)
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 200   # new sell strike distance from current spot (pts)
+ADJUSTMENT_MIN_DAYS_REMAINING   = 1     # minimum calendar days remaining to sell expiry
 
 # ---------------------------------------------------------------------------
 # Execution
@@ -125,4 +126,4 @@ RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibi
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = '2026-04-16'          # None = full available data
+BACKTEST_END_DATE       = '2026-04-17'          # None = full available data
