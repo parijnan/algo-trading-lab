@@ -108,13 +108,13 @@ ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before s
 # Losing side is never touched. Maximum one adjustment per trade.
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = True
-ADJUSTMENT_TRIGGER_DAY_MIN      = 4     # earliest trade day adjustment can fire (0 = entry day)
-ADJUSTMENT_TRIGGER_DAY_MAX      = 5     # latest trade day adjustment can fire
-ADJUSTMENT_WIN_SELL_DECAY_PCT   = 0.10  # winning side sold option LTP must be <= this fraction
-                                        # of its entry price (e.g. 0.15 = decayed to ≤15% of entry)
-ADJUSTMENT_LOSE_PL_THRESHOLD    = -30   # losing side unrealised P&L must be <= this (pts)
-ADJUSTMENT_NEW_STRIKE_DISTANCE  = 150   # new sell strike distance from current spot (pts)
-ADJUSTMENT_MIN_DAYS_REMAINING   = 1     # minimum calendar days remaining to sell expiry
+ADJUSTMENT_TRIGGER_OFFSET       = -100    # pts from sold strike at which trigger fires
+                                        # positive = still OTM, 0 = ATM, negative = ITM
+                                        # Trigger A: fires when spot >= ce_sell_strike - offset
+                                        # Trigger B: fires when spot <= pe_sell_strike + offset
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 100   # new sell strike this many pts from current spot
+ADJUSTMENT_EXCLUDED_DAYS        = (6, 7)  # trade days on which adjustment cannot fire
+                                                     # day 0 = entry day; allows days 3, 4, 5
 
 # ---------------------------------------------------------------------------
 # Execution

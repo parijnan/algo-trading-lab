@@ -50,9 +50,8 @@ from configs import (
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT,
-    ADJUSTMENT_TRIGGER_DAY_MIN, ADJUSTMENT_TRIGGER_DAY_MAX,
-    ADJUSTMENT_WIN_SELL_DECAY_PCT, ADJUSTMENT_LOSE_PL_THRESHOLD,
-    ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_MIN_DAYS_REMAINING,
+    ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
+    ADJUSTMENT_EXCLUDED_DAYS,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
 )
@@ -769,42 +768,24 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'profit_target'
             break
 
-        # Winning side roll adjustment trigger
-        # Only checked if adjustment not yet made and context params provided
+        # Spot-driven adjustment trigger
+        # Checked on every candle if adjustment not yet made and context params provided
         if (ENABLE_ADJUSTMENT and not adjustment_already_made
                 and entry_time is not None and sell_expiry_end is not None):
-            days_in_trade       = (ts.date() - entry_time.date()).days
-            days_to_sell_expiry = (sell_expiry_end.date() - ts.date()).days
+            days_in_trade = (ts.date() - entry_time.date()).days
 
-            if (ADJUSTMENT_TRIGGER_DAY_MIN <= days_in_trade <= ADJUSTMENT_TRIGGER_DAY_MAX
-                    and days_to_sell_expiry >= ADJUSTMENT_MIN_DAYS_REMAINING):
-
-                winning_side = 'ce' if ce_pl >= pe_pl else 'pe'
-                losing_side  = 'pe' if winning_side == 'ce' else 'ce'
-
-                win_sell_ltp   = running_ce_sell if winning_side == 'ce' else running_pe_sell
-                win_sell_entry = ce_sell_entry   if winning_side == 'ce' else pe_sell_entry
-                lose_pl        = pe_pl           if losing_side  == 'pe' else ce_pl
-
-                # Decay check: sold option must have decayed to <= X% of entry price
-                # Excludes cases where spot moved toward the sell strike (LTP inflated)
-                win_sell_decay = (win_sell_ltp / win_sell_entry) if win_sell_entry > 0 else 1.0
-
-                # Log decay snapshot once per trade at first candle of trigger window
-                # for distribution analysis — remove after calibration
-                if days_in_trade == ADJUSTMENT_TRIGGER_DAY_MIN and ts.time() == pd.Timestamp('09:15').time():
-                    logger.info(
-                        f"  [DECAY-DIST] {entry_time.date()} day={days_in_trade} | "
-                        f"win={winning_side} decay={win_sell_decay:.3f} "
-                        f"(ltp={win_sell_ltp:.1f}/entry={win_sell_entry:.1f}) | "
-                        f"lose_pl={lose_pl:.1f}"
-                    )
-
-                if (win_sell_decay <= ADJUSTMENT_WIN_SELL_DECAY_PCT
-                        and lose_pl <= ADJUSTMENT_LOSE_PL_THRESHOLD):
+            if days_in_trade not in ADJUSTMENT_EXCLUDED_DAYS:
+                # Trigger A: spot approaches CE sell strike — roll PE
+                if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
                     adj_trigger_ts   = ts
-                    adj_winning_side = winning_side
-                    break  # return to caller for roll execution
+                    adj_winning_side = 'pe'   # PE side gets rolled
+                    break
+
+                # Trigger B: spot approaches PE sell strike — roll CE
+                if spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET:
+                    adj_trigger_ts   = ts
+                    adj_winning_side = 'ce'   # CE side gets rolled
+                    break
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,
@@ -1313,15 +1294,15 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         if adj_trigger_ts is not None and adj_winning_side is not None:
 
             # Roll execution timestamp: open of next 1-min candle
-            roll_ts  = adj_trigger_ts + pd.Timedelta(minutes=1)
+            roll_ts   = adj_trigger_ts + pd.Timedelta(minutes=1)
             roll_spot = get_1min_value(nifty_1m, roll_ts, 'close') or spot
 
-            win  = adj_winning_side          # 'ce' or 'pe'
-            lose = 'pe' if win == 'ce' else 'ce'
+            win  = adj_winning_side   # side being rolled ('ce' or 'pe')
+            lose = 'pe' if win == 'ce' else 'ce'  # untouched side
 
-            # Step 1: compute new sell strike — fixed distance from spot, OTM side
-            # CE winning side: spot moved down, new CE sell must be above spot (OTM CE = strike > spot)
-            # PE winning side: spot moved up, new PE sell must be below spot (OTM PE = strike < spot)
+            # Step 1: compute new sell strike at fixed distance from spot, OTM
+            # CE roll (Trigger B fired): new CE sell above spot (OTM call)
+            # PE roll (Trigger A fired): new PE sell below spot (OTM put)
             if win == 'ce':
                 new_sell_strike = int(round(
                     (roll_spot + ADJUSTMENT_NEW_STRIKE_DISTANCE) / STRIKE_STEP
@@ -1718,10 +1699,9 @@ if __name__ == "__main__":
     logger.info(f"  Profit target: {'ON' if ENABLE_PROFIT_TARGET else 'OFF'} "
                 f"({PROFIT_TARGET_PCT_NET_DEBIT * 100:.0f}% of net debit)")
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}"
-                + (f" (days {ADJUSTMENT_TRIGGER_DAY_MIN}–{ADJUSTMENT_TRIGGER_DAY_MAX}, "
-                   f"win_decay<={ADJUSTMENT_WIN_SELL_DECAY_PCT}, "
-                   f"lose_pl<={ADJUSTMENT_LOSE_PL_THRESHOLD}, "
-                   f"dist={ADJUSTMENT_NEW_STRIKE_DISTANCE})"
+                + (f" (trigger_offset={ADJUSTMENT_TRIGGER_OFFSET}, "
+                   f"dist={ADJUSTMENT_NEW_STRIKE_DISTANCE}, "
+                   f"excluded_days={ADJUSTMENT_EXCLUDED_DAYS})"
                    if ENABLE_ADJUSTMENT else ""))
     logger.info(f"  Trail stop   : {'ON' if ENABLE_TRAIL_STOP else 'OFF'}"
                 + (f" (activate={TRAIL_ACTIVATION_POINTS} pts, trail={TRAIL_POINTS} pts)"
