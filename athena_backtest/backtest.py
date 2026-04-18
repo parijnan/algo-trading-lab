@@ -1303,25 +1303,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     pe_buy_entry,  pe_buy_exit)
         base_pl = round(ce_pl_base + pe_pl_base, 2)
 
-        # Add exit snapshot to trade log
-        exit_spot = get_1min_value(nifty_1m, exit_ts, 'close') or spot
-        exit_vix  = get_1min_value(vix_1m,   exit_ts, 'close')
-        trade_log.append(build_snapshot(
-            exit_ts, exit_spot, exit_vix,
-            ce_sell_strike, pe_sell_strike,
-            ce_sell_exit_raw, ce_buy_exit_raw,
-            pe_sell_exit_raw, pe_buy_exit_raw,
-            ce_sell_entry, ce_buy_entry,
-            pe_sell_entry, pe_buy_entry,
-            total_net_debit, max_theoretical_profit,
-            realised_pl_pts=base_pl,
-            realised_pl_rs=round(base_pl * LOT_SIZE, 2),
-        ))
-
-        logger.info(
-            f"  BASE EXIT {sl_reason:20s} | {exit_ts} | "
-            f"P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
-        )
+        # NOTE: exit snapshot is appended after the adjustment block below,
+        # so it always reflects the final position (post-roll if adjustment fired)
 
         # ----------------------------------------------------------------
         # Winning side roll adjustment
@@ -1548,6 +1531,27 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 f"Roll P&L: {adj_pl_points:+.1f} pts | "
                 f"Total P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
             )
+        else:
+            logger.info(
+                f"  BASE EXIT {sl_reason:20s} | {exit_ts} | "
+                f"P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
+            )
+
+        # Append final exit snapshot — always after adjustment block so
+        # ce_sell_strike/prices reflect post-roll state if adjustment fired
+        exit_spot = get_1min_value(nifty_1m, exit_ts, 'close') or spot
+        exit_vix  = get_1min_value(vix_1m,   exit_ts, 'close')
+        trade_log.append(build_snapshot(
+            exit_ts, exit_spot, exit_vix,
+            ce_sell_strike, pe_sell_strike,
+            ce_sell_exit_raw, ce_buy_exit_raw,
+            pe_sell_exit_raw, pe_buy_exit_raw,
+            ce_sell_entry, ce_buy_entry,
+            pe_sell_entry, pe_buy_entry,
+            total_net_debit, max_theoretical_profit,
+            realised_pl_pts=base_pl,
+            realised_pl_rs=round(base_pl * LOT_SIZE, 2),
+        ))
 
         # ----------------------------------------------------------------
         # Build final trade record
