@@ -30,15 +30,18 @@ A directional ITM debit spread strategy deployed when India VIX > 16. Uses dual-
 | Status | Live |
 
 ### [Athena](./athena_backtest/) — Nifty Double Calendar Spread
-A market-neutral, theta-positive double calendar spread strategy on Nifty weekly options. Sells 20-delta CE and PE on the near-term weekly expiry and buys the same strikes on the monthly expiry. Long-vega profile benefits from IV expansion. Currently in backtesting.
+A market-neutral, theta-positive double calendar spread strategy on Nifty weekly options. Sells near-delta CE and PE on the next Tuesday expiry (~8 DTE) and buys the same strikes on the monthly expiry. Long-vega profile benefits from IV expansion. Deployed when India VIX is between 16 and 25. Currently in backtesting.
 
 | | |
 |---|---|
 | Instrument | Nifty weekly options |
 | Structure | Double calendar spread (CE + PE, two expiries) |
-| Entry | Monday 10:30 AM |
-| Sell expiry | Next Tuesday (7 DTE) |
-| Buy expiry | Last Tuesday of current month (rolled if DTE < 14) |
+| Entry | Day before previous Tuesday expiry, 10:30 AM |
+| Exit | Day before sell expiry, 10:25 AM |
+| Sell expiry | Next Tuesday from entry (~8 DTE) |
+| Buy expiry | Nearest monthly expiry with DTE ≥ 16; rolled to next month if below |
+| Deploy condition | India VIX 16–25 |
+| Delta target | 0.25 (VIX 16–22), 0.30 (VIX 22–25) |
 | Broker | TBD |
 | Status | In development — backtesting |
 
@@ -48,9 +51,11 @@ A market-neutral, theta-positive double calendar spread strategy on Nifty weekly
 Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Apollo or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
 
 **Routing logic:**
-1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX (protects overnight positions when VIX drops below threshold)
-2. Otherwise: VIX > 16 → Apollo, VIX ≤ 16 → Artemis
-3. If VIX fetch fails — default to Artemis
+1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day (protects overnight positions when VIX drops below threshold)
+2. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day (protects overnight positions when VIX rises above threshold; also handles the edge case of a Thursday position held to Friday)
+3. If today is Friday and no open position exists — Artemis cannot enter new trades; route to Apollo if VIX > threshold, otherwise stand down
+4. Otherwise: VIX > 16 → Apollo, VIX ≤ 16 → Artemis
+5. If VIX fetch fails — default to Artemis (Mon–Thu) or stand down (Fri)
 
 ## Infrastructure
 
@@ -71,6 +76,24 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 | < 14 | Artemis — full confidence |
 | 14 – 16 | Artemis — reduced size, tighter SLs |
 | > 16 | Apollo |
+
+Open position detection overrides VIX routing in all cases — an active Apollo or Artemis trade is always resumed to completion regardless of current VIX or day of week.
+
+## Proposed VIX Regime (when Athena goes live)
+
+Once Athena is deployed, the routing table and Leto logic will change. The existing logic above remains in place until Athena is production-ready.
+
+| VIX Level | Strategy |
+|---|---|
+| < 16 | Artemis |
+| 16–25 | Athena |
+| > 25 | Apollo (if trend signal present) |
+
+Leto routing changes required:
+- VIX 16–25 → Athena (new path)
+- Apollo deploy condition shifts to VIX > 25
+- Athena exits at 10:25 AM the day before sell expiry; margin is free by 10:30 AM for the next entry decision
+- Artemis closes every Thursday — no margin overlap with Athena on Mondays
 
 ## Cron (delos)
 
@@ -206,10 +229,15 @@ algo-trading-lab/
 │   └── logs/                       # gitignored, created at runtime
 ├── apollo_backtest/                # Apollo backtesting and optimisation
 │   ├── README.md
-│   ├── configs.py
-│   ├── technical_indicators.py
-│   ├── precompute.py
-│   ├── backtest.py
+│   ├── configs_credit.py           # Phase 1 credit spread config (reference only)
+│   ├── configs_debit.py            # Phase 1 debit spread — production config D-R-D06g
+│   ├── configs_debit_phase2.py     # Phase 2 triple-timeframe config (in progress)
+│   ├── technical_indicators.py     # Shared by Phase 1 and Phase 2
+│   ├── precompute.py               # Phase 1 precompute
+│   ├── precompute_phase2.py        # Phase 2 precompute
+│   ├── backtest_credit.py          # Phase 1 credit spread (reference only)
+│   ├── backtest_debit.py           # Phase 1 debit spread — translated to production
+│   ├── backtest_debit_phase2.py    # Phase 2 triple-timeframe (in progress)
 │   └── data/
 │       ├── nifty_15min.csv         (generated — gitignored)
 │       ├── nifty_75min.csv         (generated — gitignored)

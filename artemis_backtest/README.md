@@ -141,4 +141,3 @@ One row per weekly contract in `data/trade_summary.csv`.
 - [x] configs.py
 - [x] data_loader.py
 - [x] backtest.py
-- [ ] analysis.py
