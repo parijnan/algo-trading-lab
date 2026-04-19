@@ -1246,6 +1246,11 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         adj_entry_spot_val = None
         adj_days_remaining_val = None
         adj_trigger_day_val    = None
+        # Originals preserved before roll mutates them (used for correct P&L accounting)
+        orig_ce_sell_entry  = ce_sell_entry
+        orig_pe_sell_entry  = pe_sell_entry
+        orig_ce_sell_strike = ce_sell_strike
+        orig_pe_sell_strike = pe_sell_strike
 
         # ----------------------------------------------------------------
         # Exit the base position
@@ -1442,6 +1447,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         (pe_buy_entry - pe_sell_entry), 2)
 
                     # Step 5: re-run scanner from roll_ts for remainder of week
+                    # Pass original sell entries so unrealised P&L in trade log
+                    # is measured consistently from entry prices throughout
                     # from_ts uses strict > so pass roll_ts - 1min to include roll_ts itself
                     (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                      sl_ts, sl_reason, running_peak_pl, _, _) = \
@@ -1450,8 +1457,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             nifty_1m, vix_1m,
                             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                             ce_sell_strike, pe_sell_strike,
-                            ce_sell_entry, ce_buy_entry,
-                            pe_sell_entry, pe_buy_entry,
+                            orig_ce_sell_entry, ce_buy_entry,
+                            orig_pe_sell_entry, pe_buy_entry,
                             total_net_debit, max_theoretical_profit,
                             spot, elm_time, trade_log,
                             ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
@@ -1489,47 +1496,57 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             pe_buy_exit,  pe_buy_exit_raw  = get_exit_price(
                 pe_buy_df,  pe_buy_ltp,  is_buy=False)
 
-            ce_pl_base = _calc_exit_pl(ce_sell_entry, ce_sell_exit,
-                                        ce_buy_entry,  ce_buy_exit)
-            pe_pl_base = _calc_exit_pl(pe_sell_entry, pe_sell_exit,
-                                        pe_buy_entry,  pe_buy_exit)
+            # P&L computed from ORIGINAL entry prices throughout
+            # ce_pl measures original sell held to exit (basis for total)
+            # adj_pl_points = new_sell_proceeds - buyback_cost
+            #   This is the incremental gain from doing the roll vs holding original to exit:
+            #   total = ce_pl(from orig) + pe_pl + adj_pl
+            ce_pl_base = _calc_exit_pl(orig_ce_sell_entry, ce_sell_exit,
+                                        ce_buy_entry,        ce_buy_exit)
+            pe_pl_base = _calc_exit_pl(orig_pe_sell_entry, pe_sell_exit,
+                                        pe_buy_entry,        pe_buy_exit)
             base_pl = round(ce_pl_base + pe_pl_base, 2)
 
-            # adj_pl_points: roll P&L only = new sell proceeds - new sell exit - buyback cost
-            if adj_side == 'ce' and adj_ce_sell_entry is not None and adj_ce_buy_entry is not None:
-                adj_pl_points    = round((adj_ce_sell_entry - ce_sell_exit) - adj_ce_buy_entry, 2)
+            if adj_side == 'ce':
+                adj_pl_points    = round(adj_ce_sell_entry - adj_ce_buy_entry, 2)
                 adj_ce_sell_exit = ce_sell_exit
                 adj_ce_buy_exit  = ce_buy_exit
-            elif adj_side == 'pe' and adj_pe_sell_entry is not None and adj_pe_buy_entry is not None:
-                adj_pl_points    = round((adj_pe_sell_entry - pe_sell_exit) - adj_pe_buy_entry, 2)
+            elif adj_side == 'pe':
+                adj_pl_points    = round(adj_pe_sell_entry - adj_pe_buy_entry, 2)
                 adj_pe_sell_exit = pe_sell_exit
                 adj_pe_buy_exit  = pe_buy_exit
+
+            total_pl = round(base_pl + adj_pl_points, 2)
 
             logger.info(
                 f"  ADJ EXIT {adj_exit_reason:20s} | {exit_ts} | "
                 f"Roll P&L: {adj_pl_points:+.1f} pts | "
-                f"Total P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
+                f"Total P&L: {total_pl:+.1f} pts ({total_pl * LOT_SIZE:+,.0f})"
             )
         else:
+            total_pl = base_pl
             logger.info(
                 f"  BASE EXIT {sl_reason:20s} | {exit_ts} | "
                 f"P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
             )
 
-        # Append final exit snapshot — always after adjustment block so
-        # ce_sell_strike/prices reflect post-roll state if adjustment fired
+        # Append final exit snapshot using original entry prices for P&L consistency
         exit_spot = get_1min_value(nifty_1m, exit_ts, 'close') or spot
         exit_vix  = get_1min_value(vix_1m,   exit_ts, 'close')
+        snap_ce_sell_entry = orig_ce_sell_entry if adj_made else ce_sell_entry
+        snap_pe_sell_entry = orig_pe_sell_entry if adj_made else pe_sell_entry
+        snap_ce_sell_strike = orig_ce_sell_strike if adj_made else ce_sell_strike
+        snap_pe_sell_strike = orig_pe_sell_strike if adj_made else pe_sell_strike
         trade_log.append(build_snapshot(
             exit_ts, exit_spot, exit_vix,
-            ce_sell_strike, pe_sell_strike,
+            snap_ce_sell_strike, snap_pe_sell_strike,
             ce_sell_exit_raw, ce_buy_exit_raw,
             pe_sell_exit_raw, pe_buy_exit_raw,
-            ce_sell_entry, ce_buy_entry,
-            pe_sell_entry, pe_buy_entry,
+            snap_ce_sell_entry, ce_buy_entry,
+            snap_pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
-            realised_pl_pts=base_pl,
-            realised_pl_rs=round(base_pl * LOT_SIZE, 2),
+            realised_pl_pts=total_pl,
+            realised_pl_rs=round(total_pl * LOT_SIZE, 2),
         ))
 
         # ----------------------------------------------------------------
@@ -1618,9 +1635,12 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         record = build_trade_record(
             entry_ts, spot, entry_vix,
             sell_expiry_date, buy_expiry_date,
-            ce_sell_strike, pe_sell_strike,
-            ce_sell_entry, ce_buy_entry,
-            pe_sell_entry, pe_buy_entry,
+            orig_ce_sell_strike if adj_made else ce_sell_strike,
+            orig_pe_sell_strike if adj_made else pe_sell_strike,
+            orig_ce_sell_entry  if adj_made else ce_sell_entry,
+            ce_buy_entry,
+            orig_pe_sell_entry  if adj_made else pe_sell_entry,
+            pe_buy_entry,
             ce_sell_delta, pe_sell_delta,
             net_debit_ce, net_debit_pe,
             max_theoretical_profit,
