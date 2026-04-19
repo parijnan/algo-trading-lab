@@ -774,7 +774,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 and entry_time is not None and sell_expiry_end is not None):
             days_in_trade = (ts.date() - entry_time.date()).days
 
-            if days_in_trade not in ADJUSTMENT_EXCLUDED_DAYS:
+            if days_in_trade not in (ADJUSTMENT_EXCLUDED_DAYS if isinstance(ADJUSTMENT_EXCLUDED_DAYS, (tuple, list, set)) else (ADJUSTMENT_EXCLUDED_DAYS,)):
                 # Trigger A: spot approaches CE sell strike — roll PE
                 if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
                     adj_trigger_ts   = ts
