@@ -48,7 +48,7 @@ from configs import (
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
-    ENABLE_DAY_N_STOP, STOP_CHECK_DAY, DAY_N_STOP_THRESHOLD,
+    ENABLE_PERIODIC_STOP, PERIODIC_STOP_THRESHOLD, STOP_START_DAY,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
@@ -582,20 +582,18 @@ def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
     return combined_pl >= PROFIT_TARGET_PCT_NET_DEBIT * total_net_debit
 
 
-def check_day_n_stop(ts: pd.Timestamp, entry_time: pd.Timestamp, cumulative_pl: float) -> bool:
+def check_periodic_stop(ts: pd.Timestamp, entry_time: pd.Timestamp, cumulative_pl: float) -> bool:
     """
-    True if the trade is down more than threshold at the end of Day N.
-    End of day is defined as 15:25 or later.
+    True if the cumulative strategy P&L is below threshold.
+    Checked from STOP_START_DAY onwards at every candle.
     """
-    if not ENABLE_DAY_N_STOP:
+    if not ENABLE_PERIODIC_STOP:
         return False
-
+    
     days_passed = (ts.date() - entry_time.date()).days
-    if days_passed == STOP_CHECK_DAY:
-        # Check if it is the end of the day (15:25 or later)
-        if ts.hour == 15 and ts.minute >= 25:
-            if cumulative_pl <= DAY_N_STOP_THRESHOLD:
-                return True
+    if days_passed >= STOP_START_DAY:
+        if cumulative_pl <= PERIODIC_STOP_THRESHOLD:
+            return True
     return False
 
 
@@ -792,9 +790,9 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'profit_target'
             break
 
-        if check_day_n_stop(ts, entry_time, cumulative_pl):
+        if check_periodic_stop(ts, entry_time, cumulative_pl):
             sl_hit_ts     = ts
-            sl_hit_reason = f'day_{STOP_CHECK_DAY}_stop'
+            sl_hit_reason = 'periodic_stop'
             break
 
         # Spot-driven adjustment trigger
@@ -803,18 +801,21 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 and entry_time is not None and sell_expiry_end is not None):
             days_in_trade = (ts.date() - entry_time.date()).days
 
-            if days_in_trade not in (ADJUSTMENT_EXCLUDED_DAYS if isinstance(ADJUSTMENT_EXCLUDED_DAYS, (tuple, list, set)) else (ADJUSTMENT_EXCLUDED_DAYS,)):
-                # Trigger A: spot approaches CE sell strike — roll PE
+            excluded = ADJUSTMENT_EXCLUDED_DAYS if isinstance(ADJUSTMENT_EXCLUDED_DAYS, (tuple, list, set)) else (ADJUSTMENT_EXCLUDED_DAYS,)
+            if days_in_trade not in excluded:
+                # Trigger A: spot approaches CE sell strike — roll PE (the winning side)
                 if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
-                    adj_trigger_ts   = ts
-                    adj_winning_side = 'pe'   # PE side gets rolled
-                    break
+                    if pe_unrealised_pl > 0:
+                        adj_trigger_ts   = ts
+                        adj_winning_side = 'pe'
+                        break
 
-                # Trigger B: spot approaches PE sell strike — roll CE
+                # Trigger B: spot approaches PE sell strike — roll CE (the winning side)
                 if spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET:
-                    adj_trigger_ts   = ts
-                    adj_winning_side = 'ce'   # CE side gets rolled
-                    break
+                    if ce_unrealised_pl > 0:
+                        adj_trigger_ts   = ts
+                        adj_winning_side = 'ce'
+                        break
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,
