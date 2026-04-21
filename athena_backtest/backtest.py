@@ -790,11 +790,6 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'profit_target'
             break
 
-        if check_periodic_stop(ts, entry_time, cumulative_pl):
-            sl_hit_ts     = ts
-            sl_hit_reason = 'periodic_stop'
-            break
-
         # Spot-driven adjustment trigger
         # Checked on every candle if adjustment not yet made and context params provided
         if (ENABLE_ADJUSTMENT and not adjustment_already_made
@@ -805,17 +800,15 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             if days_in_trade not in excluded:
                 # Trigger A: spot approaches CE sell strike — roll PE (the winning side)
                 if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
-                    if pe_unrealised_pl > 0:
-                        adj_trigger_ts   = ts
-                        adj_winning_side = 'pe'
-                        break
+                    adj_trigger_ts   = ts
+                    adj_winning_side = 'pe'
+                    break
 
                 # Trigger B: spot approaches PE sell strike — roll CE (the winning side)
                 if spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET:
-                    if ce_unrealised_pl > 0:
-                        adj_trigger_ts   = ts
-                        adj_winning_side = 'ce'
-                        break
+                    adj_trigger_ts   = ts
+                    adj_winning_side = 'ce'
+                    break
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,

@@ -106,9 +106,9 @@ ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before s
 # Exits the trade if cumulative P&L is below threshold.
 # Checked at every 1-min candle from STOP_START_DAY onwards.
 # ---------------------------------------------------------------------------
-ENABLE_PERIODIC_STOP            = True
-PERIODIC_STOP_THRESHOLD         = -75.0   # pts
-STOP_START_DAY                  = 2       # Start checking from Day 2 onwards
+ENABLE_PERIODIC_STOP            = False
+PERIODIC_STOP_THRESHOLD         = -100.0   # pts
+STOP_START_DAY                  = 1       # 0=Entry day, 1=Next day, etc.
 
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll
@@ -116,7 +116,7 @@ STOP_START_DAY                  = 2       # Start checking from Day 2 onwards
 # closer strike to collect additional premium. Both legs are rolled to 
 # maintain margin efficiency.
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT               = True
+ENABLE_ADJUSTMENT               = False
 ADJUST_BUY_LEG                  = True   # MUST be True for margin efficiency
                                           # same strike as new sell, same buy expiry as original
 ADJUSTMENT_TRIGGER_OFFSET       = -300    # pts from sold strike at which trigger fires
