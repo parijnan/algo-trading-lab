@@ -108,11 +108,13 @@ ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before s
 # Losing side is never touched. Maximum one adjustment per trade.
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = True
-ADJUSTMENT_TRIGGER_OFFSET       = -100    # pts from sold strike at which trigger fires
+ADJUST_BUY_LEG                  = False  # if True, roll the buy leg to match the new sell strike
+                                          # same strike as new sell, same buy expiry as original
+ADJUSTMENT_TRIGGER_OFFSET       = -300    # pts from sold strike at which trigger fires
                                         # positive = still OTM, 0 = ATM, negative = ITM
                                         # Trigger A: fires when spot >= ce_sell_strike - offset
                                         # Trigger B: fires when spot <= pe_sell_strike + offset
-ADJUSTMENT_NEW_STRIKE_DISTANCE  = 100   # new sell strike this many pts from current spot
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 400   # new sell strike this many pts from current spot
 ADJUSTMENT_EXCLUDED_DAYS        = (6, 7)  # trade days on which adjustment cannot fire
                                                      # day 0 = entry day; allows days 3, 4, 5
 
@@ -127,4 +129,4 @@ RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibi
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = '2026-04-16'          # None = full available data
+BACKTEST_END_DATE       = '2026-04-20'          # None = full available data

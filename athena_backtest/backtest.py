@@ -49,7 +49,7 @@ from configs import (
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
     ELM_EXIT_TIME,
-    ENABLE_ADJUSTMENT,
+    ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
     ADJUSTMENT_EXCLUDED_DAYS,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
@@ -824,14 +824,20 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         adj_side=None,
                         adj_ce_sell_strike=None,
                         adj_pe_sell_strike=None,
-                        adj_ce_sell_entry=None,
-                        adj_ce_buy_entry=None,
-                        adj_pe_sell_entry=None,
-                        adj_pe_buy_entry=None,
-                        adj_ce_sell_exit=None,
-                        adj_ce_buy_exit=None,
-                        adj_pe_sell_exit=None,
-                        adj_pe_buy_exit=None,
+                        adj_ce_new_sell_entry=None,   # new sell leg proceeds
+                        adj_ce_sell_buyback=None,     # cost to close old sell leg
+                        adj_pe_new_sell_entry=None,
+                        adj_pe_sell_buyback=None,
+                        adj_ce_new_sell_exit=None,
+                        adj_ce_new_sell_exit_raw=None,
+                        adj_pe_new_sell_exit=None,
+                        adj_pe_new_sell_exit_raw=None,
+                        adj_ce_buy_buyback=None,      # proceeds from closing old buy leg
+                        adj_pe_buy_buyback=None,
+                        adj_ce_new_buy_entry=None,    # cost of new buy leg
+                        adj_pe_new_buy_entry=None,
+                        adj_ce_new_buy_exit=None,
+                        adj_pe_new_buy_exit=None,
                         adj_exit_reason=None,
                         adj_pl_points=None,
                         adj_entry_spot=None,
@@ -892,14 +898,18 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'adj_side':                    adj_side,
         'adj_ce_sell_strike':          adj_ce_sell_strike,
         'adj_pe_sell_strike':          adj_pe_sell_strike,
-        'adj_ce_sell_entry':           round(adj_ce_sell_entry, 2) if adj_ce_sell_entry else None,
-        'adj_ce_buy_entry':            round(adj_ce_buy_entry,  2) if adj_ce_buy_entry  else None,
-        'adj_pe_sell_entry':           round(adj_pe_sell_entry, 2) if adj_pe_sell_entry else None,
-        'adj_pe_buy_entry':            round(adj_pe_buy_entry,  2) if adj_pe_buy_entry  else None,
-        'adj_ce_sell_exit':            round(adj_ce_sell_exit,  2) if adj_ce_sell_exit  else None,
-        'adj_ce_buy_exit':             round(adj_ce_buy_exit,   2) if adj_ce_buy_exit   else None,
-        'adj_pe_sell_exit':            round(adj_pe_sell_exit,  2) if adj_pe_sell_exit  else None,
-        'adj_pe_buy_exit':             round(adj_pe_buy_exit,   2) if adj_pe_buy_exit   else None,
+        'adj_ce_new_sell_entry':       round(adj_ce_new_sell_entry, 2) if adj_ce_new_sell_entry is not None else None,
+        'adj_ce_sell_buyback':         round(adj_ce_sell_buyback,   2) if adj_ce_sell_buyback   is not None else None,
+        'adj_pe_new_sell_entry':       round(adj_pe_new_sell_entry, 2) if adj_pe_new_sell_entry is not None else None,
+        'adj_pe_sell_buyback':         round(adj_pe_sell_buyback,   2) if adj_pe_sell_buyback   is not None else None,
+        'adj_ce_new_sell_exit':        round(adj_ce_new_sell_exit,  2) if adj_ce_new_sell_exit  is not None else None,
+        'adj_pe_new_sell_exit':        round(adj_pe_new_sell_exit,  2) if adj_pe_new_sell_exit  is not None else None,
+        'adj_ce_buy_buyback':          round(adj_ce_buy_buyback,    2) if adj_ce_buy_buyback    is not None else None,
+        'adj_pe_buy_buyback':          round(adj_pe_buy_buyback,    2) if adj_pe_buy_buyback    is not None else None,
+        'adj_ce_new_buy_entry':        round(adj_ce_new_buy_entry,  2) if adj_ce_new_buy_entry  is not None else None,
+        'adj_pe_new_buy_entry':        round(adj_pe_new_buy_entry,  2) if adj_pe_new_buy_entry  is not None else None,
+        'adj_ce_new_buy_exit':         round(adj_ce_new_buy_exit,   2) if adj_ce_new_buy_exit   is not None else None,
+        'adj_pe_new_buy_exit':         round(adj_pe_new_buy_exit,   2) if adj_pe_new_buy_exit   is not None else None,
         'adj_exit_reason':             adj_exit_reason,
         'adj_pl_points':               round(adj_pl_points, 2) if adj_pl_points is not None else None,
         'adj_entry_spot':              round(adj_entry_spot, 2) if adj_entry_spot is not None else None,
@@ -1229,26 +1239,32 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         # ----------------------------------------------------------------
         # Initialise adjustment state — must be before exit pricing
         # ----------------------------------------------------------------
-        adj_made           = False
-        adj_side           = None
-        adj_ce_sell_strike = None
-        adj_pe_sell_strike = None
-        adj_ce_sell_entry  = None   # new sell leg proceeds on rolled side
-        adj_ce_buy_entry   = None   # buyback cost of old sell leg on rolled side
-        adj_pe_sell_entry  = None
-        adj_pe_buy_entry   = None
-        adj_ce_sell_exit   = None
-        adj_ce_buy_exit    = None
-        adj_pe_sell_exit   = None
-        adj_pe_buy_exit    = None
-        adj_exit_reason    = None
-        adj_pl_points      = None
-        adj_entry_spot_val = None
-        adj_days_remaining_val = None
-        adj_trigger_day_val    = None
+        adj_made                = False
+        adj_side                = None
+        adj_ce_sell_strike      = None
+        adj_pe_sell_strike      = None
+        adj_ce_new_sell_entry   = None   # new sell leg proceeds
+        adj_ce_sell_buyback     = None   # cost to close old sell leg
+        adj_pe_new_sell_entry   = None
+        adj_pe_sell_buyback     = None
+        adj_ce_new_sell_exit    = None
+        adj_pe_new_sell_exit    = None
+        adj_ce_buy_buyback      = None   # proceeds from closing old buy leg
+        adj_pe_buy_buyback      = None
+        adj_ce_new_buy_entry    = None   # cost of new buy leg
+        adj_pe_new_buy_entry    = None
+        adj_ce_new_buy_exit     = None
+        adj_pe_new_buy_exit     = None
+        adj_exit_reason         = None
+        adj_pl_points           = None
+        adj_entry_spot_val      = None
+        adj_days_remaining_val  = None
+        adj_trigger_day_val     = None
         # Originals preserved before roll mutates them (used for correct P&L accounting)
         orig_ce_sell_entry  = ce_sell_entry
         orig_pe_sell_entry  = pe_sell_entry
+        orig_ce_buy_entry   = ce_buy_entry
+        orig_pe_buy_entry   = pe_buy_entry
         orig_ce_sell_strike = ce_sell_strike
         orig_pe_sell_strike = pe_sell_strike
 
@@ -1421,54 +1437,127 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         f"buyback old sell @ {buyback_price:.1f} | "
                         f"days remaining: {adj_days_remaining_val}")
 
-                    # Step 4: update position state for rolled side
-                    # Winning side sell leg replaced; losing side and all buy legs unchanged
-                    if win == 'ce':
-                        ce_sell_df     = new_sell_df
-                        ce_sell_entry  = new_sell_entry
-                        ce_sell_ltp    = new_sell_entry
-                        ce_sell_strike = new_sell_strike
-                        adj_ce_sell_strike = new_sell_strike
-                        adj_ce_sell_entry  = new_sell_entry  # new sell proceeds
-                        adj_ce_buy_entry   = buyback_price   # buyback cost
-                    else:
-                        pe_sell_df     = new_sell_df
-                        pe_sell_entry  = new_sell_entry
-                        pe_sell_ltp    = new_sell_entry
-                        pe_sell_strike = new_sell_strike
-                        adj_pe_sell_strike = new_sell_strike
-                        adj_pe_sell_entry  = new_sell_entry
-                        adj_pe_buy_entry   = buyback_price
+                    # Step 4a: handle buy leg roll if enabled
+                    new_buy_entry   = None
+                    new_buy_df      = None
+                    buyback_buy_raw = None
+                    buyback_buy_price = None
 
-                    adj_side = win
-                    # Recompute total_net_debit with updated sell entry
-                    total_net_debit = round(
-                        (ce_buy_entry - ce_sell_entry) +
-                        (pe_buy_entry - pe_sell_entry), 2)
+                    if ADJUST_BUY_LEG:
+                        old_buy_df    = ce_buy_df  if win == 'ce' else pe_buy_df
+                        old_buy_ltp   = ce_buy_ltp if win == 'ce' else pe_buy_ltp
+                        buy_expiry_ts = buy_expiry_end  # same buy expiry as original
 
-                    # Step 5: re-run scanner from roll_ts for remainder of week
-                    # Pass original sell entries so unrealised P&L in trade log
-                    # is measured consistently from entry prices throughout
-                    # from_ts uses strict > so pass roll_ts - 1min to include roll_ts itself
-                    (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                     sl_ts, sl_reason, running_peak_pl, _, _) = \
-                        append_1min_snapshots_window(
-                            roll_ts - pd.Timedelta(minutes=1), scan_end,
-                            nifty_1m, vix_1m,
-                            ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
-                            ce_sell_strike, pe_sell_strike,
-                            orig_ce_sell_entry, ce_buy_entry,
-                            orig_pe_sell_entry, pe_buy_entry,
-                            total_net_debit, max_theoretical_profit,
-                            spot, elm_time, trade_log,
-                            ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                            running_peak_pl,
-                            entry_time=entry_ts,
-                            sell_expiry_end=sell_expiry_end,
-                            adjustment_already_made=True)
+                        # Load new buy leg — same strike as new sell, same buy expiry
+                        new_buy_key = (buy_expiry_ts, new_sell_strike, win)
+                        if new_buy_key not in opt_df_cache:
+                            opt_df_cache[new_buy_key] = load_option_data(
+                                buy_expiry_ts, new_sell_strike, win)
+                        new_buy_df  = opt_df_cache[new_buy_key]
+                        new_buy_raw = get_option_price(new_buy_df, roll_ts, 'open')
 
-                    adj_exit_reason = sl_reason if sl_reason is not None else 'pre_expiry'
-                    adj_made = True
+                        if new_buy_raw is None:
+                            logger.info(
+                                f"  ADJ SKIP | No data for new buy leg {new_sell_strike}{win} "
+                                f"buy_exp={buy_expiry_ts.date()} at {roll_ts} — roll aborted")
+                            # Abort entire adjustment — re-run remainder unchanged
+                            (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+                             sl_ts, sl_reason, running_peak_pl, _, _) = \
+                                append_1min_snapshots_window(
+                                    roll_ts - pd.Timedelta(minutes=1), scan_end,
+                                    nifty_1m, vix_1m,
+                                    ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
+                                    ce_sell_strike, pe_sell_strike,
+                                    orig_ce_sell_entry, ce_buy_entry,
+                                    orig_pe_sell_entry, pe_buy_entry,
+                                    total_net_debit, max_theoretical_profit,
+                                    spot, elm_time, trade_log,
+                                    ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+                                    running_peak_pl,
+                                    entry_time=entry_ts,
+                                    sell_expiry_end=sell_expiry_end,
+                                    adjustment_already_made=True)
+                            if sl_ts is None:
+                                sl_ts = scan_end; sl_reason = 'pre_expiry'
+                            if sl_reason == 'pre_expiry':
+                                exit_ts = elm_time if elm_time is not None else scan_end
+                                use_col = 'close'; slip = False
+                            else:
+                                exit_ts = sl_ts + pd.Timedelta(minutes=1)
+                                use_col = 'open'; slip = True
+                            ce_sell_exit, ce_sell_exit_raw = get_exit_price(ce_sell_df, ce_sell_ltp, is_buy=True)
+                            ce_buy_exit,  ce_buy_exit_raw  = get_exit_price(ce_buy_df,  ce_buy_ltp,  is_buy=False)
+                            pe_sell_exit, pe_sell_exit_raw = get_exit_price(pe_sell_df, pe_sell_ltp, is_buy=True)
+                            pe_buy_exit,  pe_buy_exit_raw  = get_exit_price(pe_buy_df,  pe_buy_ltp,  is_buy=False)
+                            ce_pl_base = _calc_exit_pl(orig_ce_sell_entry, ce_sell_exit, ce_buy_entry, ce_buy_exit)
+                            pe_pl_base = _calc_exit_pl(orig_pe_sell_entry, pe_sell_exit, pe_buy_entry, pe_buy_exit)
+                            base_pl    = round(ce_pl_base + pe_pl_base, 2)
+                            # Skip to exit — do not set adj_made
+                            new_buy_df = None  # sentinel: abort was triggered
+
+                        else:
+                            # Close old buy leg (we are selling it back)
+                            buyback_buy_raw   = get_option_price(old_buy_df, roll_ts, 'open') or old_buy_ltp
+                            buyback_buy_price = apply_slippage(buyback_buy_raw, is_buy=False)
+                            new_buy_entry     = apply_slippage(new_buy_raw, is_buy=True)
+
+                    # Step 4b: update position state (only if buy leg check passed or disabled)
+                    if not ADJUST_BUY_LEG or new_buy_df is not None:
+                        if win == 'ce':
+                            ce_sell_df          = new_sell_df
+                            ce_sell_entry       = new_sell_entry
+                            ce_sell_ltp         = new_sell_entry
+                            ce_sell_strike      = new_sell_strike
+                            adj_ce_sell_strike      = new_sell_strike
+                            adj_ce_new_sell_entry   = new_sell_entry
+                            adj_ce_sell_buyback     = buyback_price
+                            if ADJUST_BUY_LEG:
+                                ce_buy_df           = new_buy_df
+                                ce_buy_entry        = new_buy_entry
+                                ce_buy_ltp          = new_buy_entry
+                                adj_ce_buy_buyback  = buyback_buy_price
+                                adj_ce_new_buy_entry = new_buy_entry
+                        else:
+                            pe_sell_df          = new_sell_df
+                            pe_sell_entry       = new_sell_entry
+                            pe_sell_ltp         = new_sell_entry
+                            pe_sell_strike      = new_sell_strike
+                            adj_pe_sell_strike      = new_sell_strike
+                            adj_pe_new_sell_entry   = new_sell_entry
+                            adj_pe_sell_buyback     = buyback_price
+                            if ADJUST_BUY_LEG:
+                                pe_buy_df           = new_buy_df
+                                pe_buy_entry        = new_buy_entry
+                                pe_buy_ltp          = new_buy_entry
+                                adj_pe_buy_buyback  = buyback_buy_price
+                                adj_pe_new_buy_entry = new_buy_entry
+
+                        adj_side = win
+                        # Recompute total_net_debit with updated entries
+                        total_net_debit = round(
+                            (ce_buy_entry - ce_sell_entry) +
+                            (pe_buy_entry - pe_sell_entry), 2)
+
+                        # Step 5: re-run scanner from roll_ts for remainder of week
+                        (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+                         sl_ts, sl_reason, running_peak_pl, _, _) = \
+                            append_1min_snapshots_window(
+                                roll_ts - pd.Timedelta(minutes=1), scan_end,
+                                nifty_1m, vix_1m,
+                                ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
+                                ce_sell_strike, pe_sell_strike,
+                                orig_ce_sell_entry, ce_buy_entry,
+                                orig_pe_sell_entry, pe_buy_entry,
+                                total_net_debit, max_theoretical_profit,
+                                spot, elm_time, trade_log,
+                                ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+                                running_peak_pl,
+                                entry_time=entry_ts,
+                                sell_expiry_end=sell_expiry_end,
+                                adjustment_already_made=True)
+
+                        adj_exit_reason = sl_reason if sl_reason is not None else 'pre_expiry'
+                        adj_made = True
 
         # ----------------------------------------------------------------
         # Re-price exit if adjustment was made (sl_ts/sl_reason may have
@@ -1497,24 +1586,28 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 pe_buy_df,  pe_buy_ltp,  is_buy=False)
 
             # P&L computed from ORIGINAL entry prices throughout
-            # ce_pl measures original sell held to exit (basis for total)
-            # adj_pl_points = new_sell_proceeds - buyback_cost
-            #   This is the incremental gain from doing the roll vs holding original to exit:
-            #   total = ce_pl(from orig) + pe_pl + adj_pl
+            # ce_pl measures original sell and buy held to exit (basis for total)
+            # adj_pl_points = net credit from roll:
+            #   sell side: new_sell_entry - buyback_sell_price
+            #   buy side (if ADJUST_BUY_LEG): buyback_buy_price - new_buy_entry
             ce_pl_base = _calc_exit_pl(orig_ce_sell_entry, ce_sell_exit,
-                                        ce_buy_entry,        ce_buy_exit)
+                                        orig_ce_buy_entry,   ce_buy_exit)
             pe_pl_base = _calc_exit_pl(orig_pe_sell_entry, pe_sell_exit,
-                                        pe_buy_entry,        pe_buy_exit)
+                                        orig_pe_buy_entry,   pe_buy_exit)
             base_pl = round(ce_pl_base + pe_pl_base, 2)
 
             if adj_side == 'ce':
-                adj_pl_points    = round(adj_ce_sell_entry - adj_ce_buy_entry, 2)
-                adj_ce_sell_exit = ce_sell_exit
-                adj_ce_buy_exit  = ce_buy_exit
+                sell_adj = round(adj_ce_new_sell_entry - adj_ce_sell_buyback, 2)
+                buy_adj  = round(adj_ce_buy_buyback - adj_ce_new_buy_entry, 2) if ADJUST_BUY_LEG and adj_ce_buy_buyback is not None else 0.0
+                adj_pl_points        = round(sell_adj + buy_adj, 2)
+                adj_ce_new_sell_exit = ce_sell_exit
+                adj_ce_new_buy_exit  = ce_buy_exit if ADJUST_BUY_LEG else None
             elif adj_side == 'pe':
-                adj_pl_points    = round(adj_pe_sell_entry - adj_pe_buy_entry, 2)
-                adj_pe_sell_exit = pe_sell_exit
-                adj_pe_buy_exit  = pe_buy_exit
+                sell_adj = round(adj_pe_new_sell_entry - adj_pe_sell_buyback, 2)
+                buy_adj  = round(adj_pe_buy_buyback - adj_pe_new_buy_entry, 2) if ADJUST_BUY_LEG and adj_pe_buy_buyback is not None else 0.0
+                adj_pl_points        = round(sell_adj + buy_adj, 2)
+                adj_pe_new_sell_exit = pe_sell_exit
+                adj_pe_new_buy_exit  = pe_buy_exit if ADJUST_BUY_LEG else None
 
             total_pl = round(base_pl + adj_pl_points, 2)
 
@@ -1661,14 +1754,18 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             adj_side=adj_side,
             adj_ce_sell_strike=adj_ce_sell_strike,
             adj_pe_sell_strike=adj_pe_sell_strike,
-            adj_ce_sell_entry=adj_ce_sell_entry,
-            adj_ce_buy_entry=adj_ce_buy_entry,
-            adj_pe_sell_entry=adj_pe_sell_entry,
-            adj_pe_buy_entry=adj_pe_buy_entry,
-            adj_ce_sell_exit=adj_ce_sell_exit,
-            adj_ce_buy_exit=adj_ce_buy_exit,
-            adj_pe_sell_exit=adj_pe_sell_exit,
-            adj_pe_buy_exit=adj_pe_buy_exit,
+            adj_ce_new_sell_entry=adj_ce_new_sell_entry,
+            adj_ce_sell_buyback=adj_ce_sell_buyback,
+            adj_pe_new_sell_entry=adj_pe_new_sell_entry,
+            adj_pe_sell_buyback=adj_pe_sell_buyback,
+            adj_ce_new_sell_exit=adj_ce_new_sell_exit,
+            adj_pe_new_sell_exit=adj_pe_new_sell_exit,
+            adj_ce_buy_buyback=adj_ce_buy_buyback,
+            adj_pe_buy_buyback=adj_pe_buy_buyback,
+            adj_ce_new_buy_entry=adj_ce_new_buy_entry,
+            adj_pe_new_buy_entry=adj_pe_new_buy_entry,
+            adj_ce_new_buy_exit=adj_ce_new_buy_exit,
+            adj_pe_new_buy_exit=adj_pe_new_buy_exit,
             adj_exit_reason=adj_exit_reason,
             adj_pl_points=adj_pl_points,
             adj_entry_spot=adj_entry_spot_val,
@@ -1719,7 +1816,8 @@ if __name__ == "__main__":
     logger.info(f"  Adjustment   : {'ON' if ENABLE_ADJUSTMENT else 'OFF'}"
                 + (f" (trigger_offset={ADJUSTMENT_TRIGGER_OFFSET}, "
                    f"dist={ADJUSTMENT_NEW_STRIKE_DISTANCE}, "
-                   f"excluded_days={ADJUSTMENT_EXCLUDED_DAYS})"
+                   f"excluded_days={ADJUSTMENT_EXCLUDED_DAYS}, "
+                   f"adjust_buy_leg={ADJUST_BUY_LEG})"
                    if ENABLE_ADJUSTMENT else ""))
     logger.info(f"  Trail stop   : {'ON' if ENABLE_TRAIL_STOP else 'OFF'}"
                 + (f" (activate={TRAIL_ACTIVATION_POINTS} pts, trail={TRAIL_POINTS} pts)"
