@@ -102,13 +102,21 @@ TRAIL_POINTS            = 10            # Exit if P&L falls this far from peak
 ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before sell expiry
 
 # ---------------------------------------------------------------------------
+# Day N P&L Gate (curtail fat tails)
+# Exits the trade if cumulative P&L is below threshold at the end of Day N.
+# ---------------------------------------------------------------------------
+ENABLE_DAY_N_STOP               = True
+STOP_CHECK_DAY                  = 2       # 0=Entry day, 1=Next day, etc.
+DAY_N_STOP_THRESHOLD            = -50.0   # pts
+
+# ---------------------------------------------------------------------------
 # Adjustment — winning side roll
 # When conditions are met mid-trade, roll the winning side's sell leg to a
 # closer strike to collect additional premium. Buy legs are never touched.
 # Losing side is never touched. Maximum one adjustment per trade.
 # ---------------------------------------------------------------------------
-ENABLE_ADJUSTMENT               = True
-ADJUST_BUY_LEG                  = False  # if True, roll the buy leg to match the new sell strike
+ENABLE_ADJUSTMENT               = False
+ADJUST_BUY_LEG                  = True  # if True, roll the buy leg to match the new sell strike
                                           # same strike as new sell, same buy expiry as original
 ADJUSTMENT_TRIGGER_OFFSET       = -300    # pts from sold strike at which trigger fires
                                         # positive = still OTM, 0 = ATM, negative = ITM

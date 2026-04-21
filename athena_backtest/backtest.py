@@ -48,6 +48,7 @@ from configs import (
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
+    ENABLE_DAY_N_STOP, STOP_CHECK_DAY, DAY_N_STOP_THRESHOLD,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
@@ -581,6 +582,23 @@ def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
     return combined_pl >= PROFIT_TARGET_PCT_NET_DEBIT * total_net_debit
 
 
+def check_day_n_stop(ts: pd.Timestamp, entry_time: pd.Timestamp, cumulative_pl: float) -> bool:
+    """
+    True if the trade is down more than threshold at the end of Day N.
+    End of day is defined as 15:25 or later.
+    """
+    if not ENABLE_DAY_N_STOP:
+        return False
+
+    days_passed = (ts.date() - entry_time.date()).days
+    if days_passed == STOP_CHECK_DAY:
+        # Check if it is the end of the day (15:25 or later)
+        if ts.hour == 15 and ts.minute >= 25:
+            if cumulative_pl <= DAY_N_STOP_THRESHOLD:
+                return True
+    return False
+
+
 def determine_breached_side(spot: float, entry_spot: float) -> str:
     """
     Determine which side was breached based on spot vs entry spot.
@@ -616,12 +634,12 @@ def build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
                    pe_sell_entry: float, pe_buy_entry: float,
                    total_net_debit: float,
                    max_theoretical_profit: float,
-                   realised_pl_pts: float = None,
-                   realised_pl_rs: float = None) -> dict:
+                   running_realised_pl: float = 0.0) -> dict:
     """Build one row for the per-trade 1-min log."""
-    ce_pl = calc_calendar_pl(ce_sell_entry, ce_sell_ltp, ce_buy_entry, ce_buy_ltp)
-    pe_pl = calc_calendar_pl(pe_sell_entry, pe_sell_ltp, pe_buy_entry, pe_buy_ltp)
-    combined_pl = round(ce_pl + pe_pl, 2)
+    ce_unrealised_pl = calc_calendar_pl(ce_sell_entry, ce_sell_ltp, ce_buy_entry, ce_buy_ltp)
+    pe_unrealised_pl = calc_calendar_pl(pe_sell_entry, pe_sell_ltp, pe_buy_entry, pe_buy_ltp)
+    combined_unrealised_pl = round(ce_unrealised_pl + pe_unrealised_pl, 2)
+    cumulative_pl = round(running_realised_pl + combined_unrealised_pl, 2)
 
     ce_index_sl = ce_sell_strike - INDEX_SL_OFFSET if ENABLE_INDEX_SL else None
     pe_index_sl = pe_sell_strike + INDEX_SL_OFFSET if ENABLE_INDEX_SL else None
@@ -629,24 +647,24 @@ def build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
     pe_opt_sl   = round(pe_sell_entry * OPTION_SL_MULTIPLIER, 2) if ENABLE_OPTION_SL else None
 
     return {
-        'time_stamp':           ts,
-        'spot':                 round(spot, 2),
-        'vix':                  round(vix, 2) if vix is not None else None,
-        'ce_sell_strike':       ce_sell_strike,
-        'pe_sell_strike':       pe_sell_strike,
-        'ce_sell_ltp':          round(ce_sell_ltp, 2),
-        'ce_buy_ltp':           round(ce_buy_ltp,  2),
-        'pe_sell_ltp':          round(pe_sell_ltp, 2),
-        'pe_buy_ltp':           round(pe_buy_ltp,  2),
-        'ce_unrealised_pl':     ce_pl,
-        'pe_unrealised_pl':     pe_pl,
-        'combined_unrealised_pl': combined_pl,
-        'ce_index_sl_level':    ce_index_sl,
-        'pe_index_sl_level':    pe_index_sl,
-        'ce_option_sl_level':   ce_opt_sl,
-        'pe_option_sl_level':   pe_opt_sl,
-        'realised_pl_pts':      round(realised_pl_pts, 2) if realised_pl_pts is not None else None,
-        'realised_pl_rs':       round(realised_pl_rs,  2) if realised_pl_rs  is not None else None,
+        'time_stamp':             ts,
+        'spot':                   round(spot, 2),
+        'vix':                    round(vix, 2) if vix is not None else None,
+        'ce_sell_strike':         ce_sell_strike,
+        'pe_sell_strike':         pe_sell_strike,
+        'ce_sell_ltp':            round(ce_sell_ltp, 2),
+        'ce_buy_ltp':             round(ce_buy_ltp,  2),
+        'pe_sell_ltp':            round(pe_sell_ltp, 2),
+        'pe_buy_ltp':             round(pe_buy_ltp,  2),
+        'ce_unrealised_pl':       ce_unrealised_pl,
+        'pe_unrealised_pl':       pe_unrealised_pl,
+        'combined_unrealised_pl': combined_unrealised_pl,
+        'running_realised_pl':    round(running_realised_pl, 2),
+        'cumulative_pl':          cumulative_pl,
+        'ce_index_sl_level':      ce_index_sl,
+        'pe_index_sl_level':      pe_index_sl,
+        'ce_option_sl_level':     ce_opt_sl,
+        'pe_option_sl_level':     pe_opt_sl,
     }
 
 
@@ -669,6 +687,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   last_ce_buy_ltp:  float,
                                   last_pe_sell_ltp: float,
                                   last_pe_buy_ltp:  float,
+                                  running_realised_pl: float = 0.0,
                                   running_peak_pl: float = 0.0,
                                   entry_time: pd.Timestamp = None,
                                   sell_expiry_end: pd.Timestamp = None,
@@ -712,15 +731,16 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         v = get_option_price(pe_buy_df,  ts, 'close')
         if v is not None: running_pe_buy  = v
 
-        ce_pl       = calc_calendar_pl(ce_sell_entry, running_ce_sell,
-                                       ce_buy_entry,  running_ce_buy)
-        pe_pl       = calc_calendar_pl(pe_sell_entry, running_pe_sell,
-                                       pe_buy_entry,  running_pe_buy)
-        combined_pl = round(ce_pl + pe_pl, 2)
+        ce_unrealised_pl = calc_calendar_pl(ce_sell_entry, running_ce_sell,
+                                            ce_buy_entry,  running_ce_buy)
+        pe_unrealised_pl = calc_calendar_pl(pe_sell_entry, running_pe_sell,
+                                            pe_buy_entry,  running_pe_buy)
+        combined_unrealised_pl = round(ce_unrealised_pl + pe_unrealised_pl, 2)
+        cumulative_pl = round(running_realised_pl + combined_unrealised_pl, 2)
 
-        # Update running peak before any exit checks
-        if combined_pl > running_peak_pl:
-            running_peak_pl = combined_pl
+        # Update running peak before any exit checks — peak is tracked on cumulative system P&L
+        if cumulative_pl > running_peak_pl:
+            running_peak_pl = cumulative_pl
 
         trade_log.append(build_snapshot(
             ts, spot, vix,
@@ -730,6 +750,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
+            running_realised_pl=running_realised_pl,
         ))
 
         if sl_hit_ts is not None:
@@ -741,8 +762,11 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'pre_expiry'
             break
 
-        # Exit checks in priority order
-        if check_spread_sl(combined_pl):
+        # Exit checks in priority order — checks are performed on combined_unrealised_pl 
+        # (floating risk) OR cumulative_pl (total strategy P&L) depending on institutional preference.
+        # Here we use combined_unrealised_pl for stops and profit target to mirror the 
+        # original logic's "net debit" and "points" thresholds.
+        if check_spread_sl(combined_unrealised_pl):
             sl_hit_ts     = ts
             sl_hit_reason = 'spread_sl'
             break
@@ -758,14 +782,19 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'option_sl'
             break
 
-        if check_trail_stop(combined_pl, running_peak_pl):
+        if check_trail_stop(combined_unrealised_pl, running_peak_pl):
             sl_hit_ts     = ts
             sl_hit_reason = 'trail_stop'
             break
 
-        if check_profit_target(combined_pl, total_net_debit):
+        if check_profit_target(combined_unrealised_pl, total_net_debit):
             sl_hit_ts     = ts
             sl_hit_reason = 'profit_target'
+            break
+
+        if check_day_n_stop(ts, entry_time, cumulative_pl):
+            sl_hit_ts     = ts
+            sl_hit_reason = f'day_{STOP_CHECK_DAY}_stop'
             break
 
         # Spot-driven adjustment trigger
@@ -1216,6 +1245,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         ce_buy_ltp  = ce_buy_entry
         pe_sell_ltp = pe_sell_entry
         pe_buy_ltp  = pe_buy_entry
+        running_realised_pl = 0.0
         running_peak_pl = 0.0
 
         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
@@ -1231,7 +1261,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             spot,
             elm_time, trade_log,
             ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-            running_peak_pl,
+            running_realised_pl=running_realised_pl,
+            running_peak_pl=running_peak_pl,
             entry_time=entry_ts,
             sell_expiry_end=sell_expiry_end,
             adjustment_already_made=False)
@@ -1348,7 +1379,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         total_net_debit, max_theoretical_profit,
                         spot, elm_time, trade_log,
                         ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                        running_peak_pl,
+                        running_realised_pl=running_realised_pl,
+                        running_peak_pl=running_peak_pl,
                         entry_time=entry_ts,
                         sell_expiry_end=sell_expiry_end,
                         adjustment_already_made=True)
@@ -1400,7 +1432,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             total_net_debit, max_theoretical_profit,
                             spot, elm_time, trade_log,
                             ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                            running_peak_pl,
+                            running_realised_pl=running_realised_pl,
+                            running_peak_pl=running_peak_pl,
                             entry_time=entry_ts,
                             sell_expiry_end=sell_expiry_end,
                             adjustment_already_made=True)
@@ -1468,12 +1501,13 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     nifty_1m, vix_1m,
                                     ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                                     ce_sell_strike, pe_sell_strike,
-                                    orig_ce_sell_entry, ce_buy_entry,
-                                    orig_pe_sell_entry, pe_buy_entry,
+                                    ce_sell_entry, ce_buy_entry,
+                                    pe_sell_entry, pe_buy_entry,
                                     total_net_debit, max_theoretical_profit,
                                     spot, elm_time, trade_log,
                                     ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                                    running_peak_pl,
+                                    running_realised_pl=running_realised_pl,
+                                    running_peak_pl=running_peak_pl,
                                     entry_time=entry_ts,
                                     sell_expiry_end=sell_expiry_end,
                                     adjustment_already_made=True)
@@ -1503,6 +1537,20 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
                     # Step 4b: update position state (only if buy leg check passed or disabled)
                     if not ADJUST_BUY_LEG or new_buy_df is not None:
+                        # Compute realised P&L from the closed legs
+                        if win == 'ce':
+                            # Proceeds from original sell minus cost to buy it back
+                            realised = round(ce_sell_entry - buyback_price, 2)
+                            if ADJUST_BUY_LEG:
+                                # Proceeds from selling old buy leg back minus original cost
+                                realised = round(realised + (buyback_buy_price - ce_buy_entry), 2)
+                        else:
+                            realised = round(pe_sell_entry - buyback_price, 2)
+                            if ADJUST_BUY_LEG:
+                                realised = round(realised + (buyback_buy_price - pe_buy_entry), 2)
+
+                        running_realised_pl = round(running_realised_pl + realised, 2)
+
                         if win == 'ce':
                             ce_sell_df          = new_sell_df
                             ce_sell_entry       = new_sell_entry
@@ -1539,6 +1587,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             (pe_buy_entry - pe_sell_entry), 2)
 
                         # Step 5: re-run scanner from roll_ts for remainder of week
+                        # We pass the NEW entry prices. Unrealised P&L will correctly drop
+                        # to 0.0 at the roll minute, and cumulative P&L will stay smooth.
                         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                          sl_ts, sl_reason, running_peak_pl, _, _) = \
                             append_1min_snapshots_window(
@@ -1546,12 +1596,13 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                 nifty_1m, vix_1m,
                                 ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
                                 ce_sell_strike, pe_sell_strike,
-                                orig_ce_sell_entry, ce_buy_entry,
-                                orig_pe_sell_entry, pe_buy_entry,
+                                ce_sell_entry, ce_buy_entry,
+                                pe_sell_entry, pe_buy_entry,
                                 total_net_debit, max_theoretical_profit,
                                 spot, elm_time, trade_log,
                                 ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
-                                running_peak_pl,
+                                running_realised_pl=running_realised_pl,
+                                running_peak_pl=running_peak_pl,
                                 entry_time=entry_ts,
                                 sell_expiry_end=sell_expiry_end,
                                 adjustment_already_made=True)
@@ -1585,16 +1636,16 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             pe_buy_exit,  pe_buy_exit_raw  = get_exit_price(
                 pe_buy_df,  pe_buy_ltp,  is_buy=False)
 
-            # P&L computed from ORIGINAL entry prices throughout
-            # ce_pl measures original sell and buy held to exit (basis for total)
-            # adj_pl_points = net credit from roll:
-            #   sell side: new_sell_entry - buyback_sell_price
-            #   buy side (if ADJUST_BUY_LEG): buyback_buy_price - new_buy_entry
-            ce_pl_base = _calc_exit_pl(orig_ce_sell_entry, ce_sell_exit,
-                                        orig_ce_buy_entry,   ce_buy_exit)
-            pe_pl_base = _calc_exit_pl(orig_pe_sell_entry, pe_sell_exit,
-                                        orig_pe_buy_entry,   pe_buy_exit)
-            base_pl = round(ce_pl_base + pe_pl_base, 2)
+            # P&L computed by separating realised gain from adjustments
+            # ce_pl_final / pe_pl_final measure the floating P&L of the ACTIVE legs at exit
+            ce_pl_final = _calc_exit_pl(ce_sell_entry, ce_sell_exit,
+                                        ce_buy_entry,  ce_buy_exit)
+            pe_pl_final = _calc_exit_pl(pe_sell_entry, pe_sell_exit,
+                                        pe_buy_entry,  pe_buy_exit)
+            
+            # base_pl in the summary for an adjusted trade is the final unrealised P&L 
+            # of the current legs at the moment they were closed at expiry/SL.
+            base_pl = round(ce_pl_final + pe_pl_final, 2)
 
             if adj_side == 'ce':
                 sell_adj = round(adj_ce_new_sell_entry - adj_ce_sell_buyback, 2)
@@ -1609,7 +1660,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 adj_pe_new_sell_exit = pe_sell_exit
                 adj_pe_new_buy_exit  = pe_buy_exit if ADJUST_BUY_LEG else None
 
-            total_pl = round(base_pl + adj_pl_points, 2)
+            # Final strategy P&L = locked in gains + final leg P&L
+            total_pl = round(running_realised_pl + base_pl, 2)
 
             logger.info(
                 f"  ADJ EXIT {adj_exit_reason:20s} | {exit_ts} | "
@@ -1623,23 +1675,20 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 f"P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
             )
 
-        # Append final exit snapshot using original entry prices for P&L consistency
+        # Append final exit snapshot using current leg entries
+        # Using slippage-adjusted exit prices (ce_sell_exit) ensures the final row's 
+        # cumulative_pl matches the actual total_pl of the trade.
         exit_spot = get_1min_value(nifty_1m, exit_ts, 'close') or spot
         exit_vix  = get_1min_value(vix_1m,   exit_ts, 'close')
-        snap_ce_sell_entry = orig_ce_sell_entry if adj_made else ce_sell_entry
-        snap_pe_sell_entry = orig_pe_sell_entry if adj_made else pe_sell_entry
-        snap_ce_sell_strike = orig_ce_sell_strike if adj_made else ce_sell_strike
-        snap_pe_sell_strike = orig_pe_sell_strike if adj_made else pe_sell_strike
         trade_log.append(build_snapshot(
             exit_ts, exit_spot, exit_vix,
-            snap_ce_sell_strike, snap_pe_sell_strike,
-            ce_sell_exit_raw, ce_buy_exit_raw,
-            pe_sell_exit_raw, pe_buy_exit_raw,
-            snap_ce_sell_entry, ce_buy_entry,
-            snap_pe_sell_entry, pe_buy_entry,
+            ce_sell_strike, pe_sell_strike,
+            ce_sell_exit, ce_buy_exit,
+            pe_sell_exit, pe_buy_exit,
+            ce_sell_entry, ce_buy_entry,
+            pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
-            realised_pl_pts=total_pl,
-            realised_pl_rs=round(total_pl * LOT_SIZE, 2),
+            running_realised_pl=running_realised_pl,
         ))
 
         # ----------------------------------------------------------------
@@ -1728,12 +1777,12 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         record = build_trade_record(
             entry_ts, spot, entry_vix,
             sell_expiry_date, buy_expiry_date,
-            orig_ce_sell_strike if adj_made else ce_sell_strike,
-            orig_pe_sell_strike if adj_made else pe_sell_strike,
-            orig_ce_sell_entry  if adj_made else ce_sell_entry,
-            ce_buy_entry,
-            orig_pe_sell_entry  if adj_made else pe_sell_entry,
-            pe_buy_entry,
+            orig_ce_sell_strike,
+            orig_pe_sell_strike,
+            orig_ce_sell_entry,
+            orig_ce_buy_entry,
+            orig_pe_sell_entry,
+            orig_pe_buy_entry,
             ce_sell_delta, pe_sell_delta,
             net_debit_ce, net_debit_pe,
             max_theoretical_profit,
