@@ -11,12 +11,12 @@ A market-neutral, theta-positive double calendar spread on Nifty weekly options.
 | Instrument | Nifty weekly options |
 | Structure | Double calendar (CE + PE, near-term sell / monthly buy) |
 | Entry | Day before previous Tuesday expiry, 10:30 AM |
-| Exit | Day before sell expiry, 10:25 AM (pre-expiry exit) |
+| Exit | Day before sell expiry, 10:25 (pre-expiry exit) |
 | Sell expiry | Next Tuesday from entry (~8 DTE) |
-| Buy expiry | Nearest monthly expiry with DTE ≥ 16; rolls to next month if below threshold |
+| Buy expiry | Last Tuesday of current month; rolls to next month if DTE < 16 |
 | Strike selection | Delta-targeted sell leg, rounded to nearest 100 points |
 | Delta computation | mibian Black-Scholes (IV backed out from market price) |
-| VIX filter | Entry only when 16 ≤ India VIX ≤ 25 |
+| VIX filter | Configurable; currently enabled (trades when VIX is >= 16 and <=25) |
 
 ## Delta Targeting
 
@@ -24,29 +24,36 @@ Delta target is VIX-conditional:
 
 | VIX Band | Target Delta |
 |---|---|
-| 16–22 | 0.25 |
+| ≤ 22 | 0.30 |
 | 22–25 | 0.30 |
 
 ## Exit Mechanisms
 
-All four legs always exit simultaneously. Only the pre-expiry exit is active in the current production baseline. Additional mechanisms are under calibration.
+All four legs always exit simultaneously. Priority order — first to trigger wins.
 
-| Priority | Mechanism | Status |
-|---|---|---|
-| 1 | Pre-expiry exit at 10:25 AM day before sell expiry | Always active |
-| 2 | Spread SL — combined P&L ≤ −N points | Under calibration |
-| 3 | Adjustment — winning side tightening | Under development |
+| Priority | Mechanism | Status | Config |
+|---|---|---|---|
+| 1 | Pre-expiry exit at 10:25 day before sell expiry | Always active | `ELM_EXIT_TIME` |
+| 2 | Spread SL — combined P&L ≤ −N points | Inactive | `SPREAD_SL_POINTS = 100` |
+| 3 | Index SL — spot within N pts of either sell strike | Inactive | `INDEX_SL_OFFSET = 50` |
+| 4 | Option SL — sell leg LTP > N × entry | Inactive | `OPTION_SL_MULTIPLIER = 2.0` |
+| 5 | Trail stop — P&L falls N pts from peak | Inactive | `TRAIL_ACTIVATION_POINTS = 20`, `TRAIL_POINTS = 10` |
+| 6 | Profit target — combined P&L ≥ N% of net debit | Inactive | `PROFIT_TARGET_PCT_NET_DEBIT = 0.20` |
 
 ## Adjustment Logic
 
-Under active development. Preliminary design based on trade log analysis:
+Spot-proximity triggered roll of the non-threatened sell leg. Maximum one adjustment per trade.
 
-- Trigger window: day 2–3 of the trade
-- Condition: losing side unrealised P&L ≤ −30 pts AND momentum confirmed
-- Action: tighten the winning side's sell strike closer to current spot (roll sell leg only; buy leg unchanged)
-- Constraint: new sell strike must remain ≥ 150 pts from current spot
-- Maximum one adjustment per trade week
-- Losing side is never touched
+**Trigger A:** `spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET` → roll PE sell leg  
+**Trigger B:** `spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET` → roll CE sell leg
+
+- The triggered side (the one spot is approaching) is **never touched**
+- The **other** side's sell leg is bought back; a new sell is placed at `existing_sell_strike ± ADJUSTMENT_NEW_STRIKE_DISTANCE` (stepped toward spot)
+- CE rolls down: `new_ce_sell = ce_sell_strike - ADJUSTMENT_NEW_STRIKE_DISTANCE`
+- PE rolls up: `new_pe_sell = pe_sell_strike + ADJUSTMENT_NEW_STRIKE_DISTANCE`
+- New sell must be OTM — abort if safety check fails
+- If `ADJUST_BUY_LEG = True`: buy leg also rolled to match new sell strike, same buy expiry. Entire adjustment aborts if new buy leg data not found.
+- Adjustment cannot fire on days listed in `ADJUSTMENT_EXCLUDED_DAYS` (calendar days from entry, day 0 = entry day)
 
 ## Project Structure
 
@@ -72,31 +79,41 @@ athena_backtest/
 
 | Column group | Contents |
 |---|---|
-| Entry | time, spot, VIX, strikes, deltas, net debit per side, max theoretical profit, target delta used |
-| Exit | time, reason, per-side and total P&L |
-| Intraweek | max/min spot, max/min VIX, max/min unrealised P&L with timestamps |
+| Entry | time, spot, VIX, sell/buy expiry, strikes, deltas, net debit per side, max theoretical profit, target delta used |
+| Exit | time, reason, per-side P&L (ce_pl_points, pe_pl_points), total_pl_points, total_pl_rupees |
+| Intraweek | max/min spot, max/min VIX, max/min unrealised P&L with timestamps, trail_activation_reached |
 | SL context | triggered side, trigger time/spot/day, untouched side values at SL, days remaining at SL |
-| Adjustment | side, strikes, entry/exit prices, P&L, exit reason, entry spot, days remaining |
+| Adjustment | adj_side, new sell strikes, new sell entry/exit, sell buyback prices, buy leg prices (if ADJUST_BUY_LEG), adj_pl_points, adj_entry_spot, adj_days_remaining, adj_trigger_day |
 
 **`data/trade_logs/trade_NNNN_YYYY-MM-DD.csv`** — one row per minute while in trade:
-- Spot, VIX, all four leg LTPs
-- Per-side and combined unrealised P&L
+- Spot, VIX, all four leg LTPs, per-side and combined unrealised P&L
 - Index SL and option SL reference levels for each side
+- realised_pl_pts / realised_pl_rs on final row only
 
 ## Key Parameters
 
 | Parameter | Current value | Notes |
 |---|---|---|
-| `ENTRY_TIME` | `10:30` | Monday equivalent entry |
-| `EXIT_TIME` | `10:25` | Day before sell expiry |
-| `VIX_FILTER_LOW` | `16.0` | No entry below this |
-| `VIX_FILTER_HIGH` | `25.0` | No entry above this |
-| `VIX_DELTA_BANDS` | `[(22.0, 0.25), (25.0, 0.30)]` | VIX-conditional delta |
+| `ENTRY_TIME` | `10:30` | Entry time on day before prior expiry |
+| `ELM_EXIT_TIME` | `10:25` | Pre-expiry exit time, holiday-adjusted |
+| `ENABLE_VIX_FILTER` | `True` | Currently enabled |
+| `VIX_FILTER_LOW` | `16.0` | Entry floor when filter enabled |
+| `VIX_FILTER_HIGH` | `25.0` | Entry ceiling when filter enabled |
+| `VIX_DELTA_BANDS` | `[(18,0.30),(20,0.30),(22,0.30),(25,0.30)]` | VIX-conditional delta |
 | `STRIKE_STEP` | `100` | Rounding interval |
-| `BUY_LEG_MIN_DTE` | `16` | Roll threshold |
-| `SLIPPAGE_POINTS` | `1.0` | Per leg |
-| `SPREAD_SL_POINTS` | `None` | Absolute point floor — under calibration |
-| `ENABLE_ADJUSTMENT` | `False` | Pending development |
+| `BUY_LEG_MIN_DTE` | `16` | Roll threshold for buy expiry |
+| `SLIPPAGE_POINTS` | `1.0` | Per leg (not applied on pre-expiry exit) |
+| `SPREAD_SL_POINTS` | `100` | Combined point floor |
+| `INDEX_SL_OFFSET` | `50` | Points before sell strike reaches ATM |
+| `OPTION_SL_MULTIPLIER` | `2.0` | Sell leg LTP multiple |
+| `TRAIL_ACTIVATION_POINTS` | `20` | Trail arms at this peak P&L |
+| `TRAIL_POINTS` | `10` | Trail fires if P&L drops this far from peak |
+| `PROFIT_TARGET_PCT_NET_DEBIT` | `0.20` | 20% of total net debit paid |
+| `ENABLE_ADJUSTMENT` | `True` | Spot-proximity roll |
+| `ADJUST_BUY_LEG` | `False` | Also roll buy leg when adjusting |
+| `ADJUSTMENT_TRIGGER_OFFSET` | `-300` | pts from sell strike (positive = OTM) |
+| `ADJUSTMENT_NEW_STRIKE_DISTANCE` | `400` | Step distance from existing sell strike |
+| `ADJUSTMENT_EXCLUDED_DAYS` | `(6,7)` | Allows adjustment on days 3, 4, 5 only |
 
 ## Relationship to Artemis and Apollo
 
@@ -108,17 +125,19 @@ Athena is the third strategy in the Algo Trading Lab. It complements Artemis (Se
 | 16–25 | Athena |
 | > 25 | Apollo (if trending) |
 
-Artemis always closes by Thursday. Athena closes by Monday 10:25 AM. The margin handoff is clean with no overlap.
+Artemis always closes by Thursday. Athena closes by Monday 10:25. The margin handoff is clean with no overlap.
 
 ## Status
 
 - [x] configs.py
 - [x] backtest.py
-- [x] VIX filter (16–25)
+- [x] VIX filter (configurable, currently disabled)
 - [x] VIX-conditional delta targeting
-- [x] Configurable entry/exit time
-- [x] Spread SL (absolute points)
+- [x] Configurable entry/exit times
+- [x] Spread SL, Index SL, Option SL, Trail stop, Profit target
 - [x] Max/min P&L with timestamps in trade summary
-- [ ] Adjustment mechanism (spec written, pending implementation)
-- [ ] Final parameter calibration
+- [x] Adjustment mechanism (spot-proximity trigger, sell leg roll)
+- [x] ADJUST_BUY_LEG option (roll buy leg alongside sell leg)
+- [ ] Adjustment parameter calibration (in progress)
+- [ ] Final exit mechanism calibration
 - [ ] Live execution module
