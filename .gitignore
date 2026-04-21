@@ -291,5 +291,8 @@ athena_backtest/data/trade_summary.csv
 athena_backtest/data/trade_logs/
 athena_backtest/data/
 
-# Claude Code
+# Claude Context
 CLAUDE.md
+
+# Gemini Context
+GEMINI.md
