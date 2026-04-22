@@ -105,7 +105,7 @@ ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before s
 # Asymmetric Delta (Path A)
 # Skews entry deltas based on 75m Supertrend regime.
 # ---------------------------------------------------------------------------
-ENABLE_ASYMMETRIC_DELTA         = True
+ENABLE_ASYMMETRIC_DELTA         = False
 DELTA_TESTED_SIDE               = 0.25    # Delta for the side the market is moving toward
 DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is moving away from
 
