@@ -110,13 +110,11 @@ DELTA_TESTED_SIDE               = 0.25    # Delta for the side the market is mov
 DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is moving away from
 
 # ---------------------------------------------------------------------------
-# Selective Overnight Hedge (Path B)
-# Buys cheap wings at 15:25 if gap risk is high; sells at 09:16.
+# Safety Wings (Path B)
+# Buys far-OTM wings at entry to cap maximum loss (Calendar Condor).
 # ---------------------------------------------------------------------------
-ENABLE_OVERNIGHT_HEDGE          = True
-HEDGE_DELTA                     = 0.05    # Target delta for the hedge wing
-EOD_MOM_THRESHOLD               = 0.15    # <0.15 (PE hedge) or >0.85 (CE hedge)
-VIX_SPIKE_THRESHOLD             = 0.05    # Buy both wings if VIX expands > 5% intraday
+ENABLE_SAFETY_WINGS             = True
+SAFETY_WING_DELTA               = 0.05    # Target delta for the safety wings
 
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll
@@ -125,7 +123,7 @@ VIX_SPIKE_THRESHOLD             = 0.05    # Buy both wings if VIX expands > 5% i
 # maintain margin efficiency.
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = False
-ADJUST_BUY_LEG                  = True   # MUST be True for margin efficiency
+ADJUST_BUY_LEG                  = False  # if True, roll the buy leg to match the new sell strike
                                           # same strike as new sell, same buy expiry as original
 ADJUSTMENT_TRIGGER_OFFSET       = -300    # pts from sold strike at which trigger fires
                                         # positive = still OTM, 0 = ATM, negative = ITM
