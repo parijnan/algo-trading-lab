@@ -2,10 +2,10 @@
 configs.py — Athena Backtest Configuration
 All parameters in one place. Tweak here, nothing else needs to change.
 
-Strategy: Double calendar spread on Nifty weekly options.
-Sell 20-delta CE and PE on next Tuesday's expiry (7 DTE from Monday entry).
-Buy same strikes on last Tuesday of current month ("monthly" expiry).
-Entry: Monday 10:30 AM.
+Strategy: Double calendar spread with safety wings (Calendar Condor).
+Sell 0.30 delta CE and PE on the near-term weekly expiry.
+Buy same strikes on the monthly expiry.
+Buy 0.05 delta wings on monthly expiry for gap protection.
 """
 
 import os
@@ -37,9 +37,9 @@ BUY_LEG_MIN_DTE         = 16            # Roll buy leg to next month if DTE belo
 # Falls back to the last band's delta if entry_vix exceeds all bounds.
 # To use a flat delta across all VIX levels, set all bands to the same value.
 VIX_DELTA_BANDS         = [
-    (18.0, 0.30),   # VIX up to 18:   0.25 delta
-    (20.0, 0.30),   # VIX 18–20:      0.25 delta
-    (22.0, 0.30),   # VIX 20–22:      0.25 delta
+    (18.0, 0.30),   # VIX up to 18:   0.30 delta
+    (20.0, 0.30),   # VIX 18–20:      0.30 delta
+    (22.0, 0.30),   # VIX 20–22:      0.30 delta
     (25.0, 0.30),   # VIX 22–25:      0.30 delta
 ]
 
@@ -115,7 +115,6 @@ DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is mov
 # ---------------------------------------------------------------------------
 ENABLE_SAFETY_WINGS             = True
 SAFETY_WING_DELTA               = 0.05    # Target delta for the safety wings
-
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll
 # When conditions are met mid-trade, roll the winning side's sell leg to a
@@ -123,15 +122,13 @@ SAFETY_WING_DELTA               = 0.05    # Target delta for the safety wings
 # maintain margin efficiency.
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = False
-ADJUST_BUY_LEG                  = False  # if True, roll the buy leg to match the new sell strike
+ADJUST_BUY_LEG                  = True   # MUST be True for margin efficiency
                                           # same strike as new sell, same buy expiry as original
-ADJUSTMENT_TRIGGER_OFFSET       = -300    # pts from sold strike at which trigger fires
-                                        # positive = still OTM, 0 = ATM, negative = ITM
-                                        # Trigger A: fires when spot >= ce_sell_strike - offset
-                                        # Trigger B: fires when spot <= pe_sell_strike + offset
-ADJUSTMENT_NEW_STRIKE_DISTANCE  = 400   # new sell strike this many pts from current spot
-ADJUSTMENT_EXCLUDED_DAYS        = (6, 7)  # trade days on which adjustment cannot fire
-                                                     # day 0 = entry day; allows days 3, 4, 5
+ADJUSTMENT_TRIGGER_OFFSET       = -150    # pts from sold strike at which trigger fires (Spot floor)
+ADJUSTMENT_WING_THRESHOLD       = 15.0    # Wing P&L gain at which stress roll triggers
+ADJUSTMENT_MIN_CREDIT_GAIN      = 20.0    # Min net credit (New Sell - Old Buyback) to proceed
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 400     # pts from roll-time spot for new strike
+ADJUSTMENT_EXCLUDED_DAYS        = (0,)    # Skip entry day
 
 # ---------------------------------------------------------------------------
 # Execution

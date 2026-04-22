@@ -1,27 +1,19 @@
 """
 backtest.py — Athena Backtest Engine
-Double calendar spread strategy on Nifty weekly options.
+Double calendar spread strategy on Nifty weekly options (Calendar Condor).
 
 Structure:
-  - Sell 20-delta CE and PE on the near-term expiry (sell leg)
+  - Sell flat-delta CE and PE on the near-term expiry (sell leg)
   - Buy same strikes on the last expiry of the current month (buy leg)
-  - Entry: trading day immediately before the expiry preceding the sell expiry
-    e.g. sell=14 Aug, prior expiry=7 Aug, entry=6 Aug
+  - Buy far-OTM wings (e.g. 5-delta) on the monthly expiry for gap protection
+  - Entry: 10:30 AM on the day before the sell expiry
   - Strike rounding: nearest 100 points
 
 Execution model:
   - Entry at ENTRY_TIME on the day before sell expiry
-  - Pre-expiry exit at 15:15 on the day before sell expiry (elm_time)
+  - Pre-expiry exit at ELM_EXIT_TIME on the day before sell expiry
   - SL fires on 1-min candle close → exit at open of next 1-min candle
-  - Pre-expiry exit uses close price at elm_time (no slippage)
-  - All four legs always exit simultaneously on any trigger
-  - Adjustment: re-enter fresh one-sided calendar on breached side if within cutoff
-
-Entry day is derived from the contract list and holiday calendar —
-fully regime-agnostic across Thursday (pre-Sep 2025) and Tuesday
-(post-Sep 2025) expiry schedules, and any future changes.
-
-Run after Tuesday night data pipeline cron has completed.
+  - All six legs always exit simultaneously on any trigger
 """
 
 import os
@@ -54,8 +46,8 @@ from configs import (
     ENABLE_SAFETY_WINGS, SAFETY_WING_DELTA,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
-    ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
-    ADJUSTMENT_EXCLUDED_DAYS,
+    ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_WING_THRESHOLD, ADJUSTMENT_MIN_CREDIT_GAIN,
+    ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_EXCLUDED_DAYS,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
 )
@@ -602,21 +594,6 @@ def check_profit_target(combined_pl: float, total_net_debit: float) -> bool:
     return combined_pl >= PROFIT_TARGET_PCT_NET_DEBIT * total_net_debit
 
 
-def check_periodic_stop(ts: pd.Timestamp, entry_time: pd.Timestamp, cumulative_pl: float) -> bool:
-    """
-    True if the cumulative strategy P&L is below threshold.
-    Checked from STOP_START_DAY onwards at every candle.
-    """
-    if not ENABLE_PERIODIC_STOP:
-        return False
-    
-    days_passed = (ts.date() - entry_time.date()).days
-    if days_passed >= STOP_START_DAY:
-        if cumulative_pl <= PERIODIC_STOP_THRESHOLD:
-            return True
-    return False
-
-
 def determine_breached_side(spot: float, entry_spot: float) -> str:
     """
     Determine which side was breached based on spot vs entry spot.
@@ -825,7 +802,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             sl_hit_reason = 'profit_target'
             break
 
-        # Spot-driven adjustment trigger
+        # Spot or Hedge driven adjustment trigger
         # Checked on every candle if adjustment not yet made and context params provided
         if (ENABLE_ADJUSTMENT and not adjustment_already_made
                 and entry_time is not None and sell_expiry_end is not None):
@@ -833,14 +810,27 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
 
             excluded = ADJUSTMENT_EXCLUDED_DAYS if isinstance(ADJUSTMENT_EXCLUDED_DAYS, (tuple, list, set)) else (ADJUSTMENT_EXCLUDED_DAYS,)
             if days_in_trade not in excluded:
-                # Trigger A: spot approaches CE sell strike — roll PE (the winning side)
+                
+                # Check for PE roll (triggered by upside move)
+                upside_stress = False
                 if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
+                    upside_stress = True
+                if ce_wing_df is not None and (running_ce_wing - ce_wing_entry) >= ADJUSTMENT_WING_THRESHOLD:
+                    upside_stress = True
+                
+                if upside_stress:
                     adj_trigger_ts   = ts
                     adj_winning_side = 'pe'
                     break
 
-                # Trigger B: spot approaches PE sell strike — roll CE (the winning side)
+                # Check for CE roll (triggered by downside move)
+                downside_stress = False
                 if spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET:
+                    downside_stress = True
+                if pe_wing_df is not None and (running_pe_wing - pe_wing_entry) >= ADJUSTMENT_WING_THRESHOLD:
+                    downside_stress = True
+                    
+                if downside_stress:
                     adj_trigger_ts   = ts
                     adj_winning_side = 'ce'
                     break
@@ -901,11 +891,16 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         adj_pl_points=None,
                         adj_entry_spot=None,
                         adj_days_remaining=None,
-                        adj_trigger_day=None) -> dict:
+                        adj_trigger_day=None,
+                        # Safety Wing fields
+                        ce_wing_strike=None, pe_wing_strike=None,
+                        ce_wing_entry=0.0, pe_wing_entry=0.0,
+                        ce_wing_exit=0.0, pe_wing_exit=0.0) -> dict:
     """Build a complete trade summary record."""
     ce_pl = _calc_exit_pl(ce_sell_entry, ce_sell_exit, ce_buy_entry, ce_buy_exit)
     pe_pl = _calc_exit_pl(pe_sell_entry, pe_sell_exit, pe_buy_entry, pe_buy_exit)
-    base_pl   = round(ce_pl + pe_pl, 2)
+    wing_pl = (ce_wing_exit - ce_wing_entry) + (pe_wing_exit - pe_wing_entry)
+    base_pl   = round(ce_pl + pe_pl + wing_pl, 2)
     adj_pl    = round(adj_pl_points, 2) if adj_pl_points is not None else 0.0
     total_pl  = round(base_pl + adj_pl, 2)
     total_rs  = round(total_pl * LOT_SIZE, 2)
@@ -918,10 +913,14 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'buy_expiry':                  buy_expiry,
         'ce_sell_strike':              ce_sell_strike,
         'pe_sell_strike':              pe_sell_strike,
+        'ce_wing_strike':              ce_wing_strike,
+        'pe_wing_strike':              pe_wing_strike,
         'ce_sell_entry':               round(ce_sell_entry, 2),
         'ce_buy_entry':                round(ce_buy_entry,  2),
         'pe_sell_entry':               round(pe_sell_entry, 2),
         'pe_buy_entry':                round(pe_buy_entry,  2),
+        'ce_wing_entry':               round(ce_wing_entry, 2),
+        'pe_wing_entry':               round(pe_wing_entry, 2),
         'ce_sell_delta':               round(ce_sell_delta, 4) if ce_sell_delta else None,
         'pe_sell_delta':               round(pe_sell_delta, 4) if pe_sell_delta else None,
         'target_delta_used':           round(target_delta_used, 4),
@@ -932,8 +931,11 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
         'exit_reason':                 exit_reason,
         'ce_sell_exit':                round(ce_sell_exit, 2) if ce_sell_exit else None,
         'ce_buy_exit':                 round(ce_buy_exit,  2) if ce_buy_exit  else None,
-        'pe_sell_exit':                round(pe_sell_exit, 2) if pe_sell_exit else None,
-        'pe_buy_exit':                 round(pe_buy_exit,  2) if pe_buy_exit  else None,
+        'pe_sell_exit':                round(pe_sell_exit, 2) if pe_sell_exit is not None else None,
+        'pe_buy_exit':                 round(pe_buy_exit, 2) if pe_buy_exit is not None else None,
+        'ce_wing_exit':                round(ce_wing_exit, 2),
+        'pe_wing_exit':                round(pe_wing_exit, 2),
+
         'ce_pl_points':                round(ce_pl, 2),
         'pe_pl_points':                round(pe_pl, 2),
         'max_spot':                    max_spot,
@@ -1067,10 +1069,11 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         'low':   'min',
         'close': 'last'
     }).dropna()
+    nifty_75m.columns = ['Open', 'High', 'Low', 'Close']
     st_indicator = SupertrendIndicator(period=10, multiplier=3.0)
     nifty_75m = st_indicator.calculate(nifty_75m)
     # Identify trend: True if close > ST (bullish), False if close < ST (bearish)
-    nifty_75m['is_bullish'] = nifty_75m['close'] > nifty_75m['Supertrend']
+    nifty_75m['is_bullish'] = nifty_75m['Close'] > nifty_75m['Supertrend']
 
     all_trades    = []
     opt_df_cache  = {}
@@ -1524,6 +1527,15 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         sell_expiry_end, new_sell_strike, win)
                 new_sell_df  = opt_df_cache[new_sell_key]
                 new_sell_raw = get_option_price(new_sell_df, roll_ts, 'open')
+
+                if new_sell_raw is not None:
+                    new_sell_entry_temp = apply_slippage(new_sell_raw, is_buy=False)
+                    credit_gain = round(new_sell_entry_temp - buyback_price, 2)
+                    if credit_gain < ADJUSTMENT_MIN_CREDIT_GAIN:
+                        logger.info(
+                            f"  ADJ SKIP | Credit gain {credit_gain:.1f} < {ADJUSTMENT_MIN_CREDIT_GAIN} "
+                            f"— roll not worth the risk at {roll_ts}")
+                        new_sell_raw = None # Force skip logic below
 
                 if new_sell_raw is None:
                     logger.info(

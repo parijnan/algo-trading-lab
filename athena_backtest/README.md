@@ -29,7 +29,7 @@ Delta target is VIX-conditional:
 
 ## Exit Mechanisms
 
-All four legs always exit simultaneously. Priority order — first to trigger wins.
+All six legs always exit simultaneously. Priority order — first to trigger wins.
 
 | Priority | Mechanism | Status | Config |
 |---|---|---|---|
