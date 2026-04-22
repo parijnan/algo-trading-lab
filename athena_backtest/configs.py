@@ -102,13 +102,21 @@ TRAIL_POINTS            = 10            # Exit if P&L falls this far from peak
 ELM_EXIT_TIME           = '10:25'      # HH:MM — exit time on the day before sell expiry
 
 # ---------------------------------------------------------------------------
-# Periodic P&L Gate (curtail fat tails)
-# Exits the trade if cumulative P&L is below threshold.
-# Checked at every 1-min candle from STOP_START_DAY onwards.
+# Asymmetric Delta (Path A)
+# Skews entry deltas based on 75m Supertrend regime.
 # ---------------------------------------------------------------------------
-ENABLE_PERIODIC_STOP            = False
-PERIODIC_STOP_THRESHOLD         = -100.0   # pts
-STOP_START_DAY                  = 1       # 0=Entry day, 1=Next day, etc.
+ENABLE_ASYMMETRIC_DELTA         = True
+DELTA_TESTED_SIDE               = 0.25    # Delta for the side the market is moving toward
+DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is moving away from
+
+# ---------------------------------------------------------------------------
+# Selective Overnight Hedge (Path B)
+# Buys cheap wings at 15:25 if gap risk is high; sells at 09:16.
+# ---------------------------------------------------------------------------
+ENABLE_OVERNIGHT_HEDGE          = True
+HEDGE_DELTA                     = 0.05    # Target delta for the hedge wing
+EOD_MOM_THRESHOLD               = 0.15    # <0.15 (PE hedge) or >0.85 (CE hedge)
+VIX_SPIKE_THRESHOLD             = 0.05    # Buy both wings if VIX expands > 5% intraday
 
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll

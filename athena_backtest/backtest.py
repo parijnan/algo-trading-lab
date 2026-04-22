@@ -34,7 +34,9 @@ import pandas as pd
 import numpy as np
 import mibian
 
-sys.path.insert(0, os.path.dirname(__file__))
+# Add parent directory to path so we can import from apollo_backtest
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from apollo_backtest.technical_indicators import SupertrendIndicator
 
 from configs import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
@@ -48,7 +50,8 @@ from configs import (
     ENABLE_OPTION_SL, OPTION_SL_MULTIPLIER,
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
-    ENABLE_PERIODIC_STOP, PERIODIC_STOP_THRESHOLD, STOP_START_DAY,
+    ENABLE_ASYMMETRIC_DELTA, DELTA_TESTED_SIDE, DELTA_SAFE_SIDE,
+    ENABLE_OVERNIGHT_HEDGE, HEDGE_DELTA, EOD_MOM_THRESHOLD, VIX_SPIKE_THRESHOLD,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_NEW_STRIKE_DISTANCE,
@@ -207,6 +210,20 @@ def get_1min_value(indexed_df: pd.DataFrame, timestamp: pd.Timestamp,
     if not prior.empty:
         return float(prior[col].iloc[-1])
     return None
+
+
+def get_supertrend_regime(st_df: pd.DataFrame, ts: pd.Timestamp) -> bool:
+    """
+    True if Bullish (Close > Supertrend), False if Bearish.
+    Uses the last completed 75m candle.
+    """
+    try:
+        # Find the latest 75m candle that ends before or at ts
+        idx = st_df.index.get_indexer([ts], method='ffill')[0]
+        if idx == -1: return True # Default Bullish
+        return bool(st_df.iloc[idx]['is_bullish'])
+    except Exception:
+        return True # Default Bullish
 
 
 # ---------------------------------------------------------------------------
@@ -1021,12 +1038,20 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                  holidays_df: pd.DataFrame = None):
     """
     Main backtest loop.
-    Iterates through every sell expiry in the contract list.
-    Entry date = trading day immediately before the sell expiry (holiday-adjusted).
-    Manages the trade through to elm_time / sell expiry via 1-min candle scanning.
-    Handles adjustment logic if SL fires within the cutoff window.
     """
     os.makedirs(TRADE_LOGS_DIR, exist_ok=True)
+
+    logger.info("Resampling 75m data for Supertrend regime...")
+    nifty_75m = nifty_1m.resample('75min').agg({
+        'open':  'first',
+        'high':  'max',
+        'low':   'min',
+        'close': 'last'
+    }).dropna()
+    st_indicator = SupertrendIndicator(period=10, multiplier=3.0)
+    nifty_75m = st_indicator.calculate(nifty_75m)
+    # Identify trend: True if close > ST (bullish), False if close < ST (bearish)
+    nifty_75m['is_bullish'] = nifty_75m['close'] > nifty_75m['Supertrend']
 
     all_trades    = []
     opt_df_cache  = {}
@@ -1129,16 +1154,32 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         target_delta_used = get_target_delta(entry_vix) if entry_vix is not None \
             else VIX_DELTA_BANDS[-1][1]
 
+        ce_delta_target = target_delta_used
+        pe_delta_target = target_delta_used
+
+        if ENABLE_ASYMMETRIC_DELTA:
+            is_bullish = get_supertrend_regime(nifty_75m, entry_ts)
+            if is_bullish:
+                # Market is moving UP: CE is the tested side (safer = lower delta)
+                # PE is the safe side (aggressive = higher delta)
+                ce_delta_target = DELTA_TESTED_SIDE
+                pe_delta_target = DELTA_SAFE_SIDE
+            else:
+                # Market is moving DOWN: PE is the tested side
+                ce_delta_target = DELTA_SAFE_SIDE
+                pe_delta_target = DELTA_TESTED_SIDE
+
         ce_sell_strike, ce_sell_raw = select_strike(
-            spot, sell_expiry_end, entry_ts, 'ce', opt_df_cache, target_delta_used)
+            spot, sell_expiry_end, entry_ts, 'ce', opt_df_cache, ce_delta_target)
         pe_sell_strike, pe_sell_raw = select_strike(
-            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache, target_delta_used)
+            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache, pe_delta_target)
 
         if ce_sell_strike is None or pe_sell_strike is None:
             skip_counts['strike_failed'] += 1
             logger.info(f"  {sell_expiry_date}: Strike selection failed — "
-                        f"entry={entry_date} spot={spot:.0f} delta={target_delta_used} "
-                        f"CE={ce_sell_strike} PE={pe_sell_strike} — skipping")
+                        f"entry={entry_date} spot={spot:.0f} "
+                        f"targets=[{ce_delta_target}, {pe_delta_target}] "
+                        f"strikes=[{ce_sell_strike}, {pe_sell_strike}] — skipping")
             continue
 
         # ----------------------------------------------------------------
