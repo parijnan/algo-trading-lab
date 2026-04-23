@@ -150,42 +150,43 @@ class Athena:
 
     def _find_delta_strike(self, spot, vix, expiry_date, target_delta, option_type):
         """
-        Iterate strikes to find the one closest to target_delta.
+        Calculate deltas for all strikes and poll LTP for the top 3 closest to target.
         """
         dte = (expiry_date - date.today()).days
-        if dte <= 0: dte = 0.5 # Expiry day
+        if dte <= 0: dte = 0.5
         
         atm = round(spot / STRIKE_STEP) * STRIKE_STEP
         
-        best_strike = atm
-        min_delta_diff = 999.0
-        
-        # Search range: ATM +/- 2000 pts
+        # 1. Calculate Deltas locally for all strikes in range
+        delta_map = []
         search_range = range(-2000, 2100, STRIKE_STEP)
         
         for offset in search_range:
             strike = atm + offset
+            c = mibian.BS([spot, strike, RISK_FREE_RATE, dte], volatility=vix)
+            current_delta = abs(c.callDelta) if option_type == 'ce' else abs(c.putDelta)
+            delta_map.append({
+                'strike': strike,
+                'delta_diff': abs(current_delta - target_delta)
+            })
+            
+        # 2. Sort by closest delta and take top 3
+        top_candidates = sorted(delta_map, key=lambda x: x['delta_diff'])[:3]
+        
+        # 3. Fetch LTP for candidates to ensure liquidity/existence
+        for candidate in top_candidates:
+            strike = candidate['strike']
             symbol, token = self._fetch_symbol_and_token(strike, option_type, expiry_date)
             if not symbol: continue
             
             ltp = self._get_ltp(EXCHANGE_NFO, symbol, token)
-            if ltp is None or ltp <= 0: continue
-            
-            # Compute delta using mibian
-            # Nifty doesn't have dividends for simple BS
-            c = mibian.BS([spot, strike, RISK_FREE_RATE, dte], volatility=vix)
-            current_delta = abs(c.callDelta) if option_type == 'ce' else abs(c.putDelta)
-            
-            diff = abs(current_delta - target_delta)
-            if diff < min_delta_diff:
-                min_delta_diff = diff
-                best_strike = strike
-            else:
-                # If diff starts increasing, we are moving away from target
-                if diff > min_delta_diff + 0.05:
-                    break
-        
-        return best_strike
+            if ltp is not None and ltp > 0:
+                logger.info(f"Selected {strike}{option_type.upper()} | Target: {target_delta} | LTP: {ltp}")
+                return strike
+                
+        # Fallback to the top choice if LTP fetch fails but we need a strike
+        logger.warning(f"Could not verify LTP for top 3 candidates. Falling back to closest: {top_candidates[0]['strike']}")
+        return top_candidates[0]['strike']
 
     def _place_order(self, transaction_type, symbol, token, lots):
         if DRY_RUN:

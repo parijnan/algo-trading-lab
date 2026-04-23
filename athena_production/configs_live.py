@@ -66,6 +66,7 @@ ENABLE_SAFETY_WINGS = True          # Toggle for Phase 1 optimization wings
 STRIKE_STEP         = 100           # Nifty strike interval for Calendar
 BUY_LEG_MIN_DTE     = 16            # Roll buy leg to next month if DTE < this
 LOT_SIZE            = 75            # Nifty lot size (update if SEBI changes this)
+RISK_FREE_RATE      = 10.0          # Annualized risk-free rate in %
 
 # Lot sizing
 LOT_COUNT           = 1             # Start with 1 lot for production testing
