@@ -83,8 +83,8 @@ SLIPPAGE_POINTS     = 1.0           # Per leg; for internal P&L tracking
 ORDER_TIMEOUT_SEC   = 10            # Seconds to wait for order fill
 
 # Polling interval in seconds (REST polling instead of WebSockets)
-# Every 15 minutes: fetch LTPs, update log, send Slack.
-TRADE_UPDATE_INTERVAL = 900
+# Every 20 seconds: fetch LTPs, update log, send Slack (if interval reached).
+TRADE_UPDATE_INTERVAL = 20
 
 # Dry run mode — no real orders placed.
 DRY_RUN             = True
