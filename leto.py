@@ -38,6 +38,7 @@ from SmartApi import SmartConnect
 REPO_ROOT      = os.path.dirname(os.path.abspath(__file__))
 APOLLO_DIR     = os.path.join(REPO_ROOT, "apollo_production")
 ARTEMIS_DIR    = os.path.join(REPO_ROOT, "artemis_production")
+ATHENA_DIR     = os.path.join(REPO_ROOT, "athena_production")
 SHARED_DIR     = os.path.join(REPO_ROOT, "shared")
 DATA_DIR       = os.path.join(REPO_ROOT, "data")
 LOGS_DIR       = os.path.join(REPO_ROOT, "logs")
@@ -268,99 +269,90 @@ def _artemis_trade_open():
     return False
 
 
+def _athena_trade_open():
+    """
+    Return True if athena_state.csv records an active trade.
+    """
+    state_file = os.path.join(ATHENA_DIR, 'data', 'athena_state.csv')
+    if not os.path.exists(state_file):
+        return False
+    try:
+        df = pd.read_csv(state_file)
+        if df.empty:
+            return False
+        return str(df.iloc[0].get('status', 'idle')) in ('in_trade', 'exiting')
+    except Exception as e:
+        logger.error(f"Could not read Athena state file: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# VIX Thresholds for Routing
+# ---------------------------------------------------------------------------
+VIX_ARTEMIS_MAX = 16.0
+VIX_ATHENA_MAX  = 25.0
+
+
 def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     """
     Decide which strategy to run, then run it.
-
-    Routing priority:
-      1. If an active Apollo trade is detected, route to Apollo regardless of
-         VIX or day — an open position must always be managed to completion.
-      2. If an active Artemis trade is detected, route to Artemis regardless of
-         VIX or day — covers the edge case of a Thursday position held to Friday.
-      3. If today is Friday and no open position exists, Artemis cannot enter a
-         new trade. Route to Apollo if VIX > threshold, otherwise stand down.
-      4. Otherwise route on current VIX:
-           VIX > VIX_THRESHOLD  → Apollo
-           VIX <= VIX_THRESHOLD → Artemis
-      5. If VIX fetch fails — default to Artemis (Mon–Thu) or stand down (Fri).
+    Returns True if control should be handed back for re-routing.
     """
-    if APOLLO_DIR not in sys.path:
-        sys.path.insert(0, APOLLO_DIR)
-    from configs_live import VIX_THRESHOLD  # type: ignore
-
     is_friday = datetime.now().weekday() == 4
 
-    # Priority 1: resume open Apollo trade unconditionally
+    # Priority 1: resume open positions unconditionally
     if _apollo_trade_open():
-        vix = _get_vix(obj)
-        vix_str = f"{vix:.2f}" if vix is not None else "unavailable"
-        logger.info(
-            f"Open Apollo trade detected in state file. "
-            f"Routing to Apollo regardless of VIX ({vix_str}).")
-        _slack(
-            f"*Leto*: Open Apollo trade detected. "
-            f"Routing to Apollo (VIX: {vix_str}, threshold: {VIX_THRESHOLD}).")
+        logger.info("Open Apollo trade detected. Routing to Apollo.")
+        _slack("*Leto*: Open Apollo trade detected. Routing to Apollo.")
         _run_apollo(obj, auth_token, instrument_df_nifty)
-        return
+        return False # No re-routing if position open
 
-    # Priority 2: resume open Artemis trade unconditionally (including Friday)
+    if _athena_trade_open():
+        logger.info("Open Athena trade detected. Routing to Athena.")
+        _slack("*Leto*: Open Athena trade detected. Routing to Athena.")
+        return _run_athena(obj, auth_token, instrument_df_nifty)
+
     if _artemis_trade_open():
-        vix = _get_vix(obj)
-        vix_str = f"{vix:.2f}" if vix is not None else "unavailable"
-        logger.info(
-            f"Open Artemis trade detected in state file. "
-            f"Routing to Artemis regardless of VIX ({vix_str}) "
-            f"{'(Friday — managing existing position only)' if is_friday else ''}.")
-        _slack(
-            f"*Leto*: Open Artemis trade detected. "
-            f"Routing to Artemis (VIX: {vix_str}"
-            f"{', Friday — existing position only' if is_friday else ''}).")
-        _run_artemis(obj, instrument_df_sensex)
-        return
+        logger.info(f"Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
+        _slack(f"*Leto*: Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
+        return _run_artemis(obj, instrument_df_sensex)
 
-    # Priority 3: no open positions — check day before routing on VIX
+    # Priority 2: no open positions — route on current VIX
     vix = _get_vix(obj)
-
     if vix is None:
-        logger.warning("Could not fetch VIX.")
         if is_friday:
             logger.info("Friday and no open positions — standing down.")
             _slack("*Leto*: Friday, no open positions. Standing down.")
-            return
+            return False
         logger.warning("Could not fetch VIX. Defaulting to Artemis.")
         _slack("*Leto* ALERT: Could not fetch VIX. Defaulting to Artemis.")
         vix = 0.0
 
     if is_friday:
-        # Artemis does not run on Fridays — only Apollo if VIX warrants it
-        if vix > VIX_THRESHOLD:
-            logger.info(
-                f"Friday. VIX: {vix:.2f} > {VIX_THRESHOLD}. Routing to Apollo.")
-            _slack(
-                f"*Leto*: Friday. VIX {vix:.2f} > {VIX_THRESHOLD}. "
-                f"Routing to Apollo.")
+        # Friday: Artemis/Athena do not enter fresh. Only Apollo if VIX warrants.
+        if vix > VIX_ATHENA_MAX:
+            logger.info(f"Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
+            _slack(f"*Leto*: Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
             _run_apollo(obj, auth_token, instrument_df_nifty)
         else:
-            logger.info(
-                f"Friday. VIX: {vix:.2f} <= {VIX_THRESHOLD}. "
-                f"No strategy active today.")
-            _slack(
-                f"*Leto*: Friday. VIX {vix:.2f} <= {VIX_THRESHOLD}. "
-                f"No strategy active today.")
-        return
+            logger.info(f"Friday. VIX {vix:.2f} <= {VIX_ATHENA_MAX}. Standing down.")
+            _slack(f"*Leto*: Friday. VIX {vix:.2f}. No fresh entries today.")
+        return False
 
-    # Priority 4: Mon–Thu, no open positions — route on VIX
-    logger.info(
-        f"VIX: {vix:.2f}. Threshold: {VIX_THRESHOLD}. "
-        f"Routing to: {'Apollo' if vix > VIX_THRESHOLD else 'Artemis'}.")
-    _slack(
-        f"*Leto*: VIX {vix:.2f} vs threshold {VIX_THRESHOLD}. "
-        f"Routing to *{'Apollo' if vix > VIX_THRESHOLD else 'Artemis'}*.")
-
-    if vix > VIX_THRESHOLD:
-        _run_apollo(obj, auth_token, instrument_df_nifty)
+    # Priority 3: Mon–Thu, no open positions — 3-way route
+    if vix <= VIX_ARTEMIS_MAX:
+        logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
+        _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
+        return _run_artemis(obj, instrument_df_sensex)
+    elif vix <= VIX_ATHENA_MAX:
+        logger.info(f"VIX {vix:.2f} in (16, 25]. Routing to Athena.")
+        _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Athena*.")
+        return _run_athena(obj, auth_token, instrument_df_nifty)
     else:
-        _run_artemis(obj, instrument_df_sensex)
+        logger.info(f"VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
+        _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Apollo*.")
+        _run_apollo(obj, auth_token, instrument_df_nifty)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -368,33 +360,44 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
 # ---------------------------------------------------------------------------
 
 def _run_apollo(obj, auth_token, instrument_df_nifty):
-    """
-    Run Apollo. Apollo owns feed start/stop.
-    Leto owns terminateSession (called in main after this returns).
-    """
+    """Run Apollo. Returns handback signal."""
     logger.info("Starting Apollo.")
-    # Apollo uses absolute paths (configs_live uses os.path.abspath) so no chdir needed.
     if APOLLO_DIR not in sys.path:
         sys.path.insert(0, APOLLO_DIR)
     from apollo import Apollo  # type: ignore
     apollo = Apollo(obj, auth_token, instrument_df_nifty)
-    apollo.run()
-    logger.info("Apollo returned.")
+    handoff = apollo.run()
+    logger.info(f"Apollo returned. Handoff signal: {handoff}")
+    return bool(handoff)
+
+
+def _run_athena(obj, auth_token, instrument_df_nifty):
+    """
+    Run Athena. Returns True if handed back for re-routing.
+    """
+    logger.info("Starting Athena.")
+    if ATHENA_DIR not in sys.path:
+        sys.path.insert(0, ATHENA_DIR)
+    import athena  # type: ignore
+    engine = athena.Athena(obj, auth_token, instrument_df_nifty)
+    handoff = engine.run()
+    logger.info(f"Athena returned. Handoff signal: {handoff}")
+    return bool(handoff)
 
 
 def _run_artemis(obj, instrument_df_sensex):
     """
-    Run Artemis. Artemis uses relative paths so we chdir first.
-    Leto owns terminateSession (called in main after this returns).
+    Run Artemis. Returns True if handed back for re-routing.
     """
     logger.info("Starting Artemis.")
     os.chdir(ARTEMIS_DIR)
     if ARTEMIS_DIR not in sys.path:
         sys.path.insert(0, ARTEMIS_DIR)
     import artemis  # type: ignore
-    artemis.run(obj, instrument_df_sensex)
-    os.chdir(REPO_ROOT)   # restore for clean teardown
-    logger.info("Artemis returned.")
+    handoff = artemis.run(obj, instrument_df_sensex)
+    os.chdir(REPO_ROOT)
+    logger.info(f"Artemis returned. Handoff signal: {handoff}")
+    return bool(handoff)
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +415,15 @@ if __name__ == '__main__':
 
         instrument_df_nifty, instrument_df_sensex = _download_scrip_master()
 
-        _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex)
+        # Re-routing loop: allows strategies to hand back control if VIX breaches at entry
+        while True:
+            should_reroute = _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex)
+            if not should_reroute:
+                break
+            
+            logger.info("Strategy handed back control. Re-evaluating routing...")
+            _slack("*Leto*: Strategy returned control. Re-evaluating routing based on new VIX...")
+            sleep(5) # breather before re-fetch
 
     except SystemExit:
         # sys.exit() from _check_market — session already terminated there

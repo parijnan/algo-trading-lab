@@ -18,14 +18,15 @@ from datetime import datetime, date, timedelta
 from time import sleep
 
 from configs_live import (
-    user_name, NIFTY_INDEX_TOKEN, VIX_TOKEN,
+    NIFTY_INDEX_TOKEN, VIX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
     ENTRY_TIME, ELM_EXIT_TIME,
+    VIX_FILTER_LOW, VIX_FILTER_HIGH,
     TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS,
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
-    DRY_RUN, TRADE_UPDATE_INTERVAL,
+    DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
-    SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
+    SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES,
     DATA_DIR, TRADE_LOGS_DIR, RISK_FREE_RATE
 )
 from state import AthenaState, load_state, save_state, clear_trade_fields
@@ -101,6 +102,16 @@ class Athena:
         except Exception as e:
             logger.error(f"LTP fetch failed for {symbol}: {e}")
             return None
+
+    def _get_expiry_dates(self):
+        expiry_dates = (
+            self.instrument_df['expiry']
+            .drop_duplicates()
+            .apply(lambda x: datetime.strptime(x, '%d%b%Y').date())
+            .sort_values()
+            .tolist()
+        )
+        return expiry_dates
 
     def _select_expiries(self):
         today = date.today()
@@ -187,6 +198,35 @@ class Athena:
         # Fallback to the top choice if LTP fetch fails but we need a strike
         logger.warning(f"Could not verify LTP for top 3 candidates. Falling back to closest: {top_candidates[0]['strike']}")
         return top_candidates[0]['strike']
+
+    def _select_all_strikes(self, spot, vix):
+        sell_exp, buy_exp = self._select_expiries()
+        if not sell_exp: return None
+        
+        logger.info(f"Selecting strikes for Spot: {spot:.2f}, VIX: {vix:.2f}")
+        logger.info(f"Expiries: Sell={sell_exp}, Buy={buy_exp}")
+        
+        # Find sold delta strikes on Sell Expiry (Weekly)
+        ce_sell_strike = self._find_delta_strike(spot, vix, sell_exp, TARGET_DELTA_SOLD, 'ce')
+        pe_sell_strike = self._find_delta_strike(spot, vix, sell_exp, TARGET_DELTA_SOLD, 'pe')
+        
+        # Buy strikes match Sell strikes
+        ce_buy_strike = ce_sell_strike
+        pe_buy_strike = pe_sell_strike
+        
+        # Find wings delta strikes on Buy (Monthly) Expiry
+        if ENABLE_SAFETY_WINGS:
+            ce_wing_strike = self._find_delta_strike(spot, vix, buy_exp, SAFETY_WING_DELTA, 'ce')
+            pe_wing_strike = self._find_delta_strike(spot, vix, buy_exp, SAFETY_WING_DELTA, 'pe')
+        else:
+            ce_wing_strike = pe_wing_strike = None
+            
+        return {
+            'sell_expiry': sell_exp, 'buy_expiry': buy_exp,
+            'ce_sell_strike': ce_sell_strike, 'pe_sell_strike': pe_sell_strike,
+            'ce_buy_strike': ce_buy_strike, 'pe_buy_strike': pe_buy_strike,
+            'ce_wing_strike': ce_wing_strike, 'pe_wing_strike': pe_wing_strike
+        }
 
     def _place_order(self, transaction_type, symbol, token, lots):
         if DRY_RUN:
@@ -281,7 +321,9 @@ class Athena:
         for key in buy_keys:
             strike = strikes_dict[f'{key}_strike']
             exp    = strikes_dict['buy_expiry']
-            sym, tok = self._fetch_symbol_and_token(strike, key.split('_')[1], exp)
+            # Map ce_buy -> ce, pe_buy -> pe, ce_wing -> ce, pe_wing -> pe
+            opt_type = 'ce' if key.startswith('ce') else 'pe'
+            sym, tok = self._fetch_symbol_and_token(strike, opt_type, exp)
             if not sym:
                 logger.error(f"Could not fetch symbol for {key} strike {strike}")
                 return False
@@ -335,11 +377,24 @@ class Athena:
         save_state(self.state)
         logger.info(f"Entry complete. Net Debit: {self.state.net_debit}")
         
-        # Send Slack Alert
+        # Send Comprehensive Slack Alert
         msg = f"*Athena* ENTRY | Spot: {spot:.2f} | VIX: {vix:.2f}\n" \
-              f"Sold CE {self.state.ce_sell_strike} @ {self.state.ce_sell_entry:.1f}\n" \
-              f"Sold PE {self.state.pe_sell_strike} @ {self.state.pe_sell_entry:.1f}\n" \
-              f"Net Debit: {self.state.net_debit:.1f}"
+              f"----------------------------------\n" \
+              f"SOLD (Weekly): \n" \
+              f"  CE {self.state.ce_sell_strike} @ {self.state.ce_sell_entry:.1f}\n" \
+              f"  PE {self.state.pe_sell_strike} @ {self.state.pe_sell_entry:.1f}\n" \
+              f"BOUGHT (Monthly): \n" \
+              f"  CE {self.state.ce_buy_strike} @ {self.state.ce_buy_entry:.1f}\n" \
+              f"  PE {self.state.pe_buy_strike} @ {self.state.pe_buy_entry:.1f}\n"
+        
+        if self.state.wings_enabled:
+            msg += f"WINGS (Monthly): \n" \
+                   f"  CE {self.state.ce_wing_strike} @ {self.state.ce_wing_entry:.1f}\n" \
+                   f"  PE {self.state.pe_wing_strike} @ {self.state.pe_wing_entry:.1f}\n"
+        
+        msg += f"----------------------------------\n" \
+               f"Net Debit: {self.state.net_debit:.1f}"
+               
         slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
         return True
 
@@ -385,7 +440,23 @@ class Athena:
         # Final log and slack
         self._append_trade_log_row(exit_reason=reason, exit_fills=exit_fills)
         
-        msg = f"*Athena* EXIT {reason.upper()} | P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs)"
+        msg = f"*Athena* EXIT {reason.upper()} | Spot: {self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN):.2f}\n" \
+              f"----------------------------------\n" \
+              f"SOLD EXIT: \n" \
+              f"  CE {self.state.ce_sell_strike} @ {exit_fills['ce_sell']:.1f}\n" \
+              f"  PE {self.state.pe_sell_strike} @ {exit_fills['pe_sell']:.1f}\n" \
+              f"BOUGHT EXIT: \n" \
+              f"  CE {self.state.ce_buy_strike} @ {exit_fills['ce_buy']:.1f}\n" \
+              f"  PE {self.state.pe_buy_strike} @ {exit_fills['pe_buy']:.1f}\n"
+        
+        if self.state.wings_enabled:
+            msg += f"WINGS EXIT: \n" \
+                   f"  CE {self.state.ce_wing_strike} @ {exit_fills['ce_wing']:.1f}\n" \
+                   f"  PE {self.state.pe_wing_strike} @ {exit_fills['pe_wing']:.1f}\n"
+
+        msg += f"----------------------------------\n" \
+               f"Final P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs)"
+        
         slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
         
         clear_trade_fields(self.state)
@@ -493,15 +564,27 @@ class Athena:
         while True:
             now = datetime.now()
             if now.time() >= self._closing_time: break
-            
             # --- 1. ENTRY LOGIC ---
             if self.state.status == 'idle':
+                # Find current weekly sell expiry
                 sell_exp, _ = self._select_expiries()
                 if sell_exp:
                     entry_day = self._last_trading_day_before(sell_exp)
-                    if now.date() == entry_day and now.time() >= self._entry_time:
+
+                    is_entry_day = (now.date() == entry_day)
+                    if FORCE_ENTRY:
+                        is_entry_day = True # Bypass date check for dry run
+
+                    if is_entry_day and now.time() >= self._entry_time:
                         spot = self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)
                         vix  = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN)
+
+                        if vix:
+                            if not (VIX_FILTER_LOW <= vix <= VIX_FILTER_HIGH):
+                                logger.info(f"VIX {vix:.2f} outside range [{VIX_FILTER_LOW}, {VIX_FILTER_HIGH}] at entry time. Handing back to Leto.")
+                                slack_bot_sendtext(f"*Athena*: VIX {vix:.2f} outside range at entry. Handing back to Leto for re-routing.", SLACK_TRADE_ALERTS)
+                                return True # Signal to re-route
+                                
                         if spot and vix:
                             strikes = self._select_all_strikes(spot, vix)
                             if strikes:
@@ -528,11 +611,6 @@ class Athena:
                 sleep(60)
                 
             _reset_counters()
-
-if __name__ == "__main__":
-    # For independent testing on local/dev
-    # Usage: python athena.py (will fail without obj from leto)
-    print("Standalone run requires SmartConnect object from leto.py.")
-    print("Checking if state can be loaded...")
-    s = load_state()
-    print(f"Current State Status: {s.status}")
+        
+        logger.info("Market closed. Athena finished for the day.")
+        return False

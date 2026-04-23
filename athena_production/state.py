@@ -160,8 +160,11 @@ def save_state(state: AthenaState) -> None:
 
 
 def clear_trade_fields(state: AthenaState) -> AthenaState:
-    """Reset all trade fields, preserving wings_enabled default."""
-    status_snapshot = 'idle'
-    new_state = init_state()
-    new_state.status = status_snapshot
-    return new_state
+    """Reset all trade-specific fields, preserving wings_enabled default."""
+    fresh = init_state()
+    for f in fields(state):
+        if f.name not in ['status', 'wings_enabled']:
+            setattr(state, f.name, getattr(fresh, f.name))
+    
+    state.status = 'idle'
+    return state

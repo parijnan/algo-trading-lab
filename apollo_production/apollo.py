@@ -458,6 +458,8 @@ class Apollo:
 
             # Always stop the feed before returning to wrapper
             self._teardown()
+        
+        return False
 
     # -----------------------------------------------------------------------
     # Missed flip recovery on restart

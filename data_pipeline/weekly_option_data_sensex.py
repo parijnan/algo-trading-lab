@@ -317,6 +317,15 @@ def update_index(obj, display_name: str, exchange: str,
         SLACK_DATA_CHANNEL
     )
 
+    # Data integrity check: Each trading day should have 375 minutes (rows)
+    if len(new_data) < 375:
+        slack_bot_sendtext(
+            f"⚠️ *Data Integrity Warning* | {display_name} ({filename})\n"
+            f"Expected at least 375 new rows, but only {len(new_data)} were added.\n"
+            f"Please verify if data for any trading day was partial or missing.",
+            SLACK_ERROR_CHANNEL
+        )
+
 
 def update_all_indices(obj):
     """Update Sensex, Nifty, and India VIX index CSV files."""
