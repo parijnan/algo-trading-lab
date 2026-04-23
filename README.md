@@ -29,21 +29,21 @@ A directional ITM debit spread strategy deployed when India VIX > 16. Uses dual-
 | Production config | D-R-D06g |
 | Status | Live |
 
-### [Athena](./athena_backtest/) — Nifty Double Calendar Spread
-A market-neutral, theta-positive double calendar spread strategy on Nifty weekly options. Sells near-delta CE and PE on the next Tuesday expiry (~8 DTE) and buys the same strikes on the monthly expiry. Long-vega profile benefits from IV expansion. Deployed when India VIX is between 16 and 25. Currently in backtesting.
+### [Athena](./athena_production/) — Nifty Double Calendar Condor
+A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25). Executes a double calendar spread on Nifty weekly options with far-OTM safety wings to cap extreme gap risk. Long-vega profile benefits from IV expansion.
 
 | | |
 |---|---|
 | Instrument | Nifty weekly options |
-| Structure | Double calendar spread (CE + PE, two expiries) |
+| Structure | Double calendar condor (6 legs) |
 | Entry | Day before previous Tuesday expiry, 10:30 AM |
-| Exit | Day before sell expiry, 10:25 AM |
+| Exit | Day before sell expiry, 10:25 AM (ELM) |
 | Sell expiry | Next Tuesday from entry (~8 DTE) |
-| Buy expiry | Nearest monthly expiry with DTE ≥ 16; rolled to next month if below |
+| Buy expiry | Nearest monthly expiry with DTE ≥ 16 |
 | Deploy condition | India VIX 16–25 |
-| Delta target | 0.25 (VIX 16–22), 0.30 (VIX 22–25) |
-| Broker | TBD |
-| Status | In development — backtesting |
+| Target Deltas | Sold: 0.30, Wings: 0.05 |
+| Broker | Angel Broking (SmartConnect) |
+| Status | Production-ready (Awaiting Leto integration) |
 
 ## Session Router
 
@@ -73,27 +73,11 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 
 | VIX Level | Strategy |
 |---|---|
-| < 14 | Artemis — full confidence |
-| 14 – 16 | Artemis — reduced size, tighter SLs |
-| > 16 | Apollo |
-
-Open position detection overrides VIX routing in all cases — an active Apollo or Artemis trade is always resumed to completion regardless of current VIX or day of week.
-
-## Proposed VIX Regime (when Athena goes live)
-
-Once Athena is deployed, the routing table and Leto logic will change. The existing logic above remains in place until Athena is production-ready.
-
-| VIX Level | Strategy |
-|---|---|
 | < 16 | Artemis |
-| 16–25 | Athena |
-| > 25 | Apollo (if trend signal present) |
+| 16 – 25 | Athena |
+| > 25 | Apollo |
 
-Leto routing changes required:
-- VIX 16–25 → Athena (new path)
-- Apollo deploy condition shifts to VIX > 25
-- Athena exits at 10:25 AM the day before sell expiry; margin is free by 10:30 AM for the next entry decision
-- Artemis closes every Thursday — no margin overlap with Athena on Mondays
+Open position detection overrides VIX routing in all cases — an active Apollo, Artemis, or Athena trade is always resumed to completion regardless of current VIX or day of week.
 
 ## Cron (delos)
 
@@ -243,6 +227,15 @@ algo-trading-lab/
 │       ├── nifty_75min.csv         (generated — gitignored)
 │       ├── vix_daily.csv           (generated — gitignored)
 │       └── trade_logs/             (generated — gitignored)
+├── athena_production/              # Live Nifty double calendar condor strategy
+│   ├── README.md
+│   ├── athena.py
+│   ├── configs_live.py
+│   ├── state.py
+│   ├── functions.py
+│   ├── logger_setup.py
+│   └── data/
+│       └── .gitkeep               # runtime data gitignored
 ├── athena_backtest/                # Athena double calendar backtesting
 │   ├── README.md
 │   ├── configs.py

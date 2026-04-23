@@ -291,6 +291,13 @@ athena_backtest/data/trade_summary.csv
 athena_backtest/data/trade_logs/
 athena_backtest/data/
 
+# Athena Production — runtime data
+athena_production/data/athena_state.csv
+athena_production/data/athena_trades.csv
+athena_production/data/trade_logs/
+athena_production/data/error_log.txt
+athena_production/logs/
+
 # Claude Context
 CLAUDE.md
 
