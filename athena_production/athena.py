@@ -235,7 +235,9 @@ class Athena:
 
     def _fetch_order_details(self, orderid_list, token, symbol):
         if DRY_RUN:
+            # For dry run, use current LTP as fill price
             fill = self._get_ltp(EXCHANGE_NFO, symbol, token) or 0.0
+            logger.info(f"[DRY RUN] Simulating fill for {symbol} at {fill:.2f}")
             return fill, datetime.now()
 
         # Wait for fills
@@ -458,13 +460,30 @@ class Athena:
             if self.state.wings_enabled:
                 pl_pts += (prices['ce_wing'] - self.state.ce_wing_entry) + \
                           (prices['pe_wing'] - self.state.pe_wing_entry)
+            
+            pl_pts = round(pl_pts, 2)
+            if pl_pts > self.state.max_unrealised_pl:
+                self.state.max_unrealised_pl = pl_pts
+            
+            # Update last known LTPs in state
+            self.state.last_spot = prices['spot']
+            self.state.last_ce_sell_ltp = prices['ce_sell']
+            self.state.last_pe_sell_ltp = prices['pe_sell']
+            self.state.last_ce_buy_ltp = prices['ce_buy']
+            self.state.last_pe_buy_ltp = prices['pe_buy']
+            if self.state.wings_enabled:
+                self.state.last_ce_wing_ltp = prices['ce_wing']
+                self.state.last_pe_wing_ltp = prices['pe_wing']
+            
+            save_state(self.state)
         except:
             return
             
         pl_rs = round(pl_pts * self.state.lots * LOT_SIZE, 2)
         
         msg = f"*Athena* UPDATE | Spot: {prices['spot']:.2f} | " \
-              f"P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs)"
+              f"P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs) | " \
+              f"Peak: {self.state.max_unrealised_pl:+.1f} pts"
         slack_bot_sendtext(msg, SLACK_TRADE_UPDATES)
 
     def run(self):
@@ -476,7 +495,6 @@ class Athena:
             
             # --- 1. ENTRY LOGIC ---
             if self.state.status == 'idle':
-                # Find current weekly sell expiry
                 sell_exp, _ = self._select_expiries()
                 if sell_exp:
                     entry_day = self._last_trading_day_before(sell_exp)
@@ -500,13 +518,20 @@ class Athena:
             if self.state.status == 'in_trade':
                 self._append_trade_log_row()
                 self._send_trade_update()
-                sleep(TRADE_UPDATE_INTERVAL)
+                
+                # Sleep in small chunks to remain responsive to exit time
+                for _ in range(int(TRADE_UPDATE_INTERVAL / 10)):
+                    sleep(10)
+                    if datetime.now().time() >= self._exit_time: break
             else:
-                sleep(60) # Wait for entry time
+                sleep(60)
                 
             _reset_counters()
 
 if __name__ == "__main__":
-    # For independent testing
-    # Requires an authenticated SmartConnect object
-    print("Standalone run requires SmartConnect object. Use leto.py to route.")
+    # For independent testing on local/dev
+    # Usage: python athena.py (will fail without obj from leto)
+    print("Standalone run requires SmartConnect object from leto.py.")
+    print("Checking if state can be loaded...")
+    s = load_state()
+    print(f"Current State Status: {s.status}")
