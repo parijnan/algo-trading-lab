@@ -4,12 +4,12 @@ Part of the **Algo Trading Lab** project.
 
 ## Strategy Overview
 
-A dual-timeframe Supertrend trend-following options strategy, deployed only when India VIX > 16. Apollo takes a directional position — one side only, in the direction of the trend.
+A dual-timeframe Supertrend trend-following options strategy, originally designed for VIX > 16 (now live for VIX > 25). Apollo takes a directional position — one side only, in the direction of the trend.
 
 | Parameter | Value |
 |---|---|
 | Instrument | Nifty weekly options |
-| Deploy condition | India VIX > 16 |
+| Deploy condition | India VIX > 25 (Live) |
 | Higher timeframe | 75-min Supertrend (trend regime) |
 | Lower timeframe | 15-min Supertrend (entry/exit trigger) |
 | Structure | ITM debit spread — buy ITM (−50 from ATM) + sell OTM (300 pts away) |

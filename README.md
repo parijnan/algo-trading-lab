@@ -17,14 +17,14 @@ A market-neutral credit spread strategy trading a weekly Sensex Iron Condor, run
 | Status | Live |
 
 ### [Apollo](./apollo_production/) — Nifty High-VIX Trend Following
-A directional ITM debit spread strategy deployed when India VIX > 16. Uses dual-timeframe Supertrend (75-min and 15-min) to identify and trade sustained directional moves in Nifty options.
+A directional ITM debit spread strategy deployed when India VIX > 25. Uses dual-timeframe Supertrend (75-min and 15-min) to identify and trade sustained directional moves in Nifty options.
 
 | | |
 |---|---|
 | Instrument | Nifty weekly options |
 | Structure | ITM debit spread (directional, one side only) |
 | Signal | Dual Supertrend — 75-min regime, 15-min entry/exit |
-| Deploy condition | India VIX > 16 |
+| Deploy condition | India VIX > 25 |
 | Broker | Angel Broking (SmartConnect) |
 | Production config | D-R-D06g |
 | Status | Live |
@@ -43,19 +43,22 @@ A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25).
 | Deploy condition | India VIX 16–25 |
 | Target Deltas | Sold: 0.30, Wings: 0.05 |
 | Broker | Angel Broking (SmartConnect) |
-| Status | Production-ready (Awaiting Leto integration) |
+| Status | Live |
 
 ## Session Router
 
 ### [Leto](./leto.py) — Strategy Router and Session Manager
-Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Apollo or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
+Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Apollo, Athena, or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
 
 **Routing logic:**
-1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day (protects overnight positions when VIX drops below threshold)
-2. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day (protects overnight positions when VIX rises above threshold; also handles the edge case of a Thursday position held to Friday)
-3. If today is Friday and no open position exists — Artemis cannot enter new trades; route to Apollo if VIX > threshold, otherwise stand down
-4. Otherwise: VIX > 16 → Apollo, VIX ≤ 16 → Artemis
-5. If VIX fetch fails — default to Artemis (Mon–Thu) or stand down (Fri)
+1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day.
+2. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
+3. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
+4. If no open position exists:
+   - **VIX ≤ 16.0** → Artemis (Mon-Thu only)
+   - **16.0 < VIX ≤ 25.0** → Athena (Mon-Thu only)
+   - **VIX > 25.0** → Apollo (Any day)
+5. **Handoff Mechanism:** If a strategy standing down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
 
 ## Infrastructure
 

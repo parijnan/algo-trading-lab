@@ -6,16 +6,18 @@ Responsibilities:
   - Login to Angel One (one session, one API key)
   - Market hours and holiday check — exit before any strategy is initialised
   - Scrip master download and filtering for Nifty (NFO) and Sensex (BFO)
-  - VIX-based routing: Apollo (VIX > threshold) or Artemis (VIX <= threshold)
+  - VIX-based routing: Artemis (VIX <= 16), Athena (16 < VIX <= 25), Apollo (VIX > 25)
+  - Re-routing loop: Supports strategy hand-back if VIX breaches at entry time
   - Session teardown (terminateSession) after strategy returns
 
-Cron on delos (replaces both existing strategy crons):
-    14 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
+Cron on delos:
+    15 9 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab && \
     /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +%%Y%%m%%d).log 2>&1
 
 Strategy interfaces:
-  Apollo  : Apollo(obj, auth_token, instrument_df_nifty)  — apollo.run() returns with feed stopped
-  Artemis : artemis.run(obj, instrument_df_sensex)        — returns with trade archived or held
+  Artemis : artemis.run(obj, instrument_df_sensex)        — returns True for hand-back
+  Athena  : athena.Athena(obj, auth_token, instrument_df)  — returns True for hand-back
+  Apollo  : apollo.Apollo(obj, auth_token, instrument_df)  — returns False (market close)
 """
 
 import os

@@ -15,6 +15,9 @@ For full details on design decisions, API behaviour, deployment, and file format
 | `rename_legacy_files.py` | One-time utility to rename legacy Sensex option files | Laptop | Manual |
 | `delete_empty_files.py` | One-time utility to delete empty option CSV files | Laptop | Manual |
 
+### Data Integrity Guards
+To ensure high-fidelity historical data, `weekly_option_data_sensex.py` implements a **Data Integrity Warning**. Since each trading day consists of 375 minutes, the script validates that at least 375 new rows are added for each index (Sensex, Nifty, VIX). If the count is lower, an alert is sent to the `#error-alerts` Slack channel.
+
 ## Directory Structure
 
 ```

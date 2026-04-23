@@ -123,7 +123,7 @@ Athena is the third strategy in the Algo Trading Lab. It complements Artemis (Se
 |---|---|
 | < 16 | Artemis |
 | 16–25 | Athena |
-| > 25 | Apollo (if trending) |
+| > 25 | Apollo |
 
 Artemis always closes by Thursday. Athena closes by Monday 10:25. The margin handoff is clean with no overlap.
 
@@ -131,13 +131,12 @@ Artemis always closes by Thursday. Athena closes by Monday 10:25. The margin han
 
 - [x] configs.py
 - [x] backtest.py
-- [x] VIX filter (configurable, currently disabled)
+- [x] VIX filter (configurable, currently enabled)
 - [x] VIX-conditional delta targeting
 - [x] Configurable entry/exit times
 - [x] Spread SL, Index SL, Option SL, Trail stop, Profit target
 - [x] Max/min P&L with timestamps in trade summary
 - [x] Adjustment mechanism (spot-proximity trigger, sell leg roll)
 - [x] ADJUST_BUY_LEG option (roll buy leg alongside sell leg)
-- [ ] Adjustment parameter calibration (in progress)
-- [ ] Final exit mechanism calibration
-- [ ] Live execution module
+- [x] 6-leg Safety Wing implementation
+- [x] Live execution module (athena_production)

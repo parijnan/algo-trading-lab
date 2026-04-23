@@ -1,4 +1,4 @@
-# Apollo Production — Nifty High-VIX Trend Following (Live Execution)
+# Apollo Production — Nifty High-VIX Trend Following (> 25 VIX)
 
 Live execution module for the Apollo debit spread strategy.
 Part of the **Algo Trading Lab** project.
