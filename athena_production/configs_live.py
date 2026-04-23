@@ -79,7 +79,6 @@ ELM_EXIT_TIME       = "10:25"       # 10:25 AM on day before sell expiry
 # ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
-SLIPPAGE_POINTS     = 1.0           # Per leg; for internal P&L tracking
 ORDER_TIMEOUT_SEC   = 10            # Seconds to wait for order fill
 
 # Polling interval in seconds (REST polling instead of WebSockets)
