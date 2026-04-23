@@ -24,6 +24,7 @@ from configs_live import (
     VIX_FILTER_LOW, VIX_FILTER_HIGH,
     TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS,
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
+    LOT_CALC, LOT_CAPITAL,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
     SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES,
@@ -307,9 +308,32 @@ class Athena:
             handle_exception(e)
             return 0.0, datetime.now()
 
+    def _calculate_lots(self):
+        """
+        Calculate the number of lots to trade.
+        LOT_CALC = False: return LOT_COUNT directly.
+        LOT_CALC = True:  auto-calculate from available margin.
+        """
+        if not LOT_CALC:
+            logger.debug(f"Lot sizing: fixed LOT_COUNT={LOT_COUNT}")
+            return LOT_COUNT
+
+        while True:
+            try:
+                _increment_poll()
+                margin = float(self.obj.rmsLimit()['data']['availablecash'])
+                lots   = max(1, int(margin // LOT_CAPITAL))
+                logger.info(
+                    f"Lot sizing: available_margin={margin:.0f}  "
+                    f"LOT_CAPITAL={LOT_CAPITAL}  lots={lots}")
+                return lots
+            except Exception as e:
+                handle_exception(e)
+                sleep(1)
+
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
-        lots = LOT_COUNT
+        lots = self._calculate_lots()
         self.state.wings_enabled = ENABLE_SAFETY_WINGS
         
         # 1. Place BUY orders (Margin protection)

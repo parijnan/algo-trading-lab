@@ -69,7 +69,12 @@ LOT_SIZE            = 75            # Nifty lot size (update if SEBI changes thi
 RISK_FREE_RATE      = 5.0           # Annualized risk-free rate in %
 
 # Lot sizing
+# LOT_CALC = False: trade exactly LOT_COUNT lots per signal
+# LOT_CALC = True:  auto-calculate from available margin (rmsLimit)
+#   lots = floor(available_margin / LOT_CAPITAL), floored at 1
+LOT_CALC            = False
 LOT_COUNT           = 1             # Start with 1 lot for production testing
+LOT_CAPITAL         = 150000        # Capital per lot for auto-calculation (Rs)
 
 # ---------------------------------------------------------------------------
 # Timing
