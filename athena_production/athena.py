@@ -580,6 +580,7 @@ class Athena:
         msg = f"*Athena* UPDATE | Spot: {prices['spot']:.2f} | " \
               f"P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs) | " \
               f"Peak: {self.state.max_unrealised_pl:+.1f} pts"
+        logger.info(msg.replace('*', '')) # Strip markdown for local log
         slack_bot_sendtext(msg, SLACK_TRADE_UPDATES)
 
     def run(self):
