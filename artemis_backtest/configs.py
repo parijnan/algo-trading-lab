@@ -55,7 +55,7 @@ TRADE_SUMMARY_FILE      = os.path.join(BACKTEST_DIR, 'data', 'trade_summary.csv'
 # edit the per-instrument dicts above it.
 
 _NIFTY_PARAMS = {
-    'lot_size':             75,
+    'lot_size':             65,
     'strike_interval':      100,
     'expected_premium':     30,
     'hedge_points':         300,

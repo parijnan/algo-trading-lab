@@ -134,7 +134,7 @@ ADJUSTMENT_EXCLUDED_DAYS        = (0,)    # Skip entry day
 # Execution
 # ---------------------------------------------------------------------------
 SLIPPAGE_POINTS         = 1.0           # Per leg; applied on all exits except pre-expiry
-LOT_SIZE                = 75            # Nifty lot size (update if SEBI changes this)
+LOT_SIZE                = 65            # Nifty lot size (update if SEBI changes this)
 RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibian BS
 
 # ---------------------------------------------------------------------------

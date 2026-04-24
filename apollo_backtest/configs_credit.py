@@ -162,7 +162,7 @@ BACKTEST_START_DATE     = '2020-01-01'
 BACKTEST_END_DATE       = None      # None = use all available data
 
 # Lot size
-LOT_SIZE                = 75        # Nifty lot size (update if SEBI changes this)
+LOT_SIZE                = 65        # Nifty lot size (update if SEBI changes this)
 
 # ---------------------------------------------------------------------------
 # Options Pricing

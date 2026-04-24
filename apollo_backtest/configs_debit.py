@@ -202,7 +202,7 @@ SLIPPAGE_POINTS         = 1.0      # Per leg; not applied on expiry exits
 BACKTEST_START_DATE     = '2020-01-01'
 BACKTEST_END_DATE       = None
 
-LOT_SIZE                = 75       # Nifty lot size
+LOT_SIZE                = 65       # Nifty lot size
 # ---------------------------------------------------------------------------
 # Entry Filters
 # Pre-entry conditions checked on every valid Supertrend flip signal.

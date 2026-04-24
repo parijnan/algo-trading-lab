@@ -155,7 +155,7 @@ ELM_SECONDS_BEFORE_EXPIRY   = 87300        # 15:15 day before expiry
 # Execution Assumptions
 # ---------------------------------------------------------------------------
 SLIPPAGE_POINTS             = 1.0          # per leg; not applied on expiry exits
-LOT_SIZE                    = 75
+LOT_SIZE                    = 65
 BACKTEST_START_DATE         = '2020-01-01'
 BACKTEST_END_DATE           = None
 LOT_CAPITAL                 = 100000
