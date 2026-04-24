@@ -502,39 +502,42 @@ class Athena:
             
         return prices
 
-    def _append_trade_log_row(self, exit_reason=None, exit_fills=None):
+    def _append_trade_log_row(self, exit_reason=None, exit_fills=None, prices=None):
         if self.state.status not in ('in_trade', 'exiting'): return
         
-        prices = self._poll_prices()
+        # Use provided prices or poll if missing (e.g. called from exit)
+        p = prices if prices is not None else self._poll_prices()
+            
         # Use fill prices if provided (for exit row)
         if exit_fills:
-            for k, v in exit_fills.items(): prices[k] = v
+            for k, v in exit_fills.items(): p[k] = v
             
         now = datetime.now()
         
         # Calculate unrealised
         try:
-            pl_pts = (prices['ce_buy'] - self.state.ce_buy_entry) + \
-                     (prices['pe_buy'] - self.state.pe_buy_entry) + \
-                     (self.state.ce_sell_entry - prices['ce_sell']) + \
-                     (self.state.pe_sell_entry - prices['pe_sell'])
+            pl_pts = (p['ce_buy'] - self.state.ce_buy_entry) + \
+                     (p['pe_buy'] - self.state.pe_buy_entry) + \
+                     (self.state.ce_sell_entry - p['ce_sell']) + \
+                     (self.state.pe_sell_entry - p['pe_sell'])
+
             if self.state.wings_enabled:
-                pl_pts += (prices['ce_wing'] - self.state.ce_wing_entry) + \
-                          (prices['pe_wing'] - self.state.pe_wing_entry)
+                pl_pts += (p['ce_wing'] - self.state.ce_wing_entry) + \
+                          (p['pe_wing'] - self.state.pe_wing_entry)
         except:
             pl_pts = 0.0
 
         row = {
             'time_stamp': now.strftime('%Y-%m-%d %H:%M:%S'),
-            'spot': prices['spot'],
-            'ce_sell_ltp': prices['ce_sell'], 'pe_sell_ltp': prices['pe_sell'],
-            'ce_buy_ltp': prices['ce_buy'], 'pe_buy_ltp': prices['pe_buy'],
+            'spot': p.get('spot'),
+            'ce_sell_ltp': p.get('ce_sell'), 'pe_sell_ltp': p.get('pe_sell'),
+            'ce_buy_ltp': p.get('ce_buy'), 'pe_buy_ltp': p.get('pe_buy'),
             'unrealised_pl': round(pl_pts, 2),
             'exit_reason': exit_reason
         }
         if self.state.wings_enabled:
-            row['ce_wing_ltp'] = prices['ce_wing']
-            row['pe_wing_ltp'] = prices['pe_wing']
+            row['ce_wing_ltp'] = p.get('ce_wing')
+            row['pe_wing_ltp'] = p.get('pe_wing')
 
         log_file = self._get_log_filepath()
         df = pd.DataFrame([row])
@@ -544,32 +547,35 @@ class Athena:
         d_str = datetime.fromisoformat(self.state.entry_time).strftime('%Y-%m-%d')
         return os.path.join(TRADE_LOGS_DIR, f"trade_{d_str}.csv")
 
-    def _send_trade_update(self):
+    def _send_trade_update(self, prices=None):
         if self.state.status != 'in_trade': return
         
-        prices = self._poll_prices()
+        # Use provided prices or poll if missing
+        p = prices if prices is not None else self._poll_prices()
+            
         try:
-            pl_pts = (prices['ce_buy'] - self.state.ce_buy_entry) + \
-                     (prices['pe_buy'] - self.state.pe_buy_entry) + \
-                     (self.state.ce_sell_entry - prices['ce_sell']) + \
-                     (self.state.pe_sell_entry - prices['pe_sell'])
+            pl_pts = (p['ce_buy'] - self.state.ce_buy_entry) + \
+                     (p['pe_buy'] - self.state.pe_buy_entry) + \
+                     (self.state.ce_sell_entry - p['ce_sell']) + \
+                     (self.state.pe_sell_entry - p['pe_sell'])
+
             if self.state.wings_enabled:
-                pl_pts += (prices['ce_wing'] - self.state.ce_wing_entry) + \
-                          (prices['pe_wing'] - self.state.pe_wing_entry)
+                pl_pts += (p['ce_wing'] - self.state.ce_wing_entry) + \
+                          (p['pe_wing'] - self.state.pe_wing_entry)
             
             pl_pts = round(pl_pts, 2)
             if pl_pts > self.state.max_unrealised_pl:
                 self.state.max_unrealised_pl = pl_pts
             
             # Update last known LTPs in state
-            self.state.last_spot = prices['spot']
-            self.state.last_ce_sell_ltp = prices['ce_sell']
-            self.state.last_pe_sell_ltp = prices['pe_sell']
-            self.state.last_ce_buy_ltp = prices['ce_buy']
-            self.state.last_pe_buy_ltp = prices['pe_buy']
+            self.state.last_spot = p.get('spot')
+            self.state.last_ce_sell_ltp = p.get('ce_sell')
+            self.state.last_pe_sell_ltp = p.get('pe_sell')
+            self.state.last_ce_buy_ltp = p.get('ce_buy')
+            self.state.last_pe_buy_ltp = p.get('pe_buy')
             if self.state.wings_enabled:
-                self.state.last_ce_wing_ltp = prices['ce_wing']
-                self.state.last_pe_wing_ltp = prices['pe_wing']
+                self.state.last_ce_wing_ltp = p.get('ce_wing')
+                self.state.last_pe_wing_ltp = p.get('pe_wing')
             
             save_state(self.state)
         except:
@@ -577,7 +583,7 @@ class Athena:
             
         pl_rs = round(pl_pts * self.state.lots * LOT_SIZE, 2)
         
-        msg = f"*Athena* UPDATE | Spot: {prices['spot']:.2f} | " \
+        msg = f"*Athena* UPDATE | Spot: {p['spot']:.2f} | " \
               f"P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs) | " \
               f"Peak: {self.state.max_unrealised_pl:+.1f} pts"
         logger.info(msg.replace('*', '')) # Strip markdown for local log
@@ -625,13 +631,17 @@ class Athena:
 
             # --- 3. MONITORING ---
             if self.state.status == 'in_trade':
-                self._append_trade_log_row()
-                self._send_trade_update()
-                
-                # Sleep in small chunks to remain responsive to exit time
-                for _ in range(int(TRADE_UPDATE_INTERVAL / 10)):
-                    sleep(10)
-                    if datetime.now().time() >= self._exit_time: break
+                try:
+                    prices = self._poll_prices()
+                    if prices.get('spot'):
+                        self._append_trade_log_row(prices=prices)
+                        self._send_trade_update(prices=prices)
+                except Exception as e:
+                    logger.error(f"Error in monitoring loop: {e}")
+                    handle_exception(e)
+
+                # Sleep for the configured interval
+                sleep(TRADE_UPDATE_INTERVAL)
             else:
                 sleep(60)
                 

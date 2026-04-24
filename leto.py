@@ -393,8 +393,8 @@ def _run_athena(obj, auth_token, instrument_df_nifty):
     logger.info("Starting Athena.")
     if ATHENA_DIR not in sys.path:
         sys.path.insert(0, ATHENA_DIR)
-    import athena  # type: ignore
-    engine = athena.Athena(obj, auth_token, instrument_df_nifty)
+    import athena_engine  # type: ignore
+    engine = athena_engine.Athena(obj, auth_token, instrument_df_nifty)
     handoff = engine.run()
     logger.info(f"Athena returned. Handoff signal: {handoff}")
     return bool(handoff)
