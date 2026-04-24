@@ -460,6 +460,10 @@ class Athena:
         if self.state.wings_enabled:
             pl_pts += (exit_fills['pe_wing'] - self.state.pe_wing_entry)
 
+        # Include locked-in P&L from the emergency parachute
+        pl_pts += self.state.running_realised_pl
+        pl_pts = round(pl_pts, 2)
+
         pl_rs = round(pl_pts * lots * LOT_SIZE, 2)
         
         # Final log and slack
@@ -477,6 +481,9 @@ class Athena:
         if self.state.wings_enabled:
             msg += f"WINGS EXIT: \n" \
                    f"  PE {self.state.pe_wing_strike} @ {exit_fills['pe_wing']:.1f}\n"
+
+        if self.state.running_realised_pl != 0.0:
+            msg += f"HEDGE P&L: {self.state.running_realised_pl:+.1f} pts\n"
 
         msg += f"----------------------------------\n" \
                f"Final P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs)"
