@@ -2,7 +2,10 @@
 state.py — Athena Production State Management
 Reads and writes athena_state.csv — the single source of truth for live trade state.
 
-Adapted for Athena's 6-leg structure (4 calendar legs + 2 safety wings).
+Adapted for Athena's Phase 2 structure:
+    - 4 core calendar legs
+    - 1 PE safety wing
+    - 1 Emergency CE Parachute
 """
 
 import os
@@ -69,6 +72,15 @@ class AthenaState:
     pe_wing_symbol:       Optional[str]   = None
     pe_wing_entry:        Optional[float] = None
 
+    # Emergency Hedge (Phase 2 Smart Parachute)
+    emer_active:          bool            = False
+    emer_strike:          Optional[int]   = None
+    emer_token:           Optional[str]   = None
+    emer_symbol:          Optional[str]   = None
+    emer_entry:           float           = 0.0
+    emer_attempts:        int             = 0
+    running_realised_pl:  float           = 0.0     # Locked in P&L from salvage exits
+
     # Order management
     lots:                 int             = 1
     net_debit:            Optional[float] = None
@@ -89,6 +101,7 @@ class AthenaState:
     last_pe_sell_ltp:     Optional[float] = None
     last_pe_buy_ltp:      Optional[float] = None
     last_pe_wing_ltp:     Optional[float] = None
+    last_emer_ltp:        Optional[float] = None
 
     # Metadata
     last_updated:         Optional[str]   = None    # ISO datetime string
@@ -160,10 +173,12 @@ def save_state(state: AthenaState) -> None:
 
 
 def clear_trade_fields(state: AthenaState) -> AthenaState:
-    """Reset all trade-specific fields, preserving wings_enabled default."""
+    """Reset all trade-specific fields, preserving defaults."""
     fresh = init_state()
+    # Preserving core persistent flags
+    excluded = ['status', 'wings_enabled']
     for f in fields(state):
-        if f.name not in ['status', 'wings_enabled']:
+        if f.name not in excluded:
             setattr(state, f.name, getattr(fresh, f.name))
     
     state.status = 'idle'

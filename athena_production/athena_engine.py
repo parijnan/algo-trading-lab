@@ -23,6 +23,8 @@ from configs_live import (
     ENTRY_TIME, ELM_EXIT_TIME,
     VIX_FILTER_LOW, VIX_FILTER_HIGH,
     TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS,
+    ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, 
+    EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
     LOT_CALC, LOT_CAPITAL,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL,
@@ -338,14 +340,15 @@ class Athena:
         
         # 1. Place BUY orders (Margin protection)
         buy_orders = {}
-        # Leg keys to process
+        # Phase 2: Buy keys are core legs + PE-only wing
         buy_keys = ['ce_buy', 'pe_buy']
-        if ENABLE_SAFETY_WINGS: buy_keys += ['ce_wing', 'pe_wing']
+        if ENABLE_SAFETY_WINGS: 
+            buy_keys += ['pe_wing'] # PE-ONLY Wing for Phase 2
         
         for key in buy_keys:
             strike = strikes_dict[f'{key}_strike']
             exp    = strikes_dict['buy_expiry']
-            # Map ce_buy -> ce, pe_buy -> pe, ce_wing -> ce, pe_wing -> pe
+            # Map ce_buy -> ce, pe_buy -> pe, pe_wing -> pe
             opt_type = 'ce' if key.startswith('ce') else 'pe'
             sym, tok = self._fetch_symbol_and_token(strike, opt_type, exp)
             if not sym:
@@ -391,11 +394,11 @@ class Athena:
         self.state.sell_expiry = strikes_dict['sell_expiry'].isoformat()
         self.state.buy_expiry  = strikes_dict['buy_expiry'].isoformat()
         
-        # Calculate net debit
+        # Calculate net debit (only PE wing for Phase 2)
         net = (self.state.ce_buy_entry + self.state.pe_buy_entry) - \
               (self.state.ce_sell_entry + self.state.pe_sell_entry)
         if ENABLE_SAFETY_WINGS:
-            net += (self.state.ce_wing_entry + self.state.pe_wing_entry)
+            net += self.state.pe_wing_entry
         self.state.net_debit = round(net, 2)
         
         save_state(self.state)
@@ -413,7 +416,6 @@ class Athena:
         
         if self.state.wings_enabled:
             msg += f"WINGS (Monthly): \n" \
-                   f"  CE {self.state.ce_wing_strike} @ {self.state.ce_wing_entry:.1f}\n" \
                    f"  PE {self.state.pe_wing_strike} @ {self.state.pe_wing_entry:.1f}\n"
         
         msg += f"----------------------------------\n" \
@@ -438,9 +440,9 @@ class Athena:
             fill, ft = self._fetch_order_details(oids, tok, sym)
             exit_fills[key] = fill
 
-        # 2. Sell to close LONG legs (CE buy, PE buy, CE wing, PE wing)
+        # 2. Sell to close LONG legs (CE buy, PE buy, PE wing)
         buy_keys = ['ce_buy', 'pe_buy']
-        if self.state.wings_enabled: buy_keys += ['ce_wing', 'pe_wing']
+        if self.state.wings_enabled: buy_keys += ['pe_wing'] # PE-ONLY for Phase 2
         
         for key in buy_keys:
             sym = getattr(self.state, f"{key}_symbol")
@@ -456,8 +458,7 @@ class Athena:
                  (self.state.pe_sell_entry - exit_fills['pe_sell'])
         
         if self.state.wings_enabled:
-            pl_pts += (exit_fills['ce_wing'] - self.state.ce_wing_entry) + \
-                      (exit_fills['pe_wing'] - self.state.pe_wing_entry)
+            pl_pts += (exit_fills['pe_wing'] - self.state.pe_wing_entry)
 
         pl_rs = round(pl_pts * lots * LOT_SIZE, 2)
         
@@ -475,7 +476,6 @@ class Athena:
         
         if self.state.wings_enabled:
             msg += f"WINGS EXIT: \n" \
-                   f"  CE {self.state.ce_wing_strike} @ {exit_fills['ce_wing']:.1f}\n" \
                    f"  PE {self.state.pe_wing_strike} @ {exit_fills['pe_wing']:.1f}\n"
 
         msg += f"----------------------------------\n" \
@@ -493,7 +493,8 @@ class Athena:
         prices['spot'] = self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)
         # 2. Active legs
         keys = ['ce_sell', 'pe_sell', 'ce_buy', 'pe_buy']
-        if self.state.wings_enabled: keys += ['ce_wing', 'pe_wing']
+        if self.state.wings_enabled: keys += ['pe_wing']
+        if self.state.emer_active:  keys += ['emer'] # Track parachute if active
         
         for key in keys:
             sym = getattr(self.state, f"{key}_symbol")
@@ -522,8 +523,13 @@ class Athena:
                      (self.state.pe_sell_entry - p['pe_sell'])
 
             if self.state.wings_enabled:
-                pl_pts += (p['ce_wing'] - self.state.ce_wing_entry) + \
-                          (p['pe_wing'] - self.state.pe_wing_entry)
+                pl_pts += (p['pe_wing'] - self.state.pe_wing_entry)
+            
+            if self.state.emer_active and 'emer' in p:
+                pl_pts += (p['emer'] - self.state.emer_entry)
+                
+            # Add locked-in realized P&L from previously closed parachutes
+            pl_pts += self.state.running_realised_pl
         except:
             pl_pts = 0.0
 
@@ -536,16 +542,13 @@ class Athena:
             'exit_reason': exit_reason
         }
         if self.state.wings_enabled:
-            row['ce_wing_ltp'] = p.get('ce_wing')
             row['pe_wing_ltp'] = p.get('pe_wing')
+        if self.state.emer_active:
+            row['emer_ltp'] = p.get('emer')
 
         log_file = self._get_log_filepath()
         df = pd.DataFrame([row])
         df.to_csv(log_file, mode='a', index=False, header=not os.path.exists(log_file))
-
-    def _get_log_filepath(self):
-        d_str = datetime.fromisoformat(self.state.entry_time).strftime('%Y-%m-%d')
-        return os.path.join(TRADE_LOGS_DIR, f"trade_{d_str}.csv")
 
     def _send_trade_update(self, prices=None):
         if self.state.status != 'in_trade': return
@@ -560,8 +563,12 @@ class Athena:
                      (self.state.pe_sell_entry - p['pe_sell'])
 
             if self.state.wings_enabled:
-                pl_pts += (p['ce_wing'] - self.state.ce_wing_entry) + \
-                          (p['pe_wing'] - self.state.pe_wing_entry)
+                pl_pts += (p['pe_wing'] - self.state.pe_wing_entry)
+            
+            if self.state.emer_active and 'emer' in p:
+                pl_pts += (p['emer'] - self.state.emer_entry)
+                
+            pl_pts += self.state.running_realised_pl
             
             pl_pts = round(pl_pts, 2)
             if pl_pts > self.state.max_unrealised_pl:
@@ -574,8 +581,9 @@ class Athena:
             self.state.last_ce_buy_ltp = p.get('ce_buy')
             self.state.last_pe_buy_ltp = p.get('pe_buy')
             if self.state.wings_enabled:
-                self.state.last_ce_wing_ltp = p.get('ce_wing')
                 self.state.last_pe_wing_ltp = p.get('pe_wing')
+            if self.state.emer_active:
+                self.state.last_emer_ltp = p.get('emer')
             
             save_state(self.state)
         except:
@@ -588,6 +596,66 @@ class Athena:
               f"Peak: {self.state.max_unrealised_pl:+.1f} pts"
         logger.info(msg.replace('*', '')) # Strip markdown for local log
         slack_bot_sendtext(msg, SLACK_TRADE_UPDATES)
+
+    def _manage_emergency_hedge(self, current_spot):
+        """
+        Phase 2: Smart Parachute logic.
+        Buy a Monthly CE if spot rallies past threshold. 
+        Sell it if spot reverses back below CE strike.
+        """
+        if not ENABLE_EMERGENCY_HEDGE: return
+
+        # 1. Entry Trigger: Spot is past CE strike by threshold
+        if not self.state.emer_active and self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS:
+            if current_spot >= (self.state.ce_sell_strike + EMERGENCY_TRIGGER_OFFSET):
+                logger.info(f"EMERGENCY TRIGGER: Spot {current_spot:.1f} >= {self.state.ce_sell_strike} + {EMERGENCY_TRIGGER_OFFSET}")
+                
+                # Select Strike (0.35 Delta Monthly)
+                buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date()
+                vix = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
+                stk = self._find_delta_strike(current_spot, vix, buy_exp, EMERGENCY_HEDGE_DELTA, 'ce')
+                
+                if stk:
+                    sym, tok = self._fetch_symbol_and_token(stk, 'ce', buy_exp)
+                    if sym:
+                        oids = self._place_order('BUY', sym, tok, self.state.lots)
+                        fill, ft = self._fetch_order_details(oids, tok, sym)
+                        
+                        self.state.emer_active = True
+                        self.state.emer_strike = stk
+                        self.state.emer_symbol = sym
+                        self.state.emer_token  = tok
+                        self.state.emer_entry  = fill
+                        self.state.emer_attempts += 1
+                        save_state(self.state)
+                        
+                        msg = f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}\n" \
+                              f"Triggered at Spot: {current_spot:.1f}"
+                        slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+
+        # 2. Exit Trigger: Reversal back to baseline
+        elif self.state.emer_active:
+            if current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
+                logger.info(f"EMERGENCY EXIT: Spot {current_spot:.1f} <= {self.state.ce_sell_strike} + {EMERGENCY_EXIT_OFFSET}")
+                
+                sym = self.state.emer_symbol
+                tok = self.state.emer_token
+                oids = self._place_order('SELL', sym, tok, self.state.lots)
+                fill, ft = self._fetch_order_details(oids, tok, sym)
+                
+                realised = round(fill - self.state.emer_entry, 2)
+                self.state.running_realised_pl += realised
+                
+                msg = f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f}\n" \
+                      f"Locked P&L: {realised:+.1f} pts | Total Realised: {self.state.running_realised_pl:+.1f} pts"
+                slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                
+                self.state.emer_active = False
+                self.state.emer_strike = None
+                self.state.emer_symbol = None
+                self.state.emer_token  = None
+                self.state.emer_entry  = 0.0
+                save_state(self.state)
 
     def run(self):
         logger.info("=== Athena run loop started ===")
@@ -627,13 +695,27 @@ class Athena:
                 exit_day = self._last_trading_day_before(sell_exp_dt)
                 
                 if now.date() == exit_day and now.time() >= self._exit_time:
+                    # Final check: If parachute is still active, sell it first
+                    if self.state.emer_active:
+                        logger.info("Closing active emergency parachute before final exit.")
+                        sym = self.state.emer_symbol
+                        tok = self.state.emer_token
+                        oids = self._place_order('SELL', sym, tok, self.state.lots)
+                        fill, ft = self._fetch_order_details(oids, tok, sym)
+                        self.state.running_realised_pl += round(fill - self.state.emer_entry, 2)
+                        self.state.emer_active = False
+
                     self._execute_exit(reason='pre_expiry')
 
-            # --- 3. MONITORING ---
+            # --- 3. MONITORING & PHASE 2 RISK MGMT ---
             if self.state.status == 'in_trade':
                 try:
                     prices = self._poll_prices()
-                    if prices.get('spot'):
+                    spot = prices.get('spot')
+                    if spot:
+                        # Call Smart Parachute Management
+                        self._manage_emergency_hedge(spot)
+                        
                         self._append_trade_log_row(prices=prices)
                         self._send_trade_update(prices=prices)
                 except Exception as e:

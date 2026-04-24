@@ -61,25 +61,31 @@ VIX_FILTER_HIGH     = 25.0
 # ---------------------------------------------------------------------------
 TARGET_DELTA_SOLD   = 0.30
 SAFETY_WING_DELTA   = 0.05
-ENABLE_SAFETY_WINGS = True          # Toggle for Phase 1 optimization wings
+ENABLE_SAFETY_WINGS = True          # If True, buys PE wing at entry (Phase 2 is PE-only)
 
 STRIKE_STEP         = 100           # Nifty strike interval for Calendar
 BUY_LEG_MIN_DTE     = 16            # Roll buy leg to next month if DTE < this
 LOT_SIZE            = 65            # Nifty lot size (update if SEBI changes this)
 RISK_FREE_RATE      = 5.0           # Annualized risk-free rate in %
 
+# ---------------------------------------------------------------------------
+# Emergency Hedge (Phase 2 Smart Parachute)
+# ---------------------------------------------------------------------------
+ENABLE_EMERGENCY_HEDGE   = True
+EMERGENCY_HEDGE_DELTA    = 0.35     # Monthly CE bought on upside stress
+EMERGENCY_TRIGGER_OFFSET = 150      # pts past CE Sell Strike to trigger BUY
+EMERGENCY_EXIT_OFFSET    = 0        # pts from CE Sell Strike to trigger SELL (reversal)
+EMERGENCY_MAX_ATTEMPTS   = 1        # Max parachutes per trade
+
 # Lot sizing
-# LOT_CALC = False: trade exactly LOT_COUNT lots per signal
-# LOT_CALC = True:  auto-calculate from available margin (rmsLimit)
-#   lots = floor(available_margin / LOT_CAPITAL), floored at 1
-LOT_CALC            = False
-LOT_COUNT           = 1             # Start with 1 lot for production testing
-LOT_CAPITAL         = 150000        # Capital per lot for auto-calculation (Rs)
+LOT_CALC            = False         # Manual lot count for Monday test
+LOT_COUNT           = 1             # Trading 1 lot
+LOT_CAPITAL         = 150000        # Capital per lot buffer (Rs)
 
 # ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
-ENTRY_TIME          = "09:45"       # 09:45 AM for dry run test
+ENTRY_TIME          = "10:30"       # 10:30 AM Entry
 ELM_EXIT_TIME       = "10:25"       # 10:25 AM on day before sell expiry
 
 # ---------------------------------------------------------------------------
@@ -91,12 +97,11 @@ ORDER_TIMEOUT_SEC   = 10            # Seconds to wait for order fill
 # Every 20 seconds: fetch LTPs, update log, send Slack (if interval reached).
 TRADE_UPDATE_INTERVAL = 20
 
-# Dry run mode — no real orders placed.
-DRY_RUN             = True
+# Dry run mode — set to False for live trading on Monday
+DRY_RUN             = False
 
-# Force entry on any day (useful for mid-week dry runs)
-# Set to False for normal Monday entry logic
-FORCE_ENTRY         = True
+# Force entry on any day — set to False for standard Monday entry
+FORCE_ENTRY         = False
 
 # ---------------------------------------------------------------------------
 # Angel One API — exchange segment strings
