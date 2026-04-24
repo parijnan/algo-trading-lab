@@ -506,7 +506,13 @@ class Athena:
         for key in keys:
             sym = getattr(self.state, f"{key}_symbol")
             tok = getattr(self.state, f"{key}_token")
-            prices[key] = self._get_ltp(EXCHANGE_NFO, sym, tok)
+            ltp = self._get_ltp(EXCHANGE_NFO, sym, tok)
+            
+            if ltp is None:
+                # Fallback to last known from state to keep heartbeat alive
+                ltp = getattr(self.state, f"last_{key}_ltp") or getattr(self.state, f"{key}_entry")
+            
+            prices[key] = ltp
             
         return prices
 
@@ -628,17 +634,20 @@ class Athena:
                         oids = self._place_order('BUY', sym, tok, self.state.lots)
                         fill, ft = self._fetch_order_details(oids, tok, sym)
                         
-                        self.state.emer_active = True
-                        self.state.emer_strike = stk
-                        self.state.emer_symbol = sym
-                        self.state.emer_token  = tok
-                        self.state.emer_entry  = fill
-                        self.state.emer_attempts += 1
-                        save_state(self.state)
-                        
-                        msg = f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}\n" \
-                              f"Triggered at Spot: {current_spot:.1f}"
-                        slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                        if fill > 0:
+                            self.state.emer_active = True
+                            self.state.emer_strike = stk
+                            self.state.emer_symbol = sym
+                            self.state.emer_token  = tok
+                            self.state.emer_entry  = fill
+                            self.state.emer_attempts += 1
+                            save_state(self.state)
+                            
+                            msg = f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}\n" \
+                                  f"Triggered at Spot: {current_spot:.1f}"
+                            slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                        else:
+                            logger.error(f"Failed to confirm fill for Parachute CE {stk}. Aborting.")
 
         # 2. Exit Trigger: Reversal back to baseline
         elif self.state.emer_active:
@@ -650,19 +659,22 @@ class Athena:
                 oids = self._place_order('SELL', sym, tok, self.state.lots)
                 fill, ft = self._fetch_order_details(oids, tok, sym)
                 
-                realised = round(fill - self.state.emer_entry, 2)
-                self.state.running_realised_pl += realised
-                
-                msg = f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f}\n" \
-                      f"Locked P&L: {realised:+.1f} pts | Total Realised: {self.state.running_realised_pl:+.1f} pts"
-                slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
-                
-                self.state.emer_active = False
-                self.state.emer_strike = None
-                self.state.emer_symbol = None
-                self.state.emer_token  = None
-                self.state.emer_entry  = 0.0
-                save_state(self.state)
+                if fill > 0:
+                    realised = round(fill - self.state.emer_entry, 2)
+                    self.state.running_realised_pl += realised
+                    
+                    msg = f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f}\n" \
+                          f"Locked P&L: {realised:+.1f} pts | Total Realised: {self.state.running_realised_pl:+.1f} pts"
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                    
+                    self.state.emer_active = False
+                    self.state.emer_strike = None
+                    self.state.emer_symbol = None
+                    self.state.emer_token  = None
+                    self.state.emer_entry  = 0.0
+                    save_state(self.state)
+                else:
+                    logger.error(f"Failed to confirm exit fill for Parachute CE. Will retry next poll.")
 
     def run(self):
         logger.info("=== Athena run loop started ===")
