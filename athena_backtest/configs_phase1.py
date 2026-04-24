@@ -116,25 +116,20 @@ DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is mov
 ENABLE_SAFETY_WINGS             = True
 SAFETY_WING_DELTA               = 0.05    # Target delta for the safety wings
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Adjustment — winning side roll (DISABLED for final verification)
+# Adjustment — winning side roll
+# When conditions are met mid-trade, roll the winning side's sell leg to a
+# closer strike to collect additional premium. Both legs are rolled to 
+# maintain margin efficiency.
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = False
-ADJUST_BUY_LEG                  = True
-ADJUSTMENT_TRIGGER_OFFSET       = -150
-ADJUSTMENT_WING_THRESHOLD       = 15.0
-ADJUSTMENT_MIN_CREDIT_GAIN      = 15.0
-ADJUSTMENT_NEW_STRIKE_DISTANCE  = 400
-ADJUSTMENT_EXCLUDED_DAYS        = (0,)
+ADJUST_BUY_LEG                  = True   # MUST be True for margin efficiency
+                                          # same strike as new sell, same buy expiry as original
+ADJUSTMENT_TRIGGER_OFFSET       = -150    # pts from sold strike at which trigger fires (Spot floor)
+ADJUSTMENT_WING_THRESHOLD       = 15.0    # Wing P&L gain at which stress roll triggers
+ADJUSTMENT_MIN_CREDIT_GAIN      = 20.0    # Min net credit (New Sell - Old Buyback) to proceed
+ADJUSTMENT_NEW_STRIKE_DISTANCE  = 400     # pts from roll-time spot for new strike
+ADJUSTMENT_EXCLUDED_DAYS        = (0,)    # Skip entry day
 
-# ---------------------------------------------------------------------------
-# Emergency Hedge (Phase 2 Smart Parachute)
-# ---------------------------------------------------------------------------
-ENABLE_EMERGENCY_HEDGE          = True
-EMERGENCY_HEDGE_DELTA           = 0.35    # Monthly CE bought on upside stress
-EMERGENCY_TRIGGER_OFFSET        = -150    # pts past CE strike to BUY hedge
-EMERGENCY_EXIT_OFFSET           = 0       # pts from CE strike to SELL hedge (on reversal)
-EMERGENCY_MAX_ATTEMPTS          = 1       # Limit whipsaw cost
 # ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------

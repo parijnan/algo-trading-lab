@@ -48,8 +48,6 @@ from configs import (
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_WING_THRESHOLD, ADJUSTMENT_MIN_CREDIT_GAIN,
     ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_EXCLUDED_DAYS,
-    ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, EMERGENCY_TRIGGER_OFFSET,
-    EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
 )
@@ -513,8 +511,7 @@ def apply_slippage(price: float, is_buy: bool) -> float:
 
 def calc_strategy_pl(sell_entry: float, sell_ltp: float,
                      buy_entry: float,  buy_ltp: float,
-                     wing_entry: float = 0.0, wing_ltp: float = 0.0,
-                     emer_entry: float = 0.0, emer_ltp: float = 0.0) -> float:
+                     wing_entry: float = 0.0, wing_ltp: float = 0.0) -> float:
     """
     Unrealised P&L for one side of the strategy (CE or PE).
     (sell_entry - sell_ltp) + (buy_ltp - buy_entry) + (wing_ltp - wing_entry)
@@ -522,8 +519,7 @@ def calc_strategy_pl(sell_entry: float, sell_ltp: float,
     sell_pl = sell_entry - sell_ltp
     buy_pl  = buy_ltp - buy_entry
     wing_pl = wing_ltp - wing_entry
-    emer_pl = emer_ltp - emer_entry
-    return round(sell_pl + buy_pl + wing_pl + emer_pl, 2)
+    return round(sell_pl + buy_pl + wing_pl, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -679,10 +675,6 @@ def build_snapshot(ts: pd.Timestamp, spot: float, vix: float,
 # 1-min snapshot window scanner
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# 1-min snapshot window scanner
-# ---------------------------------------------------------------------------
-
 def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                   ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
@@ -705,11 +697,11 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   adjustment_already_made: bool = False,
                                   ce_wing_df = None, pe_wing_df = None,
                                   ce_wing_entry: float = 0.0, pe_wing_entry: float = 0.0,
-                                  last_ce_wing_ltp: float = 0.0, last_pe_wing_ltp: float = 0.0,
-                                  opt_df_cache: dict = None, buy_expiry_end: pd.Timestamp = None):
+                                  last_ce_wing_ltp: float = 0.0, last_pe_wing_ltp: float = 0.0):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
-    Checks all exit conditions, Emergency Hedge, and structural adjustments.
+    Checks all exit conditions and the winning side roll adjustment trigger on
+    every candle.
     """
     running_ce_sell  = last_ce_sell_ltp
     running_ce_buy   = last_ce_buy_ltp
@@ -717,17 +709,6 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
     running_pe_buy   = last_pe_buy_ltp
     running_ce_wing  = last_ce_wing_ltp
     running_pe_wing  = last_pe_wing_ltp
-    
-    # Track realized P&L *internal* to this window for the hedge
-    window_realised_pl = 0.0
-
-    # Emergency Hedge State
-    emer_active = False
-    emer_strike = None
-    emer_entry  = 0.0
-    emer_ltp    = 0.0
-    emer_df     = None
-    emer_attempts = 0
 
     sl_hit_ts        = None
     sl_hit_reason    = None
@@ -742,7 +723,7 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         spot = float(row['close'])
         vix  = get_1min_value(vix_1m, ts, 'close')
 
-        # Update LTPs
+        # Update LTPs — carry forward on miss
         v = get_option_price(ce_sell_df, ts, 'close')
         if v is not None: running_ce_sell = v
         v = get_option_price(ce_buy_df,  ts, 'close')
@@ -759,42 +740,16 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             v = get_option_price(pe_wing_df, ts, 'close')
             if v is not None: running_pe_wing = v
 
-        # --- Emergency Hedge Logic ---
-        if ENABLE_EMERGENCY_HEDGE and buy_expiry_end is not None and opt_df_cache is not None:
-            if not emer_active and emer_attempts < EMERGENCY_MAX_ATTEMPTS:
-                if spot >= ce_sell_strike - EMERGENCY_TRIGGER_OFFSET:
-                    stk, pr = select_strike(spot, buy_expiry_end, ts, 'ce', opt_df_cache, EMERGENCY_HEDGE_DELTA)
-                    if stk:
-                        emer_strike = stk
-                        emer_entry  = apply_slippage(pr, is_buy=True)
-                        emer_ltp    = pr
-                        emer_df     = opt_df_cache.get((buy_expiry_end, stk, 'ce'))
-                        emer_active = True
-                        emer_attempts += 1
-                        logger.info(f"  [EMERGENCY] Bought Parachute CE {emer_strike} @ {emer_entry:.1f} at {ts} | spot={spot:.0f}")
-
-            if emer_active:
-                v = get_option_price(emer_df, ts, 'close')
-                if v is not None: emer_ltp = v
-                if spot <= ce_sell_strike + EMERGENCY_EXIT_OFFSET:
-                    exit_pr = apply_slippage(emer_ltp, is_buy=False)
-                    realised_emer = round(exit_pr - emer_entry, 2)
-                    window_realised_pl += realised_emer
-                    logger.info(f"  [EMERGENCY] Sold Parachute CE {emer_strike} @ {exit_pr:.1f} at {ts} | P&L: {realised_emer:.1f} | spot={spot:.0f}")
-                    emer_active = False
-                    emer_entry  = 0.0
-                    emer_ltp    = 0.0
-
         ce_unrealised_pl = calc_strategy_pl(ce_sell_entry, running_ce_sell,
                                              ce_buy_entry,  running_ce_buy,
-                                             ce_wing_entry, running_ce_wing,
-                                             emer_entry, emer_ltp)
+                                             ce_wing_entry, running_ce_wing)
         pe_unrealised_pl = calc_strategy_pl(pe_sell_entry, running_pe_sell,
                                              pe_buy_entry,  running_pe_buy,
                                              pe_wing_entry, running_pe_wing)
         combined_unrealised_pl = round(ce_unrealised_pl + pe_unrealised_pl, 2)
-        cumulative_pl = round(running_realised_pl + window_realised_pl + combined_unrealised_pl, 2)
+        cumulative_pl = round(running_realised_pl + combined_unrealised_pl, 2)
 
+        # Update running peak before any exit checks — peak is tracked on cumulative system P&L
         if cumulative_pl > running_peak_pl:
             running_peak_pl = cumulative_pl
 
@@ -806,64 +761,89 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
-            running_realised_pl=(running_realised_pl + window_realised_pl),
+            running_realised_pl=running_realised_pl,
             ce_wing_ltp=running_ce_wing, ce_wing_entry=ce_wing_entry,
             pe_wing_ltp=running_pe_wing, pe_wing_entry=pe_wing_entry,
         ))
 
-        # Exit checks
-        if elm_time is not None and ts >= elm_time:
-            sl_hit_ts, sl_hit_reason = ts, 'pre_expiry'
-            break
-        if check_spread_sl(combined_unrealised_pl):
-            sl_hit_ts, sl_hit_reason = ts, 'spread_sl'
-            break
-        if check_index_sl(spot, ce_sell_strike, pe_sell_strike):
-            sl_hit_ts, sl_hit_reason = ts, 'index_sl'
-            break
-        if check_option_sl(running_ce_sell, ce_sell_entry, running_pe_sell, pe_sell_entry):
-            sl_hit_ts, sl_hit_reason = ts, 'option_sl'
-            break
-        if check_trail_stop(combined_unrealised_pl, running_peak_pl):
-            sl_hit_ts, sl_hit_reason = ts, 'trail_stop'
-            break
-        if check_profit_target(combined_unrealised_pl, total_net_debit):
-            sl_hit_ts, sl_hit_reason = ts, 'profit_target'
+        if sl_hit_ts is not None:
             break
 
-        # Structural Adjustment Trigger
+        # Pre-expiry check (always first — mandatory time-based exit)
+        if elm_time is not None and ts >= elm_time:
+            sl_hit_ts     = ts
+            sl_hit_reason = 'pre_expiry'
+            break
+
+        # Exit checks in priority order
+        if check_spread_sl(combined_unrealised_pl):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'spread_sl'
+            break
+
+        if check_index_sl(spot, ce_sell_strike, pe_sell_strike):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'index_sl'
+            break
+
+        if check_option_sl(running_ce_sell, ce_sell_entry,
+                           running_pe_sell, pe_sell_entry):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'option_sl'
+            break
+
+        if check_trail_stop(combined_unrealised_pl, running_peak_pl):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'trail_stop'
+            break
+
+        if check_profit_target(combined_unrealised_pl, total_net_debit):
+            sl_hit_ts     = ts
+            sl_hit_reason = 'profit_target'
+            break
+
+        # Spot or Hedge driven adjustment trigger
+        # Checked on every candle if adjustment not yet made and context params provided
         if (ENABLE_ADJUSTMENT and not adjustment_already_made
                 and entry_time is not None and sell_expiry_end is not None):
             days_in_trade = (ts.date() - entry_time.date()).days
+
             excluded = ADJUSTMENT_EXCLUDED_DAYS if isinstance(ADJUSTMENT_EXCLUDED_DAYS, (tuple, list, set)) else (ADJUSTMENT_EXCLUDED_DAYS,)
             if days_in_trade not in excluded:
+                
+                # Check for PE roll (triggered by upside move)
                 upside_stress = False
                 if spot >= ce_sell_strike - ADJUSTMENT_TRIGGER_OFFSET:
                     upside_stress = True
                 if ce_wing_df is not None and (running_ce_wing - ce_wing_entry) >= ADJUSTMENT_WING_THRESHOLD:
                     upside_stress = True
+                
                 if upside_stress:
-                    adj_trigger_ts, adj_winning_side = ts, 'pe'
+                    adj_trigger_ts   = ts
+                    adj_winning_side = 'pe'
                     break
 
+                # Check for CE roll (triggered by downside move)
                 downside_stress = False
-                # Disabled downside roll for now
+                if spot <= pe_sell_strike + ADJUSTMENT_TRIGGER_OFFSET:
+                    downside_stress = True
+                if pe_wing_df is not None and (running_pe_wing - pe_wing_entry) >= ADJUSTMENT_WING_THRESHOLD:
+                    downside_stress = True
+                    
                 if downside_stress:
-                    adj_trigger_ts, adj_winning_side = ts, 'ce'
+                    adj_trigger_ts   = ts
+                    adj_winning_side = 'ce'
                     break
-
-    if emer_active:
-        exit_pr = apply_slippage(emer_ltp, is_buy=False)
-        realised_emer = round(exit_pr - emer_entry, 2)
-        window_realised_pl += realised_emer
-        logger.info(f"  [EMERGENCY] Final Closure Parachute CE {emer_strike} @ {exit_pr:.1f} at {ts} | P&L: {realised_emer:.1f} | spot={spot:.0f}")
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,
             adj_trigger_ts, adj_winning_side,
-            running_ce_wing, running_pe_wing,
-            round(window_realised_pl, 2))
+            running_ce_wing, running_pe_wing)
 
+
+# ---------------------------------------------------------------------------
+# Trade record builder
+# ---------------------------------------------------------------------------
 
 def build_trade_record(entry_time, entry_spot, entry_vix,
                         sell_expiry, buy_expiry,
@@ -915,17 +895,14 @@ def build_trade_record(entry_time, entry_spot, entry_vix,
                         # Safety Wing fields
                         ce_wing_strike=None, pe_wing_strike=None,
                         ce_wing_entry=0.0, pe_wing_entry=0.0,
-                        ce_wing_exit=0.0, pe_wing_exit=0.0,
-                        realised_pl=0.0) -> dict:
+                        ce_wing_exit=0.0, pe_wing_exit=0.0) -> dict:
     """Build a complete trade summary record."""
     ce_pl = _calc_exit_pl(ce_sell_entry, ce_sell_exit, ce_buy_entry, ce_buy_exit)
     pe_pl = _calc_exit_pl(pe_sell_entry, pe_sell_exit, pe_buy_entry, pe_buy_exit)
     wing_pl = (ce_wing_exit - ce_wing_entry) + (pe_wing_exit - pe_wing_entry)
     base_pl   = round(ce_pl + pe_pl + wing_pl, 2)
     adj_pl    = round(adj_pl_points, 2) if adj_pl_points is not None else 0.0
-    
-    # realised_pl includes locked-in gains from Emergency Hedge and previous adjustments
-    total_pl  = round(base_pl + adj_pl + realised_pl, 2)
+    total_pl  = round(base_pl + adj_pl, 2)
     total_rs  = round(total_pl * LOT_SIZE, 2)
 
     return {
@@ -1214,11 +1191,18 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 ce_delta_target = DELTA_SAFE_SIDE
                 pe_delta_target = DELTA_TESTED_SIDE
 
-        pe_sell_strike, pe_sell_raw = select_strike(
-            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache, pe_delta_target)
-
         ce_sell_strike, ce_sell_raw = select_strike(
             spot, sell_expiry_end, entry_ts, 'ce', opt_df_cache, ce_delta_target)
+        pe_sell_strike, pe_sell_raw = select_strike(
+            spot, sell_expiry_end, entry_ts, 'pe', opt_df_cache, pe_delta_target)
+        
+        ce_wing_strike = None
+        pe_wing_strike = None
+        if ENABLE_SAFETY_WINGS:
+            ce_wing_strike, ce_wing_raw = select_strike(
+                spot, buy_expiry_end, entry_ts, 'ce', opt_df_cache, SAFETY_WING_DELTA)
+            pe_wing_strike, pe_wing_raw = select_strike(
+                spot, buy_expiry_end, entry_ts, 'pe', opt_df_cache, SAFETY_WING_DELTA)
 
         if ce_sell_strike is None or pe_sell_strike is None:
             skip_counts['strike_failed'] += 1
@@ -1227,22 +1211,6 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         f"targets=[{ce_delta_target}, {pe_delta_target}] "
                         f"strikes=[{ce_sell_strike}, {pe_sell_strike}] — skipping")
             continue
-
-        # --- Phase 2 Adjustment: Matching Strikes ---
-        # We go back to the symmetric setup where long and short strikes match.
-        ce_buy_strike = ce_sell_strike
-        pe_buy_strike = pe_sell_strike
-
-        ce_wing_strike = None
-        pe_wing_strike = None
-        if ENABLE_SAFETY_WINGS:
-            # --- Phase 2 Adjustment: PE-Only Wing ---
-            # We skip the CE wing to save cost.
-            ce_wing_strike = None
-            ce_wing_raw = 0.0
-            
-            pe_wing_strike, pe_wing_raw = select_strike(
-                spot, buy_expiry_end, entry_ts, 'pe', opt_df_cache, SAFETY_WING_DELTA)
 
         # ----------------------------------------------------------------
         # Load all option files (4 for base + 2 for wings)
@@ -1258,15 +1226,15 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             load_option_data(sell_expiry_end, pe_sell_strike, 'pe',
                              f"{_file_debug} PE-sell" if _file_debug else None))
 
-        ce_buy_df_key = (buy_expiry_end, ce_buy_strike, 'ce')
-        pe_buy_df_key = (buy_expiry_end, pe_buy_strike, 'pe')
+        ce_buy_df_key = (buy_expiry_end, ce_sell_strike, 'ce')
+        pe_buy_df_key = (buy_expiry_end, pe_sell_strike, 'pe')
         if ce_buy_df_key not in opt_df_cache:
             opt_df_cache[ce_buy_df_key] = load_option_data(
-                buy_expiry_end, ce_buy_strike, 'ce',
+                buy_expiry_end, ce_sell_strike, 'ce',
                 f"{_file_debug} CE-buy" if _file_debug else None)
         if pe_buy_df_key not in opt_df_cache:
             opt_df_cache[pe_buy_df_key] = load_option_data(
-                buy_expiry_end, pe_buy_strike, 'pe',
+                buy_expiry_end, pe_sell_strike, 'pe',
                 f"{_file_debug} PE-buy" if _file_debug else None)
         ce_buy_df = opt_df_cache[ce_buy_df_key]
         pe_buy_df = opt_df_cache[pe_buy_df_key]
@@ -1379,8 +1347,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
          sl_ts, sl_reason, running_peak_pl,
          adj_trigger_ts, adj_winning_side,
-         ce_wing_ltp, pe_wing_ltp,
-         window_realised_emer_pl) = append_1min_snapshots_window(
+         ce_wing_ltp, pe_wing_ltp) = append_1min_snapshots_window(
             scan_start, scan_end,
             nifty_1m, vix_1m,
             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
@@ -1398,10 +1365,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             adjustment_already_made=False,
             ce_wing_df=ce_wing_df, pe_wing_df=pe_wing_df,
             ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
-            last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
-            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
-
-        running_realised_pl += window_realised_emer_pl
+            last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp)
 
         # ----------------------------------------------------------------
         # Initialise adjustment state — must be before exit pricing
@@ -1514,8 +1478,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                     f"is not OTM at spot {roll_spot:.0f} — roll aborted")
                 (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                  sl_ts, sl_reason, running_peak_pl, _, _,
-                 ce_wing_ltp, pe_wing_ltp,
-                 window_realised_emer_pl) = \
+                 ce_wing_ltp, pe_wing_ltp) = \
                     append_1min_snapshots_window(
                         roll_ts - pd.Timedelta(minutes=1), scan_end,
                         nifty_1m, vix_1m,
@@ -1533,10 +1496,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         adjustment_already_made=True,
                         ce_wing_df=ce_wing_df, pe_wing_df=pe_wing_df,
                         ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
-                        last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
-                        opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
-
-                running_realised_pl += window_realised_emer_pl
+                        last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp)
                 if sl_ts is None:
                     sl_ts = scan_end; sl_reason = 'pre_expiry'
                 if sl_reason == 'pre_expiry':
@@ -1584,8 +1544,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                     # scanner already stopped — re-run remainder with adjustment disabled
                     (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                      sl_ts, sl_reason, running_peak_pl, _, _,
-                     ce_wing_ltp, pe_wing_ltp,
-                     window_realised_emer_pl) = \
+                     ce_wing_ltp, pe_wing_ltp) = \
                         append_1min_snapshots_window(
                             roll_ts - pd.Timedelta(minutes=1), scan_end,
                             nifty_1m, vix_1m,
@@ -1603,10 +1562,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             adjustment_already_made=True,
                             ce_wing_df=ce_wing_df, pe_wing_df=pe_wing_df,
                             ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
-                            last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
-                            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
-
-                    running_realised_pl += window_realised_emer_pl
+                            last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp)
                     # Re-price exit with updated sl_ts/sl_reason from resumed scan
                     if sl_ts is None:
                         sl_ts     = scan_end
@@ -1666,8 +1622,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             # Abort entire adjustment — re-run remainder unchanged
                             (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                              sl_ts, sl_reason, running_peak_pl, _, _,
-                             ce_wing_ltp, pe_wing_ltp,
-                             window_realised_emer_pl) = \
+                             ce_wing_ltp, pe_wing_ltp) = \
                                 append_1min_snapshots_window(
                                     roll_ts - pd.Timedelta(minutes=1), scan_end,
                                     nifty_1m, vix_1m,
@@ -1685,10 +1640,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     adjustment_already_made=True,
                                     ce_wing_df=ce_wing_df, pe_wing_df=pe_wing_df,
                                     ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
-                                    last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
-                                    opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
-
-                            running_realised_pl += window_realised_emer_pl
+                                    last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp)
                             if sl_ts is None:
                                 sl_ts = scan_end; sl_reason = 'pre_expiry'
                             if sl_reason == 'pre_expiry':
@@ -1769,8 +1721,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         # to 0.0 at the roll minute, and cumulative P&L will stay smooth.
                         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
                          sl_ts, sl_reason, running_peak_pl, _, _,
-                         ce_wing_ltp, pe_wing_ltp,
-                         window_realised_emer_pl) = \
+                         ce_wing_ltp, pe_wing_ltp) = \
                             append_1min_snapshots_window(
                                 roll_ts - pd.Timedelta(minutes=1), scan_end,
                                 nifty_1m, vix_1m,
@@ -1788,10 +1739,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                 adjustment_already_made=True,
                                 ce_wing_df=ce_wing_df, pe_wing_df=pe_wing_df,
                                 ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
-                                last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
-                                opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
-
-                        running_realised_pl += window_realised_emer_pl
+                                last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp)
 
                         adj_exit_reason = sl_reason if sl_reason is not None else 'pre_expiry'
                         adj_made = True
@@ -2012,9 +1960,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
             ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
             ce_wing_exit=ce_wing_exit, pe_wing_exit=pe_wing_exit,
-            realised_pl=running_realised_pl,
-            )
-
+        )
         all_trades.append(record)
         save_trade_log(trade_counter, entry_ts, trade_log)
 
