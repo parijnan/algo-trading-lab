@@ -331,11 +331,24 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         vix = 0.0
 
     if is_friday:
-        # Friday: Artemis/Athena do not enter fresh. Only Apollo if VIX warrants.
+        # Check if Athena has FORCE_ENTRY enabled for dry run
+        force_athena = False
+        try:
+            if ATHENA_DIR not in sys.path: sys.path.insert(0, ATHENA_DIR)
+            from configs_live import FORCE_ENTRY as ATHENA_FORCE # type: ignore
+            force_athena = ATHENA_FORCE
+        except Exception:
+            pass
+
+        # Friday: Artemis/Athena do not enter fresh unless forced.
         if vix > VIX_ATHENA_MAX:
             logger.info(f"Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
             _slack(f"*Leto*: Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
             _run_apollo(obj, auth_token, instrument_df_nifty)
+        elif force_athena and vix > VIX_ARTEMIS_MAX:
+            logger.info(f"Friday (FORCED). VIX {vix:.2f} in (16, 25]. Routing to Athena.")
+            _slack(f"*Leto*: Friday (FORCED). VIX {vix:.2f}. Routing to *Athena*.")
+            _run_athena(obj, auth_token, instrument_df_nifty)
         else:
             logger.info(f"Friday. VIX {vix:.2f} <= {VIX_ATHENA_MAX}. Standing down.")
             _slack(f"*Leto*: Friday. VIX {vix:.2f}. No fresh entries today.")
