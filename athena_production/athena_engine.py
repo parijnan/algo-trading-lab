@@ -531,6 +531,14 @@ class Athena:
             
         return prices
 
+    def _get_log_filepath(self):
+        """Generate and return the trade log filepath, creating directory if needed."""
+        os.makedirs(TRADE_LOGS_DIR, exist_ok=True)
+        entry_dt  = datetime.fromisoformat(self.state.entry_time)
+        entry_str = entry_dt.strftime('%Y-%m-%d_%H%M')
+        filename  = f"trade_{entry_str}.csv"
+        return os.path.join(TRADE_LOGS_DIR, filename)
+
     def _append_trade_log_row(self, exit_reason=None, exit_fills=None, prices=None):
         if self.state.status not in ('in_trade', 'exiting'): return
         
