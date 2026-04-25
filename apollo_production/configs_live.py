@@ -83,12 +83,10 @@ MIN_DTE             = 2             # Roll to next expiry if DTE < this
 LOT_SIZE            = 65            # Nifty lot size — update if SEBI changes this
 
 # Lot sizing
-# LOT_CALC = False: trade exactly LOT_COUNT lots per signal
-# LOT_CALC = True:  auto-calculate from available margin (rmsLimit)
-#   lots = floor(available_margin / LOT_CAPITAL), floored at 1
 LOT_CALC            = False
 LOT_COUNT           = 1             # lots per signal when LOT_CALC = False
 LOT_CAPITAL         = 100000        # capital per lot for auto-calculation (Rs)
+CASH_PER_LOT_REQUIRED = 15000       # upfront pure cash required per lot
 
 # ---------------------------------------------------------------------------
 # Entry filters (D-R-D06g)

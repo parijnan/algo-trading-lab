@@ -36,7 +36,7 @@ from configs_live import (
     MARKET_OPEN, MARKET_CLOSE,
     VIX_THRESHOLD,
     SPREAD_TYPE, BUY_LEG_OFFSET, HEDGE_POINTS, STRIKE_STEP, MIN_DTE, LOT_SIZE,
-    LOT_CALC, LOT_COUNT, LOT_CAPITAL,
+    LOT_CALC, LOT_COUNT, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
     EXCLUDE_BEARISH_DAYS, EXCLUDE_BULLISH_DAYS,
     ENABLE_HARD_STOP, HARD_STOP_POINTS_BULL, HARD_STOP_POINTS_BEAR,
@@ -659,8 +659,8 @@ class Apollo:
         Calculate the number of lots to trade.
 
         LOT_CALC = False: return LOT_COUNT directly (manual control)
-        LOT_CALC = True:  fetch available margin from Angel One rmsLimit(),
-                          compute floor(margin / LOT_CAPITAL), floor at 1.
+        LOT_CALC = True:  auto-calculate from available margin AND pure cash.
+                          Lots = min(margin / LOT_CAPITAL, pure_cash / CASH_PER_LOT_REQUIRED)
 
         Returns int >= 1.
         """
@@ -670,11 +670,27 @@ class Apollo:
 
         while True:
             try:
-                margin = float(self.obj.rmsLimit()['data']['availablecash'])
-                lots   = max(1, int(margin // LOT_CAPITAL))
+                _increment_poll()
+                rms = self.obj.rmsLimit()['data']
+                
+                total_power = float(rms['availablecash'])
+                collateral  = float(rms['collateral'])
+                pure_cash   = round(total_power - collateral, 2)
+
+                # 1. Limit by total margin (LOT_CAPITAL per lot)
+                lots_by_capital = int(total_power // LOT_CAPITAL)
+                
+                # 2. Limit by available pure cash (CASH_PER_LOT_REQUIRED per lot)
+                lots_by_cash    = int(pure_cash // CASH_PER_LOT_REQUIRED)
+                
+                # Final lots is the bottleneck of the two
+                lots = max(1, min(lots_by_capital, lots_by_cash))
+                
                 logger.info(
-                    f"Lot sizing: available_margin={margin:.0f}  "
-                    f"LOT_CAPITAL={LOT_CAPITAL}  lots={lots}")
+                    f"Lot sizing: Total Power={total_power:,.0f} | Pure Cash={pure_cash:,.0f} | "
+                    f"By Capital={lots_by_capital} | By Cash={lots_by_cash} | "
+                    f"Final Lots={lots}")
+                
                 return lots
             except Exception as e:
                 handle_exception(e)
