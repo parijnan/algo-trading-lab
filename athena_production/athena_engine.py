@@ -420,7 +420,7 @@ class Athena:
         logger.info(f"Entry complete. Net Debit: {self.state.net_debit}")
         
         # Send Comprehensive Slack Alert
-        msg = f"*Athena* ENTRY | Spot: {spot:.2f} | VIX: {vix:.2f}\n" \
+        msg = f"*Athena* ENTRY | Lots: {self.state.lots} | Spot: {spot:.2f} | VIX: {vix:.2f}\n" \
               f"----------------------------------\n" \
               f"SOLD (Weekly): \n" \
               f"  CE {self.state.ce_sell_strike} @ {self.state.ce_sell_entry:.1f}\n" \
@@ -484,7 +484,7 @@ class Athena:
         # Final log and slack
         self._append_trade_log_row(exit_reason=reason, exit_fills=exit_fills)
         
-        msg = f"*Athena* EXIT {reason.upper()} | Spot: {self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN):.2f}\n" \
+        msg = f"*Athena* EXIT {reason.upper()} | Lots: {lots} | Spot: {self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN):.2f}\n" \
               f"----------------------------------\n" \
               f"SOLD EXIT: \n" \
               f"  CE {self.state.ce_sell_strike} @ {exit_fills['ce_sell']:.1f}\n" \
