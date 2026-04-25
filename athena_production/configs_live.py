@@ -81,6 +81,7 @@ EMERGENCY_MAX_ATTEMPTS   = 1        # Max parachutes per trade
 LOT_CALC            = False         # Manual lot count for Monday test
 LOT_COUNT           = 1             # Trading 1 lot
 LOT_CAPITAL         = 150000        # Capital per lot buffer (Rs)
+CASH_PER_LOT_REQUIRED = 35000       # Upfront pure cash required per lot
 
 # ---------------------------------------------------------------------------
 # Timing

@@ -26,7 +26,7 @@ from configs_live import (
     ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, 
     EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
-    LOT_CALC, LOT_CAPITAL,
+    LOT_CALC, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
     SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES,
@@ -314,7 +314,7 @@ class Athena:
         """
         Calculate the number of lots to trade.
         LOT_CALC = False: return LOT_COUNT directly.
-        LOT_CALC = True:  auto-calculate from available margin.
+        LOT_CALC = True:  auto-calculate from available margin AND pure cash.
         """
         if not LOT_CALC:
             logger.debug(f"Lot sizing: fixed LOT_COUNT={LOT_COUNT}")
@@ -323,11 +323,26 @@ class Athena:
         while True:
             try:
                 _increment_poll()
-                margin = float(self.obj.rmsLimit()['data']['availablecash'])
-                lots   = max(1, int(margin // LOT_CAPITAL))
+                rms = self.obj.rmsLimit()['data']
+                
+                total_power = float(rms['availablecash'])
+                collateral  = float(rms['collateral'])
+                pure_cash   = round(total_power - collateral, 2)
+
+                # 1. Limit by total margin (LOT_CAPITAL per lot)
+                lots_by_capital = int(total_power // LOT_CAPITAL)
+                
+                # 2. Limit by available pure cash (CASH_PER_LOT_REQUIRED per lot)
+                lots_by_cash    = int(pure_cash // CASH_PER_LOT_REQUIRED)
+                
+                # Final lots is the bottleneck of the two
+                lots = max(1, min(lots_by_capital, lots_by_cash))
+                
                 logger.info(
-                    f"Lot sizing: available_margin={margin:.0f}  "
-                    f"LOT_CAPITAL={LOT_CAPITAL}  lots={lots}")
+                    f"Lot sizing: Total Power={total_power:,.0f} | Pure Cash={pure_cash:,.0f} | "
+                    f"By Capital={lots_by_capital} | By Cash={lots_by_cash} | "
+                    f"Final Lots={lots}")
+                
                 return lots
             except Exception as e:
                 handle_exception(e)
