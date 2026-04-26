@@ -10,7 +10,7 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 - **Adjustments:** None (Static structure for maximum efficiency).
 
 ## Architecture
-- `athena.py`: Main execution engine (Entry, Polling Loop, Exit).
+- `athena_engine.py`: Main execution engine (Entry, Polling Loop, Exit).
 - `configs_live.py`: Strategy parameters and `ENABLE_SAFETY_WINGS` toggle.
 - `state.py`: Atomic state management (CSV-backed) to handle restarts.
 - `functions.py`: Slack/Telegram alerts and SmartAPI rate limiting.

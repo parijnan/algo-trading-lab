@@ -16,7 +16,7 @@ Cron on delos:
 
 Strategy interfaces:
   Artemis : artemis.run(obj, instrument_df_sensex)        — returns True for hand-back
-  Athena  : athena.Athena(obj, auth_token, instrument_df)  — returns True for hand-back
+  Athena  : athena_engine.Athena(obj, auth_token, instrument_df)  — returns True for hand-back
   Apollo  : apollo.Apollo(obj, auth_token, instrument_df)  — returns False (market close)
 """
 
