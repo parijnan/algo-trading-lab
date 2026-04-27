@@ -353,35 +353,33 @@ class Athena:
         lots = self._calculate_lots()
         self.state.wings_enabled = ENABLE_SAFETY_WINGS
         
-        # 1. Place BUY orders (Margin protection)
-        buy_orders = {}
-        # Phase 2: Buy keys are core legs + PE-only wing
-        buy_keys = ['ce_buy', 'pe_buy']
-        if ENABLE_SAFETY_WINGS: 
-            buy_keys += ['pe_wing'] # PE-ONLY Wing for Phase 2
-        
-        for key in buy_keys:
+        # -------------------------------------------------------------------
+        # STEP 1: Buy Core Monthly Longs (Establish Calendar Spread)
+        # -------------------------------------------------------------------
+        long_orders = {}
+        for side in ['ce', 'pe']:
+            key = f"{side}_buy"
             strike = strikes_dict[f'{key}_strike']
             exp    = strikes_dict['buy_expiry']
-            # Map ce_buy -> ce, pe_buy -> pe, pe_wing -> pe
-            opt_type = 'ce' if key.startswith('ce') else 'pe'
-            sym, tok = self._fetch_symbol_and_token(strike, opt_type, exp)
+            sym, tok = self._fetch_symbol_and_token(strike, side, exp)
             if not sym:
                 logger.error(f"Could not fetch symbol for {key} strike {strike}")
                 return False
             
             oids = self._place_order('BUY', sym, tok, lots)
-            buy_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
+            long_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
 
-        # 2. Confirm BUY fills and update state
-        for key, info in buy_orders.items():
+        # Confirm Long fills
+        for key, info in long_orders.items():
             fill, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
             setattr(self.state, f"{key}_strike", info['strike'])
             setattr(self.state, f"{key}_token",  info['tok'])
             setattr(self.state, f"{key}_symbol", info['sym'])
             setattr(self.state, f"{key}_entry",  fill)
 
-        # 3. Place SELL orders
+        # -------------------------------------------------------------------
+        # STEP 2: Sell Core Weekly Shorts (Collect Premium / Release Margin)
+        # -------------------------------------------------------------------
         sell_orders = {}
         for side in ['ce', 'pe']:
             key = f"{side}_sell"
@@ -392,13 +390,33 @@ class Athena:
             oids = self._place_order('SELL', sym, tok, lots)
             sell_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
 
-        # 4. Confirm SELL fills and update state
+        # Confirm Sell fills
         for key, info in sell_orders.items():
             fill, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
             setattr(self.state, f"{key}_strike", info['strike'])
             setattr(self.state, f"{key}_token",  info['tok'])
             setattr(self.state, f"{key}_symbol", info['sym'])
             setattr(self.state, f"{key}_entry",  fill)
+
+        # -------------------------------------------------------------------
+        # STEP 3: Buy Safety Wing (Financed by weekly premium)
+        # -------------------------------------------------------------------
+        if ENABLE_SAFETY_WINGS:
+            key = 'pe_wing'
+            strike = strikes_dict[f'{key}_strike']
+            exp    = strikes_dict['buy_expiry']
+            sym, tok = self._fetch_symbol_and_token(strike, 'pe', exp)
+            
+            if sym:
+                oids = self._place_order('BUY', sym, tok, lots)
+                fill, ft = self._fetch_order_details(oids, tok, sym)
+                
+                setattr(self.state, f"{key}_strike", strike)
+                setattr(self.state, f"{key}_token",  tok)
+                setattr(self.state, f"{key}_symbol", sym)
+                setattr(self.state, f"{key}_entry",  fill)
+            else:
+                logger.warning(f"Could not fetch symbol for {key} strike {strike}. Proceeding without wing.")
 
         # Finalise state
         self.state.status = 'in_trade'
