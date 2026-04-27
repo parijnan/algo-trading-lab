@@ -87,6 +87,7 @@ class AthenaState:
 
     # Entry context
     entry_time:           Optional[str]   = None    # ISO datetime string
+    exit_timestamp:       Optional[str]   = None    # ISO datetime string (Calculated at entry)
     entry_spot:           Optional[float] = None
     entry_vix:            Optional[float] = None
 

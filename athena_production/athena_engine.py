@@ -404,6 +404,13 @@ class Athena:
         self.state.status = 'in_trade'
         self.state.lots = lots
         self.state.entry_time = datetime.now().isoformat()
+        
+        # Calculate full exit timestamp (robust against short-DTE weeks)
+        sell_exp_dt = strikes_dict['sell_expiry']
+        exit_day = self._last_trading_day_before(sell_exp_dt)
+        exit_dt = datetime.combine(exit_day, self._exit_time)
+        self.state.exit_timestamp = exit_dt.isoformat()
+
         self.state.entry_spot = spot
         self.state.entry_vix  = vix
         self.state.sell_expiry = strikes_dict['sell_expiry'].isoformat()
@@ -732,12 +739,10 @@ class Athena:
                                 self._execute_entry(strikes, spot, vix)
                 
             # --- 2. EXIT LOGIC ---
-            if self.state.status == 'in_trade':
-                sell_exp_dt = date.fromisoformat(self.state.sell_expiry)
-                exit_day = self._last_trading_day_before(sell_exp_dt)
+            if self.state.status == 'in_trade' and self.state.exit_timestamp:
+                exit_dt = datetime.fromisoformat(self.state.exit_timestamp)
                 
-                # Ensure we only exit if it's the correct day AND we are past the exit time
-                if now.date() == exit_day and now.time() >= self._exit_time:
+                if now >= exit_dt:
                     # Final check: If parachute is still active, sell it first
                     if self.state.emer_active:
                         logger.info("Closing active emergency parachute before final exit.")
