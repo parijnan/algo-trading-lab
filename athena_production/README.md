@@ -4,7 +4,8 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 
 ## Strategy Structure
 - **Core:** 4-leg Double Calendar (Sell 0.30 Delta weekly, Buy same strikes on Monthly).
-- **Hedge:** 2-leg Safety Wings (Buy 0.05 Delta on Monthly).
+- **Hedge:** PE-Only Safety Wing (Buy 0.05 Delta on Monthly).
+- **Emergency Hedge:** Smart Parachute (Buy Monthly CE if Spot >= CE Strike + 150).
 - **Entry:** 10:30 AM on the day before the weekly sell expiry.
 - **Exit:** 10:25 AM on the day before the weekly sell expiry (ELM).
 - **Adjustments:** None (Static structure for maximum efficiency).
@@ -17,9 +18,9 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 - `logger_setup.py`: Dual console/file logging.
 
 ## Monitoring
-Athena uses REST API polling (every 15 minutes by default) to fetch LTPs, calculate unrealised P&L, and log detailed snapshots to `data/trade_logs/`.
+Athena uses REST API polling (every 20 seconds) to fetch LTPs, calculate unrealised P&L, and log detailed snapshots to `data/trade_logs/`.
 
 ## Execution Safety
-- **Margin-Aware Sequence:** Always places BUY orders first to ensure collateral is in place before SELL orders.
+- **Capital-Efficient Sequence:** Always places **MONTHLY BUY** orders first to establish the calendar spread and secure margin benefits before selling weekly legs. Finally buys the PE wing using generated credit.
 - **Dry Run Mode:** Set `DRY_RUN = True` in `configs_live.py` to test strike selection and logging without placing real orders.
 - **Error Recovery:** State is persisted on every poll; the script automatically resumes tracking open positions if restarted.

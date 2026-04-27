@@ -73,4 +73,12 @@ Introduces a 5-min Supertrend as the entry and exit trigger. The 15-min ST no lo
 | Entry filter analysis (D5-R03) | ⬜ Next step — pending upload of D5-R01 trade logs |
 | Exit stack calibration | ⬜ Pending entry filters |
 
-Key finding from D5-R01: 52% of trades exit same-day at 28.4% WR (−₹1,04,156). Multi-day trades show 56.5% WR (+₹2,22,416) with quality improving sharply beyond Day 2. The day-0 drag is an entry quality problem, not an exit gate problem. Entry filter analysis is the immediate next step.
+### Phase 3 — ML Regime Adaptation (Solo Quant) — IN PROGRESS
+
+Transitioning from fixed thresholds to a pro-active ML-driven engine.
+
+- **Feature Engineering (`ml_feature_engineering.py`):** Implementation of "Spatial Coordinates" (Price-EMA distance) and "Risk Interaction" signals.
+- **Institutional Intent (`oi_aggregator.py`):** Real-time aggregation of 1-minute Open Interest dynamics (PCR Velocity) to detect institutional walls.
+- **Signal Simulation (`leto_phase2_simulation.py`):** Researching the "Two-Stage Triage" architecture (Trend vs Range, then Direction).
+
+**Early Findings:** Simulation identifies high-confidence "Stealth Trends" occurring at VIX < 16, identifying alpha that is invisible to the current production router.

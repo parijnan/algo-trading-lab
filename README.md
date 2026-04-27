@@ -35,15 +35,26 @@ A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25).
 | | |
 |---|---|
 | Instrument | Nifty weekly options |
-| Structure | Double calendar condor (6 legs) |
-| Entry | Day before previous Tuesday expiry, 10:30 AM |
+| Structure | Double calendar condor (5-6 legs) |
+| Entry | Day before previous weekly expiry, 10:30 AM |
 | Exit | Day before sell expiry, 10:25 AM (ELM) |
-| Sell expiry | Next Tuesday from entry (~8 DTE) |
+| Sell expiry | Next weekly expiry from entry (~8 DTE) |
 | Buy expiry | Nearest monthly expiry with DTE ≥ 16 |
 | Deploy condition | India VIX 16–25 |
 | Target Deltas | Sold: 0.30, Wings: 0.05 |
 | Broker | Angel Broking (SmartConnect) |
 | Status | Live |
+
+### [Phase 3 Research](./apollo_backtest/) — ML Regime Adaptation (Solo Quant)
+Research into replacing fixed VIX/Supertrend routing with a LightGBM/HMM regime classifier. Focuses on "Spatial Coordinates" (Price-EMA tension) and "Institutional Intent" (1-minute OI accumulation).
+
+| | |
+|---|---|
+| Framework | Solo Quant ML Architecture |
+| Model | LightGBM Classifier |
+| Features | DTEMA 20, PCR Velocity, Risk Signals |
+| Goal | Stealth Trend detection and dynamic capital allocation |
+| Status | Backtesting |
 
 ## Session Router
 
@@ -216,6 +227,9 @@ algo-trading-lab/
 │   └── logs/                       # gitignored, created at runtime
 ├── apollo_backtest/                # Apollo backtesting and optimisation
 │   ├── README.md
+│   ├── ml_feature_engineering.py    # Spatial Price-VIX feature generator
+│   ├── oi_aggregator.py            # 1-min Institutional OI dynamics
+│   ├── leto_phase2_simulation.py    # Signal ensemble and routing logic
 │   ├── configs_credit.py           # Phase 1 credit spread config (reference only)
 │   ├── configs_debit.py            # Phase 1 debit spread — production config D-R-D06g
 │   ├── configs_debit_phase2.py     # Phase 2 triple-timeframe config (in progress)
@@ -241,6 +255,8 @@ algo-trading-lab/
 │       └── .gitkeep               # runtime data gitignored
 ├── athena_backtest/                # Athena double calendar backtesting
 │   ├── README.md
+│   ├── backtest_wing_salvage.py    # Research: Tactical wing exiting
+│   ├── backtest_ml_adaptive.py     # Research: ML-driven tactical adjustments
 │   ├── configs.py
 │   ├── backtest.py
 │   └── data/

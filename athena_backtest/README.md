@@ -43,5 +43,16 @@ python athena_backtest/backtest.py
 ### 3. Review Results
 Results are saved to `athena_backtest/data/trade_summary.csv`.
 
+## Future Research
+
+### Phase 2.1 — Tactical Adjustments
+- **PE Wing Salvage (`backtest_wing_salvage.py`):** Automatically exiting the redundant PE wing when the CE Parachute triggers. 
+- **Results:** Improved win rate (64.2%) and R:R (1.37), though absolute profit was slightly lower due to exit slippage.
+
+### Phase 3 — ML-Adaptive Routing (`backtest_ml_adaptive.py`)
+- **Dynamic Parachute:** Scaling the emergency trigger offset based on ML confidence.
+- **Preemptive Pivot:** Proactively closing the tested side based on high-confidence stealth trend detection from the LightGBM model.
+- **Results:** Demonstrated significantly higher consistency (62.5% WR) and improved drawdown metrics.
+
 ---
 *Note: Phase 1 legacy configurations are preserved in `configs_phase1.py` and `backtest_phase1.py` for reference.*
