@@ -102,7 +102,7 @@ TRADE_UPDATE_INTERVAL = 20
 DRY_RUN             = False
 
 # Force entry on any day — set to False for standard Monday entry
-FORCE_ENTRY         = False
+FORCE_ENTRY         = True
 
 # ---------------------------------------------------------------------------
 # Angel One API — exchange segment strings
