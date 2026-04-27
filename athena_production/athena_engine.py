@@ -736,6 +736,7 @@ class Athena:
                 sell_exp_dt = date.fromisoformat(self.state.sell_expiry)
                 exit_day = self._last_trading_day_before(sell_exp_dt)
                 
+                # Ensure we only exit if it's the correct day AND we are past the exit time
                 if now.date() == exit_day and now.time() >= self._exit_time:
                     # Final check: If parachute is still active, sell it first
                     if self.state.emer_active:
