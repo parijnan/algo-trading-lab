@@ -206,22 +206,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Apollo — precomputed intermediate files (large, reproducible)
-apollo_backtest/data/nifty_15min.csv
-apollo_backtest/data/nifty_75min.csv
-apollo_backtest/data/vix_daily.csv
-apollo_backtest/data/vix_daily_phase2.csv
-apollo_backtest/data/nifty_5min_phase2.csv
-apollo_backtest/data/nifty_15min_phase2.csv
-apollo_backtest/data/nifty_75min_phase2.csv
+# Apollo backtest — generated data
+apollo_backtest/data/
 
-# Trade output
-apollo_backtest/data/trade_logs/
-apollo_backtest/data/trade_logs_debit/
-apollo_backtest/data/trade_summary.csv
-apollo_backtest/data/trade_summary_debit.csv
-apollo_backtest/data/trade_logs_phase2/
-apollo_backtest/data/trade_summary_phase2.csv
+# Athena backtest — generated data
+athena_backtest/data/
 
 # Raw historical data — stored separately
 data/indices/

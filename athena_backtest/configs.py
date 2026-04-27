@@ -21,6 +21,7 @@ VIX_INDEX_FILE      = os.path.join(PIPELINE_DATA, "indices", "india_vix.csv")
 NIFTY_OPTIONS_PATH  = os.path.join(PIPELINE_DATA, "nifty", "options")
 CONTRACT_LIST_FILE  = os.path.join(REPO_ROOT, "data_pipeline", "config", "options_list_nf.csv")
 
+PRECOMPUTED_DIR     = os.path.join(REPO_ROOT, "apollo_backtest", "data")
 TRADE_LOGS_DIR      = os.path.join(os.path.dirname(__file__), "data", "trade_logs")
 TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_summary.csv")
 
