@@ -723,6 +723,7 @@ class Athena:
                     if FORCE_ENTRY:
                         is_entry_day = True # Bypass date check for dry run
 
+                    logger.debug(f"Entry Check: day={is_entry_day}, time={now.time()} >= {self._entry_time}")
                     if is_entry_day and now.time() >= self._entry_time:
                         spot = self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)
                         vix  = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN)
