@@ -120,19 +120,21 @@ class Athena:
         today = date.today()
         all_expiries = self._get_expiry_dates()
         
-        # 1. Sell Expiry: The next available expiry
-        sell_expiry = next((exp for exp in all_expiries if exp >= today), None)
-        if not sell_expiry:
-            logger.error("No future expiries found.")
+        # 1. Sell Expiry: We sell the SECOND available expiry from today
+        # (matching the backtest entry logic: entry is day before prior expiry)
+        future_expiries = [exp for exp in all_expiries if exp >= today]
+        
+        if len(future_expiries) < 2:
+            logger.error("Not enough future expiries found to form a calendar.")
             return None, None
             
+        # If today is the day before the first expiry, we sell the second one
+        sell_expiry = future_expiries[1]
+        
         # 2. Buy Expiry: Monthly expiry (usually the last Thursday/Tuesday of the month)
-        # We need at least BUY_LEG_MIN_DTE
         buy_expiry = None
         for exp in all_expiries:
             if exp >= sell_expiry + timedelta(days=BUY_LEG_MIN_DTE):
-                # Check if it's the last expiry of its month
-                # (Simple heuristic: next expiry is in a different month)
                 idx = all_expiries.index(exp)
                 if idx + 1 < len(all_expiries):
                     next_exp = all_expiries[idx+1]
@@ -140,12 +142,10 @@ class Athena:
                         buy_expiry = exp
                         break
                 else:
-                    # Last available expiry in master
                     buy_expiry = exp
                     break
         
         if not buy_expiry:
-            # Fallback to the latest available if min DTE not met for monthly
             buy_expiry = all_expiries[-1]
             
         return sell_expiry, buy_expiry
