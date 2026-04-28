@@ -38,12 +38,18 @@ def load_merged_dataset():
     ml_df = pd.read_csv(ML_MASTER_FILE, parse_dates=['time_stamp'])
     oi_df = pd.read_csv(OI_MASTER_FILE, parse_dates=['datetime'])
     
-    # Align timestamps
-    df = pd.merge(ml_df, oi_df, left_on='time_stamp', right_on='datetime', how='inner')
+    # Coverage Fix: Use Left Merge to keep all 5 years of ML features
+    # even if OI data (institutional intent) only starts in late 2025.
+    df = pd.merge(ml_df, oi_df, left_on='time_stamp', right_on='datetime', how='left')
     df = df.drop(columns=['datetime'])
+    
+    # Fill missing OI values with neutral defaults
+    df['pcr_velocity'] = df['pcr_velocity'].fillna(0.0)
+    df['oi_velocity']  = df['oi_velocity'].fillna(0.0)
+    
     df = df.sort_values('time_stamp').reset_index(drop=True)
     
-    logger.info(f"Merged dataset created: {len(df):,} minutes of overlapping data.")
+    logger.info(f"Merged dataset created: {len(df):,} rows (Coverage: {df['time_stamp'].min()} to {df['time_stamp'].max()})")
     return df
 
 def simulate_signals(df):

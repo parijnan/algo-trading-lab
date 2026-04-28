@@ -51,8 +51,11 @@ Results are saved to `athena_backtest/data/trade_summary.csv`.
 
 ### Phase 3 — ML-Adaptive Routing (`backtest_ml_adaptive.py`)
 - **Dynamic Parachute:** Scaling the emergency trigger offset based on ML confidence.
-- **Preemptive Pivot:** Proactively closing the tested side based on high-confidence stealth trend detection from the LightGBM model.
-- **Results:** Demonstrated significantly higher consistency (62.5% WR) and improved drawdown metrics.
+- **Preemptive Pivot:** Proactively closing the tested side based on stealth trend detection.
+- **Results:** Consistently underperformed Phase 2. Final results (5-year coverage): **₹105,329 P&L, 60.8% Win Rate**.
+- **Conclusion:** ML proactivity introduced a "Complexity Trap." Tightening triggers too early increased insurance costs and slippage without providing a commensurate reduction in risk. 
+
+**VERDICT:** Phase 2 (Static 150-pt trigger) is the definitive production version for institutional scaling.
 
 ---
 *Note: Phase 1 legacy configurations are preserved in `configs_phase1.py` and `backtest_phase1.py` for reference.*

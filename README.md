@@ -53,8 +53,8 @@ Research into replacing fixed VIX/Supertrend routing with a LightGBM/HMM regime 
 | Framework | Solo Quant ML Architecture |
 | Model | LightGBM Classifier |
 | Features | DTEMA 20, PCR Velocity, Risk Signals |
-| Goal | Stealth Trend detection and dynamic capital allocation |
-| Status | Backtesting |
+| Goal | Stealth Trend detection |
+| Status | **Research Lab (Underperforms Phase 2)** |
 
 ## Session Router
 

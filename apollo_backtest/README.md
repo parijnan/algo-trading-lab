@@ -81,4 +81,4 @@ Transitioning from fixed thresholds to a pro-active ML-driven engine.
 - **Institutional Intent (`oi_aggregator.py`):** Real-time aggregation of 1-minute Open Interest dynamics (PCR Velocity) to detect institutional walls.
 - **Signal Simulation (`leto_phase2_simulation.py`):** Researching the "Two-Stage Triage" architecture (Trend vs Range, then Direction).
 
-**Early Findings:** Simulation identifies high-confidence "Stealth Trends" occurring at VIX < 16, identifying alpha that is invisible to the current production router.
+**Early Findings:** Simulation identifies high-confidence "Stealth Trends" occurring at VIX < 16. However, application in Athena revealed a "Complexity Trap": pro-active trigger tightening based on these signals incurred higher friction costs than the static Phase 2 baseline. Phase 3 remains a research laboratory track.

@@ -97,8 +97,18 @@ def append_1min_snapshots_window_ml(from_ts, to_ts, nifty_1m, vix_1m,
 
         # 1. DYNAMIC PARACHUTE (Athena)
         if bt.ENABLE_EMERGENCY_HEDGE and not emer_active and emer_attempts < bt.EMERGENCY_MAX_ATTEMPTS:
-            # Scale trigger offset: -150 at conf=0, 0 at conf=1.0
-            dynamic_offset = bt.EMERGENCY_TRIGGER_OFFSET + (conf * abs(bt.EMERGENCY_TRIGGER_OFFSET))
+            # SENSITIVITY REDUCTION:
+            # Baseline is +150.
+            # If confidence < 0.7: Stay at +150 (Phase 2 static logic).
+            # If confidence >= 0.7: Tighten trigger linearly from +150 down to +50 (institutional wall detection).
+            
+            if conf < 0.7:
+                dynamic_offset = abs(bt.EMERGENCY_TRIGGER_OFFSET) # +150
+            else:
+                # Map conf [0.7, 1.0] -> offset [150, 50]
+                scaled_conf = (conf - 0.7) / 0.3 # 0.0 to 1.0
+                dynamic_offset = 150 - (scaled_conf * 100) 
+            
             if spot >= (ce_sell_strike + dynamic_offset):
                 stk, pr = bt.select_strike(spot, buy_expiry_end, ts, 'ce', opt_df_cache, bt.EMERGENCY_HEDGE_DELTA)
                 if stk:
