@@ -796,5 +796,16 @@ class Athena:
                 
             _reset_counters()
         
+        # Final update before handing back to Leto
+        if self.state.status == 'in_trade':
+            try:
+                self._send_trade_update()
+            except Exception as e:
+                logger.error(f"Final trade update failed: {e}")
+        else:
+            msg = "*Athena*: Standing down for the day. No active positions."
+            logger.info(msg.replace('*', ''))
+            slack_bot_sendtext(msg, SLACK_TRADE_UPDATES)
+
         logger.info("Market closed. Athena finished for the day.")
         return False
