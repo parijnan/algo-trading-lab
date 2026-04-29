@@ -290,5 +290,5 @@ athena_production/logs/
 # Claude Context
 CLAUDE.md
 
-# Gemini Context
-GEMINI.md
+# Artemis Phase 4 Research
+artemis_backtest_phase4/data/
