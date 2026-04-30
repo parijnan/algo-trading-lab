@@ -142,6 +142,8 @@ ENABLE_TRAILING_PROFIT  = False
 # No exit on 09:15 candle close — defer SL check to 09:16 (15-min fallback)
 NO_EXIT_BEFORE          = '09:16'
 
+QTY_FREEZE              = 1800      # Angel One qty freeze for Nifty
+
 # Slippage: used for P&L tracking only — live execution uses market orders
 SLIPPAGE_POINTS         = 1.0
 

@@ -27,7 +27,7 @@ from configs_live import (
     EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
     LOT_CALC, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
-    DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL,
+    DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL, QTY_FREEZE,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
     SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES,
     DATA_DIR, TRADE_LOGS_DIR, RISK_FREE_RATE
@@ -67,7 +67,7 @@ class Athena:
         self._exit_time     = datetime.strptime(ELM_EXIT_TIME, "%H:%M").time()
         
         # Qty freeze for Nifty on NFO
-        self._qty_freeze    = 1800
+        self._qty_freeze    = QTY_FREEZE
         
         # Register signal handlers
         signal.signal(signal.SIGINT,  self._handle_signal)

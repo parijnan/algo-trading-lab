@@ -84,8 +84,7 @@ def run_backtest():
         entry_ts = contract['entry']
         elm_ts = contract['elm_time']
         
-        if idx % 10 == 0:
-            logger.info(f"Progress: Processing contract {idx+1}/{len(contracts)} (Expiry: {exp_ts.date()})")
+        logger.info(f"Progress: Processing contract {idx+1}/{len(contracts)} (Expiry: {exp_ts.date()})")
         
         # VIX Check
         vix = vix_map.get(entry_ts.date())
@@ -183,9 +182,16 @@ def run_backtest():
         tpl = 0
         reasons = []
         for s in [pe_spread, ce_spread]:
-            if s['sell_entry'] and s['sell_exit']:
-                tpl += ((s['sell_entry'] - s['sell_exit']) + (s['buy_exit'] - s['buy_entry'])) * LOT_SIZE
-                if s['exit_reason']: reasons.append(s['exit_reason'])
+            # Ensure all prices exist before calculation
+            if all(v is not None for v in [s['sell_entry'], s['sell_exit'], s['buy_entry'], s['buy_exit']]):
+                pl = ((s['sell_entry'] - s['sell_exit']) + (s['buy_exit'] - s['buy_entry']))
+                tpl += pl * LOT_SIZE
+                if s['exit_reason']:
+                    reasons.append(s['exit_reason'])
+            elif s['status'] == 'active' or s['status'] == 'closed':
+                # If we entered but couldn't find an exit price, log a warning
+                if s['sell_entry'] is not None:
+                    logger.warning(f"  [{exp_ts.date()}] Missing exit prices for {s['type'].upper()}. PL calculation skipped for this leg.")
         
         if pe_spread['sell_entry'] or ce_spread['sell_entry']:
             summary.append({

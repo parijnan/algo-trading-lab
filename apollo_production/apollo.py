@@ -46,6 +46,7 @@ from configs_live import (
     TIME_GATE_MIN_PROFIT_PCT_BULL, TIME_GATE_MIN_PROFIT_PCT_BEAR,
     ELM_SECONDS_BEFORE_EXPIRY,
     NO_EXIT_BEFORE,
+    QTY_FREEZE,
     FO_EXCHANGE_SEGMENT,
     TRADE_UPDATE_INTERVAL,
     DRY_RUN,
@@ -139,7 +140,7 @@ class Apollo:
         self._no_exit_time  = datetime.strptime(NO_EXIT_BEFORE, "%H:%M").time()
 
         # Qty freeze for Nifty on NFO — 1800 units (36 lots of 50)
-        self._qty_freeze    = 1800
+        self._qty_freeze    = QTY_FREEZE
 
         # Per-trade log state
         self._trade_log      = []
