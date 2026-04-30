@@ -84,6 +84,9 @@ def run_backtest():
         entry_ts = contract['entry']
         elm_ts = contract['elm_time']
         
+        if idx % 10 == 0:
+            logger.info(f"Progress: Processing contract {idx+1}/{len(contracts)} (Expiry: {exp_ts.date()})")
+        
         # VIX Check
         vix = vix_map.get(entry_ts.date())
         if vix is None:
