@@ -147,4 +147,4 @@ RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibi
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'
-BACKTEST_END_DATE       = '2026-04-20'          # None = full available data
+BACKTEST_END_DATE       = None          # None = full available data

@@ -1855,10 +1855,10 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 f"Total P&L: {total_pl:+.1f} pts ({total_pl * LOT_SIZE:+,.0f})"
             )
         else:
-            total_pl = base_pl
+            total_pl = round(running_realised_pl + base_pl, 2)
             logger.info(
                 f"  BASE EXIT {sl_reason:20s} | {exit_ts} | "
-                f"P&L: {base_pl:+.1f} pts ({base_pl * LOT_SIZE:+,.0f})"
+                f"P&L: {total_pl:+.1f} pts ({total_pl * LOT_SIZE:+,.0f})"
             )
 
         # Append final exit snapshot using current leg entries
