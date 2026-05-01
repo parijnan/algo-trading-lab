@@ -108,6 +108,7 @@ Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maint
 |---|---|---|---|
 | Sensex options + all indices | Angel Broking — VPS cron via `run_sensex_downloader.sh` | Daily at 15:45 | Mid-2024 onwards |
 | Nifty options | ICICI Breeze — laptop cron via `run_nifty_downloader.sh` | Tuesdays at 23:30 | May 2019 onwards |
+| Nifty options (Real-time) | Angel Broking — Manual via `angel_nifty_backtest_data.py` | As needed | Apr 2026 onwards |
 
 ### Pipeline design
 - 1-minute OHLCV data, saved as CSV, organised by expiry date
@@ -166,10 +167,10 @@ data/
 ├── indices/                      # synced from VPS via sync_data.sh
 ├── sensex/                       # synced from VPS via sync_data.sh
 └── nifty/
-    └── options/
+    ├── options/                  # ICICI Breeze data (standard)
+    │   └── YYYY-MM-DD/
+    └── temp/                     # Angel One data (real-time backtesting)
         └── YYYY-MM-DD/
-            ├── 23000ce.csv
-            └── 23000pe.csv
 ```
 
 ---

@@ -57,5 +57,18 @@ Results are saved to `athena_backtest/data/trade_summary.csv`.
 
 **VERDICT:** Phase 2 (Static 150-pt trigger) is the definitive production version for institutional scaling.
 
+## Real-Time Backtesting
+
+A separate sandbox is provided for backtesting currently open or recently closed trades before the official ICICI Breeze data is available (which only happens after contract expiry).
+
+- **Data Source:** Angel One (`NFO` segment) normalised to match Breeze schema.
+- **Engine:** `athena_backtest/backtest_realtime.py`
+- **Config:** `athena_backtest/configs_realtime.py`
+- **Results:** `athena_backtest/data_realtime/`
+
+To run a real-time backtest:
+1. Download data: `python data_pipeline/angel_nifty_backtest_data.py`
+2. Execute backtest: `python athena_backtest/backtest_realtime.py`
+
 ---
 *Note: Phase 1 legacy configurations are preserved in `configs_phase1.py` and `backtest_phase1.py` for reference.*

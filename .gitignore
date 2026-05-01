@@ -279,6 +279,7 @@ artemis_production/logs/
 athena_backtest/data/trade_summary.csv
 athena_backtest/data/trade_logs/
 athena_backtest/data/
+athena_backtest/data_realtime/
 
 # Athena Production — runtime data
 athena_production/data/athena_state.csv
@@ -295,3 +296,6 @@ artemis_backtest_phase4/data/
 
 # Gemini Context
 GEMINI.md
+
+# Temp Data
+data_pipeline/data/nifty/temp/
