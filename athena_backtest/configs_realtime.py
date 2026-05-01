@@ -21,6 +21,7 @@ VIX_INDEX_FILE      = os.path.join(PIPELINE_DATA, "indices", "india_vix.csv")
 
 # USING TEMP PATH FOR REAL-TIME BACKTEST
 NIFTY_OPTIONS_PATH  = os.path.join(PIPELINE_DATA, "nifty", "temp")
+NIFTY_OPTIONS_FALLBACK = os.path.join(PIPELINE_DATA, "nifty", "options")
 CONTRACT_LIST_FILE  = os.path.join(REPO_ROOT, "data_pipeline", "config", "options_list_nf.csv")
 
 PRECOMPUTED_DIR     = os.path.join(REPO_ROOT, "apollo_backtest", "data")

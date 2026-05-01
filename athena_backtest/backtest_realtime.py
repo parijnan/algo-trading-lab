@@ -32,7 +32,7 @@ from apollo_backtest.technical_indicators import SupertrendIndicator
 
 from configs_realtime import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
-    NIFTY_OPTIONS_PATH, CONTRACT_LIST_FILE,
+    NIFTY_OPTIONS_PATH, NIFTY_OPTIONS_FALLBACK, CONTRACT_LIST_FILE,
     DATA_DIR, TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     ENTRY_TIME, STRIKE_STEP, BUY_LEG_MIN_DTE,
     VIX_DELTA_BANDS,
@@ -160,10 +160,18 @@ def load_option_data(expiry_date: pd.Timestamp, strike: int,
     Returns empty DataFrame if file not found.
     """
     expiry_str = expiry_date.strftime('%Y-%m-%d')
-    filepath   = os.path.join(
-        NIFTY_OPTIONS_PATH, expiry_str, f"{strike}{option_type}.csv")
+    filename   = f"{strike}{option_type}.csv"
+    
+    # Try primary (temp) path
+    filepath   = os.path.join(NIFTY_OPTIONS_PATH, expiry_str, filename)
+    
+    if not os.path.exists(filepath):
+        # Try fallback (ICICI) path
+        filepath = os.path.join(NIFTY_OPTIONS_FALLBACK, expiry_str, filename)
+
     if _debug_entry:
         logger.info(f"  [FILE-DEBUG] {_debug_entry} | loading: {filepath} | exists={os.path.exists(filepath)}")
+    
     if not os.path.exists(filepath):
         return pd.DataFrame()
     df = pd.read_csv(filepath, parse_dates=['datetime'])
