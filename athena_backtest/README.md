@@ -20,11 +20,14 @@ Phase 2 introduces asymmetric risk management to protect against runaway rallies
    - **Exit (Salvage):** If the market reverses and `Spot <= CE Sell Strike`, the hedge is sold to preserve core profit.
    - **Limit:** Maximum 1 attempt per trade to limit whipsaw costs.
 
-### Performance (Lot Size 65)
-- **Total P&L:** +157,336 ₹ (on 1 lot, 5-year backtest)
-- **Win Rate:** 63.9%
-- **Reward:Risk:** 1.42
-- **Max Drawdown (Consec):** 3 losses
+### Performance (Lot Size 65 | VIX Filter 16-25)
+- **Total P&L:** +139,201 ₹ (on 1 lot, 5-year backtest)
+- **Win Rate:** 57.9%
+- **Reward:Risk:** 1.66
+- **Max Drawdown (Consec):** 4 losses
+
+### Verification Note
+As of May 2026, the backtesting engine has been updated to strictly account for the **PE Safety Wing** cost/gain from entry to exit. Previous results (₹157k) omitted the wing cost from the summary totals. The current ₹139k figure represents the true net performance with all 5/6 legs (Base 4 + PE Wing + CE Parachute) correctly netted.
 
 ## Usage
 
