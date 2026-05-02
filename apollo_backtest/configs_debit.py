@@ -30,7 +30,7 @@ TRADE_SUMMARY_FILE  = os.path.join(os.path.dirname(__file__), "data", "trade_sum
 # ---------------------------------------------------------------------------
 # VIX Regime Filter
 # ---------------------------------------------------------------------------
-VIX_THRESHOLD           = 16.0      # Deploy strategy only when VIX > this value
+VIX_THRESHOLD           = 25.0      # Deploy strategy only when VIX > this value
 
 # ---------------------------------------------------------------------------
 # Supertrend Parameters — confirmed optimum from credit spread phase
