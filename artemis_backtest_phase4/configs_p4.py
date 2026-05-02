@@ -27,10 +27,10 @@ TRADE_SUMMARY_FILE = os.path.join(PHASE4_DIR, 'data', 'trade_summary_p4.csv')
 # Nifty Parameters
 LOT_SIZE = 75
 STRIKE_INTERVAL = 100
-EXPECTED_PREMIUM = 35 # Adjusted for 4-day theta capture
+EXPECTED_PREMIUM = 30 # Aligned with legacy
 HEDGE_POINTS = 300
 ADJUSTMENT_DISTANCE = 200
-MINIMUM_GAP = 300
+MINIMUM_GAP = 350 # Aligned with legacy
 MINIMUM_GAP_ITERATOR = 100
 
 # VIX Gates
@@ -41,13 +41,14 @@ ENABLE_WEEKEND_PARACHUTE = True # Borrowed from Athena
 PARACHUTE_DISTANCE_PERCENT = 2.0 # 2% move triggers exit or hedge
 
 # Stop Losses (Base Multipliers)
+INDEX_SL_OFFSET = 50 # Points before strike is reached (Nifty)
 SL_DTE_MULTIPLIERS = {
     'vix_lt16': {
-        4: 2.5, # Entry (Thu)
-        3: 2.2, # Fri
-        2: 1.8, # Mon (Weekend passed)
-        1: 1.5, # Tue (Expiry Day)
-        0: 1.2
+        4: 2.66, # Aligned with legacy
+        3: 2.33,
+        2: 2.00,
+        1: 1.66,
+        0: 1.33
     }
 }
 

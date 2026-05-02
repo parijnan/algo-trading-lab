@@ -25,7 +25,7 @@ from configs_p4 import (
     CONTRACTS_FILE, HOLIDAYS_FILE, TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
     ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
-    VIX_THRESHOLD, SL_DTE_MULTIPLIERS,
+    VIX_THRESHOLD, SL_DTE_MULTIPLIERS, INDEX_SL_OFFSET,
     ENABLE_WEEKEND_PARACHUTE, PARACHUTE_DISTANCE_PERCENT,
     ENABLE_TRADE_LOGS
 )
@@ -147,6 +147,22 @@ def run_backtest():
                             s['status'], s['exit_reason'], s['exit_time'] = 'closed', 'parachute', curr_ts
                     break
 
+            # Index SL Check
+            for s in [pe_spread, ce_spread]:
+                if s['status'] != 'active': continue
+                
+                triggered = False
+                if s['type'] == 'pe' and spot <= s['sell_strike'] + INDEX_SL_OFFSET:
+                    triggered = True
+                if s['type'] == 'ce' and spot >= s['sell_strike'] - INDEX_SL_OFFSET:
+                    triggered = True
+                
+                if triggered:
+                    # Exit at next open to simulate market order response
+                    s['sell_exit'] = get_next_open(s['sell_df'], curr_ts)[1]
+                    s['buy_exit'] = get_next_open(s['buy_df'], curr_ts)[1]
+                    s['status'], s['exit_reason'], s['exit_time'] = 'closed', 'index_sl', curr_ts
+
             # Logic check for SL and LTP updates
             for s in [pe_spread, ce_spread]:
                 if s['status'] != 'active': continue
@@ -157,6 +173,10 @@ def run_backtest():
                     s['sell_exit'] = get_next_open(s['sell_df'], curr_ts)[1]
                     s['buy_exit'] = get_next_open(s['buy_df'], curr_ts)[1]
                     s['status'], s['exit_reason'], s['exit_time'] = 'closed', 'sl', curr_ts
+            
+            # If both spreads are now closed, stop monitoring this week
+            if pe_spread['status'] == 'closed' and ce_spread['status'] == 'closed':
+                break
             
             # Daily SL Update
             if curr_ts.time() == dtime(15, 29):
