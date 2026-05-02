@@ -173,6 +173,19 @@ data/
         └── YYYY-MM-DD/
 ```
 
+## Consolidated Portfolio Performance (2020–2026)
+
+The following benchmark represents the "Gold Standard" performance of the lab's core strategies over a 6-year backtest (2020–2026). All results are **normalised to a ₹1.04L capital base** (Artemis base) for accurate portfolio comparison.
+
+| Strategy | VIX Regime | Trade Count | Total P&L (₹) | **Normalised P&L (₹)** | Win Rate |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **Artemis** | < 16 | 177 | ₹145,899 | **₹145,899** | ~69% |
+| **Athena** | 16 – 25 | 121 | ₹139,200 | **₹120,641** | ~58% |
+| **Apollo** | > 25 | 18 | ₹46,160 | **₹24,003** | ~61% |
+| **Total** | | **316** | **₹331,259** | **₹290,543** | **~64%** |
+
+*Note: Apollo results are based on the latest 15-min Supertrend logic with a strict VIX > 25 gate. Artemis results include the Nifty reruns (2020–2025) and Sensex live phase (2025–Present).*
+
 ---
 
 ## Phase 4 Roadmap: Strategic Convergence
