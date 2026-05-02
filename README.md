@@ -175,7 +175,7 @@ data/
 
 ## Consolidated Portfolio Performance (2020–2026)
 
-The following benchmark represents the "Gold Standard" performance of the lab's core strategies over a 6-year backtest (2020–2026). All results are **normalised to a ₹1.04L capital base** (Artemis base) for accurate portfolio comparison.
+The following benchmark represents the \"Gold Standard\" performance of the lab's core strategies over a 6-year backtest (**2019-12-31 to 2026-04-20**). All results are **normalised to a ₹1.04L capital base** (Artemis base) for accurate portfolio comparison.
 
 | Strategy | VIX Regime | Trade Count | Total P&L (₹) | **Normalised P&L (₹)** | Win Rate |
 | :--- | :--- | :---: | :---: | :---: | :---: |
@@ -184,7 +184,19 @@ The following benchmark represents the "Gold Standard" performance of the lab's 
 | **Apollo** | > 25 | 18 | ₹46,160 | **₹24,003** | ~61% |
 | **Total** | | **316** | **₹331,259** | **₹290,543** | **~64%** |
 
-*Note: Apollo results are based on the latest 15-min Supertrend logic with a strict VIX > 25 gate. Artemis results include the Nifty reruns (2020–2025) and Sensex live phase (2025–Present).*
+### Risk & Portfolio Metrics
+*Calculated over the full 6-year unified equity curve.*
+
+| Metric | Unified Portfolio | Nifty 50 (Benchmark) |
+| :--- | :---: | :---: |
+| **Sharpe Ratio** | **1.19** | 0.25 |
+| **Sortino Ratio** | **2.80** | 0.34 |
+| **Max Drawdown** | **-4.62%** | -38.4% (Mar 2020) |
+| **Recovery Speed** | **77 Days** | ~220 Days |
+| **Annualised Vol** | **8.54%** | 14.78% |
+| **Portfolio Beta** | **0.01** | 1.00 |
+
+*Note: Apollo results are based on the latest 15-min Supertrend logic with a strict VIX > 25 gate. All metrics account for idle time and assume a 5% risk-free rate.*
 
 ---
 
