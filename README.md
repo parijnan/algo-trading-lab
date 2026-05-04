@@ -4,15 +4,16 @@ A personal algorithmic trading laboratory for backtesting, optimising, and autom
 
 ## Strategies
 
-### [Artemis](./artemis_production/) — Sensex Iron Condor
-A market-neutral credit spread strategy trading a weekly Sensex Iron Condor, running Monday to Thursday. Sells OTM options on both sides and buys further OTM options as hedges. Deployed when India VIX < 16.
+### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
+A market-neutral credit spread strategy that starts as a weekly Sensex Iron Condor. During trends, it dynamically transforms into a **directional credit spread** by exiting the tested side and reinforcing the winning side with rolled strikes and additional lots (position sizing scales up to 150% of the base).
 
 | | |
 |---|---|
 | Instrument | Sensex weekly options |
-| Structure | Iron Condor (PE spread + CE spread) |
+| Structure | Iron Condor → Reinforced Directional Spread |
 | Entry | Monday 10:30 AM |
 | Expiry | Thursday |
+| Adjustments | Dynamic strike rolling + lot reinforcement (1.5x) |
 | Broker | Angel Broking (SmartConnect) |
 | Status | Live |
 
@@ -229,7 +230,7 @@ algo-trading-lab/
 │   ├── user_credentials.csv        # not in git
 │   └── holidays.csv
 ├── logs/                           # Leto session logs — gitignored, created at runtime
-├── artemis_production/             # Live Sensex iron condor strategy
+├── artemis_production/             # Live Sensex dynamic iron condor
 │   ├── README.md
 │   ├── artemis.py
 │   ├── iron_condor.py
@@ -322,4 +323,5 @@ algo-trading-lab/
         ├── sensex/
         └── nifty/
             └── options/
+```��─ options/
 ```

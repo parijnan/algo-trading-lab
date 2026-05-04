@@ -1,10 +1,10 @@
-# Artemis Production — Sensex Iron Condor (Live Execution)
+# Artemis Production — Sensex Dynamic Iron Condor (Live Execution)
 
-Live execution module for the Artemis iron condor strategy.
+Live execution module for the Artemis strategy.
 Part of the **Algo Trading Lab** project.
 
-Deployed when India VIX < 16. Sells a weekly Sensex iron condor on Monday at 10:30 AM
-and manages it through to Thursday expiry.
+Deployed when India VIX < 16. Sells a weekly Sensex **Iron Condor** on Monday at 10:30 AM.
+If the market trends and a side is tested, the strategy dynamically transforms into a **reinforced directional credit spread** by exiting the losing side and rolling/reinforcing the winning side. It manages the position through to Thursday expiry.
 
 ## Module structure
 
