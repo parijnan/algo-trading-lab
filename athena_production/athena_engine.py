@@ -134,7 +134,7 @@ class Athena:
         # 2. Buy Expiry: Monthly expiry (usually the last Thursday/Tuesday of the month)
         buy_expiry = None
         for exp in all_expiries:
-            if exp >= sell_expiry + timedelta(days=BUY_LEG_MIN_DTE):
+            if exp >= today + timedelta(days=BUY_LEG_MIN_DTE):
                 idx = all_expiries.index(exp)
                 if idx + 1 < len(all_expiries):
                     next_exp = all_expiries[idx+1]
@@ -305,12 +305,13 @@ class Athena:
                         if ft > fill_time: fill_time = ft
             
             avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-            return avg_price, fill_time
+            filled_lots = int(total_qty // LOT_SIZE)
+            return avg_price, filled_lots, fill_time
         except Exception as e:
             handle_exception(e)
-            return 0.0, datetime.now()
+            return 0.0, 0, datetime.now()
 
-    def _calculate_lots(self):
+    def _calculate_lots(self, strikes_dict=None):
         """
         Calculate the number of lots to trade.
         LOT_CALC = False: return LOT_COUNT directly.
@@ -332,8 +333,27 @@ class Athena:
                 # 1. Limit by total margin (LOT_CAPITAL per lot)
                 lots_by_capital = int(total_power // LOT_CAPITAL)
                 
-                # 2. Limit by available pure cash (CASH_PER_LOT_REQUIRED per lot)
-                lots_by_cash    = int(pure_cash // CASH_PER_LOT_REQUIRED)
+                # 2. Limit by available pure cash
+                # If strikes_dict provided, use actual LTPs to estimate debit.
+                # Else fallback to CASH_PER_LOT_REQUIRED.
+                debit_est = CASH_PER_LOT_REQUIRED
+                if strikes_dict:
+                    try:
+                        # Fetch LTPs for all 5 legs to estimate total debit
+                        # Longs (CE/PE/Wing) - Shorts (CE/PE)
+                        lp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['ce_buy_strike'], 'ce', strikes_dict['buy_expiry'])) or 300
+                        pp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_buy_strike'], 'pe', strikes_dict['buy_expiry'])) or 300
+                        wp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_wing_strike'], 'pe', strikes_dict['buy_expiry'])) or 50
+                        ls = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['ce_sell_strike'], 'ce', strikes_dict['sell_expiry'])) or 100
+                        ps = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_sell_strike'], 'pe', strikes_dict['sell_expiry'])) or 100
+                        
+                        debit_est = (lp + pp + wp - ls - ps) * LOT_SIZE
+                        debit_est *= 1.1 # Add 10% safety buffer for market orders
+                        logger.info(f"Dynamic Debit Estimate: {debit_est:,.0f} Rs per lot")
+                    except:
+                        pass
+                
+                lots_by_cash = int(pure_cash // debit_est)
                 
                 # Final lots is the bottleneck of the two
                 lots = max(1, min(lots_by_capital, lots_by_cash))
@@ -350,9 +370,11 @@ class Athena:
 
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
-        lots = self._calculate_lots()
+        lots = self._calculate_lots(strikes_dict)
         self.state.wings_enabled = ENABLE_SAFETY_WINGS
         
+        actual_lots = lots
+
         # -------------------------------------------------------------------
         # STEP 1: Buy Core Monthly Longs (Establish Calendar Spread)
         # -------------------------------------------------------------------
@@ -371,11 +393,19 @@ class Athena:
 
         # Confirm Long fills
         for key, info in long_orders.items():
-            fill, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
+            fill, filled_q, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
             setattr(self.state, f"{key}_strike", info['strike'])
             setattr(self.state, f"{key}_token",  info['tok'])
             setattr(self.state, f"{key}_symbol", info['sym'])
             setattr(self.state, f"{key}_entry",  fill)
+            # Update actual lots based on the first major leg's fill
+            if filled_q < actual_lots: actual_lots = filled_q
+
+        # If 0 lots were filled on longs, abort
+        if actual_lots == 0:
+            logger.error("No long legs filled. Aborting entry.")
+            clear_trade_fields(self.state)
+            return False
 
         # -------------------------------------------------------------------
         # STEP 2: Sell Core Weekly Shorts (Collect Premium / Release Margin)
@@ -387,12 +417,12 @@ class Athena:
             exp    = strikes_dict['sell_expiry']
             sym, tok = self._fetch_symbol_and_token(strike, side, exp)
             
-            oids = self._place_order('SELL', sym, tok, lots)
+            oids = self._place_order('SELL', sym, tok, actual_lots)
             sell_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
 
         # Confirm Sell fills
         for key, info in sell_orders.items():
-            fill, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
+            fill, filled_q, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
             setattr(self.state, f"{key}_strike", info['strike'])
             setattr(self.state, f"{key}_token",  info['tok'])
             setattr(self.state, f"{key}_symbol", info['sym'])
@@ -408,8 +438,8 @@ class Athena:
             sym, tok = self._fetch_symbol_and_token(strike, 'pe', exp)
             
             if sym:
-                oids = self._place_order('BUY', sym, tok, lots)
-                fill, ft = self._fetch_order_details(oids, tok, sym)
+                oids = self._place_order('BUY', sym, tok, actual_lots)
+                fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
                 
                 setattr(self.state, f"{key}_strike", strike)
                 setattr(self.state, f"{key}_token",  tok)
@@ -420,7 +450,7 @@ class Athena:
 
         # Finalise state
         self.state.status = 'in_trade'
-        self.state.lots = lots
+        self.state.lots = actual_lots
         self.state.entry_time = datetime.now().isoformat()
         
         # Calculate full exit timestamp (robust against short-DTE weeks)
