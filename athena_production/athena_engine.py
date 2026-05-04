@@ -539,7 +539,7 @@ class Athena:
         pl_pts += self.state.running_realised_pl
         pl_pts = round(pl_pts, 2)
 
-        pl_rs = round(pl_pts * lots * LOT_SIZE, 2)
+        pl_rs_per_lot = round(pl_pts * LOT_SIZE, 2)
         
         # Final log and slack
         self._append_trade_log_row(exit_reason=reason, exit_fills=exit_fills)
@@ -561,7 +561,7 @@ class Athena:
             msg += f"HEDGE P&L: {self.state.running_realised_pl:+.1f} pts\n"
 
         msg += f"----------------------------------\n" \
-               f"Final P&L: {pl_pts:+.1f} pts ({pl_rs:+,.0f} Rs)"
+               f"Final P&L: {pl_pts:+.1f} pts ({pl_rs_per_lot:+,.0f} Rs/lot)"
         
         slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
         
@@ -844,3 +844,4 @@ class Athena:
 
         logger.info("Market closed. Athena finished for the day.")
         return False
+  return False

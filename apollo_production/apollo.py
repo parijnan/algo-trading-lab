@@ -946,21 +946,21 @@ class Apollo:
         pl_points = round(
             (buy_exit_fill  - self.state.buy_entry) -
             (sell_exit_fill - self.state.sell_entry), 2)
-        pl_rupees = round(pl_points * lots * LOT_SIZE, 2)
+        pl_rupees_per_lot = round(pl_points * LOT_SIZE, 2)
 
         logger.info(
-            f"Exit P&L: {pl_points:+.2f} pts ({pl_rupees:+,.0f} Rs)  "
+            f"Exit P&L: {pl_points:+.2f} pts ({pl_rupees_per_lot * lots:+,.0f} Rs)  "
             f"lots={lots}  reason={reason}")
 
         self._append_trade_log_row(
             exit_reason=reason,
             realised_pl_pts=pl_points,
-            realised_pl_rs=pl_rupees)
+            realised_pl_rs=round(pl_points * lots * LOT_SIZE, 2))
         self._save_trade_log()
 
         self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
 
-        self._log_trade(reason, buy_exit_fill, sell_exit_fill, pl_points, pl_rupees)
+        self._log_trade(reason, buy_exit_fill, sell_exit_fill, pl_points, round(pl_points * lots * LOT_SIZE, 2))
 
         slack_bot_sendtext(
             f"*Apollo* EXIT {reason.upper()} | "
@@ -968,7 +968,7 @@ class Apollo:
             f"Buy  {self.state.buy_strike} exit @ {buy_exit_fill:.1f} | "
             f"Sell {self.state.sell_strike} exit @ {sell_exit_fill:.1f} | "
             f"Lots: {lots} | "
-            f"P&L: {pl_points:+.1f} pts ({pl_rupees:+,.0f} Rs)",
+            f"P&L: {pl_points:+.1f} pts ({pl_rupees_per_lot:+,.0f} Rs/lot)",
             SLACK_TRADE_ALERTS)
 
         clear_trade_fields(self.state)
