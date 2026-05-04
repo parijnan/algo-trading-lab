@@ -324,11 +324,15 @@ class Athena:
         while True:
             try:
                 _increment_poll()
-                rms = self.obj.rmsLimit()['data']
+                rms = self.obj.rmsLimit()["data"]
                 
-                total_power = float(rms['availablecash'])
-                collateral  = float(rms['collateral'])
-                pure_cash   = round(total_power - collateral, 2)
+                total_power = float(rms["availablecash"])
+                # Using "cashbalance" for pure cash is safer as it represents unutilized cash
+                pure_cash   = float(rms.get("cashbalance", 0.0))
+                if pure_cash <= 0:
+                    # Fallback if cashbalance is missing/zero
+                    collateral  = float(rms.get("collateral", 0.0))
+                    pure_cash   = round(total_power - collateral, 2)
 
                 # 1. Limit by total margin (LOT_CAPITAL per lot)
                 lots_by_capital = int(total_power // LOT_CAPITAL)
@@ -341,14 +345,14 @@ class Athena:
                     try:
                         # Fetch LTPs for all 5 legs to estimate total debit
                         # Longs (CE/PE/Wing) - Shorts (CE/PE)
-                        lp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['ce_buy_strike'], 'ce', strikes_dict['buy_expiry'])) or 300
-                        pp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_buy_strike'], 'pe', strikes_dict['buy_expiry'])) or 300
-                        wp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_wing_strike'], 'pe', strikes_dict['buy_expiry'])) or 50
-                        ls = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['ce_sell_strike'], 'ce', strikes_dict['sell_expiry'])) or 100
-                        ps = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict['pe_sell_strike'], 'pe', strikes_dict['sell_expiry'])) or 100
+                        lp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["ce_buy_strike"], "ce", strikes_dict["buy_expiry"])) or 300
+                        pp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["pe_buy_strike"], "pe", strikes_dict["buy_expiry"])) or 300
+                        wp = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["pe_wing_strike"], "pe", strikes_dict["buy_expiry"])) or 50
+                        ls = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["ce_sell_strike"], "ce", strikes_dict["sell_expiry"])) or 100
+                        ps = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["pe_sell_strike"], "pe", strikes_dict["sell_expiry"])) or 100
                         
                         debit_est = (lp + pp + wp - ls - ps) * LOT_SIZE
-                        debit_est *= 1.1 # Add 10% safety buffer for market orders
+                        debit_est *= 1.15 # Add 15% safety buffer for market orders
                         logger.info(f"Dynamic Debit Estimate: {debit_est:,.0f} Rs per lot")
                     except:
                         pass
@@ -370,83 +374,83 @@ class Athena:
 
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
-        lots = self._calculate_lots(strikes_dict)
+        target_lots = self._calculate_lots(strikes_dict)
         self.state.wings_enabled = ENABLE_SAFETY_WINGS
         
-        actual_lots = lots
+        actual_lots = target_lots
 
         # -------------------------------------------------------------------
         # STEP 1: Buy Core Monthly Longs (Establish Calendar Spread)
         # -------------------------------------------------------------------
-        long_orders = {}
-        for side in ['ce', 'pe']:
+        for side in ["ce", "pe"]:
             key = f"{side}_buy"
-            strike = strikes_dict[f'{key}_strike']
-            exp    = strikes_dict['buy_expiry']
+            strike = strikes_dict[f"{key}_strike"]
+            exp    = strikes_dict["buy_expiry"]
             sym, tok = self._fetch_symbol_and_token(strike, side, exp)
             if not sym:
                 logger.error(f"Could not fetch symbol for {key} strike {strike}")
                 return False
             
-            oids = self._place_order('BUY', sym, tok, lots)
-            long_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
-
-        # Confirm Long fills
-        for key, info in long_orders.items():
-            fill, filled_q, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
-            setattr(self.state, f"{key}_strike", info['strike'])
-            setattr(self.state, f"{key}_token",  info['tok'])
-            setattr(self.state, f"{key}_symbol", info['sym'])
+            oids = self._place_order("BUY", sym, tok, actual_lots)
+            fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
+            
+            setattr(self.state, f"{key}_strike", strikes_dict[f"{key}_strike"])
+            setattr(self.state, f"{key}_token",  tok)
+            setattr(self.state, f"{key}_symbol", sym)
             setattr(self.state, f"{key}_entry",  fill)
-            # Update actual lots based on the first major leg's fill
-            if filled_q < actual_lots: actual_lots = filled_q
+            
+            # Cascading fill verification: reduce actual_lots for subsequent legs if partial fill
+            if filled_q < actual_lots:
+                logger.warning(f"Partial fill on {key}: {filled_q} < {actual_lots}. Down-adjusting subsequent legs.")
+                actual_lots = filled_q
 
         # If 0 lots were filled on longs, abort
         if actual_lots == 0:
             logger.error("No long legs filled. Aborting entry.")
-            clear_trade_fields(self.state)
+            clear_trade_fields(self.state); save_state(self.state)
             return False
 
         # -------------------------------------------------------------------
         # STEP 2: Sell Core Weekly Shorts (Collect Premium / Release Margin)
         # -------------------------------------------------------------------
-        sell_orders = {}
-        for side in ['ce', 'pe']:
+        for side in ["ce", "pe"]:
             key = f"{side}_sell"
-            strike = strikes_dict[f'{key}_strike']
-            exp    = strikes_dict['sell_expiry']
+            strike = strikes_dict[f"{key}_strike"]
+            exp    = strikes_dict["sell_expiry"]
             sym, tok = self._fetch_symbol_and_token(strike, side, exp)
             
-            oids = self._place_order('SELL', sym, tok, actual_lots)
-            sell_orders[key] = {'oids': oids, 'sym': sym, 'tok': tok, 'strike': strike}
-
-        # Confirm Sell fills
-        for key, info in sell_orders.items():
-            fill, filled_q, ft = self._fetch_order_details(info['oids'], info['tok'], info['sym'])
-            setattr(self.state, f"{key}_strike", info['strike'])
-            setattr(self.state, f"{key}_token",  info['tok'])
-            setattr(self.state, f"{key}_symbol", info['sym'])
+            oids = self._place_order("SELL", sym, tok, actual_lots)
+            fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
+            
+            setattr(self.state, f"{key}_strike", strikes_dict[f"{key}_strike"])
+            setattr(self.state, f"{key}_token",  tok)
+            setattr(self.state, f"{key}_symbol", sym)
             setattr(self.state, f"{key}_entry",  fill)
+            
+            if filled_q < actual_lots:
+                logger.warning(f"Partial fill on {key}: {filled_q} < {actual_lots}. Down-adjusting.")
+                actual_lots = filled_q
 
         # -------------------------------------------------------------------
         # STEP 3: Buy Safety Wing (Financed by weekly premium)
         # -------------------------------------------------------------------
         if ENABLE_SAFETY_WINGS:
-            key = 'pe_wing'
-            strike = strikes_dict[f'{key}_strike']
-            exp    = strikes_dict['buy_expiry']
-            sym, tok = self._fetch_symbol_and_token(strike, 'pe', exp)
+            key = "pe_wing"
+            strike = strikes_dict[f"{key}_strike"]
+            exp    = strikes_dict["buy_expiry"]
+            sym, tok = self._fetch_symbol_and_token(strike, "pe", exp)
             
             if sym:
-                oids = self._place_order('BUY', sym, tok, actual_lots)
+                oids = self._place_order("BUY", sym, tok, actual_lots)
                 fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
                 
-                setattr(self.state, f"{key}_strike", strike)
+                setattr(self.state, f"{key}_strike", strikes_dict[f"{key}_strike"])
                 setattr(self.state, f"{key}_token",  tok)
                 setattr(self.state, f"{key}_symbol", sym)
                 setattr(self.state, f"{key}_entry",  fill)
-            else:
-                logger.warning(f"Could not fetch symbol for {key} strike {strike}. Proceeding without wing.")
+                
+                if filled_q < actual_lots:
+                    actual_lots = filled_q
 
         # Finalise state
         self.state.status = 'in_trade'
