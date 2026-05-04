@@ -338,8 +338,7 @@ class Athena:
                 lots_by_capital = int(total_power // LOT_CAPITAL)
                 
                 # 2. Limit by available pure cash
-                # If strikes_dict provided, use actual LTPs to estimate debit.
-                # Else fallback to CASH_PER_LOT_REQUIRED.
+                # Use the HIGHER of the hardcoded requirement and the dynamic estimate
                 debit_est = CASH_PER_LOT_REQUIRED
                 if strikes_dict:
                     try:
@@ -351,9 +350,11 @@ class Athena:
                         ls = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["ce_sell_strike"], "ce", strikes_dict["sell_expiry"])) or 100
                         ps = self._get_ltp(EXCHANGE_NFO, *self._fetch_symbol_and_token(strikes_dict["pe_sell_strike"], "pe", strikes_dict["sell_expiry"])) or 100
                         
-                        debit_est = (lp + pp + wp - ls - ps) * LOT_SIZE
-                        debit_est *= 1.15 # Add 15% safety buffer for market orders
-                        logger.info(f"Dynamic Debit Estimate: {debit_est:,.0f} Rs per lot")
+                        market_debit = (lp + pp + wp - ls - ps) * LOT_SIZE
+                        market_debit *= 1.15 # Add 15% safety buffer
+                        
+                        debit_est = max(CASH_PER_LOT_REQUIRED, market_debit)
+                        logger.info(f"Debit Estimate: {debit_est:,.0f} Rs per lot (Market: {market_debit:,.0f})")
                     except:
                         pass
                 
