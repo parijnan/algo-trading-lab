@@ -15,39 +15,60 @@ from datetime import datetime
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_ERRORS_CHANNEL,
-    DATA_DIR,
+    DATA_DIR, ORDER_LIMIT
 )
 
 # ---------------------------------------------------------------------------
 # Rate limit counters
 # ---------------------------------------------------------------------------
-_poll_counter  = 0
+_rms_poll_counter = 0
+_order_book_poll_counter = 0
+_ltp_poll_counter = 0
 _order_counter = 0
-_POLL_LIMIT    = 10
-_ORDER_LIMIT   = 9
+
+_RMS_POLL_LIMIT = 2
+_ORDER_BOOK_POLL_LIMIT = 1
+_LTP_POLL_LIMIT = 10
+_ORDER_LIMIT = ORDER_LIMIT
 
 
-def _increment_poll():
-    global _poll_counter, _order_counter
-    _poll_counter += 1
-    if _poll_counter >= _POLL_LIMIT:
+def _increment_rms_poll():
+    global _rms_poll_counter
+    _rms_poll_counter += 1
+    if _rms_poll_counter >= _RMS_POLL_LIMIT:
         sleep(1)
-        _poll_counter = 0
-        _order_counter = 0
+        _reset_counters()
+
+
+def _increment_order_book_poll():
+    global _order_book_poll_counter
+    _order_book_poll_counter += 1
+    if _order_book_poll_counter >= _ORDER_BOOK_POLL_LIMIT:
+        sleep(1)
+        _reset_counters()
+
+
+def _increment_ltp_poll():
+    global _ltp_poll_counter
+    _ltp_poll_counter += 1
+    if _ltp_poll_counter >= _LTP_POLL_LIMIT:
+        sleep(1)
+        _reset_counters()
 
 
 def _increment_order():
-    global _poll_counter, _order_counter
+    global _order_counter
     _order_counter += 1
     if _order_counter >= _ORDER_LIMIT:
         sleep(1)
-        _poll_counter = 0
-        _order_counter = 0
+        _reset_counters()
 
 
 def _reset_counters():
-    global _poll_counter, _order_counter
-    _poll_counter = 0
+    global _rms_poll_counter, _order_book_poll_counter, _ltp_poll_counter, _order_counter
+    _rms_poll_counter = 0
+    _order_book_poll_counter = 0
+    _ltp_poll_counter = 0
     _order_counter = 0
 
 
