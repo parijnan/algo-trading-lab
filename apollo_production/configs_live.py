@@ -149,6 +149,13 @@ SLIPPAGE_POINTS         = 1.0
 
 # Order management
 ORDER_TIMEOUT_SEC       = 10        # Seconds to wait for order fill confirmation
+ORDER_LIMIT             = 10        # Orders per second limit
+
+# Rate Limits (Polls per second)
+RMS_POLL_LIMIT        = 2
+ORDER_BOOK_POLL_LIMIT = 1
+LTP_POLL_LIMIT        = 10
+CANDLE_POLL_LIMIT     = 3
 CANDLE_FETCH_RETRIES        = 5     # Extra retries if candle data unavailable
 CANDLE_FETCH_RETRY_INTERVAL = 10    # Seconds between retries
 

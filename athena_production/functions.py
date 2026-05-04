@@ -15,7 +15,8 @@ from datetime import datetime
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_ERRORS_CHANNEL,
-    DATA_DIR, ORDER_LIMIT
+    DATA_DIR, ORDER_LIMIT,
+    RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
 
 # ---------------------------------------------------------------------------
@@ -24,18 +25,14 @@ from configs_live import (
 _rms_poll_counter = 0
 _order_book_poll_counter = 0
 _ltp_poll_counter = 0
+_candle_poll_counter = 0
 _order_counter = 0
-
-_RMS_POLL_LIMIT = 2
-_ORDER_BOOK_POLL_LIMIT = 1
-_LTP_POLL_LIMIT = 10
-_ORDER_LIMIT = ORDER_LIMIT
 
 
 def _increment_rms_poll():
     global _rms_poll_counter
     _rms_poll_counter += 1
-    if _rms_poll_counter >= _RMS_POLL_LIMIT:
+    if _rms_poll_counter >= RMS_POLL_LIMIT:
         sleep(1)
         _reset_counters()
 
@@ -43,7 +40,7 @@ def _increment_rms_poll():
 def _increment_order_book_poll():
     global _order_book_poll_counter
     _order_book_poll_counter += 1
-    if _order_book_poll_counter >= _ORDER_BOOK_POLL_LIMIT:
+    if _order_book_poll_counter >= ORDER_BOOK_POLL_LIMIT:
         sleep(1)
         _reset_counters()
 
@@ -51,7 +48,15 @@ def _increment_order_book_poll():
 def _increment_ltp_poll():
     global _ltp_poll_counter
     _ltp_poll_counter += 1
-    if _ltp_poll_counter >= _LTP_POLL_LIMIT:
+    if _ltp_poll_counter >= LTP_POLL_LIMIT:
+        sleep(1)
+        _reset_counters()
+
+
+def _increment_candle_poll():
+    global _candle_poll_counter
+    _candle_poll_counter += 1
+    if _candle_poll_counter >= CANDLE_POLL_LIMIT:
         sleep(1)
         _reset_counters()
 
@@ -59,7 +64,7 @@ def _increment_ltp_poll():
 def _increment_order():
     global _order_counter
     _order_counter += 1
-    if _order_counter >= _ORDER_LIMIT:
+    if _order_counter >= ORDER_LIMIT:
         sleep(1)
         _reset_counters()
 

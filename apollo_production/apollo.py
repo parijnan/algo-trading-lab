@@ -56,44 +56,16 @@ from configs_live import (
 )
 from websocket_feed import ApolloFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN
 from supertrend import SupertrendManager
-from state import ApolloState, load_state, save_state, init_state, clear_trade_fields
-from functions import slack_bot_sendtext, handle_exception
+from state import ApolloState, load_state, save_state, clear_trade_fields
+from functions import (
+    slack_bot_sendtext, handle_exception,
+    _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
+    _increment_candle_poll, _increment_order, _reset_counters
+)
 from logger_setup import get_logger
 
+
 logger = get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Rate limit counters — module-level, same pattern as Artemis functions.py
-# ---------------------------------------------------------------------------
-_poll_counter  = 0
-_order_counter = 0
-_POLL_LIMIT    = 10
-_ORDER_LIMIT   = 9
-
-
-def _increment_poll():
-    global _poll_counter, _order_counter
-    _poll_counter += 1
-    if _poll_counter >= _POLL_LIMIT:
-        sleep(1)
-        _poll_counter = 0
-        _order_counter = 0
-
-
-def _increment_order():
-    global _poll_counter, _order_counter
-    _order_counter += 1
-    if _order_counter >= _ORDER_LIMIT:
-        sleep(1)
-        _poll_counter = 0
-        _order_counter = 0
-
-
-def _reset_counters():
-    global _poll_counter, _order_counter
-    _poll_counter = 0
-    _order_counter = 0
-
 
 # Trade log directory
 _TRADE_LOGS_DIR = os.path.join(DATA_DIR, "trade_logs")
@@ -671,8 +643,9 @@ class Apollo:
 
         while True:
             try:
-                _increment_poll()
                 rms = self.obj.rmsLimit()['data']
+                _increment_rms_poll()
+
                 
                 total_power = float(rms['availablecash'])
                 collateral  = float(rms['collateral'])
@@ -1042,7 +1015,7 @@ class Apollo:
         while True:
             try:
                 self.order_book = self.obj.orderBook()
-                _increment_poll()
+                _increment_order_book_poll()
                 break
             except Exception as e:
                 handle_exception(e)
@@ -1112,7 +1085,7 @@ class Apollo:
             try:
                 ltp = self.obj.ltpData(
                     FO_EXCHANGE_SEGMENT, symbol, token)['data']['ltp']
-                _increment_poll()
+                _increment_ltp_poll()
                 if ltp is not None:
                     return float(ltp)
             except Exception as e:
@@ -1151,8 +1124,9 @@ class Apollo:
         for attempt in range(3):
             try:
                 response = self.obj.getCandleData(params)
-                _increment_poll()
+                _increment_candle_poll()
                 data = response.get('data', [])
+
                 if data:
                     candles = []
                     for row in data:

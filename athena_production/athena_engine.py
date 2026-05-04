@@ -36,7 +36,7 @@ from state import AthenaState, load_state, save_state, clear_trade_fields
 from functions import (
     slack_bot_sendtext, handle_exception, 
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
-    _increment_order, _reset_counters
+    _increment_candle_poll, _increment_order, _reset_counters
 )
 from logger_setup import get_logger
 
@@ -100,9 +100,10 @@ class Athena:
         return None
 
     def _get_ltp(self, exchange, symbol, token):
-        _increment_ltp_poll()
         try:
-            return float(self.obj.ltpData(exchange, symbol, token)['data']['ltp'])
+            ltp = float(self.obj.ltpData(exchange, symbol, token)['data']['ltp'])
+            _increment_ltp_poll()
+            return ltp
         except Exception as e:
             logger.error(f"LTP fetch failed for {symbol}: {e}")
             return None
@@ -226,8 +227,8 @@ class Athena:
             }
             while True:
                 try:
-                    _increment_order()
                     response = self.obj.placeOrderFullResponse(orderparams)
+                    _increment_order()
                     if response['message'] == 'SUCCESS':
                         oid = response['data']['orderid']
                         orderid_list.append(oid)
@@ -246,8 +247,8 @@ class Athena:
             return fill, 0, datetime.now()
         total_qty = 0; total_val = 0.0; fill_time = datetime.now()
         try:
-            _increment_order_book_poll()
             book = self.obj.orderBook()['data']
+            _increment_order_book_poll()
             for oid in orderid_list:
                 for order in book:
                     if order['orderid'] == oid:
@@ -265,8 +266,8 @@ class Athena:
         if not LOT_CALC: return LOT_COUNT
         while True:
             try:
-                _increment_rms_poll()
                 rms = self.obj.rmsLimit()["data"]
+                _increment_rms_poll()
                 total_power = float(rms["availablecash"])
                 pure_cash = float(rms.get("cashbalance", 0.0))
                 if pure_cash <= 0:

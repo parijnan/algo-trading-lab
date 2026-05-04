@@ -96,6 +96,13 @@ QTY_FREEZE          = 1800          # Angel One qty freeze for Nifty
 ORDER_TIMEOUT_SEC   = 10            # Seconds to wait for order fill
 ORDER_LIMIT         = 10            # Orders per second limit
 
+# Rate Limits (Polls per second)
+RMS_POLL_LIMIT        = 2
+ORDER_BOOK_POLL_LIMIT = 1
+LTP_POLL_LIMIT        = 10
+CANDLE_POLL_LIMIT     = 3
+
+
 # Polling interval in seconds (REST polling instead of WebSockets)
 # Every 20 seconds: fetch LTPs, update log, send Slack (if interval reached).
 TRADE_UPDATE_INTERVAL = 20
