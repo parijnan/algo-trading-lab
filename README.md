@@ -323,5 +323,4 @@ algo-trading-lab/
         ├── sensex/
         └── nifty/
             └── options/
-```��─ options/
 ```
