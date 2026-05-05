@@ -751,6 +751,9 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
     pe_emer_df     = None
     pe_emer_attempts = 0
 
+    pe_wing_active = True if pe_wing_df is not None else False
+    current_pe_wing_entry = pe_wing_entry
+
     sl_hit_ts        = None
     sl_hit_reason    = None
     adj_trigger_ts   = None
@@ -820,6 +823,14 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                         pe_emer_attempts += 1
                         logger.info(f"  [EMERGENCY] Bought Parachute PE {pe_emer_strike} @ {pe_emer_entry:.1f} at {ts} | spot={spot:.0f}")
 
+                        # Salvage: Exit PE Wing when parachute is deployed
+                        if pe_wing_active:
+                            exit_pr = apply_slippage(running_pe_wing, is_buy=False)
+                            realised_wing = round(exit_pr - current_pe_wing_entry, 2)
+                            window_realised_pl += realised_wing
+                            pe_wing_active = False
+                            logger.info(f"  [SALVAGE] Exited PE Wing {pe_wing_strike} @ {exit_pr:.1f} | P&L: {realised_wing:.1f}")
+
             if pe_emer_active:
                 v = get_option_price(pe_emer_df, ts, 'close')
                 if v is not None: pe_emer_ltp = v
@@ -832,13 +843,24 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                     pe_emer_entry  = 0.0
                     pe_emer_ltp    = 0.0
 
+                    # Re-buy: Bring back the PE Wing when parachute is exited
+                    if pe_wing_df is not None and not pe_wing_active:
+                        v_wing = get_option_price(pe_wing_df, ts, 'close')
+                        if v_wing is not None:
+                            entry_pr = apply_slippage(v_wing, is_buy=True)
+                            current_pe_wing_entry = entry_pr
+                            running_pe_wing = v_wing
+                            pe_wing_active = True
+                            logger.info(f"  [SALVAGE] Re-bought PE Wing {pe_wing_strike} @ {entry_pr:.1f}")
+
         ce_unrealised_pl = calc_strategy_pl(ce_sell_entry, running_ce_sell,
                                              ce_buy_entry,  running_ce_buy,
                                              ce_wing_entry, running_ce_wing,
                                              emer_entry, emer_ltp)
         pe_unrealised_pl = calc_strategy_pl(pe_sell_entry, running_pe_sell,
                                              pe_buy_entry,  running_pe_buy,
-                                             pe_wing_entry, running_pe_wing,
+                                             current_pe_wing_entry if pe_wing_active else 0.0,
+                                             running_pe_wing if pe_wing_active else 0.0,
                                              pe_emer_entry, pe_emer_ltp)
         combined_unrealised_pl = round(ce_unrealised_pl + pe_unrealised_pl, 2)
         cumulative_pl = round(running_realised_pl + window_realised_pl + combined_unrealised_pl, 2)
@@ -856,7 +878,8 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             total_net_debit, max_theoretical_profit,
             running_realised_pl=(running_realised_pl + window_realised_pl),
             ce_wing_ltp=running_ce_wing, ce_wing_entry=ce_wing_entry,
-            pe_wing_ltp=running_pe_wing, pe_wing_entry=pe_wing_entry,
+            pe_wing_ltp=running_pe_wing if pe_wing_active else 0.0,
+            pe_wing_entry=current_pe_wing_entry if pe_wing_active else 0.0,
             ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
             emer_strike=emer_strike, emer_entry=emer_entry, emer_ltp=emer_ltp,
             pe_emer_strike=pe_emer_strike, pe_emer_entry=pe_emer_entry, pe_emer_ltp=pe_emer_ltp
@@ -915,13 +938,21 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         window_realised_pl += realised_pe_emer
         logger.info(f"  [EMERGENCY] Final Closure Parachute PE {pe_emer_strike} @ {exit_pr:.1f} at {ts} | P&L: {realised_pe_emer:.1f} | spot={spot:.0f}")
 
+    if pe_wing_active:
+        # We don't necessarily want to EXIT it here if it's supposed to be held until the base exit.
+        # But append_1min_snapshots_window is used to scan UNTIL the exit.
+        # The main run_backtest loop handles base exits.
+        # However, if we toggle it, we need to pass back the LATEST entry for the final netting.
+        pass
+
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,
             adj_trigger_ts, adj_winning_side,
             running_ce_wing, running_pe_wing,
             round(window_realised_pl, 2),
             emer_strike, emer_entry, emer_ltp,
-            pe_emer_strike, pe_emer_entry, pe_emer_ltp)
+            pe_emer_strike, pe_emer_entry, pe_emer_ltp,
+            current_pe_wing_entry, pe_wing_active)
 
 def build_trade_record(entry_time, entry_spot, entry_vix,
                         sell_expiry, buy_expiry,
@@ -1461,7 +1492,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
          ce_wing_ltp, pe_wing_ltp,
          window_realised_emer_pl,
          emer_strike, emer_entry, emer_exit,
-         pe_emer_strike, pe_emer_entry, pe_emer_exit) = append_1min_snapshots_window(
+         pe_emer_strike, pe_emer_entry, pe_emer_exit,
+         pe_wing_entry, pe_wing_active) = append_1min_snapshots_window(
 
             scan_start, scan_end,
             nifty_1m, vix_1m,
@@ -1859,7 +1891,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                          ce_wing_ltp, pe_wing_ltp,
                          window_realised_emer_pl,
                          emer_strike, emer_entry, emer_exit,
-                         pe_emer_strike, pe_emer_entry, pe_emer_exit) = append_1min_snapshots_window(
+                         pe_emer_strike, pe_emer_entry, pe_emer_exit,
+                         pe_wing_entry, pe_wing_active) = append_1min_snapshots_window(
                                 roll_ts - pd.Timedelta(minutes=1), scan_end,
                                 nifty_1m, vix_1m,
                                 ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
