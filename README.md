@@ -302,11 +302,22 @@ algo-trading-lab/
 │   ├── README.md
 │   ├── backtest_wing_salvage.py    # Research: Tactical wing exiting
 │   ├── backtest_ml_adaptive.py     # Research: ML-driven tactical adjustments
-│   ├── configs.py
-│   ├── backtest.py
-│   └── data/
-│       ├── trade_summary.csv       (generated — gitignored)
-│       └── trade_logs/             (generated — gitignored)
+│   ├── backtest_adaptive_exit.py   # Experiment: 15:15 entry with VIX-based adaptive exit
+│   ├── backtest_realtime.py        # Real-time simulation logic for current month
+│   ├── backtest_phase1.py          # Legacy Phase 1 backtest logic
+│   ├── configs.py                  # Production-spec backtest config
+│   ├── configs_adaptive_exit.py    # Adaptive exit experiment config
+│   ├── configs_realtime.py         # Real-time simulation config
+│   ├── configs_phase1.py           # Legacy Phase 1 config
+│   ├── data/                       # Standard backtest results (gitignored)
+│   │   ├── trade_summary.csv
+│   │   └── trade_logs/
+│   ├── data_realtime/              # Real-time simulation results (gitignored)
+│   │   ├── trade_summary.csv
+│   │   └── trade_logs/
+│   └── data_adaptive_exit/         # Experiment results (gitignored)
+│       ├── trade_summary.csv
+│       └── trade_logs/
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
     ├── weekly_option_data_sensex.py

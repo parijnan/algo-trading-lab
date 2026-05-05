@@ -58,7 +58,12 @@ Results are saved to `athena_backtest/data/trade_summary.csv`.
 - **Results:** Consistently underperformed Phase 2. Final results (5-year coverage): **₹105,329 P&L, 60.8% Win Rate**.
 - **Conclusion:** ML proactivity introduced a "Complexity Trap." Tightening triggers too early increased insurance costs and slippage without providing a commensurate reduction in risk. 
 
-**VERDICT:** Phase 2 (Static 150-pt trigger) is the definitive production version for institutional scaling.
+### Experiment: Adaptive Exit Timing (`backtest_adaptive_exit.py`)
+- **Logic:** Shifted entry to 15:15. Implemented VIX-based exit: 10:25 AM if VIX < 16 (handoff to Artemis), otherwise 15:10 PM.
+- **Results:** **₹102,000 P&L, 50% Win Rate, 1.70 R:R**.
+- **Verdict:** Underperformed production spec. While Reward:Risk improved, the sharp drop in Win Rate and absolute P&L makes it unsuitable for production.
+
+**VERDICT:** Phase 2 (Static 150-pt trigger) remains the definitive production version for institutional scaling.
 
 ## Real-Time Backtesting
 
