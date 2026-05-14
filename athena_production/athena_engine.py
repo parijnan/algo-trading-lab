@@ -16,7 +16,7 @@ import pandas as pd
 import mibian
 from datetime import datetime, date, timedelta
 from time import sleep
-from SmartApi.smartExceptions import DataException
+from SmartApi.smartExceptions import DataException, NetworkException, TokenException
 
 from configs_live import (
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
@@ -236,8 +236,13 @@ class Athena:
                     else:
                         logger.error(f"Order rejected: {response.get('message')}")
                         break
-                except DataException:
-                    logger.warning(f"DataException (b'') during {transaction_type} {symbol}. Verifying order book...")
+                except DataException as e:
+                    err_msg = str(e).lower()
+                    if "access rate" in err_msg:
+                        logger.warning(f"Rate limit hit during {transaction_type} {symbol}. Cooling down 2s...")
+                        sleep(2); continue
+                    
+                    logger.warning(f"DataException ({err_msg}) during {transaction_type} {symbol}. Verifying order book...")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
@@ -256,9 +261,12 @@ class Athena:
                                 break
                         if found: break
                         else: logger.info("Order not found in book. Retrying placement..."); continue
-                    except Exception as e:
-                        logger.error(f"Error checking book: {e}. Retrying placement...")
+                    except Exception as e_inner:
+                        logger.error(f"Error checking book: {e_inner}. Retrying placement...")
                         continue
+                except NetworkException:
+                    logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
+                    sleep(5); continue
                 except Exception as e:
                     handle_exception(e); sleep(1)
         return orderid_list

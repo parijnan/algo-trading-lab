@@ -4,7 +4,7 @@ No changes to trading logic. chdir removed — wrapper sets cwd.
 """
 
 from datetime import datetime, time
-from SmartApi.smartExceptions import DataException
+from SmartApi.smartExceptions import DataException, NetworkException, TokenException
 from numpy import busday_count
 from math import floor, ceil
 from functions import slack_bot_sendtext, sleep, exists, handle_exception, increment_poll_counter, increment_order_counter, reset_counters#, telegram_bot_sendtext
@@ -95,7 +95,11 @@ class CreditSpread:
                         break
                     else:
                         break
-                except DataException:
+                except DataException as e:
+                    err_msg = str(e).lower()
+                    if "access rate" in err_msg:
+                        sleep(2); continue
+
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
@@ -113,8 +117,10 @@ class CreditSpread:
                                 break
                         if found: break
                         else: continue
-                    except Exception as e:
+                    except Exception as e_inner:
                         continue
+                except NetworkException:
+                    sleep(5); continue
                 except Exception as e:
                     handle_exception(e); sleep(1)
                 reset_counters()
