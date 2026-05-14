@@ -2,8 +2,11 @@
 athena_engine.py — Athena Production Main Entry Point
 Nifty Double Calendar Condor Strategy — Live Execution
 
+Called by leto.py — not run directly.
+
 Architecture:
     - Athena class owns run loop, entry/exit logic, order placement.
+    - leto.py                       — owns login, market/holiday check, scrip master, session teardown
     - state.AthenaState             — persistent trade state across restarts
     - functions.py                  — Slack/Telegram messaging, exception handling
     - logger_setup.py               — dual console+file logging
@@ -54,6 +57,16 @@ class Athena:
     """
 
     def __init__(self, obj, auth_token, instrument_df):
+        """
+        Main entry point called by leto.py.
+        Initialises state, holidays, and signal handlers.
+
+        Parameters
+        ----------
+        obj            : SmartConnect — authenticated session from Leto
+        auth_token     : str          — JWT token from generateSession response
+        instrument_df  : DataFrame    — Nifty NFO rows from scrip master
+        """
         self.obj            = obj
         self.auth_token     = auth_token
         self.instrument_df  = instrument_df
@@ -510,6 +523,12 @@ class Athena:
                     self.state.emer_active = False; self.state.emer_strike = None; self.state.emer_symbol = None; self.state.emer_token = None; self.state.emer_entry = 0.0; save_state(self.state)
 
     def run(self):
+        """
+        Main entry loop called by leto.py.
+        Handles entry checks, position monitoring, and pre-expiry exits.
+        Returns True to Leto if a VIX breach occurred at entry (requesting re-route),
+        otherwise False.
+        """
         logger.info("=== Athena run loop started ===")
         while True:
             now = datetime.now()
