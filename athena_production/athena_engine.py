@@ -16,7 +16,7 @@ import pandas as pd
 import mibian
 from datetime import datetime, date, timedelta
 from time import sleep
-from SmartApi.smartExceptions import DataException, NetworkException, TokenException
+from SmartApi.smartExceptions import DataException, NetworkException
 
 from configs_live import (
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
@@ -268,6 +268,9 @@ class Athena:
                     logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
                     sleep(5); continue
                 except Exception as e:
+                    if "token" in str(e).lower() or "invalid" in str(e).lower():
+                        logger.critical(f"Session failure detected: {e}. Aborting to Leto.")
+                        raise e
                     handle_exception(e); sleep(1)
         return orderid_list
 

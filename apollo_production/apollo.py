@@ -29,7 +29,7 @@ import signal
 import pandas as pd
 from datetime import datetime, date, timedelta
 from time import sleep
-from SmartApi.smartExceptions import DataException, NetworkException, TokenException
+from SmartApi.smartExceptions import DataException, NetworkException
 
 from configs_live import (
     user_name,
@@ -1032,6 +1032,9 @@ class Apollo:
                     logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
                     sleep(5); continue
                 except Exception as e:
+                    if "token" in str(e).lower() or "invalid" in str(e).lower():
+                        logger.critical(f"Session failure detected: {e}. Aborting to Leto.")
+                        raise e
                     handle_exception(e); sleep(1)
                 _reset_counters()
 

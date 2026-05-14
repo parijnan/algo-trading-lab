@@ -4,7 +4,7 @@ No changes to trading logic. chdir removed — wrapper sets cwd.
 """
 
 from datetime import datetime, time
-from SmartApi.smartExceptions import DataException, NetworkException, TokenException
+from SmartApi.smartExceptions import DataException, NetworkException
 from numpy import busday_count
 from math import floor, ceil
 from functions import slack_bot_sendtext, sleep, exists, handle_exception, increment_poll_counter, increment_order_counter, reset_counters#, telegram_bot_sendtext
@@ -122,6 +122,8 @@ class CreditSpread:
                 except NetworkException:
                     sleep(5); continue
                 except Exception as e:
+                    if "token" in str(e).lower() or "invalid" in str(e).lower():
+                        raise e
                     handle_exception(e); sleep(1)
                 reset_counters()
         return orderID_list
