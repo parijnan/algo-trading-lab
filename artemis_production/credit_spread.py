@@ -4,6 +4,7 @@ No changes to trading logic. chdir removed — wrapper sets cwd.
 """
 
 from datetime import datetime, time
+from SmartApi.smartExceptions import DataException
 from numpy import busday_count
 from math import floor, ceil
 from functions import slack_bot_sendtext, sleep, exists, handle_exception, increment_poll_counter, increment_order_counter, reset_counters#, telegram_bot_sendtext
@@ -62,23 +63,17 @@ class CreditSpread:
             reset_counters()
         
     # Private method to place order, and return total orders and orderid list
-    def _place_order(self, transaction_type, symbol, token, quantity):
-        l_limit = qty_freeze / lot_size
+    def _place_order(self, transaction_type, symbol, token, lots):
+        l_limit = qty_freeze // lot_size
         order_quantities = []
-
-        # If quantity is less than or equal to l_limit, just place one order for that quantity
-        if quantity <= l_limit:
-            order_quantities.append(quantity)
-        else:
-            full_lots = int(quantity // l_limit)
-            remainder = quantity % l_limit
-            for _ in range(full_lots):
-                order_quantities.append(l_limit)
-            if remainder > 0:
-                order_quantities.append(remainder)
+        remaining_lots = lots
+        while remaining_lots > 0:
+            chunk = min(remaining_lots, l_limit)
+            order_quantities.append(chunk)
+            remaining_lots -= chunk
 
         orderID_list = []
-        for lots in order_quantities:
+        for lot_chunk in order_quantities:
             orderparams = {
                 "variety": "NORMAL",
                 "tradingsymbol": symbol,
@@ -88,18 +83,40 @@ class CreditSpread:
                 "ordertype": "MARKET",
                 "producttype": "CARRYFORWARD",
                 "duration": "DAY",
-                "quantity": str(lots * lot_size)
+                "quantity": str(int(lot_chunk * lot_size))
             }
             while True:
                 try:
                     order_response = self.obj.placeOrderFullResponse(orderparams)
                     increment_order_counter()
-                    if order_response['message'] == 'SUCCESS':
-                        orderID_list.append(order_response['data']['orderid'])
+                    if order_response.get('message') == 'SUCCESS':
+                        oid = order_response['data']['orderid']
+                        orderID_list.append(oid)
                         break
+                    else:
+                        break
+                except DataException:
+                    sleep(2)
+                    try:
+                        book = self.obj.orderBook()['data']
+                        increment_poll_counter()
+                        found = False
+                        for order in book:
+                            if (order['tradingsymbol'] == symbol and 
+                                order['transactiontype'] == transaction_type and
+                                int(order['quantity']) == int(lot_chunk * lot_size) and
+                                order['status'] in ('complete', 'open', 'validation pending')):
+                                
+                                oid = order['orderid']
+                                orderID_list.append(oid)
+                                found = True
+                                break
+                        if found: break
+                        else: continue
+                    except Exception as e:
+                        continue
                 except Exception as e:
-                    handle_exception(e)
-                sleep(1)
+                    handle_exception(e); sleep(1)
                 reset_counters()
         return orderID_list
       

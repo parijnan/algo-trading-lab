@@ -29,6 +29,7 @@ import signal
 import pandas as pd
 from datetime import datetime, date, timedelta
 from time import sleep
+from SmartApi.smartExceptions import DataException
 
 from configs_live import (
     user_name,
@@ -966,18 +967,13 @@ class Apollo:
                 SLACK_TRADE_ALERTS)
             return [dry_id]
 
-        l_limit = self._qty_freeze / LOT_SIZE
+        l_limit = self._qty_freeze // LOT_SIZE
         order_quantities = []
-
-        if lots <= l_limit:
-            order_quantities.append(lots)
-        else:
-            full = int(lots // l_limit)
-            rem  = lots % l_limit
-            for _ in range(full):
-                order_quantities.append(l_limit)
-            if rem > 0:
-                order_quantities.append(rem)
+        remaining_lots = lots
+        while remaining_lots > 0:
+            chunk = min(remaining_lots, l_limit)
+            order_quantities.append(chunk)
+            remaining_lots -= chunk
 
         orderid_list = []
         for lot_chunk in order_quantities:
@@ -996,15 +992,39 @@ class Apollo:
                 try:
                     response = self.obj.placeOrderFullResponse(orderparams)
                     _increment_order()
-                    if response['message'] == 'SUCCESS':
-                        orderid_list.append(response['data']['orderid'])
-                        logger.info(
-                            f"Order placed: {transaction_type} {symbol}  "
-                            f"ID: {response['data']['orderid']}")
+                    if response.get('message') == 'SUCCESS':
+                        oid = response['data']['orderid']
+                        orderid_list.append(oid)
+                        logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}")
                         break
+                    else:
+                        logger.error(f"Order rejected: {response.get('message')}")
+                        break
+                except DataException:
+                    logger.warning(f"DataException (b'') during {transaction_type} {symbol}. Verifying order book...")
+                    sleep(2)
+                    try:
+                        book = self.obj.orderBook()['data']
+                        _increment_order_book_poll()
+                        found = False
+                        for order in book:
+                            if (order['tradingsymbol'] == symbol and 
+                                order['transactiontype'] == transaction_type and
+                                int(order['quantity']) == int(lot_chunk * LOT_SIZE) and
+                                order['status'] in ('complete', 'open', 'validation pending')):
+                                
+                                oid = order['orderid']
+                                orderid_list.append(oid)
+                                logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
+                                found = True
+                                break
+                        if found: break
+                        else: logger.info("Order not found in book. Retrying placement..."); continue
+                    except Exception as e:
+                        logger.error(f"Error checking book: {e}. Retrying placement...")
+                        continue
                 except Exception as e:
-                    handle_exception(e)
-                sleep(1)
+                    handle_exception(e); sleep(1)
                 _reset_counters()
 
         return orderid_list
