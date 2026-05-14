@@ -208,15 +208,13 @@ class Athena:
             dry_id = f"DRY_{token}_{transaction_type}_{datetime.now():%H%M%S}"
             logger.info(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} ({token}) — ID: {dry_id}")
             return [dry_id]
-        l_limit = self._qty_freeze / LOT_SIZE
+        l_limit = self._qty_freeze // LOT_SIZE
         order_quantities = []
-        if lots <= l_limit:
-            order_quantities.append(lots)
-        else:
-            full = int(lots // l_limit)
-            rem  = lots % l_limit
-            for _ in range(full): order_quantities.append(int(l_limit))
-            if rem > 0: order_quantities.append(int(rem))
+        remaining_lots = lots
+        while remaining_lots > 0:
+            chunk = min(remaining_lots, l_limit)
+            order_quantities.append(chunk)
+            remaining_lots -= chunk
         orderid_list = []
         for lot_chunk in order_quantities:
             orderparams = {
