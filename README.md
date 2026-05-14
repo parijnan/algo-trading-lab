@@ -72,6 +72,16 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
    - **VIX > 25.0** → Apollo (Any day)
 5. **Handoff Mechanism:** If a strategy standing down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
 
+## Resilient Order Execution
+
+All production strategies (Artemis, Apollo, Athena) implement a robust order placement engine designed to handle broker API failures:
+
+- **Ghost Order Protection:** Catches `DataException` (triggered by empty `b''` responses). Before retrying, the engine polls the Order Book to verify if the order was successfully received by the broker backend despite the malformed response.
+- **Smart Rate-Limit Handling:** Detects "access rate" errors and enforces a mandatory 2-second cooldown to clear the rate-limit bucket before retrying.
+- **Network Resilience:** Specifically handles `NetworkException` with a 5-second backoff to allow for temporary connection stability.
+- **Session Kill Switch:** Detects session-level failures (invalid tokens) and aborts execution to return control to Leto, preventing infinite failing retry loops.
+- **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
+
 ## Infrastructure
 
 | Component | Details |
@@ -225,6 +235,7 @@ For the full detailed plan, see the [Phase 4 Research Document](./plans/phase-4-
 algo-trading-lab/
 ├── README.md
 ├── .gitignore
+├── analyze_broker_state.py         # Utility for post-market margin and orderbook analysis
 ├── leto.py                         # Session router and strategy entry point
 ├── data/                           # Shared runtime data (credentials, holidays)
 │   ├── user_credentials.csv        # not in git
@@ -268,13 +279,13 @@ algo-trading-lab/
 │   ├── data/
 │   │   ├── user_credentials.csv    # symlink → ../data/user_credentials.csv
 │   │   ├── holidays.csv            # symlink → ../data/holidays.csv
-│   │   └── .gitkeep               # runtime data gitignored
+│   │   └── .gitkeep                # runtime data gitignored
 │   └── logs/                       # gitignored, created at runtime
 ├── apollo_backtest/                # Apollo backtesting and optimisation
 │   ├── README.md
-│   ├── ml_feature_engineering.py    # Spatial Price-VIX feature generator
+│   ├── ml_feature_engineering.py   # Spatial Price-VIX feature generator
 │   ├── oi_aggregator.py            # 1-min Institutional OI dynamics
-│   ├── leto_phase2_simulation.py    # Signal ensemble and routing logic
+│   ├── leto_phase2_simulation.py   # Signal ensemble and routing logic
 │   ├── configs_credit.py           # Phase 1 credit spread config (reference only)
 │   ├── configs_debit.py            # Phase 1 debit spread — production config D-R-D06g
 │   ├── configs_debit_phase2.py     # Phase 2 triple-timeframe config (in progress)
@@ -297,7 +308,7 @@ algo-trading-lab/
 │   ├── functions.py
 │   ├── logger_setup.py
 │   └── data/
-│       └── .gitkeep               # runtime data gitignored
+│       └── .gitkeep                # runtime data gitignored
 ├── athena_backtest/                # Athena double calendar backtesting
 │   ├── README.md
 │   ├── backtest_wing_salvage.py    # Research: Tactical wing exiting

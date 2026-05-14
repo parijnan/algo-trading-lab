@@ -301,3 +301,4 @@ GEMINI.md
 # Temp Data
 data_pipeline/data/nifty/temp/
 data/unified_performance_snapshot.csv
+data/debug_analysis_*.json
