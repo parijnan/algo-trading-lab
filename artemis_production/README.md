@@ -34,6 +34,32 @@ checks, scrip master download, and session teardown. Artemis receives:
 - `obj` — authenticated `SmartConnect` instance
 - `instrument_df` — Sensex BFO rows filtered from the scrip master
 
+### Execution Flow
+
+```mermaid
+graph TD
+    Start([Leto Call]) --> EntryCheck{Active Position?}
+    EntryCheck -- No --> Monday{Monday 10:30?}
+    Monday -- Yes --> SetupIC[Sell 0.30 Delta Iron Condor]
+    Monday -- No --> StandDown[Stand Down]
+    
+    EntryCheck -- Yes --> Monitor[Monitor Loop: Every 20s]
+    SetupIC --> Monitor
+    
+    Monitor --> SLHit{Stop Loss Hit?}
+    SLHit -- No --> ELMCheck{ELM Time Hit?}
+    ELMCheck -- Yes --> ELMAdj[Close Tested Leg / Roll Hedge]
+    ELMCheck -- No --> Expiry{Market Close/Expiry?}
+    
+    SLHit -- Yes --> Transform[Transform: Close Tested Side, Roll & Reinforce Winning Side]
+    Transform --> Monitor
+    
+    ELMAdj --> Expiry
+    Expiry -- No --> Monitor
+    Expiry -- Yes --> Archive[Log & Archive Trade]
+    Archive --> End([Exit Artemis])
+```
+
 `iron_condor.set_session(obj, instrument_df)` propagates both to the PE and CE
 spread objects and handles lot sizing if `lot_calc = true` in `trade_settings.csv`.
 

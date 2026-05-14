@@ -72,6 +72,29 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
    - **VIX > 25.0** → Apollo (Any day)
 5. **Handoff Mechanism:** If a strategy standing down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
 
+### Orchestration Flow
+
+```mermaid
+graph TD
+    Start([Cron: 09:15 AM]) --> Login[Login to Angel One]
+    Login --> Setup[Download Scrip Master & Load Holidays]
+    Setup --> CheckState{Active Trade Found?}
+
+    CheckState -- Apollo --> RunApollo[Execute Apollo]
+    CheckState -- Athena --> RunAthena[Execute Athena]
+    CheckState -- Artemis --> RunArtemis[Execute Artemis]
+
+    CheckState -- None --> VIXCheck{Read VIX at 10:30 AM}
+    VIXCheck -- "< 16" --> RunArtemis
+    VIXCheck -- "16 - 25" --> RunAthena
+    VIXCheck -- "> 25" --> RunApollo
+
+    RunApollo & RunAthena & RunArtemis --> Result{Hand-off?}
+    Result -- Yes --> VIXCheck
+    Result -- No/Market Close --> Logout[Terminate Session]
+    Logout --> End([Leto Complete])
+```
+
 ## Resilient Order Execution
 
 All production strategies (Artemis, Apollo, Athena) implement a robust order placement engine designed to handle broker API failures:

@@ -22,6 +22,36 @@ and design decisions.
 | `technical_indicators.py` | SupertrendIndicator — copied from apollo_backtest/ |
 | `tests/ws_test.py` | WebSocket layer validation harness |
 
+### Execution Flow
+
+```mermaid
+graph TD
+    Start([Leto Call]) --> Seed[Supertrend Seeding: 600 Candles]
+    Seed --> WS[Start WebSocket Tick Feed]
+    WS --> State{Trade Status?}
+    
+    State -- Idle --> Signal{15m ST Flip Signal?}
+    Signal -- Yes --> Filter[Apply D-R-D06g Filters]
+    Filter -- Pass --> Buy[Entry: Buy ITM Debit Spread]
+    Filter -- Fail --> Signal
+    
+    State -- In Trade --> Monitor[Monitor Feed: ~1s Polling]
+    Buy --> Monitor
+    
+    Monitor --> ExitStack{Exit Priority}
+    ExitStack -- 1 --> HardStop[Hard Stop Hit]
+    ExitStack -- 2 --> PT[Profit Target Hit]
+    ExitStack -- 3 --> Gate[Time Gate Profit Hit]
+    ExitStack -- 4 --> Flip[ST Signal Flip]
+    ExitStack -- 5 --> ELM[Pre-expiry Exit]
+    
+    HardStop & PT & Gate & Flip & ELM --> Sell[Exit Spread]
+    Sell --> Teardown[Stop Feed & State Cleanup]
+    Teardown --> End([Apollo Complete])
+    
+    Monitor -- Market Close --> Teardown
+```
+
 ## Setup on delos
 
 ```bash

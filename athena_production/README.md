@@ -17,6 +17,32 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 - `functions.py`: Slack/Telegram alerts and SmartAPI rate limiting.
 - `logger_setup.py`: Dual console/file logging.
 
+### Execution Flow
+
+```mermaid
+graph TD
+    Start([Leto Call]) --> Status{Status?}
+    
+    Status -- Idle --> DayCheck{Entry Day 10:30?}
+    DayCheck -- Yes --> Strikes[Select Double Calendar Strikes]
+    Strikes --> Entry[Batch Order Execution: Buy Monthly first]
+    Entry --> Poll[Polling Loop: Every 60s]
+    
+    Status -- In Trade --> Poll
+    
+    Poll -- Spot >= CE + Offset --> Hedge[Deploy Parachute CE Hedge]
+    Poll -- Spot <= CE + Offset --> Unhedge[Exit Parachute CE Hedge]
+    
+    Poll --> ExitCheck{Pre-expiry Exit Time?}
+    ExitCheck -- Yes --> Close[Close All Legs: Sell Monthly first]
+    Close --> End([Athena Complete])
+    
+    Poll -- Market Close --> Sleep[Sleep]
+    Sleep --> Poll
+    
+    DayCheck -- No --> StandDown[Stand Down]
+```
+
 ## Monitoring
 Athena uses REST API polling (every 20 seconds) to fetch LTPs, calculate unrealised P&L, and log detailed snapshots to `data/trade_logs/`.
 
