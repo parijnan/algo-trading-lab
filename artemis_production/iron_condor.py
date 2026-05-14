@@ -1,11 +1,11 @@
 """
 iron_condor.py — Artemis Production Iron Condor
 Changes from original:
-  1. chdir removed — wrapper sets cwd to artemis_production/
-  2. login() removed entirely — wrapper owns market/holiday checks and session
+  1. chdir removed — Leto sets cwd to artemis_production/
+  2. login() removed entirely — Leto owns market/holiday checks and session
   3. set_session(obj, instrument_df) receives authenticated object and
-     filtered Sensex instrument DataFrame from the wrapper
-  4. logout() does not call terminateSession — wrapper owns that
+     filtered Sensex instrument DataFrame from Leto
+  4. logout() does not call terminateSession — Leto owns that
   5. _archive_trade() remove() calls guarded with exists() — instrument_master.csv
      and scrip_master.csv are no longer written to artemis_production/data/
   All trading logic is completely unchanged.
@@ -97,7 +97,7 @@ class IronCondor:
     def set_session(self, obj, instrument_df):
         """
         Receive the authenticated SmartConnect object and filtered Sensex
-        instrument DataFrame from the wrapper. Called immediately after
+        instrument DataFrame from Leto. Called immediately after
         IronCondor() is instantiated.
         """
         self._set_current_datetime()
@@ -612,7 +612,7 @@ class IronCondor:
             if exists("data/error_log.txt"):
                 rename("data/error_log.txt", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} error_log.txt")
             # instrument_master.csv and scrip_master.csv are no longer written
-            # to artemis_production/data/ — the wrapper owns the scrip master.
+            # to artemis_production/data/ — Leto owns the scrip master.
             # Guards prevent FileNotFoundError on weeks where these files exist
             # from a manual run of the old codebase.
             from os.path import exists as path_exists
@@ -658,7 +658,7 @@ class IronCondor:
     def logout(self):
         """
         Final update, trade log, status message and archive if expired.
-        Does NOT call terminateSession — wrapper handles session teardown.
+        Does NOT call terminateSession — Leto handles session teardown.
         """
         self._set_current_datetime()
         if self.trade_status:

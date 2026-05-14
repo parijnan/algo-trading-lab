@@ -3,7 +3,7 @@ configs.py — Artemis Production Configuration
 All parameters loaded from data/ files in this directory.
 
 Change from original: chdir removed entirely.
-The wrapper sets os.chdir(ARTEMIS_DIR) before importing Artemis modules,
+Leto sets os.chdir(ARTEMIS_DIR) before importing Artemis modules,
 so all relative paths (data/contracts.csv etc.) resolve correctly without
 any chdir inside the module.
 """
@@ -19,7 +19,7 @@ closing_time  = time(15, 30)
 scrip_master_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 # Load contracts list, holidays list and trade settings
-# Paths are relative — wrapper sets cwd to artemis_production/ before import
+# Paths are relative — leto.py sets cwd to artemis_production/ before import
 contracts_df      = pd.read_csv('data/contracts.csv',     parse_dates=['expiry', 'entry', 'elm_time', 'cutoff_time'])
 holidays_df       = pd.read_csv('data/holidays.csv',      parse_dates=['date'])
 holidays_df['date'] = pd.to_datetime(holidays_df['date']).apply(lambda x: x.date())

@@ -3,11 +3,11 @@ apollo.py — Apollo Production Main Entry Point
 Nifty High-VIX ITM Debit Spread Strategy — Live Execution
 Frozen production config: D-R-D06g
 
-Called by wrapper.py — not run directly.
+Called by leto.py — not run directly.
 
 Architecture:
     - Apollo class owns ST seed, run loop, entry/exit logic, order placement, feed teardown
-    - wrapper.py owns login, market/holiday check, scrip master, session teardown
+    - leto.py owns login, market/holiday check, scrip master, session teardown
     - websocket_feed.ApolloFeed     — tick feed, LTP/OHLC access, option subscribe/unsub
     - supertrend.SupertrendManager  — ST seeding and 15-min candle updates
     - state.ApolloState             — persistent trade state across restarts
@@ -76,7 +76,7 @@ class Apollo:
     """
     Apollo live execution engine.
     Receives an authenticated SmartConnect object, JWT auth token, and
-    filtered Nifty instrument DataFrame from wrapper.py.
+    filtered Nifty instrument DataFrame from leto.py.
 
     Owns: ST seed, WebSocket feed start/stop, run loop, entry/exit logic.
     Does NOT own: login, session teardown, market/holiday checks.
@@ -90,7 +90,7 @@ class Apollo:
         """
         Parameters
         ----------
-        obj            : SmartConnect — authenticated session from wrapper
+        obj            : SmartConnect — authenticated session from Leto
         auth_token     : str          — JWT token from generateSession response
         instrument_df  : DataFrame    — Nifty NFO rows from scrip master
         """
@@ -197,7 +197,7 @@ class Apollo:
         """
         Stop WebSocket feed and send session-complete alert.
         Called at the end of run() and from _handle_signal().
-        Does NOT call terminateSession — wrapper owns that.
+        Does NOT call terminateSession — Leto owns that.
         """
         logger.info("Apollo teardown: stopping feed.")
         self.feed.stop()
@@ -207,9 +207,9 @@ class Apollo:
 
     def run(self):
         """
-        Main entry point called by wrapper.py.
+        Main entry point called by leto.py.
         Seeds ST, starts feed, runs the main loop, stops feed before returning.
-        Wrapper calls terminateSession after this returns.
+        Leto calls terminateSession after this returns.
         """
         self._setup()
 
@@ -430,7 +430,7 @@ class Apollo:
                     f"Holding overnight. Expiry: {self.state.expiry}.",
                     SLACK_TRADEBOT_CHANNEL)
 
-            # Always stop the feed before returning to wrapper
+            # Always stop the feed before returning to Leto
             self._teardown()
         
         return False

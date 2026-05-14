@@ -1,12 +1,12 @@
 """
 artemis.py — Artemis Production Entry Point
-Called by wrapper.py — not run directly.
+Called by leto.py — not run directly.
 
 Changes from original:
-  - chdir removed — wrapper sets cwd to artemis_production/ before importing
-  - login() removed — wrapper owns market/holiday checks and session
-  - set_session(obj, instrument_df) receives authenticated session from wrapper
-  - logout() does not terminate the session — wrapper calls terminateSession
+  - chdir removed — Leto sets cwd to artemis_production/ before importing
+  - login() removed — Leto owns market/holiday checks and session
+  - set_session(obj, instrument_df) receives authenticated session from Leto
+  - logout() does not terminate the session — Leto calls terminateSession
 """
 
 from iron_condor import IronCondor
@@ -16,12 +16,12 @@ from functions import handle_exception
 
 def run(obj, instrument_df):
     """
-    Main Artemis execution. Called by wrapper.py with an authenticated
+    Main Artemis execution. Called by leto.py with an authenticated
     SmartConnect object and the pre-filtered Sensex instrument DataFrame.
     """
     iron_condor = IronCondor()
 
-    # Receive session from wrapper
+    # Receive session from Leto
     iron_condor.set_session(obj, instrument_df)
 
     # Trade entry block — executes only if spreads are not yet active

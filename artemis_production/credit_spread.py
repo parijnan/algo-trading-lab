@@ -1,6 +1,6 @@
 """
 credit_spread.py — Artemis Production Credit Spread
-No changes to trading logic. chdir removed — wrapper sets cwd.
+No changes to trading logic. chdir removed — Leto sets cwd.
 """
 
 from datetime import datetime, time
