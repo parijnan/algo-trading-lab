@@ -60,9 +60,11 @@ def handle_exception(e):
     trace_msg = format_exc()
     msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
     print(msg_txt_detailed)
-    msg_txt = (f"An Error Occurred at {datetime.now():%Y-%m-%d %H:%M:%S}.\nThe Program has closed.\nWill try to restart.\n")
-    #telegram_bot_sendtext(msg_txt, 'bot')
-    slack_bot_sendtext(msg_txt, "#error-alerts")
+    slack_bot_sendtext(
+        f"ARTEMIS ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
+        f"{format(e)} — check logs.",
+        "#error-alerts"
+    )
     mode = 'a' if exists('data/error_log.txt') else 'w'
     with open('data/error_log.txt', mode) as error_log:
         error_log.writelines(msg_txt_detailed)
