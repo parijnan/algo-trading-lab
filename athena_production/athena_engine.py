@@ -295,36 +295,82 @@ class Athena:
         logger.info("=== EXECUTING ENTRY ===")
         target_lots = self._calculate_lots(strikes_dict)
         self.state.wings_enabled = ENABLE_SAFETY_WINGS
-        actual_lots = target_lots
+        
+        # 1. Determine batches based on QTY_FREEZE
+        l_limit = self._qty_freeze // LOT_SIZE
+        batches = []
+        rem = target_lots
+        while rem > 0:
+            c = min(rem, l_limit)
+            batches.append(c); rem -= c
+            
+        # 2. Pre-fetch core leg details
+        legs = {}
         for side in ["ce", "pe"]:
-            key = f"{side}_buy"; strike = strikes_dict[f"{key}_strike"]; exp = strikes_dict["buy_expiry"]
-            sym, tok = self._fetch_symbol_and_token(strike, side, exp)
-            if not sym: return False
-            oids = self._place_order("BUY", sym, tok, actual_lots)
-            fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
-            setattr(self.state, f"{key}_strike", strike); setattr(self.state, f"{key}_token", tok)
-            setattr(self.state, f"{key}_symbol", sym); setattr(self.state, f"{key}_entry", fill)
-            if filled_q < actual_lots: actual_lots = filled_q
-        if actual_lots == 0:
-            logger.error("No longs filled. Aborting."); clear_trade_fields(self.state); save_state(self.state); return False
-        for side in ["ce", "pe"]:
-            key = f"{side}_sell"; strike = strikes_dict[f"{key}_strike"]; exp = strikes_dict["sell_expiry"]
-            sym, tok = self._fetch_symbol_and_token(strike, side, exp)
-            oids = self._place_order("SELL", sym, tok, actual_lots)
-            fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
-            setattr(self.state, f"{key}_strike", strike); setattr(self.state, f"{key}_token", tok)
-            setattr(self.state, f"{key}_symbol", sym); setattr(self.state, f"{key}_entry", fill)
-            if filled_q < actual_lots: actual_lots = filled_q
+            for t in ["buy", "sell"]:
+                exp = strikes_dict["buy_expiry"] if t == "buy" else strikes_dict["sell_expiry"]
+                stk = strikes_dict[f"{side}_{t}_strike"]
+                sym, tok = self._fetch_symbol_and_token(stk, side, exp)
+                if not sym: return False
+                legs[f"{side}_{t}"] = (sym, tok, stk)
+
+        fill_data = {k: {"qty": 0, "val": 0.0} for k in legs.keys()}
+        total_actual_lots = 0
+
+        # 3. Interleaved Batch Loop for Core Legs
+        for b_idx, b_lots in enumerate(batches):
+            logger.info(f"Processing core batch {b_idx + 1}/{len(batches)}: {b_lots} lots")
+            b_filled = b_lots
+            
+            # Longs
+            for side in ["ce", "pe"]:
+                k = f"{side}_buy"; sym, tok, stk = legs[k]
+                oids = self._place_order("BUY", sym, tok, b_lots)
+                px, f_lots, ft = self._fetch_order_details(oids, tok, sym)
+                fill_data[k]["qty"] += (f_lots * LOT_SIZE)
+                fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
+                if f_lots < b_filled: b_filled = f_lots
+            
+            if b_filled == 0: continue
+            
+            # Shorts
+            for side in ["ce", "pe"]:
+                k = f"{side}_sell"; sym, tok, stk = legs[k]
+                oids = self._place_order("SELL", sym, tok, b_filled)
+                px, f_lots, ft = self._fetch_order_details(oids, tok, sym)
+                fill_data[k]["qty"] += (f_lots * LOT_SIZE)
+                fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
+                if f_lots < b_filled: b_filled = f_lots
+                
+            total_actual_lots += b_filled
+            if b_filled < b_lots:
+                logger.warning(f"Batch {b_idx + 1} partial fill. Stopping entry.")
+                break
+            
+        if total_actual_lots == 0:
+            logger.error("No lots filled. Aborting."); clear_trade_fields(self.state); save_state(self.state); return False
+
+        # Store core leg state (Averages)
+        for k in ["ce_buy", "pe_buy", "ce_sell", "pe_sell"]:
+            sym, tok, stk = legs[k]
+            setattr(self.state, f"{k}_strike", stk); setattr(self.state, f"{k}_token", tok)
+            setattr(self.state, f"{k}_symbol", sym)
+            avg = round(fill_data[k]["val"] / fill_data[k]["qty"], 2) if fill_data[k]["qty"] > 0 else 0.0
+            setattr(self.state, f"{k}_entry", avg)
+
+        # 4. Buy PE Wings LAST for the total quantity
         if ENABLE_SAFETY_WINGS:
-            key = "pe_wing"; strike = strikes_dict[f"{key}_strike"]; exp = strikes_dict["buy_expiry"]
-            sym, tok = self._fetch_symbol_and_token(strike, "pe", exp)
+            k = "pe_wing"; stk = strikes_dict[f"{k}_strike"]; exp = strikes_dict["buy_expiry"]
+            sym, tok = self._fetch_symbol_and_token(stk, "pe", exp)
             if sym:
-                oids = self._place_order("BUY", sym, tok, actual_lots)
+                logger.info(f"Buying PE Wings: {total_actual_lots} lots")
+                oids = self._place_order("BUY", sym, tok, total_actual_lots)
                 fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
-                setattr(self.state, f"{key}_strike", strike); setattr(self.state, f"{key}_token", tok)
-                setattr(self.state, f"{key}_symbol", sym); setattr(self.state, f"{key}_entry", fill)
-                if filled_q < actual_lots: actual_lots = filled_q
-        self.state.status = 'in_trade'; self.state.lots = actual_lots; self.state.entry_time = datetime.now().isoformat()
+                setattr(self.state, f"{k}_strike", stk); setattr(self.state, f"{k}_token", tok)
+                setattr(self.state, f"{k}_symbol", sym); setattr(self.state, f"{k}_entry", fill)
+                if filled_q < total_actual_lots: total_actual_lots = filled_q
+
+        self.state.status = 'in_trade'; self.state.lots = total_actual_lots; self.state.entry_time = datetime.now().isoformat()
         sell_exp_dt = strikes_dict['sell_expiry']; exit_day = self._last_trading_day_before(sell_exp_dt)
         self.state.exit_timestamp = datetime.combine(exit_day, self._exit_time).isoformat()
         self.state.entry_spot = spot; self.state.entry_vix = vix; self.state.sell_expiry = strikes_dict['sell_expiry'].isoformat()
