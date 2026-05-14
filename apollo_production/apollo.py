@@ -1004,9 +1004,11 @@ class Apollo:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
                         logger.warning(f"Rate limit hit during {transaction_type} {symbol}. Cooling down 2s...")
+                        slack_bot_sendtext(f"APOLLO: Rate limit hit ({symbol}). Retrying in 2s...", SLACK_ERRORS_CHANNEL)
                         sleep(2); continue
 
                     logger.warning(f"DataException ({err_msg}) during {transaction_type} {symbol}. Verifying order book...")
+                    slack_bot_sendtext(f"APOLLO: DataException ({symbol}). Verifying order book...", SLACK_ERRORS_CHANNEL)
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
@@ -1021,6 +1023,7 @@ class Apollo:
                                 oid = order['orderid']
                                 orderid_list.append(oid)
                                 logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
+                                slack_bot_sendtext(f"APOLLO: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
                                 found = True
                                 break
                         if found: break
@@ -1030,6 +1033,7 @@ class Apollo:
                         continue
                 except NetworkException:
                     logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
+                    slack_bot_sendtext(f"APOLLO: Network timeout ({symbol}). Backing off 5s...", SLACK_ERRORS_CHANNEL)
                     sleep(5); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():

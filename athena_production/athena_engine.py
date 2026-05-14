@@ -30,7 +30,7 @@ from configs_live import (
     LOT_CALC, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL, QTY_FREEZE,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
-    SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES,
+    SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     DATA_DIR, TRADE_LOGS_DIR, RISK_FREE_RATE
 )
 from state import AthenaState, load_state, save_state, clear_trade_fields
@@ -240,9 +240,11 @@ class Athena:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
                         logger.warning(f"Rate limit hit during {transaction_type} {symbol}. Cooling down 2s...")
+                        slack_bot_sendtext(f"ATHENA: Rate limit hit ({symbol}). Retrying in 2s...", SLACK_ERRORS_CHANNEL)
                         sleep(2); continue
                     
                     logger.warning(f"DataException ({err_msg}) during {transaction_type} {symbol}. Verifying order book...")
+                    slack_bot_sendtext(f"ATHENA: DataException ({symbol}). Verifying order book...", SLACK_ERRORS_CHANNEL)
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
@@ -257,6 +259,7 @@ class Athena:
                                 oid = order['orderid']
                                 orderid_list.append(oid)
                                 logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
+                                slack_bot_sendtext(f"ATHENA: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
                                 found = True
                                 break
                         if found: break
@@ -266,6 +269,7 @@ class Athena:
                         continue
                 except NetworkException:
                     logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
+                    slack_bot_sendtext(f"ATHENA: Network timeout ({symbol}). Backing off 5s...", SLACK_ERRORS_CHANNEL)
                     sleep(5); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():

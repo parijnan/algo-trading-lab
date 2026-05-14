@@ -98,8 +98,10 @@ class CreditSpread:
                 except DataException as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
+                        slack_bot_sendtext(f"ARTEMIS: Rate limit hit ({symbol}). Retrying in 2s...", "#error-alerts")
                         sleep(2); continue
 
+                    slack_bot_sendtext(f"ARTEMIS: DataException ({symbol}). Verifying order book...", "#error-alerts")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
@@ -113,6 +115,7 @@ class CreditSpread:
                                 
                                 oid = order['orderid']
                                 orderID_list.append(oid)
+                                slack_bot_sendtext(f"ARTEMIS: Ghost order RECOVERED ({symbol})", "#error-alerts")
                                 found = True
                                 break
                         if found: break
@@ -120,6 +123,7 @@ class CreditSpread:
                     except Exception as e_inner:
                         continue
                 except NetworkException:
+                    slack_bot_sendtext(f"ARTEMIS: Network timeout ({symbol}). Backing off 5s...", "#error-alerts")
                     sleep(5); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
