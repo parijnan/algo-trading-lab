@@ -16,6 +16,7 @@ import pandas as pd
 import mibian
 from datetime import datetime, date, timedelta
 from time import sleep
+from SmartApi.smartExceptions import DataException
 
 from configs_live import (
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
@@ -227,14 +228,37 @@ class Athena:
                 try:
                     response = self.obj.placeOrderFullResponse(orderparams)
                     _increment_order()
-                    if response['message'] == 'SUCCESS':
+                    if response.get('message') == 'SUCCESS':
                         oid = response['data']['orderid']
                         orderid_list.append(oid)
                         logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}")
                         break
                     else:
-                        logger.error(f"Order failed: {response['message']}")
+                        logger.error(f"Order rejected: {response.get('message')}")
                         break
+                except DataException:
+                    logger.warning(f"DataException (b'') during {transaction_type} {symbol}. Verifying order book...")
+                    sleep(2)
+                    try:
+                        book = self.obj.orderBook()['data']
+                        _increment_order_book_poll()
+                        found = False
+                        for order in book:
+                            if (order['tradingsymbol'] == symbol and 
+                                order['transactiontype'] == transaction_type and
+                                int(order['quantity']) == int(lot_chunk * LOT_SIZE) and
+                                order['status'] in ('complete', 'open', 'validation pending')):
+                                
+                                oid = order['orderid']
+                                orderid_list.append(oid)
+                                logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
+                                found = True
+                                break
+                        if found: break
+                        else: logger.info("Order not found in book. Retrying placement..."); continue
+                    except Exception as e:
+                        logger.error(f"Error checking book: {e}. Retrying placement...")
+                        continue
                 except Exception as e:
                     handle_exception(e); sleep(1)
         return orderid_list
