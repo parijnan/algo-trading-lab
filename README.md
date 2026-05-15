@@ -94,6 +94,24 @@ All production strategies (Artemis, Apollo, Athena) implement a robust order pla
 - **Session Kill Switch:** Detects session-level failures (invalid tokens) and aborts execution to return control to Leto, preventing infinite failing retry loops.
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
 
+## Slack Interactive Control
+
+The laboratory is managed remotely via a dedicated **#actions** Slack channel using an interactive **Control Panel**. This eliminates the need for SSH access during market hours and ensures human-in-the-loop safety.
+
+### Circuit Breakers (Socket Mode)
+A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode to receive real-time commands:
+- **`⚠️ Exit Trade`**: Liquidates all active positions across all strategies and halts the bot immediately.
+- **`🚨 Kill Switch`**: Drops automated control immediately without liquidating. Positions remain open for manual intervention.
+- **`⏸️ Disable Algo`**: Sets a persistent flag that prevents Leto from starting any new sessions or routing to strategies.
+- **`✅ Clear Flag`**: Removes all blocking flags to resume normal automated operations.
+- **`🚀 Start Leto`**: Manually triggers the `leto.py` orchestrator outside of the standard cron schedule.
+
+### Remote Position Sizing
+The **`⚙️ Manage Sizing`** button triggers a Slack Modal for surgical configuration updates:
+- **Sizing Mode**: Toggle between "Dynamic Auto-Sizing" (capital-based) and "Fixed Lots".
+- **Lot Count**: Update the specific lot count for Artemis, Athena, or Apollo.
+- **Persistence**: Updates are written directly to the strategy's `configs_live.py` or `trade_settings.csv` on the VPS, surviving restarts and reboots.
+
 ## Infrastructure
 
 | Component | Details |
@@ -303,9 +321,11 @@ For the archival details, see the [Phase 4 Research Document](./plans/phase-4-co
 ```
 algo-trading-lab/
 ├── README.md
+├── REQUIREMENTS.md                 # System dependencies and Python modules
 ├── .gitignore
 ├── analyze_broker_state.py         # Utility for post-market margin and orderbook analysis
 ├── leto.py                         # Session router and strategy entry point
+├── slack_listener.py               # Slack interactive daemon (Socket Mode)
 ├── data/                           # Shared runtime data (credentials, holidays)
 │   ├── user_credentials.csv        # not in git
 │   └── holidays.csv
