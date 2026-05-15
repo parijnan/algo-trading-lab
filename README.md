@@ -153,7 +153,7 @@ The system is in complete compliance with circular **[SEBI/HO/MRD/TPD-1/P/CIR/20
 
 ### Retail Algorithmic Trading Compliance
 The system is in complete compliance with circular **[SEBI/HO/MIRSD/MIRSD-PoD/P/CIR/2025/0000013](https://www.sebi.gov.in/legal/circulars/feb-2025/safer-participation-of-retail-investors-in-algorithmic-trading_91614.html)** regarding safer participation of retail investors in algorithmic trading.
-- **Order Management:** Implements strict client-side rate limiting (RMS=2, OrderBook=1, LTP=10, Candles=3) to prevent burst-traffic and ensure adherence to retail order-frequency mandates.
+- **Order Management:** Enforces a strict limit of **10 orders per second** as mandated by SEBI for retail participants. Additionally, the system implements granular client-side rate limiting for broker-specific endpoints (RMS=2, OrderBook=1, LTP=10, Candles=3) to prevent burst-traffic and maintain operational stability.
 - **Traceability:** All production execution is routed through a fixed, static IPv4 address (Linode VPS `delos`) registered with the broker for end-to-end auditability and compliance with retail algo traceability norms.
 
 ## Cron (delos)
