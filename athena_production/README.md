@@ -25,8 +25,8 @@ graph TD
     
     Status -- Idle --> DayCheck{Entry Day 10:30?}
     DayCheck -- Yes --> Strikes[Select Double Calendar Strikes]
-    Strikes --> Entry[Batch Order Execution: Buy Monthly first]
-    Entry --> Poll[Polling Loop: Every 60s]
+    Strikes --> Entry[Batch Entry: Buy Monthly -> Sell Weekly -> Buy PE Wing]
+    Entry --> Poll[Polling Loop: Every 20s]
     
     Status -- In Trade --> Poll
     
@@ -34,7 +34,7 @@ graph TD
     Poll -- Spot <= CE + Offset --> Unhedge[Exit Parachute CE Hedge]
     
     Poll --> ExitCheck{Pre-expiry Exit Time?}
-    ExitCheck -- Yes --> Close[Close All Legs: Sell Monthly first]
+    ExitCheck -- Yes --> Close[Close All Legs: Buy Weekly first]
     Close --> End([Athena Complete])
     
     Poll -- Market Close --> Sleep[Sleep]
