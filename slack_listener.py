@@ -209,7 +209,6 @@ def handle_start(ack, body, say):
 
     # Check if Leto is already running
     try:
-        # Grep for leto.py but exclude the grep process itself and other common matches
         pgrep = subprocess.run(["pgrep", "-f", "python.*leto.py"], capture_output=True, text=True)
         if pgrep.stdout.strip():
             say(channel="#tradebot-updates", text="❌ Leto is already running. Duplicate process prevented.")
@@ -219,7 +218,6 @@ def handle_start(ack, body, say):
 
     # Launch Leto
     try:
-        # Launch Leto in a separate process group so it doesn't die if listener restarts
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         log_name = os.path.join(BASE_DIR, "logs", f"leto_manual_{timestamp}.log")
         with open(log_name, "w") as log_f:
@@ -330,42 +328,6 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     else:
         err_msg = f"❌ *Error*: Failed to update configuration for {strategy}. Check daemon logs on VPS."
         client.chat_postMessage(channel="#error-alerts", text=err_msg)
-
-# ---------------------------------------------------------------------------
-# Initializer
-# ---------------------------------------------------------------------------
-
-def post_control_panel():
-    try:
-        # Find #actions channel ID
-        result = app.client.conversations_list(types="public_channel,private_channel")
-        actions_channel_id = None
-        for channel in result["channels"]:
-            if channel["name"] == "actions":
-                actions_channel_id = channel["id"]
-                break
-        
-        if not actions_channel_id:
-            logger.error("Could not find #actions channel. Make sure the bot is invited to it.")
-            return
-
-        # Post the control panel
-        app.client.chat_postMessage(
-            channel=actions_channel_id,
-            text="Algo Trading Lab Control Panel",
-            blocks=CONTROL_PANEL_BLOCKS
-        )
-        logger.info(f"Control Panel posted to #actions ({actions_channel_id}).")
-    except Exception as e:
-        logger.error(f"Failed to post Control Panel: {e}")
-
-if __name__ == "__main__":
-    # Post control panel on start
-    post_control_panel()
-    
-    # Start Socket Mode Handler
-    handler = SocketModeHandler(app, app_token)
-    handler.start()
 
 # ---------------------------------------------------------------------------
 # Initializer
