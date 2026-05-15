@@ -52,12 +52,12 @@ def update_python_config(file_path, lot_calc, lot_count):
         with open(file_path, 'r') as f:
             content = f.read()
         
-        # Replace LOT_CALC
+        # Replace LOT_CALC - Use \g<1> to avoid octal escape ambiguity
         calc_val = "True" if lot_calc else "False"
-        content = re.sub(r'(LOT_CALC\s*=\s*)(True|False)', f'\\1{calc_val}', content)
+        content = re.sub(r'(LOT_CALC\s*=\s*)(True|False)', f'\\g<1>{calc_val}', content)
         
-        # Replace LOT_COUNT
-        content = re.sub(r'(LOT_COUNT\s*=\s*)(\d+)', f'\\1{lot_count}', content)
+        # Replace LOT_COUNT - Use \g<1> to avoid octal escape ambiguity
+        content = re.sub(r'(LOT_COUNT\s*=\s*)(\d+)', f'\\g<1>{lot_count}', content)
         
         with open(file_path, 'w') as f:
             f.write(content)
