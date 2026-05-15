@@ -117,6 +117,31 @@ All production strategies (Artemis, Apollo, Athena) implement a robust order pla
 | Notifications | Slack |
 | Language | Python |
 
+## Slack Messaging
+
+The laboratory is integrated with Slack for real-time monitoring and alerting. Each strategy and the data pipeline route messages to specific channels based on the event priority.
+
+### Monitoring Channels
+
+| Channel | Purpose | Sources |
+| :--- | :--- | :--- |
+| **`#trade-alerts`** | High-priority trade events: entries, exits, adjustments, and SL hits. | Artemis, Athena, Apollo |
+| **`#trade-updates`** | Periodic status updates: LTP tracking, current P&L, and peak drawdown/profit. | Artemis, Athena |
+| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, session termination, and archival. | Leto, Apollo |
+| **`#error-alerts`** | Fatal exceptions, rate limit cooling, ghost order recoveries, and network timeouts. | All Strategies, Leto, Data Pipeline |
+| **`#data-alerts`** | Pipeline status: Start/End notifications and daily download completion reports. | Data Pipeline |
+
+### Automated Pipeline Messaging
+
+The `data_pipeline/` infrastructure uses a dual-layer messaging system:
+
+1.  **Shell Wrappers (`run_*.sh`):**
+    -   **Start Warning:** Posts to `#data-alerts` when the downloader starts (e.g., "⚠️ *Sensex Downloader* – Run started. Do not push to GitHub.").
+    -   **System Errors:** Posts to `#error-alerts` if `git pull` or `git push` fails during the sync process.
+    -   **Final Status:** Posts a success (✅) or failure (🚨) notification with a mention (`<@MEMBER_ID>`) upon completion.
+2.  **Python Downloaders (`weekly_option_data_*.py`):**
+    -   Post detailed completion summaries and any API-level warnings to `#data-alerts`.
+
 ## VIX Regime
 
 | VIX Level | Strategy |
