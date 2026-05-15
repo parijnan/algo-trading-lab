@@ -141,7 +141,7 @@ CONTROL_PANEL_BLOCKS = [
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "⚙️ Position Sizing"},
+                "text": {"type": "plain_text", "text": "⚙️ Manage Sizing"},
                 "action_id": "btn_pos_sizing"
             }
         ]
