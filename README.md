@@ -115,8 +115,8 @@ The laboratory is integrated with Slack for real-time monitoring and alerting. E
 | Channel | Purpose | Sources |
 | :--- | :--- | :--- |
 | **`#trade-alerts`** | High-priority trade events: entries, exits, adjustments, and SL hits. | Artemis, Athena, Apollo |
-| **`#trade-updates`** | Periodic status updates: LTP tracking, current P&L, and peak drawdown/profit. | Artemis, Athena |
-| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, session termination, and archival. | Leto, Apollo |
+| **`#trade-updates`** | Periodic status updates: LTP tracking, current P&L, and peak drawdown/profit. | Artemis, Athena, Apollo |
+| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, session termination, and archival. | Leto, Artemis, Apollo |
 | **`#error-alerts`** | Fatal exceptions, rate limit cooling, ghost order recoveries, and network timeouts. | All Strategies, Leto, Data Pipeline |
 | **`#data-alerts`** | Pipeline status: Start/End notifications and daily download completion reports. | Data Pipeline |
 
