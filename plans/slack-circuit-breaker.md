@@ -54,6 +54,9 @@ These buttons will be housed in a persistent "Control Panel" message within a de
 * Map `KILL` to immediately raising an exception (bypassing exit execution).
 * Explicitly ignore `DISABLE` inside the strategy loop so active trades can finish cleanly.
 
+### Step 6: Documentation
+* Update root `README.md` to document the Circuit Breaker workflow, the `#actions` channel, and the functionality of each button.
+
 ## Expected Outcomes
 * **Zero SSH Management:** Full lifecycle control directly from mobile via a clean Slack UI.
 * **Human-Bot Separation:** Eliminates race conditions between manual intervention and automated cron jobs.

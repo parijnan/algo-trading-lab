@@ -52,6 +52,9 @@ Implement targeted file manipulation logic within the daemon to update the sourc
 * **Success**: Upon successful file write, use `client.chat_postMessage` to send a summary to `#tradebot-updates` (e.g., `✅ *Position Sizing Updated* by @user: Athena set to Fixed Lots (41).`).
 * **Failure**: Catch `IOError` or unexpected parsing errors, log them locally, and send a traceback summary to `#error-alerts`.
 
+### Step 5: Documentation
+* Update root `README.md` to document the Position Sizing workflow and the 5-minute Monday morning transition window.
+
 ## Expected Outcomes
 * **Unified Management**: No need to SSH into the VPS or use an IDE to adjust sizes before the Monday open.
 * **State Persistence**: Modifying the source config files directly guarantees that Leto and the strategies will inherently respect the new settings upon their next instantiation, surviving reboots.

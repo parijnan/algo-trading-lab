@@ -46,17 +46,6 @@ A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25).
 | Broker | Angel Broking (SmartConnect) |
 | Status | Live |
 
-### [Phase 3 Research](./apollo_backtest/) — ML Regime Adaptation (Solo Quant)
-Research into replacing fixed VIX/Supertrend routing with a LightGBM/HMM regime classifier. Focuses on "Spatial Coordinates" (Price-EMA tension) and "Institutional Intent" (1-minute OI accumulation).
-
-| | |
-|---|---|
-| Framework | Solo Quant ML Architecture |
-| Model | LightGBM Classifier |
-| Features | DTEMA 20, PCR Velocity, Risk Signals |
-| Goal | Stealth Trend detection |
-| Status | **Research Lab (Underperforms Phase 2)** |
-
 ## Session Router
 
 ### [Leto](./leto.py) — Strategy Router and Session Manager
@@ -70,7 +59,7 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
    - **VIX ≤ 16.0** → Artemis (Mon-Thu only)
    - **16.0 < VIX ≤ 25.0** → Athena (Mon-Thu only)
    - **VIX > 25.0** → Apollo (Any day)
-5. **Handoff Mechanism:** If a strategy standing down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
+5. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
 
 ### Orchestration Flow
 
@@ -151,6 +140,20 @@ The `data_pipeline/` infrastructure uses a dual-layer messaging system:
 | > 25 | Apollo |
 
 Open position detection overrides VIX routing in all cases — an active Apollo, Artemis, or Athena trade is always resumed to completion regardless of current VIX or day of week.
+
+## Regulatory Compliance
+
+The laboratory is designed with structural safeguards to ensure strict adherence to Indian market regulations and SEBI mandates.
+
+### ELM & Calendar Spread Margin Compliance
+The system is in complete compliance with circular **[SEBI/HO/MRD/TPD-1/P/CIR/2024/132](https://www.sebi.gov.in/legal/circulars/oct-2024/measures-to-strengthen-equity-index-derivatives-framework-for-increased-investor-protection-and-market-stability_87208.html)** regarding the removal of Calendar Spread margin benefits on expiry day and increased Extra Loss Margin (ELM) requirements.
+- **Artemis:** Actively rolls hedges inward and exits additional lots on the day prior to expiry to mitigate ELM spikes.
+- **Athena:** Enforces a hard pre-expiry exit at 10:25 AM the day before expiry specifically to eliminate exposure during the margin-benefit removal window.
+
+### Retail Algorithmic Trading Compliance
+The system is in complete compliance with circular **[SEBI/HO/MIRSD/MIRSD-PoD/P/CIR/2025/0000013](https://www.sebi.gov.in/legal/circulars/feb-2025/safer-participation-of-retail-investors-in-algorithmic-trading_91614.html)** regarding safer participation of retail investors in algorithmic trading.
+- **Order Management:** Implements strict client-side rate limiting (RMS=2, OrderBook=1, LTP=10, Candles=3) to prevent burst-traffic and ensure adherence to retail order-frequency mandates.
+- **Traceability:** All production execution is routed through a fixed, static IPv4 address (Linode VPS `delos`) registered with the broker for end-to-end auditability and compliance with retail algo traceability norms.
 
 ## Cron (delos)
 
@@ -256,6 +259,23 @@ The following benchmark represents the \"Gold Standard\" performance of the lab'
 | **Portfolio Beta** | **0.01** | 1.00 |
 
 *Note: Apollo results are based on the latest 15-min Supertrend logic with a strict VIX > 25 gate. All metrics account for idle time and assume a 5% risk-free rate.*
+
+---
+
+## Phase 3 Research: ML Regime Adaptation
+
+Research into replacing fixed VIX/Supertrend routing with a LightGBM/HMM regime classifier. Focuses on "Spatial Coordinates" (Price-EMA tension) and "Institutional Intent" (1-minute OI accumulation).
+
+| | |
+|---|---|
+| Framework | Solo Quant ML Architecture |
+| Model | LightGBM Classifier |
+| Features | DTEMA 20, PCR Velocity, Risk Signals |
+| Goal | Stealth Trend detection |
+| Status | **Research Lab (Underperforms Phase 2)** |
+
+### Verdict
+Research into ML-based regime adaptation (LightGBM and HMM) using "Spatial Price-VIX" coordinates and "Institutional Intent" (1-min OI accumulation) proved that while these features offer higher precision in backtests, they introduce significant overfitting risk and execution latency. The simpler, rule-based VIX regime routing of Phase 2 consistently provided superior risk-adjusted returns and operational stability in real-world scenarios.
 
 ---
 
