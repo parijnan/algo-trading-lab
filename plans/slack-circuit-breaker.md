@@ -1,38 +1,41 @@
 # Slack Circuit Breaker Architecture
 
 ## Objective
-Implement a highly resilient, file-based circuit breaker controlled via Slack. This enables manual intervention (`!kill`, `!exit`, `!disable`) without risking Leto automatically taking back control on subsequent cron runs. It cleanly separates human management from automated cron jobs.
+Implement a highly resilient, file-based circuit breaker controlled via Slack **interactive buttons (Block Kit)**. This enables manual intervention (Kill, Exit, Disable, Start, Clear) without needing to type commands or risking Leto automatically taking back control on subsequent cron runs. It cleanly separates human management from automated cron jobs, offering a persistent "Control Panel" UI housed in a dedicated `#actions` channel.
 
 ## Architecture Overview
-1. **Slack Listener Daemon (`slack_listener.py`)**: A standalone, lightweight process utilizing Slack's Socket Mode to listen for commands 24/7 without exposing webhooks.
+1. **Slack Listener Daemon (`slack_listener.py`)**: A standalone, lightweight process utilizing Slack's Socket Mode to listen for interactive button clicks 24/7 without exposing webhooks.
 2. **Systemd Service**: A Linux service configuration ensuring the daemon runs continuously and auto-restarts on failure or server reboot.
 3. **File-Based Flag (`SLACK_COMMAND.flag`)**: A persistent state file in the `data/` directory. By persisting the flag to disk, the circuit breaker remains active even if the VPS reboots.
 4. **Leto Gatekeeper**: `leto.py` checks for the flag *before* initiating any broker login or strategy routing.
 5. **Strategy Polling Integration**: Active strategies (Apollo, Artemis, Athena) poll the flag file during their existing loops to halt or liquidate if a command is received mid-trade.
 
-## Command Definitions
+## Interactive Buttons (Control Panel)
 
-| Command | Action on Active Trade (Strategy Loop) | Action on Leto Startup (`leto.py`) |
+These buttons will be housed in a persistent "Control Panel" message within a dedicated `#actions` channel.
+
+| Button | Action on Active Trade (Strategy Loop) | Action on Leto Startup (`leto.py`) |
 | :--- | :--- | :--- |
-| **`!exit`** | Liquidates open positions safely, drops control. | Aborts startup. |
-| **`!kill`** | Drops control immediately. Positions remain open. | Aborts startup. |
-| **`!disable`** | Ignores flag (lets active trades run safely). | Aborts startup. |
-| **`!clear`** | Clears flag. | Resumes normal operations. |
-| **`!start`** | N/A | **Manually triggers `leto.py` run.** |
+| **`Exit Trade`** | Liquidates open positions safely, drops control. | Aborts startup. |
+| **`Kill Switch`** | Drops control immediately. Positions remain open. | Aborts startup. |
+| **`Disable Algo`** | Ignores flag (lets active trades run safely). | Aborts startup. |
+| **`Clear Flag`** | Clears flag. | Resumes normal operations. |
+| **`Start Leto`** | N/A | **Manually triggers `leto.py` run.** |
 
 ## Implementation Steps
 
 ### Step 1: Slack App Configuration
 * Go to the Slack API Dashboard for the existing bot.
-* Enable **Socket Mode**.
+* Enable **Socket Mode** and **Interactivity & Shortcuts**.
 * Generate an App-Level Token (`xapp-...`).
-* Under Event Subscriptions, subscribe to `message.channels` or `app_mention`.
+* Under Event Subscriptions, ensure the bot is configured to handle interactivity payloads.
 
 ### Step 2: Listener Daemon
 * Create a new script: `slack_listener.py` (preferably in `data_pipeline/` or root).
 * Utilize the `slack_bolt` App framework.
-* Add listeners for the 5 commands (`!exit`, `!kill`, `!disable`, `!clear`, `!start`).
-* **`!start` Logic**: Must check if `SLACK_COMMAND.flag` exists and verify that `leto.py` is not already running (via `pgrep`) before spawning a detached process.
+* On startup, the daemon should post (or update a pinned) Block Kit UI containing the 5 interactive buttons to the `#actions` channel.
+* Add listeners for the 5 actions via `@app.action("action_id")`.
+* **`Start Leto` Logic**: Must check if `SLACK_COMMAND.flag` exists and verify that `leto.py` is not already running (via `pgrep`) before spawning a detached process.
 * Implement the Monitor & Confirm loop: the daemon must write the command to `data/SLACK_COMMAND.flag` and immediately send a confirmation message back to `#tradebot-updates`.
 
 ### Step 3: Systemd Service Setup
@@ -52,6 +55,6 @@ Implement a highly resilient, file-based circuit breaker controlled via Slack. T
 * Explicitly ignore `DISABLE` inside the strategy loop so active trades can finish cleanly.
 
 ## Expected Outcomes
-* **Zero SSH Management:** Full lifecycle control directly from mobile via Slack.
+* **Zero SSH Management:** Full lifecycle control directly from mobile via a clean Slack UI.
 * **Human-Bot Separation:** Eliminates race conditions between manual intervention and automated cron jobs.
 * **High Reliability:** Immune to single-process crashes or VPS reboots. Leto stays disabled until explicitly cleared.
