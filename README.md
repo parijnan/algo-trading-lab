@@ -259,21 +259,21 @@ The following benchmark represents the \"Gold Standard\" performance of the lab'
 
 ---
 
-## Phase 4 Roadmap: Strategic Convergence
+## Phase 4 Research: Strategic Convergence
 
-We are currently in **Phase 4**, focusing on unifying Artemis, Athena, and Apollo into a single Nifty-based portfolio managed by a dynamic version of Leto.
+Research into unifying Artemis, Athena, and Apollo into a single Nifty-based portfolio managed by a dynamic version of Leto.
 
-### Objectives
-- **Unified Underlyings:** Return Artemis to Nifty to enable cross-strategy interaction.
-- **Dynamic Handoffs:** Transition between strategies mid-trade based on VIX and Trend regime shifts.
-- **Greek-Based Management:** Move towards a model where Leto manages net portfolio Delta/Vega rather than isolated strike orders.
+| | |
+|---|---|
+| Framework | Unified Nifty Portfolio |
+| Logic | Dynamic VIX/Trend Handoffs |
+| Objective | Greek-Based Portfolio Management |
+| Status | **Research Complete (Underperforms Phase 2)** |
 
-### Current Progress
-- [ ] Phase 4.1: Artemis Nifty Translation & Weekend Hedging backtest.
-- [ ] Phase 4.2: Leto Handoff Simulation (Hard Liquidation vs Leg Morphing).
-- [ ] Phase 4.3: Unified Greeks Manager implementation.
+### Verdict
+Exploration of Phase 4 (Nifty translation for Artemis and dynamic strategy morphing) has been completed. Similar to Phase 3 ML research, the increased complexity of dynamic handoffs and unified underlyings resulted in lower risk-adjusted returns compared to the isolated VIX-regime architecture of Phase 2. The lab will continue to operate on the **Phase 2 Baseline** for production execution.
 
-For the full detailed plan, see the [Phase 4 Research Document](./plans/phase-4-convergence.md) (in progress).
+For the archival details, see the [Phase 4 Research Document](./plans/phase-4-convergence.md).
 
 ---
 
