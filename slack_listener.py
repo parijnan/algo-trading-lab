@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import logging
+import re
 import pandas as pd
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -14,6 +15,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 LOG_FILE = os.path.join(BASE_DIR, "logs", "slack_listener.log")
 FLAG_FILE = os.path.join(DATA_DIR, "SLACK_COMMAND.flag")
 CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
+
+# Strategy Config Paths
+ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
+APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
+ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
 
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -35,6 +41,42 @@ except Exception as e:
     sys.exit(1)
 
 app = App(token=bot_token)
+
+# ---------------------------------------------------------------------------
+# Config Editors
+# ---------------------------------------------------------------------------
+
+def update_python_config(file_path, lot_calc, lot_count):
+    """Surgically update LOT_CALC and LOT_COUNT in a python config file."""
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+        
+        # Replace LOT_CALC
+        calc_val = "True" if lot_calc else "False"
+        content = re.sub(r'(LOT_CALC\s*=\s*)(True|False)', f'\\1{calc_val}', content)
+        
+        # Replace LOT_COUNT
+        content = re.sub(r'(LOT_COUNT\s*=\s*)(\d+)', f'\\1{lot_count}', content)
+        
+        with open(file_path, 'w') as f:
+            f.write(content)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update Python config {file_path}: {e}")
+        return False
+
+def update_artemis_config(lot_calc, lot_count):
+    """Update trade_settings.csv for Artemis."""
+    try:
+        df = pd.read_csv(ARTEMIS_CONFIG)
+        df.loc[0, 'lot_calc'] = lot_calc
+        df.loc[0, 'lot_count'] = int(lot_count)
+        df.to_csv(ARTEMIS_CONFIG, index=False)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update Artemis config: {e}")
+        return False
 
 # ---------------------------------------------------------------------------
 # Control Panel UI (Block Kit)
@@ -195,11 +237,135 @@ def handle_start(ack, body, say):
         logger.error(err_msg)
         say(channel="#error-alerts", text=f"🚨 {err_msg}")
 
+# ---------------------------------------------------------------------------
+# Position Sizing Modal
+# ---------------------------------------------------------------------------
+
 @app.action("btn_pos_sizing")
 def handle_pos_sizing_btn(ack, body, client):
     ack()
-    # To be implemented in next phase: Open Modal
-    client.chat_postMessage(channel="#tradebot-updates", text="⚙️ Position Sizing Modal logic coming in next phase.")
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "view_pos_sizing",
+            "title": {"type": "plain_text", "text": "Position Sizing"},
+            "submit": {"type": "plain_text", "text": "Apply Changes"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "block_strategy",
+                    "label": {"type": "plain_text", "text": "Strategy"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "select_strategy",
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
+                            {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
+                            {"text": {"type": "plain_text", "text": "Apollo (Nifty Trend)"}, "value": "Apollo"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_mode",
+                    "label": {"type": "plain_text", "text": "Sizing Mode"},
+                    "element": {
+                        "type": "radio_buttons",
+                        "action_id": "radio_mode",
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Dynamic Auto-Sizing"}, "value": "dynamic"},
+                            {"text": {"type": "plain_text", "text": "Fixed Lots"}, "value": "fixed"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_lots",
+                    "label": {"type": "plain_text", "text": "Lot Count"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "input_lots",
+                        "placeholder": {"type": "plain_text", "text": "e.g. 41"}
+                    }
+                }
+            ]
+        }
+    )
+
+@app.view("view_pos_sizing")
+def handle_pos_sizing_submission(ack, body, view, say, client):
+    # Extract values
+    strategy = view["state"]["values"]["block_strategy"]["select_strategy"]["selected_option"]["value"]
+    mode = view["state"]["values"]["block_mode"]["radio_mode"]["selected_option"]["value"]
+    lots_str = view["state"]["values"]["block_lots"]["input_lots"]["value"]
+    user_id = body["user"]["id"]
+
+    # Validate Lot Count
+    try:
+        lots = int(lots_str)
+        if lots <= 0: raise ValueError
+    except ValueError:
+        ack(response_action="errors", errors={"block_lots": "Please enter a positive integer for lot count."})
+        return
+
+    ack()
+    
+    lot_calc = (mode == "dynamic")
+    success = False
+
+    if strategy == "Artemis":
+        success = update_artemis_config(lot_calc, lots)
+    elif strategy == "Athena":
+        success = update_python_config(ATHENA_CONFIG, lot_calc, lots)
+    elif strategy == "Apollo":
+        success = update_python_config(APOLLO_CONFIG, lot_calc, lots)
+
+    if success:
+        mode_text = "Dynamic Auto-Sizing" if lot_calc else "Fixed Lots"
+        msg = f"✅ *Position Sizing Updated* by <@{user_id}>\n*Strategy:* {strategy}\n*Mode:* {mode_text}\n*Lots:* {lots}"
+        client.chat_postMessage(channel="#tradebot-updates", text=msg)
+        logger.info(f"Position sizing updated for {strategy} by <@{user_id}>: Mode={mode_text}, Lots={lots}")
+    else:
+        err_msg = f"❌ *Error*: Failed to update configuration for {strategy}. Check daemon logs on VPS."
+        client.chat_postMessage(channel="#error-alerts", text=err_msg)
+
+# ---------------------------------------------------------------------------
+# Initializer
+# ---------------------------------------------------------------------------
+
+def post_control_panel():
+    try:
+        # Find #actions channel ID
+        result = app.client.conversations_list(types="public_channel,private_channel")
+        actions_channel_id = None
+        for channel in result["channels"]:
+            if channel["name"] == "actions":
+                actions_channel_id = channel["id"]
+                break
+        
+        if not actions_channel_id:
+            logger.error("Could not find #actions channel. Make sure the bot is invited to it.")
+            return
+
+        # Post the control panel
+        app.client.chat_postMessage(
+            channel=actions_channel_id,
+            text="Algo Trading Lab Control Panel",
+            blocks=CONTROL_PANEL_BLOCKS
+        )
+        logger.info(f"Control Panel posted to #actions ({actions_channel_id}).")
+    except Exception as e:
+        logger.error(f"Failed to post Control Panel: {e}")
+
+if __name__ == "__main__":
+    # Post control panel on start
+    post_control_panel()
+    
+    # Start Socket Mode Handler
+    handler = SocketModeHandler(app, app_token)
+    handler.start()
 
 # ---------------------------------------------------------------------------
 # Initializer
