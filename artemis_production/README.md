@@ -40,7 +40,7 @@ checks, scrip master download, and session teardown. Artemis receives:
 graph TD
     Start([Leto Call]) --> EntryCheck{Active Position?}
     EntryCheck -- No --> Monday{Monday 10:30?}
-    Monday -- Yes --> SetupIC[Sell 0.30 Delta Iron Condor]
+    Monday -- Yes --> SetupIC[Sell Iron Condor as per expected premium defined in configs]
     Monday -- No --> StandDown[Stand Down]
     
     EntryCheck -- Yes --> Monitor[Monitor Loop: Every 20s]
