@@ -47,14 +47,17 @@ graph TD
     SetupIC --> Monitor
     
     Monitor --> SLHit{Stop Loss Hit?}
-    SLHit -- No --> ELMCheck{ELM Time Hit?}
-    ELMCheck -- Yes --> ELMAdj[Close Tested Leg / Roll Hedge]
-    ELMCheck -- No --> Expiry{Market Close/Expiry?}
-    
     SLHit -- Yes --> Transform[Transform: Close Tested Side, Roll & Reinforce Winning Side]
     Transform --> Monitor
     
-    ELMAdj --> Expiry
+    SLHit -- No --> ELMCheck{ELM Time: Day Before Expiry?}
+    ELMCheck -- Yes --> ELMType{Both Sides Active?}
+    ELMType -- Yes --> ChooseSide[Retain Side with Higher Premium / Close Other]
+    ELMType -- No --> ELMAdj[Roll Hedge Inward / Exit Additional Lots]
+    ELMCheck -- No --> Expiry{Market Close/Expiry?}
+    
+    ChooseSide --> Monitor
+    ELMAdj --> Monitor
     Expiry -- No --> Monitor
     Expiry -- Yes --> Archive[Log & Archive Trade]
     Archive --> End([Exit Artemis])
