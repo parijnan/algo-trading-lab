@@ -18,6 +18,7 @@ Implement a highly resilient, file-based circuit breaker controlled via Slack. T
 | **`!kill`** | Drops control immediately. Positions remain open. | Aborts startup. |
 | **`!disable`** | Ignores flag (lets active trades run safely). | Aborts startup. |
 | **`!clear`** | Clears flag. | Resumes normal operations. |
+| **`!start`** | N/A | **Manually triggers `leto.py` run.** |
 
 ## Implementation Steps
 
@@ -30,7 +31,8 @@ Implement a highly resilient, file-based circuit breaker controlled via Slack. T
 ### Step 2: Listener Daemon
 * Create a new script: `slack_listener.py` (preferably in `data_pipeline/` or root).
 * Utilize the `slack_bolt` App framework.
-* Add listeners for the 4 commands.
+* Add listeners for the 5 commands (`!exit`, `!kill`, `!disable`, `!clear`, `!start`).
+* **`!start` Logic**: Must check if `SLACK_COMMAND.flag` exists and verify that `leto.py` is not already running (via `pgrep`) before spawning a detached process.
 * Implement the Monitor & Confirm loop: the daemon must write the command to `data/SLACK_COMMAND.flag` and immediately send a confirmation message back to `#tradebot-updates`.
 
 ### Step 3: Systemd Service Setup
