@@ -37,6 +37,7 @@ def run(obj, instrument_df):
     # Trade monitoring loop
     while iron_condor.current_time > opening_time and iron_condor.current_time < closing_time:
         try:
+            iron_condor._check_slack_commands()
             if not iron_condor.monitor_trade():
                 break
             iron_condor.evaluate_adjust_for_elm()

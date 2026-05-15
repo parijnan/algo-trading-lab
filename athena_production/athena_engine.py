@@ -522,6 +522,39 @@ class Athena:
                     realised = round(fill - self.state.emer_entry, 2); self.state.running_realised_pl += realised; slack_bot_sendtext(f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f} | Realised: {realised:+.1f} pts", SLACK_TRADE_ALERTS)
                     self.state.emer_active = False; self.state.emer_strike = None; self.state.emer_symbol = None; self.state.emer_token = None; self.state.emer_entry = 0.0; save_state(self.state)
 
+    def _check_slack_commands(self):
+        """
+        Check for persistent Slack command flags during the live trade.
+        Handles EXIT (liquidate) and KILL (halt immediately).
+        """
+        flag_path = os.path.join(REPO_ROOT, 'data', 'SLACK_COMMAND.flag')
+        if os.path.exists(flag_path):
+            try:
+                with open(flag_path, 'r') as f:
+                    command = f.read().strip()
+                
+                if command == "EXIT":
+                    msg = "⚠️ *Athena*: Slack `Exit Trade` detected. Liquidating..."
+                    logger.critical(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                    if self.state.status == 'in_trade':
+                        self._execute_exit(reason='slack_exit')
+                    raise Exception("Session terminated by Slack !exit command.")
+                
+                elif command == "KILL":
+                    msg = "🚨 *Athena*: Slack `Kill Switch` detected. Dropping control immediately."
+                    logger.critical(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                    self.state.status = 'idle'
+                    save_state(self.state)
+                    raise Exception("Session terminated by Slack !kill command.")
+                
+                # If command == "DISABLE", we do nothing inside the loop. 
+                # Leto will catch it on the next startup.
+            except Exception as e:
+                if "Session terminated" in str(e): raise
+                logger.error(f"Error reading slack command flag: {e}")
+
     def run(self):
         """
         Main entry loop called by leto.py.
@@ -531,6 +564,7 @@ class Athena:
         """
         logger.info("=== Athena run loop started ===")
         while True:
+            self._check_slack_commands()
             now = datetime.now()
             if now.time() >= self._closing_time: break
             if self.state.status == 'idle':

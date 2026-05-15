@@ -119,6 +119,29 @@ def _write_error_log(msg):
 
 
 # ---------------------------------------------------------------------------
+# Circuit Breaker Check
+# ---------------------------------------------------------------------------
+
+def _check_circuit_breaker():
+    """
+    Check for the presence of a persistent Slack command flag.
+    If EXIT, KILL, or DISABLE is active, abort Leto immediately.
+    """
+    flag_path = os.path.join(DATA_DIR, 'SLACK_COMMAND.flag')
+    if os.path.exists(flag_path):
+        try:
+            with open(flag_path, 'r') as f:
+                command = f.read().strip()
+            
+            if command in ["EXIT", "KILL", "DISABLE"]:
+                msg = f"⛔ *Leto*: Circuit Breaker active (Flag: _{command}_). Standing down. Send `Clear Flag` to resume."
+                logger.info(msg.replace('*', ''))
+                _slack(msg)
+                sys.exit(0)
+        except Exception as e:
+            logger.error(f"Error reading circuit breaker flag: {e}")
+
+# ---------------------------------------------------------------------------
 # Login
 # ---------------------------------------------------------------------------
 
@@ -421,6 +444,7 @@ def _run_artemis(obj, instrument_df_sensex):
 
 if __name__ == '__main__':
     logger.info("=== Leto starting ===")
+    _check_circuit_breaker()
     obj        = None
     auth_token = None
 

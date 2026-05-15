@@ -523,6 +523,42 @@ class IronCondor:
                 self.trade_book_df.iloc[i, 7] = self.ce_spread.sell_entry - self.ce_spread.sell_ltp
             self.trade_book_df.to_csv('data/trade_book.csv', index=False)
 
+    def _check_slack_commands(self):
+        """
+        Check for persistent Slack command flags during the live trade.
+        Handles EXIT (liquidate) and KILL (halt immediately).
+        """
+        from os.path import exists as path_exists
+        flag_path = os.path.join(REPO_ROOT, 'data', 'SLACK_COMMAND.flag')
+        if path_exists(flag_path):
+            try:
+                with open(flag_path, 'r') as f:
+                    command = f.read().strip()
+                
+                if command == "EXIT":
+                    msg = "⚠️ *Artemis*: Slack `Exit Trade` detected. Liquidating..."
+                    print(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, "#trade-alerts")
+                    if self.trade_status:
+                        self.pe_spread.exit_spread()
+                        self.ce_spread.exit_spread()
+                        self._update_trade_book_exit()
+                        self._archive_trade()
+                    raise Exception("Session terminated by Slack !exit command.")
+                
+                elif command == "KILL":
+                    msg = "🚨 *Artemis*: Slack `Kill Switch` detected. Dropping control immediately."
+                    print(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, "#trade-alerts")
+                    # We don't reset state so it can be resumed manually if needed
+                    raise Exception("Session terminated by Slack !kill command.")
+                
+                # If command == "DISABLE", we do nothing inside the loop. 
+                # Leto will catch it on the next startup.
+            except Exception as e:
+                if "Session terminated" in str(e): raise
+                handle_exception(e)
+
     # Method to monitor spread
     def monitor_trade(self):
         if not self.trade_status:

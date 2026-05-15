@@ -205,6 +205,39 @@ class Apollo:
             f"*Apollo*: Session complete. Feed stopped at {datetime.now():%Y-%m-%d %H:%M:%S}.",
             SLACK_TRADEBOT_CHANNEL)
 
+    def _check_slack_commands(self):
+        """
+        Check for persistent Slack command flags during the live trade.
+        Handles EXIT (liquidate) and KILL (halt immediately).
+        """
+        flag_path = os.path.join(DATA_DIR, 'SLACK_COMMAND.flag')
+        if os.path.exists(flag_path):
+            try:
+                with open(flag_path, 'r') as f:
+                    command = f.read().strip()
+                
+                if command == "EXIT":
+                    msg = "⚠️ *Apollo*: Slack `Exit Trade` detected. Liquidating..."
+                    logger.critical(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                    if self.state.status == 'in_trade':
+                        self._execute_exit(reason='slack_exit')
+                    raise Exception("Session terminated by Slack !exit command.")
+                
+                elif command == "KILL":
+                    msg = "🚨 *Apollo*: Slack `Kill Switch` detected. Dropping control immediately."
+                    logger.critical(msg.replace('*', ''))
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+                    # We don't reset state to idle so that it can be resumed manually if needed
+                    # but we raise to stop the bot.
+                    raise Exception("Session terminated by Slack !kill command.")
+                
+                # If command == "DISABLE", we do nothing inside the loop. 
+                # Leto will catch it on the next startup.
+            except Exception as e:
+                if "Session terminated" in str(e): raise
+                logger.error(f"Error reading slack command flag: {e}")
+
     def run(self):
         """
         Main entry point called by leto.py.
@@ -239,6 +272,7 @@ class Apollo:
 
                 elapsed = 0
                 while elapsed < seconds_to_close - 2:
+                    self._check_slack_commands()
                     sleep(1)
                     elapsed += 1
                     self._update_elapsed += 1
