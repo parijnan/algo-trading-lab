@@ -18,9 +18,16 @@ This approach has significant limitations:
 1. **Shared Data Feed Module:** Abstract the existing `websocket_feed.py` from Apollo into a root-level or shared utility that any strategy can instantiate.
 2. **Basket Subscription:** At trade entry, the strategy will register a "basket" of required tokens (e.g., Nifty Spot, CE Parachute strike, PE and CE spread legs) with the WebSocket listener.
 3. **Local Memory State:** The WebSocket will run in a background thread, constantly overwriting a local dictionary (`self.current_prices`) with the absolute latest tick data.
-4. **Sub-second Monitoring Loop:** The main strategy loop will change from a `sleep(20)` REST call to a `sleep(0.5)` local dictionary check, allowing near-instantaneous triggering of SL and Parachute conditions.
+4. Sub-second Monitoring Loop: The main strategy loop will change from a `sleep(20)` REST call to a `sleep(0.5)` local dictionary check, allowing near-instantaneous triggering of SL and Parachute conditions.
 
-## 4. Implementation Steps
+## 4. Decoupling Monitoring from Reporting (The Apollo Pattern)
+To prevent Slack spam while achieving sub-second safety, we will adopt the **Apollo Reporting Pattern**:
+- **Monitoring Loop (High Frequency):** The main loop will run with a minimal sleep (e.g., 500ms). It will execute `_check_slack_commands()`, poll the local WebSocket memory for SL/Parachute triggers, and increment a local `self._update_elapsed` counter.
+- **Gated Reporting (Low Frequency):** Based on the existing `TRADE_UPDATE_INTERVAL` (e.g., 20 or 60 seconds), the bot will only execute `_send_trade_update()` and `_append_trade_log_row()` when `self._update_elapsed >= TRADE_UPDATE_INTERVAL`.
+- **Reset:** After a report is sent, `self._update_elapsed` is reset to zero. This ensures the user sees exactly the same frequency of updates as before, but the strategy's "nervous system" is reacting at tick-speed.
+
+## 5. Implementation Steps
+
 
 ### Phase 1: Abstraction & Refactoring
 - Move `apollo_production/websocket_feed.py` to a shared location (e.g., `shared/` or `utils/`).
