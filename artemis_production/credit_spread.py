@@ -483,17 +483,16 @@ class CreditSpread:
                 total_lots = self.lots + self.additional_lots
             else:
                 total_lots = self.lots
+            # 1. Fire Burst (Execution-First)
             # Execute buy order first
             buy_orderID_list = self._place_order('BUY', self.buy_symbol, self.buy_token, total_lots)
             # Then execute sell order
             sell_orderID_list = self._place_order('SELL', self.sell_symbol, self.sell_token, total_lots)
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Fetch executed price and entry time for all traded instruments
-            self.buy_entry, self.entry = self._fetch_order_details(buy_orderID_list)
-            self.sell_entry, self.entry = self._fetch_order_details(sell_orderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            # Using the hardened _fetch_order_details with sub-second polling
+            self.buy_entry, self.entry = self._fetch_order_details(buy_orderID_list, expected_lots=total_lots)
+            self.sell_entry, self.entry = self._fetch_order_details(sell_orderID_list, expected_lots=total_lots)
             # Set stop losses as per the entry parameters
             self._set_sl()
             # Update the class variables and save to file
@@ -535,29 +534,27 @@ class CreditSpread:
         self.current_datetime = datetime.now()
         # Code to exit trade only when the spread has the original number of lots
         if self.spread_status == 'adjusted' or self.spread_status == 'active' or self.spread_status == 'active_additional_elm' or self.spread_status == 'adjusted_elm' or self.spread_status == 'adjusted_additional_elm':
+            # 1. Fire Burst (Execution-First)
             sell_exit_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.lots)
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list)
-            self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         # Code to exit trade if it has additional lots
         else:    
+            # 1. Fire Burst (Execution-First)
             # Exit sold option first
             sell_exit_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, (self.lots+self.additional_lots))
             # Exit bought options next
             if self.buy_token == self.additional_buy_token:
                 # Code to exit buy if bought option for the additional spread is the same as the original spread
                 buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, (self.lots+self.additional_lots))
-                # Get order book
-                sleep(1)
-                reset_counters()
-                self._fetch_order_book()
-                # Fetch exit details for all instruments
-                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list)
-                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list)
+                
+                # 2. Verify Fills (Verification-Second)
+                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
+                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
                 self.additional_buy_exit = self.buy_exit
                 self.additional_buy_exit_time = self.exit_time
             else:
@@ -565,14 +562,11 @@ class CreditSpread:
                 buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
                 # Code to exit additional bought option
                 additional_buy_exit_orderID_list = self._place_order('SELL', self.additional_buy_symbol, self.additional_buy_token, self.additional_lots)
-                # Get order book
-                sleep(1)
-                reset_counters()
-                self._fetch_order_book()
-                # Fetch exit details for all the instruments
-                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list)
-                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list)
-                self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_exit_orderID_list)
+
+                # 2. Verify Fills (Verification-Second)
+                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
+                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+                self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_exit_orderID_list, expected_lots=self.additional_lots)
             self.additional_booked_pl = self.additional_booked_pl + self.additional_buy_exit - self.additional_buy_entry + self.sell_entry - self.sell_exit
             self.additional_pl = self.additional_booked_pl
             self.additional_buy_ltp = self.additional_buy_exit
@@ -617,17 +611,17 @@ class CreditSpread:
         self.new_sell_symbol, self.new_sell_token = self._fetch_symbol_and_token(self.new_sell_strike)
         # Code to only adjust existing spread without entering an additional spread
         if self.current_datetime < self.elm_time and self.current_datetime > self.cutoff_time:
+            # 1. Fire Burst (Execution-First)
             # Exit existing sell
             sell_exit_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.lots)
             # Enter new sell
             new_sellorderID_list = self._place_order('SELL', self.new_sell_symbol, self.new_sell_token, self.lots)
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Get order details for all instruments
-            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list)
-            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            # Internal _fetch_order_book handles polling; loop exits on success.
+            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=self.lots)
+            
             # Update spread status
             self.spread_status = 'adjusted'
             # Update msg_txt
@@ -641,20 +635,20 @@ class CreditSpread:
             else:
                 self.additional_buy_strike = self.new_sell_strike - hedge_points
             self.additional_buy_symbol, self.additional_buy_token = self._fetch_symbol_and_token(self.additional_buy_strike)
+            
+            # 1. Fire Burst (Execution-First)
             # Exit existing sell
             sell_exit_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.lots)
             # Buy hedges for additional lots
             additional_buy_orderID_list = self._place_order('BUY', self.additional_buy_symbol, self.additional_buy_token, self.additional_lots)
             # Enter new sell with original lots + additional lots
             new_sellorderID_list = self._place_order('SELL', self.new_sell_symbol, self.new_sell_token, (self.lots+self.additional_lots))
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Get order details for all instruments
-            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list)
-            self.additional_buy_entry, self.additional_buy_entry_time = self._fetch_order_details(additional_buy_orderID_list)
-            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.additional_buy_entry, self.additional_buy_entry_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
+            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=(self.lots+self.additional_lots))
+            
             # Update spread status
             self.spread_status = 'adjusted_additional'
             # Update msg_txt
@@ -716,54 +710,50 @@ class CreditSpread:
             self.new_buy_strike = self.sell_strike - hedge_points
         self.new_buy_symbol, self.new_buy_token = self._fetch_symbol_and_token(self.new_buy_strike)
         if self.spread_status == 'adjusted':
+            # 1. Fire Burst (Execution-First)
             # Execute new buy
             new_buy_orderID_list = self._place_order('BUY', self.new_buy_symbol, self.new_buy_token, self.lots)
             # Exit previous buy
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Get order details for all instruments traded
-            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list)
-            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=self.lots)
+            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            
             # Update spread status
             self.spread_status = 'adjusted_elm'
             # Update msg_txt
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         if self.spread_status == 'adjusted_additional':
+            # 1. Fire Burst (Execution-First)
             # Exit additional sold options
             additional_sell_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.additional_lots)
             # Buy hedge for difference
             new_buy_orderID_list = self._place_order('BUY', self.new_buy_symbol, self.new_buy_token, (self.lots-self.additional_lots))
             # Sell the hedge option for the original lots
-            sleep(1)
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Get order details for all instruments traded
-            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list)
-            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list)
-            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
+            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=(self.lots-self.additional_lots))
+            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            
             # Update spread status
             self.spread_status = 'adjusted_additional_elm'
             self.additional_buy_exit = self.new_buy_entry
             # Update msg_txt
             msg_txt = f"*Artemis:*\nAdditional {self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_\n{self.spread_type.upper()} Hedge brought in at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"     
         if self.spread_status == 'active_additional':
+            # 1. Fire Burst (Execution-First)
             # Exit additional sold options
             additional_sell_orderID_list = self._place_order('BUY', self.sell_symbol, self.sell_token, self.additional_lots)
             # Exit hedge for additional spread
             additional_buy_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.additional_lots)
-            # Get order book
-            sleep(1)
-            reset_counters()
-            self._fetch_order_book()
-            # Get order details for all instruments traded
-            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list)
-            self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_orderID_list)
+
+            # 2. Verify Fills (Verification-Second)
+            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
+            self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
+            
             # Update spread status
             self.spread_status = 'active_additional_elm'
             # Update msg_txt

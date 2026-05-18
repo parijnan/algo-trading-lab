@@ -745,18 +745,16 @@ class Apollo:
             f"Sell {sell_strike}{option_type.upper()} ({sell_token})  "
             f"Expiry: {expiry_date}  Spot: {spot:.2f}  Lots: {lots}")
 
+        # 1. Fire Burst (Execution-First)
         buy_orderid_list = self._place_order('BUY', buy_symbol, buy_token, lots)
-        sleep(1)
-        _reset_counters()
-        self._fetch_order_book()
-        buy_fill, buy_time = self._fetch_order_details(buy_orderid_list, buy_token)
+        sell_orderid_list = self._place_order('SELL', sell_symbol, sell_token, lots)
+
+        # 2. Verify Fills (Verification-Second)
+        # Using the hardened _fetch_order_details with sub-second polling
+        buy_fill, buy_time = self._fetch_order_details(buy_orderid_list, buy_token, expected_lots=lots)
         logger.info(f"Buy fill: {buy_fill:.2f} at {buy_time}")
 
-        sell_orderid_list = self._place_order('SELL', sell_symbol, sell_token, lots)
-        sleep(1)
-        _reset_counters()
-        self._fetch_order_book()
-        sell_fill, sell_time = self._fetch_order_details(sell_orderid_list, sell_token)
+        sell_fill, sell_time = self._fetch_order_details(sell_orderid_list, sell_token, expected_lots=lots)
         logger.info(f"Sell fill: {sell_fill:.2f} at {sell_time}")
 
         net_debit         = buy_fill - sell_fill
@@ -934,20 +932,16 @@ class Apollo:
 
         lots = self.state.lots
 
-        sell_close_ids = self._place_order(
-            'BUY', self.state.sell_symbol, self.state.sell_token, lots)
-        sleep(1)
-        _reset_counters()
-        self._fetch_order_book()
-        sell_exit_fill, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token)
+        # 1. Fire Burst (Execution-First)
+        # Sell leg (Short) is closed with a BUY order; Buy leg (Long) with a SELL order
+        sell_close_ids = self._place_order('BUY', self.state.sell_symbol, self.state.sell_token, lots)
+        buy_close_ids = self._place_order('SELL', self.state.buy_symbol, self.state.buy_token, lots)
+
+        # 2. Verify Fills (Verification-Second)
+        sell_exit_fill, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token, expected_lots=lots)
         logger.info(f"Sell leg exit fill: {sell_exit_fill:.2f}")
 
-        buy_close_ids = self._place_order(
-            'SELL', self.state.buy_symbol, self.state.buy_token, lots)
-        sleep(1)
-        _reset_counters()
-        self._fetch_order_book()
-        buy_exit_fill, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token)
+        buy_exit_fill, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token, expected_lots=lots)
         logger.info(f"Buy leg exit fill: {buy_exit_fill:.2f}")
 
         pl_points = round(
