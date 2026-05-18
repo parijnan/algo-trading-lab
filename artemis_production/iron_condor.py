@@ -594,7 +594,8 @@ class IronCondor:
             self._update_trade_book_exit()
             if self.ce_spread.spread_status == 'closed':
                 self.ce_spread.initialize_spread()
-                self.ce_spread.execute_spread()
+                while self.ce_spread.spread_status == 'open':
+                    self.ce_spread.execute_spread()
                 if self.ce_spread.spread_status in ('active', 'active_additional'):
                     self._update_trade_book_re_entry()
             else:
@@ -605,7 +606,8 @@ class IronCondor:
             self._update_trade_book_exit()
             if self.pe_spread.spread_status == 'closed':
                 self.pe_spread.initialize_spread()
-                self.pe_spread.execute_spread()
+                while self.pe_spread.spread_status == 'open':
+                    self.pe_spread.execute_spread()
                 if self.pe_spread.spread_status in ('active', 'active_additional'):
                     self._update_trade_book_re_entry()
             else:
