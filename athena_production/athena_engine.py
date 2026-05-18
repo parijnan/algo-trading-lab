@@ -229,14 +229,14 @@ class Athena:
         
         orderid_list = []
         for idx, lot_chunk in enumerate(order_quantities):
-            # Unique tag: ATH_[MMDD]_[Sym4]_[Type]_[Idx]
+            # Unique tag: ATH_[MMDD]_[Sym4]_[Type]_[Idx] (Max 20 chars)
             unique_tag = f"ATH_{datetime.now():%m%d}_{symbol[:4]}_{transaction_type[0]}_{idx+1}"
             orderparams = {
                 "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
                 "transactiontype": transaction_type, "exchange": FO_EXCHANGE_SEGMENT,
                 "ordertype": "MARKET", "producttype": "CARRYFORWARD",
                 "duration": "DAY", "quantity": str(int(lot_chunk * LOT_SIZE)),
-                "tag": unique_tag
+                "ordertag": unique_tag
             }
             while True:
                 try:
@@ -251,14 +251,15 @@ class Athena:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg: logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
                     
-                    logger.warning(f"DataException ({symbol}). Checking tag: {unique_tag}")
+                    logger.warning(f"DataException ({symbol}). Checking ordertag: {unique_tag}")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
                         _increment_order_book_poll()
                         found = False
                         for order in book:
-                            if order.get('text') == unique_tag: # 'text' field carries the 'tag'
+                            # Search in both 'ordertag' and fallback 'text' fields
+                            if order.get('ordertag') == unique_tag or order.get('text') == unique_tag:
                                 oid = order['orderid']; orderid_list.append(oid)
                                 logger.info(f"Ghost Order recovered! ID: {oid} (Tag: {unique_tag})"); found = True; break
                         if found: break
