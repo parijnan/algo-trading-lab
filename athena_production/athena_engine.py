@@ -221,6 +221,10 @@ class Athena:
     def _place_order(self, transaction_type, symbol, token, lots):
         if DRY_RUN:
             dry_id = f"DRY_{token}_{transaction_type}_{datetime.now():%H%M%S}"; logger.info(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} ({token}) — ID: {dry_id}"); return [dry_id]
+        
+        # We track all IDs placed in THIS strategy run to avoid ghost-recovery collisions
+        if not hasattr(self, '_placed_order_ids'): self._placed_order_ids = set()
+        
         l_limit = QTY_FREEZE // LOT_SIZE
         order_quantities = []
         rem = lots
@@ -228,15 +232,13 @@ class Athena:
             chunk = min(rem, l_limit); order_quantities.append(chunk); rem -= chunk
         
         orderid_list = []
-        for idx, lot_chunk in enumerate(order_quantities):
-            # Unique tag: ATH_[MMDD]_[Sym4]_[Type]_[Idx] (Max 20 chars)
-            unique_tag = f"ATH_{datetime.now():%m%d}_{symbol[:4]}_{transaction_type[0]}_{idx+1}"
+        for lot_chunk in order_quantities:
+            qty_shares = int(lot_chunk * LOT_SIZE)
             orderparams = {
                 "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
                 "transactiontype": transaction_type, "exchange": FO_EXCHANGE_SEGMENT,
                 "ordertype": "MARKET", "producttype": "CARRYFORWARD",
-                "duration": "DAY", "quantity": str(int(lot_chunk * LOT_SIZE)),
-                "ordertag": unique_tag
+                "duration": "DAY", "quantity": str(qty_shares)
             }
             while True:
                 try:
@@ -244,24 +246,35 @@ class Athena:
                     _increment_order()
                     if response.get('message') == 'SUCCESS':
                         oid = response['data']['orderid']
-                        orderid_list.append(oid); logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid} (Tag: {unique_tag})"); break
+                        orderid_list.append(oid); self._placed_order_ids.add(oid)
+                        logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}"); break
                     else:
                         logger.error(f"Order rejected: {response.get('message')}"); break
                 except DataException as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg: logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
                     
-                    logger.warning(f"DataException ({symbol}). Checking ordertag: {unique_tag}")
+                    logger.warning(f"DataException ({symbol}). Verifying order book via ID-exclusion...")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
                         _increment_order_book_poll()
                         found = False
                         for order in book:
-                            # Search in both 'ordertag' and fallback 'text' fields
-                            if order.get('ordertag') == unique_tag or order.get('text') == unique_tag:
-                                oid = order['orderid']; orderid_list.append(oid)
-                                logger.info(f"Ghost Order recovered! ID: {oid} (Tag: {unique_tag})"); found = True; break
+                            # Match on standard documented fields
+                            if (order['tradingsymbol'] == symbol and 
+                                order['transactiontype'] == transaction_type and
+                                int(order['quantity']) == qty_shares):
+                                
+                                oid = order['orderid']
+                                # ONLY recover if this is a NEW ID we haven't processed yet
+                                if oid not in self._placed_order_ids:
+                                    # Ensure it's recent (within 60s)
+                                    ut = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                    if (datetime.now() - ut).total_seconds() < 60:
+                                        orderid_list.append(oid); self._placed_order_ids.add(oid)
+                                        logger.info(f"Ghost Order recovered! ID: {oid}")
+                                        found = True; break
                         if found: break
                         else: logger.info("Order not found in book. Retrying placement..."); continue
                     except Exception as e_inner:
