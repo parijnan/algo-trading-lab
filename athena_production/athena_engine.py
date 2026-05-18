@@ -225,7 +225,7 @@ class Athena:
         # We track all IDs placed in THIS strategy run to avoid ghost-recovery collisions
         if not hasattr(self, '_placed_order_ids'): self._placed_order_ids = set()
         
-        l_limit = QTY_FREEZE // LOT_SIZE
+        l_limit = self._qty_freeze // LOT_SIZE
         order_quantities = []
         rem = lots
         while rem > 0:
