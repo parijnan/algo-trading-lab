@@ -44,6 +44,7 @@ def run(obj, instrument_df):
             iron_condor.evaluate_handle_sl()
             iron_condor.continue_monitoring()
         except Exception as e:
+            if "Session terminated" in str(e): raise
             handle_exception(e)
             continue
 
