@@ -220,23 +220,23 @@ class Athena:
 
     def _place_order(self, transaction_type, symbol, token, lots):
         if DRY_RUN:
-            dry_id = f"DRY_{token}_{transaction_type}_{datetime.now():%H%M%S}"
-            logger.info(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} ({token}) — ID: {dry_id}")
-            return [dry_id]
-        l_limit = self._qty_freeze // LOT_SIZE
+            dry_id = f"DRY_{token}_{transaction_type}_{datetime.now():%H%M%S}"; logger.info(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} ({token}) — ID: {dry_id}"); return [dry_id]
+        l_limit = QTY_FREEZE // LOT_SIZE
         order_quantities = []
-        remaining_lots = lots
-        while remaining_lots > 0:
-            chunk = min(remaining_lots, l_limit)
-            order_quantities.append(chunk)
-            remaining_lots -= chunk
+        rem = lots
+        while rem > 0:
+            chunk = min(rem, l_limit); order_quantities.append(chunk); rem -= chunk
+        
         orderid_list = []
-        for lot_chunk in order_quantities:
+        for idx, lot_chunk in enumerate(order_quantities):
+            # Unique tag: ATH_[MMDD]_[Sym4]_[Type]_[Idx]
+            unique_tag = f"ATH_{datetime.now():%m%d}_{symbol[:4]}_{transaction_type[0]}_{idx+1}"
             orderparams = {
                 "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
                 "transactiontype": transaction_type, "exchange": FO_EXCHANGE_SEGMENT,
                 "ordertype": "MARKET", "producttype": "CARRYFORWARD",
                 "duration": "DAY", "quantity": str(int(lot_chunk * LOT_SIZE)),
+                "tag": unique_tag
             }
             while True:
                 try:
@@ -244,53 +244,34 @@ class Athena:
                     _increment_order()
                     if response.get('message') == 'SUCCESS':
                         oid = response['data']['orderid']
-                        orderid_list.append(oid)
-                        logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}")
-                        break
+                        orderid_list.append(oid); logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid} (Tag: {unique_tag})"); break
                     else:
-                        logger.error(f"Order rejected: {response.get('message')}")
-                        break
+                        logger.error(f"Order rejected: {response.get('message')}"); break
                 except DataException as e:
                     err_msg = str(e).lower()
-                    if "access rate" in err_msg:
-                        logger.warning(f"Rate limit hit during {transaction_type} {symbol}. Cooling down 2s...")
-                        slack_bot_sendtext(f"ATHENA: Rate limit hit ({symbol}). Retrying in 2s...", SLACK_ERRORS_CHANNEL)
-                        sleep(2); continue
+                    if "access rate" in err_msg: logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
                     
-                    logger.warning(f"DataException ({err_msg}) during {transaction_type} {symbol}. Verifying order book...")
-                    slack_bot_sendtext(f"ATHENA: DataException ({symbol}). Verifying order book...", SLACK_ERRORS_CHANNEL)
+                    logger.warning(f"DataException ({symbol}). Checking tag: {unique_tag}")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
                         _increment_order_book_poll()
                         found = False
                         for order in book:
-                            if (order['tradingsymbol'] == symbol and 
-                                order['transactiontype'] == transaction_type and
-                                int(order['quantity']) == int(lot_chunk * LOT_SIZE) and
-                                order['status'] in ('complete', 'open', 'validation pending')):
-                                
-                                oid = order['orderid']
-                                orderid_list.append(oid)
-                                logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
-                                slack_bot_sendtext(f"ATHENA: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
-                                found = True
-                                break
+                            if order.get('text') == unique_tag: # 'text' field carries the 'tag'
+                                oid = order['orderid']; orderid_list.append(oid)
+                                logger.info(f"Ghost Order recovered! ID: {oid} (Tag: {unique_tag})"); found = True; break
                         if found: break
                         else: logger.info("Order not found in book. Retrying placement..."); continue
                     except Exception as e_inner:
-                        logger.error(f"Error checking book: {e_inner}. Retrying placement...")
-                        continue
+                        logger.error(f"Error checking book: {e_inner}. Retrying placement..."); continue
                 except NetworkException:
-                    logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
-                    slack_bot_sendtext(f"ATHENA: Network timeout ({symbol}). Backing off 5s...", SLACK_ERRORS_CHANNEL)
-                    sleep(5); continue
+                    logger.warning(f"Network timeout ({symbol}). Backing off 5s..."); sleep(5); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
-                        logger.critical(f"Session failure detected: {e}. Aborting to Leto.")
-                        raise e
+                        logger.critical(f"Session failure detected: {e}. Aborting to Leto."); raise e
                     handle_exception(e); sleep(1)
-                return orderid_list
+        return orderid_list
 
     def _fetch_order_details(self, orderid_list, token, symbol, expected_lots=0):
         if DRY_RUN:
