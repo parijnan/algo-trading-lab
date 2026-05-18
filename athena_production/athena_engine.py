@@ -532,21 +532,53 @@ class Athena:
     def _execute_exit(self, reason):
         logger.info(f"=== EXECUTING EXIT: {reason.upper()} ===")
         lots = self.state.lots; self.state.status = 'exiting'; save_state(self.state)
-        sell_legs = [('ce_sell', self.state.ce_sell_symbol, self.state.ce_sell_token), ('pe_sell', self.state.pe_sell_symbol, self.state.pe_sell_token)]
+        
+        # 1. Define all exit legs
+        # Sell legs (shorts) are closed with BUY orders
+        exit_legs = [
+            ('ce_sell', self.state.ce_sell_symbol, self.state.ce_sell_token, 'BUY'),
+            ('pe_sell', self.state.pe_sell_symbol, self.state.pe_sell_token, 'BUY')
+        ]
+        # Buy legs (longs) are closed with SELL orders
+        exit_legs += [
+            ('ce_buy', self.state.ce_buy_symbol, self.state.ce_buy_token, 'SELL'),
+            ('pe_buy', self.state.pe_buy_symbol, self.state.pe_buy_token, 'SELL')
+        ]
+        if self.state.wings_enabled:
+            exit_legs.append(('pe_wing', self.state.pe_wing_symbol, self.state.pe_wing_token, 'SELL'))
+            
+        # 2. Fire all market orders in a fast burst
+        order_receipts = {}
+        for key, sym, tok, side in exit_legs:
+            logger.info(f"Exiting {key}: Firing {side} for {lots} lots...")
+            oids = self._place_order(side, sym, tok, lots)
+            order_receipts[key] = (oids, tok, sym)
+            
+        # 3. Fetch fill details for PnL report (the 10s wait happens here, after all orders are in)
         exit_fills = {}
-        for key, sym, tok in sell_legs:
-            oids = self._place_order('BUY', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots); exit_fills[key] = fill
-        buy_keys = ['ce_buy', 'pe_buy']
-        if self.state.wings_enabled: buy_keys += ['pe_wing']
-        for key in buy_keys:
-            sym = getattr(self.state, f"{key}_symbol"); tok = getattr(self.state, f"{key}_token")
-            oids = self._place_order('SELL', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots); exit_fills[key] = fill
-        pl_pts = round((exit_fills['ce_buy'] - self.state.ce_buy_entry) + (exit_fills['pe_buy'] - self.state.pe_buy_entry) + (self.state.ce_sell_entry - exit_fills['ce_sell']) + (self.state.pe_sell_entry - exit_fills['pe_sell']), 2)
-        if self.state.wings_enabled: pl_pts = round(pl_pts + (exit_fills['pe_wing'] - self.state.pe_wing_entry), 2)
-        pl_pts = round(pl_pts + self.state.running_realised_pl, 2); pl_rs_per_lot = round(pl_pts * LOT_SIZE, 2)
+        for key, (oids, tok, sym) in order_receipts.items():
+            fill, q, ft = self._fetch_order_details(oids, tok, sym, lots)
+            exit_fills[key] = fill
+            
+        # 4. Final P&L Calculation
+        pl_pts = round(
+            (exit_fills['ce_buy'] - self.state.ce_buy_entry) + 
+            (exit_fills['pe_buy'] - self.state.pe_buy_entry) + 
+            (self.state.ce_sell_entry - exit_fills['ce_sell']) + 
+            (self.state.pe_sell_entry - exit_fills['pe_sell']), 2
+        )
+        if self.state.wings_enabled:
+            pl_pts = round(pl_pts + (exit_fills['pe_wing'] - self.state.pe_wing_entry), 2)
+            
+        pl_pts = round(pl_pts + self.state.running_realised_pl, 2)
+        pl_rs_per_lot = round(pl_pts * LOT_SIZE, 2)
+        
+        # Log and Alert
         self._append_trade_log_row(exit_reason=reason, exit_fills=exit_fills)
         msg = f"*Athena* EXIT {reason.upper()} | Lots: {lots} | Final P&L: {pl_pts:+.1f} pts ({pl_rs_per_lot:+,.0f} Rs/lot)"
-        slack_bot_sendtext(msg, SLACK_TRADE_ALERTS); clear_trade_fields(self.state); save_state(self.state); return True
+        slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
+        
+        clear_trade_fields(self.state); save_state(self.state); return True
 
     def _poll_prices(self):
         prices = {'spot': self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)}
