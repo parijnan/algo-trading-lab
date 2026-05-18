@@ -88,9 +88,9 @@ graph TD
 
 All production strategies (Artemis, Apollo, Athena) implement a robust order placement engine designed to handle broker API failures:
 
-- **Ghost Order Protection:** Catches `DataException` (triggered by empty `b''` responses). Before retrying, the engine polls the Order Book to verify if the order was successfully received by the broker backend despite the malformed response.
-- **Smart Rate-Limit Handling:** Detects "access rate" errors and enforces a mandatory 2-second cooldown to clear the rate-limit bucket before retrying.
-- **Network Resilience:** Specifically handles `NetworkException` with a 5-second backoff to allow for temporary connection stability.
+- **ID-Exclusion Ghost Recovery:** Catches `DataException` and `NetworkException`. Instead of blind retries, the engine maintains a session list of processed IDs and reconciles the Order Book using documented fields (`symbol`, `qty`, `type`) to identify and recover lost orders, preventing double-fills during connectivity issues.
+- **Proactive Rate Limiting:** Enforces a strict limit of **10 orders per second** as mandated by SEBI for retail participants. A client-side gatekeeper tracks timestamps and enforces a proactive 1.1s sleep *before* the 11th order is fired.
+- **Sub-Second Verification:** Uses an "Execution-Burst, Verification-Second" pattern. Batch fills are verified instantly (typically <200ms) with a 1.1s safety window for discrepancies.
 - **Session Kill Switch:** Detects session-level failures (invalid tokens) and aborts execution to return control to Leto, preventing infinite failing retry loops.
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
 
