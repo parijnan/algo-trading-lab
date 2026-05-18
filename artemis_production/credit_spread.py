@@ -522,7 +522,14 @@ class CreditSpread:
             confirmed_total_lots = min(buy_filled_lots, sell_filled_lots)
             self._cleanup_orphan_fill('BUY',  self.buy_symbol,  self.buy_token,  buy_filled_lots,  confirmed_total_lots)
             self._cleanup_orphan_fill('SELL', self.sell_symbol, self.sell_token, sell_filled_lots, confirmed_total_lots)
-            self.lots = confirmed_total_lots
+            if confirmed_total_lots == 0:
+                slack_bot_sendtext(f"*Artemis*: Zero fills on both legs for {self.spread_type.upper()}. Aborting entry.", "#error-alerts")
+                return
+            if confirmed_total_lots < total_lots:
+                self.lots = confirmed_total_lots
+                self.additional_lots = 0
+                self.trade_params_df.iloc[0, 1]  = self.lots
+                self.trade_params_df.iloc[0, 26] = self.additional_lots
             # Set stop losses as per the entry parameters
             self._set_sl()
             # Update the class variables and save to file
