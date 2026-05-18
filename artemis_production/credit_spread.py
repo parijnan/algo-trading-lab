@@ -149,21 +149,34 @@ class CreditSpread:
             sleep(1)
             reset_counters()
         
+    # Private method to liquidate excess fills on an opening leg
+    def _cleanup_orphan_fill(self, tx_type, symbol, token, filled_lots, expected_lots):
+        excess_lots = filled_lots - expected_lots
+        if excess_lots <= 0:
+            return
+        counter_tx = 'SELL' if tx_type == 'BUY' else 'BUY'
+        slack_bot_sendtext(
+            f"*Artemis*: Orphan fill in {symbol}. "
+            f"Filled {filled_lots} vs expected {expected_lots}. "
+            f"Liquidating {excess_lots} excess lots ({counter_tx}).",
+            "#error-alerts")
+        self._place_order(counter_tx, symbol, token, excess_lots)
+
     # Private method to fetch average fill price and average fill time
     def _fetch_order_details(self, orderID_list, expected_lots=0):
         start_time = datetime.now()
         timeout = 10 # 10s timeout for fill verification
-        
+
         while True:
             try:
                 self._fetch_order_book()
                 book = self.order_book.get('data', [])
-                
+
                 total_qty = 0
                 total_val = 0.0
                 fill_time = datetime.now()
                 matched_ids = []
-                
+
                 for oid in orderID_list:
                     for order in book:
                         if order['orderid'] == oid:
@@ -176,14 +189,14 @@ class CreditSpread:
                                 ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
                                 if ft > fill_time: fill_time = ft
                             except: pass
-                
+
                 filled_lots = int(total_qty // lot_size)
                 all_ids_found = all(oid in matched_ids for oid in orderID_list)
-                
+
                 # 1. SUCCESS: All IDs found AND quantity matches expectation
                 if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
+                    return avg_price, filled_lots, fill_time
 
                 # 2. FAILURE: Terminal states reached but not filled
                 all_final = all_ids_found
@@ -194,24 +207,24 @@ class CreditSpread:
                                 if order['status'] not in ('complete', 'rejected', 'cancelled'):
                                     all_final = False; break
                         if not all_final: break
-                
+
                 if all_final:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
+                    return avg_price, filled_lots, fill_time
 
                 # 3. TIMEOUT
                 if (datetime.now() - start_time).total_seconds() >= timeout:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
-                
+                    return avg_price, filled_lots, fill_time
+
                 sleep(1)
-                
+
             except Exception as e:
                 handle_exception(e)
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
                 sleep(1)
-                
-        return 0.0, datetime.now()
+
+        return 0.0, 0, datetime.now()
         
     # Method to intialize object
     def __init__(self, spread_type):
@@ -491,8 +504,11 @@ class CreditSpread:
 
             # 2. Verify Fills (Verification-Second)
             # Using the hardened _fetch_order_details with sub-second polling
-            self.buy_entry, self.entry = self._fetch_order_details(buy_orderID_list, expected_lots=total_lots)
-            self.sell_entry, self.entry = self._fetch_order_details(sell_orderID_list, expected_lots=total_lots)
+            self.buy_entry, buy_filled_lots, self.entry = self._fetch_order_details(buy_orderID_list, expected_lots=total_lots)
+            self.sell_entry, sell_filled_lots, self.entry = self._fetch_order_details(sell_orderID_list, expected_lots=total_lots)
+            confirmed_total_lots = min(buy_filled_lots, sell_filled_lots)
+            self._cleanup_orphan_fill('BUY',  self.buy_symbol,  self.buy_token,  buy_filled_lots,  confirmed_total_lots)
+            self._cleanup_orphan_fill('SELL', self.sell_symbol, self.sell_token, sell_filled_lots, confirmed_total_lots)
             # Set stop losses as per the entry parameters
             self._set_sl()
             # Update the class variables and save to file
@@ -539,8 +555,8 @@ class CreditSpread:
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
 
             # 2. Verify Fills (Verification-Second)
-            self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
-            self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            self.sell_exit, _sf, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.buy_exit, _bf, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread exited at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_"
         # Code to exit trade if it has additional lots
         else:    
@@ -553,8 +569,8 @@ class CreditSpread:
                 buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, (self.lots+self.additional_lots))
                 
                 # 2. Verify Fills (Verification-Second)
-                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
-                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
+                self.sell_exit, _sf, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
+                self.buy_exit, _bf, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
                 self.additional_buy_exit = self.buy_exit
                 self.additional_buy_exit_time = self.exit_time
             else:
@@ -564,9 +580,9 @@ class CreditSpread:
                 additional_buy_exit_orderID_list = self._place_order('SELL', self.additional_buy_symbol, self.additional_buy_token, self.additional_lots)
 
                 # 2. Verify Fills (Verification-Second)
-                self.sell_exit, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
-                self.buy_exit, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
-                self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_exit_orderID_list, expected_lots=self.additional_lots)
+                self.sell_exit, _sf, self.exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=(self.lots+self.additional_lots))
+                self.buy_exit, _bf, self.exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+                self.additional_buy_exit, _abf, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_exit_orderID_list, expected_lots=self.additional_lots)
             self.additional_booked_pl = self.additional_booked_pl + self.additional_buy_exit - self.additional_buy_entry + self.sell_entry - self.sell_exit
             self.additional_pl = self.additional_booked_pl
             self.additional_buy_ltp = self.additional_buy_exit
@@ -619,8 +635,9 @@ class CreditSpread:
 
             # 2. Verify Fills (Verification-Second)
             # Internal _fetch_order_book handles polling; loop exits on success.
-            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
-            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=self.lots)
+            self.sell_exit, _sf, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.new_sell_entry, new_sell_filled_lots, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=self.lots)
+            self._cleanup_orphan_fill('SELL', self.new_sell_symbol, self.new_sell_token, new_sell_filled_lots, self.lots)
             
             # Update spread status
             self.spread_status = 'adjusted'
@@ -645,9 +662,11 @@ class CreditSpread:
             new_sellorderID_list = self._place_order('SELL', self.new_sell_symbol, self.new_sell_token, (self.lots+self.additional_lots))
 
             # 2. Verify Fills (Verification-Second)
-            self.sell_exit, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
-            self.additional_buy_entry, self.additional_buy_entry_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
-            self.new_sell_entry, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=(self.lots+self.additional_lots))
+            self.sell_exit, _sf, self.sell_exit_time = self._fetch_order_details(sell_exit_orderID_list, expected_lots=self.lots)
+            self.additional_buy_entry, addl_buy_filled_lots, self.additional_buy_entry_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
+            self.new_sell_entry, new_sell_filled_lots, self.new_sell_entry_time = self._fetch_order_details(new_sellorderID_list, expected_lots=(self.lots+self.additional_lots))
+            self._cleanup_orphan_fill('BUY',  self.additional_buy_symbol, self.additional_buy_token, addl_buy_filled_lots, self.additional_lots)
+            self._cleanup_orphan_fill('SELL', self.new_sell_symbol, self.new_sell_token, new_sell_filled_lots, (self.lots+self.additional_lots))
             
             # Update spread status
             self.spread_status = 'adjusted_additional'
@@ -717,8 +736,9 @@ class CreditSpread:
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
 
             # 2. Verify Fills (Verification-Second)
-            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=self.lots)
-            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            self.new_buy_entry, new_buy_filled_lots, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=self.lots)
+            self.buy_exit, _bf, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            self._cleanup_orphan_fill('BUY', self.new_buy_symbol, self.new_buy_token, new_buy_filled_lots, self.lots)
             
             # Update spread status
             self.spread_status = 'adjusted_elm'
@@ -734,9 +754,10 @@ class CreditSpread:
             buy_exit_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.lots)
 
             # 2. Verify Fills (Verification-Second)
-            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
-            self.new_buy_entry, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=(self.lots-self.additional_lots))
-            self.buy_exit, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            self.additional_sell_exit, _asf, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
+            self.new_buy_entry, new_buy_filled_lots, self.new_buy_entry_time = self._fetch_order_details(new_buy_orderID_list, expected_lots=(self.lots-self.additional_lots))
+            self.buy_exit, _bf, self.buy_exit_time = self._fetch_order_details(buy_exit_orderID_list, expected_lots=self.lots)
+            self._cleanup_orphan_fill('BUY', self.new_buy_symbol, self.new_buy_token, new_buy_filled_lots, (self.lots-self.additional_lots))
             
             # Update spread status
             self.spread_status = 'adjusted_additional_elm'
@@ -751,8 +772,8 @@ class CreditSpread:
             additional_buy_orderID_list = self._place_order('SELL', self.buy_symbol, self.buy_token, self.additional_lots)
 
             # 2. Verify Fills (Verification-Second)
-            self.additional_sell_exit, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
-            self.additional_buy_exit, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
+            self.additional_sell_exit, _asf, self.additional_sell_exit_time = self._fetch_order_details(additional_sell_orderID_list, expected_lots=self.additional_lots)
+            self.additional_buy_exit, _abf, self.additional_buy_exit_time = self._fetch_order_details(additional_buy_orderID_list, expected_lots=self.additional_lots)
             
             # Update spread status
             self.spread_status = 'active_additional_elm'

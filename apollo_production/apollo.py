@@ -751,11 +751,15 @@ class Apollo:
 
         # 2. Verify Fills (Verification-Second)
         # Using the hardened _fetch_order_details with sub-second polling
-        buy_fill, buy_time = self._fetch_order_details(buy_orderid_list, buy_token, expected_lots=lots)
+        buy_fill, buy_filled_lots, buy_time = self._fetch_order_details(buy_orderid_list, buy_token, expected_lots=lots)
         logger.info(f"Buy fill: {buy_fill:.2f} at {buy_time}")
 
-        sell_fill, sell_time = self._fetch_order_details(sell_orderid_list, sell_token, expected_lots=lots)
+        sell_fill, sell_filled_lots, sell_time = self._fetch_order_details(sell_orderid_list, sell_token, expected_lots=lots)
         logger.info(f"Sell fill: {sell_fill:.2f} at {sell_time}")
+
+        confirmed_lots = min(buy_filled_lots, sell_filled_lots)
+        self._cleanup_orphan_fill('BUY',  buy_symbol,  buy_token,  buy_filled_lots,  confirmed_lots)
+        self._cleanup_orphan_fill('SELL', sell_symbol, sell_token, sell_filled_lots, confirmed_lots)
 
         net_debit         = buy_fill - sell_fill
         max_profit        = HEDGE_POINTS - net_debit
@@ -783,7 +787,7 @@ class Apollo:
         self.state.sell_token          = sell_token
         self.state.buy_symbol          = buy_symbol
         self.state.sell_symbol         = sell_symbol
-        self.state.lots                = lots
+        self.state.lots                = confirmed_lots
         self.state.buy_entry           = round(buy_fill,  2)
         self.state.sell_entry          = round(sell_fill, 2)
         self.state.net_debit           = round(net_debit, 2)
@@ -814,7 +818,7 @@ class Apollo:
             f"PT: {profit_target_pts:.1f} pts ({pt_pct:.0%}) | "
             f"Hard stop: {hard_stop_pts} pts | "
             f"Gate: {gate_min_pct:.0%} | "
-            f"Lots: {lots} | Expiry: {expiry_date} | Spot: {spot:.0f}",
+            f"Lots: {confirmed_lots} | Expiry: {expiry_date} | Spot: {spot:.0f}",
             SLACK_TRADE_ALERTS)
 
     # -----------------------------------------------------------------------
@@ -938,10 +942,10 @@ class Apollo:
         buy_close_ids = self._place_order('SELL', self.state.buy_symbol, self.state.buy_token, lots)
 
         # 2. Verify Fills (Verification-Second)
-        sell_exit_fill, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token, expected_lots=lots)
+        sell_exit_fill, _sf, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token, expected_lots=lots)
         logger.info(f"Sell leg exit fill: {sell_exit_fill:.2f}")
 
-        buy_exit_fill, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token, expected_lots=lots)
+        buy_exit_fill, _bf, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token, expected_lots=lots)
         logger.info(f"Buy leg exit fill: {buy_exit_fill:.2f}")
 
         pl_points = round(
@@ -1084,21 +1088,21 @@ class Apollo:
                     handle_exception(e); fill = 0.0
             fill_time = datetime.now()
             logger.info(f"[DRY RUN] Fill for token {token}: {fill:.2f} at {fill_time:%H:%M:%S}")
-            return fill, fill_time
+            return fill, expected_lots, fill_time
 
         start_time = datetime.now()
         timeout = 10 # 10s timeout for fill verification
-        
+
         while True:
             try:
                 self._fetch_order_book()
                 book = self.order_book.get('data', [])
-                
+
                 total_qty = 0
                 total_val = 0.0
                 fill_time = datetime.now()
                 matched_ids = []
-                
+
                 for oid in orderid_list:
                     for order in book:
                         if order['orderid'] == oid:
@@ -1111,14 +1115,14 @@ class Apollo:
                                 ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
                                 if ft > fill_time: fill_time = ft
                             except: pass
-                
+
                 filled_lots = int(total_qty // LOT_SIZE)
                 all_ids_found = all(oid in matched_ids for oid in orderid_list)
-                
+
                 # 1. SUCCESS: All IDs found AND quantity matches expectation
                 if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
+                    return avg_price, filled_lots, fill_time
 
                 # 2. FAILURE: Terminal states reached but not filled
                 all_final = all_ids_found
@@ -1129,24 +1133,38 @@ class Apollo:
                                 if order['status'] not in ('complete', 'rejected', 'cancelled'):
                                     all_final = False; break
                         if not all_final: break
-                
+
                 if all_final:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
+                    return avg_price, filled_lots, fill_time
 
                 # 3. TIMEOUT
                 if (datetime.now() - start_time).total_seconds() >= timeout:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, fill_time
-                
+                    return avg_price, filled_lots, fill_time
+
                 sleep(1)
-                
+
             except Exception as e:
                 handle_exception(e)
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
                 sleep(1)
-                
-        return 0.0, datetime.now()
+
+        return 0.0, 0, datetime.now()
+
+    def _cleanup_orphan_fill(self, tx_type, symbol, token, filled_lots, expected_lots):
+        excess_lots = filled_lots - expected_lots
+        if excess_lots <= 0:
+            return
+        counter_tx = 'SELL' if tx_type == 'BUY' else 'BUY'
+        logger.warning(
+            f"Orphan fill: {symbol} filled {filled_lots} vs expected {expected_lots}. "
+            f"Liquidating {excess_lots} excess lots ({counter_tx}).")
+        slack_bot_sendtext(
+            f"⚠️ *Apollo*: Orphan fill in {symbol}. "
+            f"Liquidating {excess_lots} excess lots.",
+            SLACK_ERRORS_CHANNEL)
+        self._place_order(counter_tx, symbol, token, excess_lots)
 
     def _fetch_option_ltp(self, symbol, token):
         while True:
