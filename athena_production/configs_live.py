@@ -93,7 +93,7 @@ ELM_EXIT_TIME       = "10:25"       # 10:25 AM on day before sell expiry
 # Execution
 # ---------------------------------------------------------------------------
 QTY_FREEZE          = 1800          # Angel One qty freeze for Nifty
-ORDER_TIMEOUT_SEC   = 10            # Seconds to wait for order fill
+ORDER_TIMEOUT_SEC   = 1.1           # Seconds to wait for order fill
 ORDER_LIMIT         = 10            # Orders per second limit
 
 # Rate Limits (Polls per second)

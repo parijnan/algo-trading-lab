@@ -27,8 +27,9 @@ from configs_live import (
     ENTRY_TIME, ELM_EXIT_TIME,
     VIX_FILTER_LOW, VIX_FILTER_HIGH,
     TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS,
-    ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, 
+    ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, ORDER_TIMEOUT_SEC,
     EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
+
     STRIKE_STEP, BUY_LEG_MIN_DTE, LOT_SIZE, LOT_COUNT,
     LOT_CALC, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL, QTY_FREEZE,
@@ -297,8 +298,7 @@ class Athena:
             return fill, expected_lots, datetime.now()
         
         start_time = datetime.now()
-        # Use config timeout or default to 10s
-        timeout = globals().get('ORDER_TIMEOUT_SEC', 10)
+        timeout = ORDER_TIMEOUT_SEC
         
         while (datetime.now() - start_time).total_seconds() < timeout:
             total_qty = 0
@@ -445,39 +445,33 @@ class Athena:
         # 3. Interleaved Batch Loop for Core Legs
         for b_idx, b_lots in enumerate(batches):
             logger.info(f"Processing core batch {b_idx + 1}/{len(batches)}: {b_lots} lots")
-            b_filled = b_lots
             
-            # Longs
+            # Fire all 4 core legs in a rapid burst
+            batch_order_receipts = {}
+            
+            # Sub-Burst A: Longs (Monthly) first for margin collateral
             for side in ["ce", "pe"]:
                 k = f"{side}_buy"; sym, tok, stk = legs[k]
                 oids = self._place_order("BUY", sym, tok, b_lots)
+                batch_order_receipts[k] = (oids, tok, sym)
+                
+            # Sub-Burst B: Shorts (Weekly) immediately after
+            for side in ["ce", "pe"]:
+                k = f"{side}_sell"; sym, tok, stk = legs[k]
+                oids = self._place_order("SELL", sym, tok, b_lots)
+                batch_order_receipts[k] = (oids, tok, sym)
+                
+            # Now Verify all 4 legs of this batch (Wait up to 10s for the whole group)
+            b_filled_min = b_lots
+            for k, (oids, tok, sym) in batch_order_receipts.items():
                 px, f_lots, ft = self._fetch_order_details(oids, tok, sym, b_lots)
                 fill_data[k]["qty"] += (f_lots * LOT_SIZE)
                 fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
-                if f_lots < b_filled: b_filled = f_lots
+                if f_lots < b_filled_min: b_filled_min = f_lots
                 
-                # If a long leg fails completely, stop the entry immediately
-                if f_lots == 0:
-                    logger.critical(f"Long leg {sym} failed to fill. Aborting entry sequence.")
-                    b_filled = 0
-                    break
-            
-            if b_filled == 0:
-                logger.error(f"Batch {b_idx + 1} long legs failed. Stopping entry.")
-                break
-            
-            # Shorts
-            for side in ["ce", "pe"]:
-                k = f"{side}_sell"; sym, tok, stk = legs[k]
-                oids = self._place_order("SELL", sym, tok, b_filled)
-                px, f_lots, ft = self._fetch_order_details(oids, tok, sym, b_filled)
-                fill_data[k]["qty"] += (f_lots * LOT_SIZE)
-                fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
-                if f_lots < b_filled: b_filled = f_lots
-                
-            total_actual_lots += b_filled
-            if b_filled < b_lots:
-                logger.warning(f"Batch {b_idx + 1} partial fill ({b_filled}/{b_lots}). Stopping entry.")
+            total_actual_lots += b_filled_min
+            if b_filled_min < b_lots:
+                logger.warning(f"Batch {b_idx + 1} partial fill ({b_filled_min}/{b_lots}). Stopping entry.")
                 break
             
         # 4. Universal Orphan Leg Cleanup (Balanced Strategy)
