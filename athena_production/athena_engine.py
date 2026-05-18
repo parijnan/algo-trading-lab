@@ -291,26 +291,99 @@ class Athena:
                     handle_exception(e); sleep(1)
         return orderid_list
 
-    def _fetch_order_details(self, orderid_list, token, symbol):
+    def _fetch_order_details(self, orderid_list, token, symbol, expected_lots=0):
         if DRY_RUN:
             fill = self._get_ltp(EXCHANGE_NFO, symbol, token) or 0.0
-            return fill, 0, datetime.now()
-        total_qty = 0; total_val = 0.0; fill_time = datetime.now()
+            return fill, expected_lots, datetime.now()
+        
+        start_time = datetime.now()
+        # Use config timeout or default to 10s
+        timeout = globals().get('ORDER_TIMEOUT_SEC', 10)
+        
+        while (datetime.now() - start_time).total_seconds() < timeout:
+            total_qty = 0
+            total_val = 0.0
+            fill_time = datetime.now()
+            
+            try:
+                book_res = self.obj.orderBook()
+                _increment_order_book_poll()
+                
+                if not book_res or not book_res.get('status'):
+                    logger.warning(f"Order book fetch failed for {symbol}. Retrying...")
+                    sleep(0.5)
+                    continue
+                    
+                book = book_res['data']
+                matched_count = 0
+                
+                for oid in orderid_list:
+                    for order in book:
+                        if order['orderid'] == oid:
+                            matched_count += 1
+                            q = int(order['filledshares'])
+                            p = float(order['averageprice'])
+                            total_qty += q
+                            total_val += (p * q)
+                            try:
+                                # Update to latest fill time
+                                ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                if ft > fill_time: fill_time = ft
+                            except:
+                                pass
+                
+                filled_lots = int(total_qty // LOT_SIZE)
+                
+                # Success Condition: All expected lots are filled
+                if expected_lots > 0 and filled_lots >= expected_lots:
+                    avg_price = round(total_val / total_qty, 2)
+                    return avg_price, filled_lots, fill_time
+                
+                # Failure Condition: All orders are in a final non-complete state
+                all_final = True
+                if matched_count < len(orderid_list):
+                    all_final = False
+                else:
+                    for oid in orderid_list:
+                        for order in book:
+                            if order['orderid'] == oid:
+                                if order['status'] not in ('complete', 'rejected', 'cancelled'):
+                                    all_final = False
+                                    break
+                        if not all_final: break
+                
+                if all_final:
+                    if total_qty > 0:
+                        logger.info(f"Order sequence for {symbol} finalized with partial fill: {filled_lots}/{expected_lots} lots.")
+                        avg_price = round(total_val / total_qty, 2)
+                        return avg_price, filled_lots, fill_time
+                    else:
+                        logger.warning(f"Order sequence for {symbol} finalized with ZERO fills.")
+                        return 0.0, 0, datetime.now()
+                        
+            except Exception as e:
+                logger.error(f"Error in _fetch_order_details for {symbol}: {e}")
+            
+            sleep(0.5)
+            _reset_counters()
+            
+        # Timeout reached
+        total_qty = 0
+        total_val = 0.0
         try:
-            book = self.obj.orderBook()['data']
-            _increment_order_book_poll()
+            book = self.obj.orderBook().get('data', [])
             for oid in orderid_list:
                 for order in book:
                     if order['orderid'] == oid:
-                        q = int(order['filledshares']); p = float(order['averageprice'])
-                        total_qty += q; total_val += (p * q)
-                        ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
-                        if ft > fill_time: fill_time = ft
-            avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-            filled_lots = int(total_qty // LOT_SIZE)
-            return avg_price, filled_lots, fill_time
-        except Exception as e:
-            handle_exception(e); return 0.0, 0, datetime.now()
+                        q = int(order['filledshares'])
+                        total_qty += q
+                        total_val += (float(order['averageprice']) * q)
+        except: pass
+        
+        avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+        filled_lots = int(total_qty // LOT_SIZE)
+        logger.warning(f"Timeout reached verifying {symbol}. Found {filled_lots} lots.")
+        return avg_price, filled_lots, datetime.now()
 
     def _calculate_lots(self, strikes_dict=None):
         if not LOT_CALC: return LOT_COUNT
@@ -378,29 +451,52 @@ class Athena:
             for side in ["ce", "pe"]:
                 k = f"{side}_buy"; sym, tok, stk = legs[k]
                 oids = self._place_order("BUY", sym, tok, b_lots)
-                px, f_lots, ft = self._fetch_order_details(oids, tok, sym)
+                px, f_lots, ft = self._fetch_order_details(oids, tok, sym, b_lots)
                 fill_data[k]["qty"] += (f_lots * LOT_SIZE)
                 fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
                 if f_lots < b_filled: b_filled = f_lots
+                
+                # If a long leg fails completely, stop the entry immediately
+                if f_lots == 0:
+                    logger.critical(f"Long leg {sym} failed to fill. Aborting entry sequence.")
+                    b_filled = 0
+                    break
             
-            if b_filled == 0: continue
+            if b_filled == 0:
+                logger.error(f"Batch {b_idx + 1} long legs failed. Stopping entry.")
+                break
             
             # Shorts
             for side in ["ce", "pe"]:
                 k = f"{side}_sell"; sym, tok, stk = legs[k]
                 oids = self._place_order("SELL", sym, tok, b_filled)
-                px, f_lots, ft = self._fetch_order_details(oids, tok, sym)
+                px, f_lots, ft = self._fetch_order_details(oids, tok, sym, b_filled)
                 fill_data[k]["qty"] += (f_lots * LOT_SIZE)
                 fill_data[k]["val"] += (px * f_lots * LOT_SIZE)
                 if f_lots < b_filled: b_filled = f_lots
                 
             total_actual_lots += b_filled
             if b_filled < b_lots:
-                logger.warning(f"Batch {b_idx + 1} partial fill. Stopping entry.")
+                logger.warning(f"Batch {b_idx + 1} partial fill ({b_filled}/{b_lots}). Stopping entry.")
                 break
             
+        # 4. Universal Orphan Leg Cleanup (Balanced Strategy)
+        for k in ["ce_buy", "pe_buy", "ce_sell", "pe_sell"]:
+            actual_qty = fill_data[k]["qty"]
+            expected_qty = total_actual_lots * LOT_SIZE
+            if actual_qty > expected_qty:
+                excess_lots = int((actual_qty - expected_qty) // LOT_SIZE)
+                if excess_lots > 0:
+                    sym, tok, stk = legs[k]
+                    # If it was a BUY leg, SELL to close. If SELL, BUY to close.
+                    tx_type = "SELL" if "_buy" in k else "BUY"
+                    logger.warning(f"Excess quantity in {k}: {excess_lots} lots. Liquidating ({tx_type}).")
+                    slack_bot_sendtext(f"⚠️ *Athena*: Excess quantity in {sym}. Liquidating {excess_lots} lots.", SLACK_ERRORS_CHANNEL)
+                    self._place_order(tx_type, sym, tok, excess_lots)
+
         if total_actual_lots == 0:
-            logger.error("No lots filled. Aborting."); clear_trade_fields(self.state); save_state(self.state); return False
+            logger.error("No core lots filled successfully. Aborting entry."); clear_trade_fields(self.state); save_state(self.state); return False
+
 
         # Store core leg state (Averages)
         for k in ["ce_buy", "pe_buy", "ce_sell", "pe_sell"]:
@@ -417,7 +513,7 @@ class Athena:
             if sym:
                 logger.info(f"Buying PE Wings: {total_actual_lots} lots")
                 oids = self._place_order("BUY", sym, tok, total_actual_lots)
-                fill, filled_q, ft = self._fetch_order_details(oids, tok, sym)
+                fill, filled_q, ft = self._fetch_order_details(oids, tok, sym, total_actual_lots)
                 setattr(self.state, f"{k}_strike", stk); setattr(self.state, f"{k}_token", tok)
                 setattr(self.state, f"{k}_symbol", sym); setattr(self.state, f"{k}_entry", fill)
                 if filled_q < total_actual_lots: total_actual_lots = filled_q
@@ -439,12 +535,12 @@ class Athena:
         sell_legs = [('ce_sell', self.state.ce_sell_symbol, self.state.ce_sell_token), ('pe_sell', self.state.pe_sell_symbol, self.state.pe_sell_token)]
         exit_fills = {}
         for key, sym, tok in sell_legs:
-            oids = self._place_order('BUY', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym); exit_fills[key] = fill
+            oids = self._place_order('BUY', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots); exit_fills[key] = fill
         buy_keys = ['ce_buy', 'pe_buy']
         if self.state.wings_enabled: buy_keys += ['pe_wing']
         for key in buy_keys:
             sym = getattr(self.state, f"{key}_symbol"); tok = getattr(self.state, f"{key}_token")
-            oids = self._place_order('SELL', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym); exit_fills[key] = fill
+            oids = self._place_order('SELL', sym, tok, lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots); exit_fills[key] = fill
         pl_pts = round((exit_fills['ce_buy'] - self.state.ce_buy_entry) + (exit_fills['pe_buy'] - self.state.pe_buy_entry) + (self.state.ce_sell_entry - exit_fills['ce_sell']) + (self.state.pe_sell_entry - exit_fills['pe_sell']), 2)
         if self.state.wings_enabled: pl_pts = round(pl_pts + (exit_fills['pe_wing'] - self.state.pe_wing_entry), 2)
         pl_pts = round(pl_pts + self.state.running_realised_pl, 2); pl_rs_per_lot = round(pl_pts * LOT_SIZE, 2)
@@ -511,13 +607,13 @@ class Athena:
                 if stk:
                     sym, tok = self._fetch_symbol_and_token(stk, 'ce', buy_exp)
                     if sym:
-                        oids = self._place_order('BUY', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym)
+                        oids = self._place_order('BUY', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
                         if fill > 0:
                             self.state.emer_active = True; self.state.emer_strike = stk; self.state.emer_symbol = sym; self.state.emer_token = tok; self.state.emer_entry = fill; self.state.emer_attempts += 1; save_state(self.state)
                             slack_bot_sendtext(f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}", SLACK_TRADE_ALERTS)
         elif self.state.emer_active:
             if current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
-                sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym)
+                sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
                 if fill > 0:
                     realised = round(fill - self.state.emer_entry, 2); self.state.running_realised_pl += realised; slack_bot_sendtext(f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f} | Realised: {realised:+.1f} pts", SLACK_TRADE_ALERTS)
                     self.state.emer_active = False; self.state.emer_strike = None; self.state.emer_symbol = None; self.state.emer_token = None; self.state.emer_entry = 0.0; save_state(self.state)
@@ -577,11 +673,14 @@ class Athena:
                         if vix and not (VIX_FILTER_LOW <= vix <= VIX_FILTER_HIGH): return True
                         if spot and vix:
                             strikes = self._select_all_strikes(spot, vix)
-                            if strikes: self._execute_entry(strikes, spot, vix)
+                            if strikes:
+                                if not self._execute_entry(strikes, spot, vix):
+                                    logger.error("Entry failed. Standing down to prevent accidental retries.")
+                                    return False # Exit Athena run loop
             if self.state.status == 'in_trade' and self.state.exit_timestamp:
                 if now >= datetime.fromisoformat(self.state.exit_timestamp):
                     if self.state.emer_active:
-                        sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym)
+                        sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
                         self.state.running_realised_pl += round(fill - self.state.emer_entry, 2); self.state.emer_active = False
                     self._execute_exit(reason='pre_expiry')
             if self.state.status == 'in_trade':
