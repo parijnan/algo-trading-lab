@@ -69,31 +69,45 @@ def handle_exception(e):
     with open('data/error_log.txt', mode) as error_log:
         error_log.writelines(msg_txt_detailed)
 
-# Function to increment poll_counter
-def increment_poll_counter():
-    global poll_counter
-    global order_counter
-    poll_counter+=1
-    # Sleep for one second after poll_counter reaches poll_limit to ensure we do not exceed rate limit
-    if poll_counter == poll_limit:
-        sleep(1)
-        poll_counter = 0
-        order_counter = 0
+# ---------------------------------------------------------------------------
+# Hardened Rate Limit Counters
+# ---------------------------------------------------------------------------
+_counters = {
+    'rms': {'count': 0, 'limit': 2, 'last_reset': 0},
+    'order_book': {'count': 0, 'limit': 1, 'last_reset': 0},
+    'ltp': {'count': 0, 'limit': 10, 'last_reset': 0},
+    'order': {'count': 0, 'limit': 10, 'last_reset': 0}
+}
 
-# Function to increment order_counter
-def increment_order_counter():
-    global poll_counter
-    global order_counter
-    order_counter+=1
-    # Sleep for one second after order_counter reaches order_limit to ensure we do not exceed rate limit
-    if order_counter == order_limit:
-        sleep(1)
-        poll_counter = 0
-        order_counter = 0
+def _check_limit(key):
+    global _counters
+    now = time()
+    c = _counters[key]
+
+    # Self-healing: If 1s has passed, this specific bucket is fresh
+    if now - c['last_reset'] > 1.0:
+        c['count'] = 0
+        c['last_reset'] = now
+
+    # If we are about to EXCEED the limit, sleep and reset EVERY bucket
+    if c['count'] >= c['limit']:
+        # print(f"Rate limit hit for {key.upper()}. Enforcing 1.1s cooldown...")
+        sleep(1.1)
+        reset_counters()
+        return
+
+    c['count'] += 1
+
+def increment_rms_poll(): _check_limit('rms')
+def increment_poll_counter(): _check_limit('ltp') # Poll in Artemis is primarily LTP
+def increment_order_book_poll(): _check_limit('order_book')
+def increment_order_counter(): _check_limit('order')
 
 # Function to reset counters
 def reset_counters():
-    global poll_counter
-    global order_counter
-    poll_counter = 0
-    order_counter = 0
+    """Manual reset of all counters — call after any significant sleep."""
+    global _counters
+    now = time()
+    for k in _counters:
+        _counters[k]['count'] = 0
+        _counters[k]['last_reset'] = now

@@ -7,7 +7,11 @@ from datetime import datetime, time
 from SmartApi.smartExceptions import DataException, NetworkException
 from numpy import busday_count
 from math import floor, ceil
-from functions import slack_bot_sendtext, sleep, exists, handle_exception, increment_poll_counter, increment_order_counter, reset_counters#, telegram_bot_sendtext
+from functions import (
+    slack_bot_sendtext, sleep, exists, handle_exception, 
+    increment_poll_counter, increment_order_counter, 
+    increment_order_book_poll, increment_rms_poll, reset_counters
+)
 from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset
 
 # Main class for option spread
@@ -56,7 +60,7 @@ class CreditSpread:
                 instrument_ltp = self.obj.ltpData(exchange, symbol, token)['data']['ltp']
                 increment_poll_counter()
                 if instrument_ltp is not None:
-                    return instrument_ltp
+                    return float(instrument_ltp)
             except Exception as e:
                 handle_exception(e)
             sleep(1)
@@ -64,26 +68,26 @@ class CreditSpread:
         
     # Private method to place order, and return total orders and orderid list
     def _place_order(self, transaction_type, symbol, token, lots):
+        # Initialise orderID_list
+        orderID_list = []
+        if lots <= 0: return orderID_list
+        
+        # We track all IDs placed in THIS strategy run to avoid ghost-recovery collisions
+        if not hasattr(self, '_placed_order_ids'): self._placed_order_ids = set()
+
         l_limit = qty_freeze // lot_size
         order_quantities = []
-        remaining_lots = lots
-        while remaining_lots > 0:
-            chunk = min(remaining_lots, l_limit)
-            order_quantities.append(chunk)
-            remaining_lots -= chunk
+        rem = lots
+        while rem > 0:
+            chunk = min(rem, l_limit); order_quantities.append(chunk); rem -= chunk
 
-        orderID_list = []
         for lot_chunk in order_quantities:
+            qty_shares = int(lot_chunk * lot_size)
             orderparams = {
-                "variety": "NORMAL",
-                "tradingsymbol": symbol,
-                "symboltoken": token,
-                "transactiontype": transaction_type,
-                "exchange": fo_exchange_segment,
-                "ordertype": "MARKET",
-                "producttype": "CARRYFORWARD",
-                "duration": "DAY",
-                "quantity": str(int(lot_chunk * lot_size))
+                "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
+                "transactiontype": transaction_type, "exchange": fo_exchange_segment,
+                "ordertype": "MARKET", "producttype": "CARRYFORWARD",
+                "duration": "DAY", "quantity": str(qty_shares)
             }
             while True:
                 try:
@@ -91,40 +95,41 @@ class CreditSpread:
                     increment_order_counter()
                     if order_response.get('message') == 'SUCCESS':
                         oid = order_response['data']['orderid']
-                        orderID_list.append(oid)
+                        orderID_list.append(oid); self._placed_order_ids.add(oid)
                         break
                     else:
                         break
-                except DataException as e:
+                except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
                         slack_bot_sendtext(f"ARTEMIS: Rate limit hit ({symbol}). Retrying in 2s...", "#error-alerts")
                         sleep(2); continue
 
-                    slack_bot_sendtext(f"ARTEMIS: DataException ({symbol}). Verifying order book...", "#error-alerts")
+                    slack_bot_sendtext(f"ARTEMIS: {type(e).__name__} ({symbol}). Verifying order book via ID-exclusion...", "#error-alerts")
                     sleep(2)
                     try:
-                        book = self.obj.orderBook()['data']
-                        increment_poll_counter()
-                        found = False
-                        for order in book:
-                            if (order['tradingsymbol'] == symbol and 
-                                order['transactiontype'] == transaction_type and
-                                int(order['quantity']) == int(lot_chunk * lot_size) and
-                                order['status'] in ('complete', 'open', 'validation pending')):
-                                
-                                oid = order['orderid']
-                                orderID_list.append(oid)
-                                slack_bot_sendtext(f"ARTEMIS: Ghost order RECOVERED ({symbol})", "#error-alerts")
-                                found = True
-                                break
-                        if found: break
-                        else: continue
+                        book_res = self.obj.orderBook()
+                        increment_order_book_poll()
+                        if book_res and book_res.get('status'):
+                            book = book_res['data']
+                            found = False
+                            for order in book:
+                                if (order['tradingsymbol'] == symbol and 
+                                    order['transactiontype'] == transaction_type and
+                                    int(order['quantity']) == qty_shares and
+                                    order['status'] in ('complete', 'open', 'validation pending')):
+                                    
+                                    oid = order['orderid']
+                                    if oid not in self._placed_order_ids:
+                                        ut = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                        if (datetime.now() - ut).total_seconds() < 60:
+                                            orderID_list.append(oid); self._placed_order_ids.add(oid)
+                                            slack_bot_sendtext(f"ARTEMIS: Ghost order RECOVERED ({symbol})", "#error-alerts")
+                                            found = True; break
+                            if found: break
+                            else: continue
                     except Exception as e_inner:
                         continue
-                except NetworkException:
-                    slack_bot_sendtext(f"ARTEMIS: Network timeout ({symbol}). Backing off 5s...", "#error-alerts")
-                    sleep(5); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
                         raise e
@@ -137,6 +142,7 @@ class CreditSpread:
         while True:
             try:
                 self.order_book = self.obj.orderBook()
+                increment_order_book_poll()
                 break
             except Exception as e:
                 handle_exception(e)
@@ -144,35 +150,68 @@ class CreditSpread:
             reset_counters()
         
     # Private method to fetch average fill price and average fill time
-    def _fetch_order_details(self, orderID_list):
-        # Function to fetch and populate the price, quantity and orderID lists
-        def get_details(order_book, orderID_list):
-            executed_price_list = []
-            quantity_list = []
-            executed_time_list = []
-            # Run a loop to run through the orderID_list (to get the order right) & order book and fetch the entry price and time when the orderId is matched.
-            for order_id in orderID_list:
-                for order in order_book['data']:
-                    if order['orderid'] == order_id:
-                        price = order['averageprice']
-                        qty = int(order['quantity'])
-                        executed_price_list.append(price * qty)
-                        quantity_list.append(qty)
-                        executed_time_list.append(datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S'))
-            return executed_price_list, quantity_list, executed_time_list
-        executed_price = None
-        entry_time = None
-        # Loop till the executed prices or quantities are not zero or None
-        while executed_price is None or entry_time is None or any(p == 0 for p in executed_price_list) or any(q == 0 for q in quantity_list):
-            executed_price_list, quantity_list, executed_time_list = get_details(self.order_book, orderID_list)
-            if executed_price_list and quantity_list and sum(quantity_list) > 0:
-                executed_price = sum(executed_price_list) / sum(quantity_list)
-                entry_time = max(executed_time_list) if executed_time_list else None
-            if executed_price is None or entry_time is None or any(p == 0 for p in executed_price_list) or any(q == 0 for q in quantity_list):
-                sleep(1)
-                reset_counters()
+    def _fetch_order_details(self, orderID_list, expected_lots=0):
+        start_time = datetime.now()
+        timeout = 10 # 10s timeout for fill verification
+        
+        while True:
+            try:
                 self._fetch_order_book()
-        return executed_price, entry_time
+                book = self.order_book.get('data', [])
+                
+                total_qty = 0
+                total_val = 0.0
+                fill_time = datetime.now()
+                matched_ids = []
+                
+                for oid in orderID_list:
+                    for order in book:
+                        if order['orderid'] == oid:
+                            matched_ids.append(oid)
+                            q = int(order['filledshares'])
+                            p = float(order['averageprice'])
+                            total_qty += q
+                            total_val += (p * q)
+                            try:
+                                ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                if ft > fill_time: fill_time = ft
+                            except: pass
+                
+                filled_lots = int(total_qty // lot_size)
+                all_ids_found = all(oid in matched_ids for oid in orderID_list)
+                
+                # 1. SUCCESS: All IDs found AND quantity matches expectation
+                if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
+
+                # 2. FAILURE: Terminal states reached but not filled
+                all_final = all_ids_found
+                if all_ids_found:
+                    for oid in orderID_list:
+                        for order in book:
+                            if order['orderid'] == oid:
+                                if order['status'] not in ('complete', 'rejected', 'cancelled'):
+                                    all_final = False; break
+                        if not all_final: break
+                
+                if all_final:
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
+
+                # 3. TIMEOUT
+                if (datetime.now() - start_time).total_seconds() >= timeout:
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
+                
+                sleep(0.5)
+                
+            except Exception as e:
+                handle_exception(e)
+                if (datetime.now() - start_time).total_seconds() >= timeout: break
+                sleep(0.5)
+                
+        return 0.0, datetime.now()
         
     # Method to intialize object
     def __init__(self, spread_type):

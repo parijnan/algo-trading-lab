@@ -9,7 +9,7 @@ Imports credentials from configs_live — loaded once at module level.
 from os.path import exists
 from requests import get, post
 from re import sub
-from time import sleep
+from time import sleep, time
 from traceback import format_exc
 from datetime import datetime
 
@@ -20,64 +20,49 @@ from configs_live import (
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
 
-
 # ---------------------------------------------------------------------------
-# Rate limit counters
+# Hardened Rate Limit Counters
 # ---------------------------------------------------------------------------
-_rms_poll_counter = 0
-_order_book_poll_counter = 0
-_ltp_poll_counter = 0
-_candle_poll_counter = 0
-_order_counter = 0
+_counters = {
+    'rms': {'count': 0, 'limit': RMS_POLL_LIMIT, 'last_reset': 0},
+    'order_book': {'count': 0, 'limit': ORDER_BOOK_POLL_LIMIT, 'last_reset': 0},
+    'ltp': {'count': 0, 'limit': LTP_POLL_LIMIT, 'last_reset': 0},
+    'candle': {'count': 0, 'limit': CANDLE_POLL_LIMIT, 'last_reset': 0},
+    'order': {'count': 0, 'limit': ORDER_LIMIT, 'last_reset': 0}
+}
 
-
-def _increment_rms_poll():
-    global _rms_poll_counter
-    _rms_poll_counter += 1
-    if _rms_poll_counter >= RMS_POLL_LIMIT:
-        sleep(1)
+def _check_limit(key):
+    global _counters
+    now = time()
+    c = _counters[key]
+    
+    # Self-healing: If 1s has passed, this specific bucket is fresh
+    if now - c['last_reset'] > 1.0:
+        c['count'] = 0
+        c['last_reset'] = now
+    
+    # If we are about to EXCEED the limit, sleep and reset EVERY bucket
+    if c['count'] >= c['limit']:
+        # print(f"Rate limit hit for {key.upper()}. Enforcing 1.1s cooldown...")
+        sleep(1.1)
         _reset_counters()
+        return
 
+    c['count'] += 1
 
-def _increment_order_book_poll():
-    global _order_book_poll_counter
-    _order_book_poll_counter += 1
-    if _order_book_poll_counter >= ORDER_BOOK_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_ltp_poll():
-    global _ltp_poll_counter
-    _ltp_poll_counter += 1
-    if _ltp_poll_counter >= LTP_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_candle_poll():
-    global _candle_poll_counter
-    _candle_poll_counter += 1
-    if _candle_poll_counter >= CANDLE_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_order():
-    global _order_counter
-    _order_counter += 1
-    if _order_counter >= ORDER_LIMIT:
-        sleep(1)
-        _reset_counters()
-
+def _increment_rms_poll(): _check_limit('rms')
+def _increment_order_book_poll(): _check_limit('order_book')
+def _increment_ltp_poll(): _check_limit('ltp')
+def _increment_candle_poll(): _check_limit('candle')
+def _increment_order(): _check_limit('order')
 
 def _reset_counters():
-    global _rms_poll_counter, _order_book_poll_counter, _ltp_poll_counter, _candle_poll_counter, _order_counter
-    _rms_poll_counter = 0
-    _order_book_poll_counter = 0
-    _ltp_poll_counter = 0
-    _candle_poll_counter = 0
-    _order_counter = 0
+    """Manual reset of all counters — call after any significant sleep."""
+    global _counters
+    now = time()
+    for k in _counters:
+        _counters[k]['count'] = 0
+        _counters[k]['last_reset'] = now
 
 
 def slack_bot_sendtext(msg, channel):

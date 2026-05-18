@@ -681,7 +681,6 @@ class Apollo:
                 rms = self.obj.rmsLimit()['data']
                 _increment_rms_poll()
 
-                
                 total_power = float(rms['availablecash'])
                 collateral  = float(rms['collateral'])
                 pure_cash   = round(total_power - collateral, 2)
@@ -992,35 +991,27 @@ class Apollo:
     def _place_order(self, transaction_type, symbol, token, lots):
         if DRY_RUN:
             dry_id = f"DRY_{token}_{transaction_type}_{datetime.now():%H%M%S}"
-            logger.info(
-                f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} "
-                f"(token={token}) — ID: {dry_id}")
-            slack_bot_sendtext(
-                f"*Apollo* DRY RUN | {transaction_type} {lots} lot(s) | "
-                f"{symbol} | token: {token} | ID: {dry_id}",
-                SLACK_TRADE_ALERTS)
+            logger.info(f"[DRY RUN] {transaction_type} {lots} lot(s) {symbol} (token={token}) — ID: {dry_id}")
+            slack_bot_sendtext(f"*Apollo* DRY RUN | {transaction_type} {lots} lot(s) | {symbol} | token: {token} | ID: {dry_id}", SLACK_TRADE_ALERTS)
             return [dry_id]
+
+        # We track all IDs placed in THIS strategy run to avoid ghost-recovery collisions
+        if not hasattr(self, '_placed_order_ids'): self._placed_order_ids = set()
 
         l_limit = self._qty_freeze // LOT_SIZE
         order_quantities = []
-        remaining_lots = lots
-        while remaining_lots > 0:
-            chunk = min(remaining_lots, l_limit)
-            order_quantities.append(chunk)
-            remaining_lots -= chunk
+        rem = lots
+        while rem > 0:
+            chunk = min(rem, l_limit); order_quantities.append(chunk); rem -= chunk
 
         orderid_list = []
         for lot_chunk in order_quantities:
+            qty_shares = int(lot_chunk * LOT_SIZE)
             orderparams = {
-                "variety":         "NORMAL",
-                "tradingsymbol":   symbol,
-                "symboltoken":     token,
-                "transactiontype": transaction_type,
-                "exchange":        FO_EXCHANGE_SEGMENT,
-                "ordertype":       "MARKET",
-                "producttype":     "CARRYFORWARD",
-                "duration":        "DAY",
-                "quantity":        str(int(lot_chunk * LOT_SIZE)),
+                "variety": "NORMAL", "tradingsymbol": symbol, "symboltoken": token,
+                "transactiontype": transaction_type, "exchange": FO_EXCHANGE_SEGMENT,
+                "ordertype": "MARKET", "producttype": "CARRYFORWARD",
+                "duration": "DAY", "quantity": str(qty_shares)
             }
             while True:
                 try:
@@ -1028,54 +1019,47 @@ class Apollo:
                     _increment_order()
                     if response.get('message') == 'SUCCESS':
                         oid = response['data']['orderid']
-                        orderid_list.append(oid)
+                        orderid_list.append(oid); self._placed_order_ids.add(oid)
                         logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}")
                         break
                     else:
-                        logger.error(f"Order rejected: {response.get('message')}")
-                        break
-                except DataException as e:
+                        logger.error(f"Order rejected: {response.get('message')}"); break
+                except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
-                        logger.warning(f"Rate limit hit during {transaction_type} {symbol}. Cooling down 2s...")
-                        slack_bot_sendtext(f"APOLLO: Rate limit hit ({symbol}). Retrying in 2s...", SLACK_ERRORS_CHANNEL)
-                        sleep(2); continue
+                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
 
-                    logger.warning(f"DataException ({err_msg}) during {transaction_type} {symbol}. Verifying order book...")
-                    slack_bot_sendtext(f"APOLLO: DataException ({symbol}). Verifying order book...", SLACK_ERRORS_CHANNEL)
+                    logger.warning(f"Connectivity issue ({type(e).__name__}) during {symbol}. Verifying order book via ID-exclusion...")
                     sleep(2)
                     try:
-                        book = self.obj.orderBook()['data']
+                        book_res = self.obj.orderBook()
                         _increment_order_book_poll()
-                        found = False
-                        for order in book:
-                            if (order['tradingsymbol'] == symbol and 
-                                order['transactiontype'] == transaction_type and
-                                int(order['quantity']) == int(lot_chunk * LOT_SIZE) and
-                                order['status'] in ('complete', 'open', 'validation pending')):
-                                
-                                oid = order['orderid']
-                                orderid_list.append(oid)
-                                logger.info(f"Ghost order RECOVERED from book: {symbol} ID: {oid}")
-                                slack_bot_sendtext(f"APOLLO: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
-                                found = True
-                                break
-                        if found: break
-                        else: logger.info("Order not found in book. Retrying placement..."); continue
+                        if book_res and book_res.get('status'):
+                            book = book_res['data']
+                            found = False
+                            for order in book:
+                                if (order['tradingsymbol'] == symbol and 
+                                    order['transactiontype'] == transaction_type and
+                                    int(order['quantity']) == qty_shares and
+                                    order['status'] in ('complete', 'open', 'validation pending')):
+                                    
+                                    oid = order['orderid']
+                                    if oid not in self._placed_order_ids:
+                                        ut = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                        if (datetime.now() - ut).total_seconds() < 60:
+                                            orderid_list.append(oid); self._placed_order_ids.add(oid)
+                                            logger.info(f"Ghost Order recovered! ID: {oid}")
+                                            slack_bot_sendtext(f"APOLLO: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
+                                            found = True; break
+                            if found: break
+                            else: logger.info("Order not found in book. Retrying placement..."); continue
                     except Exception as e_inner:
-                        logger.error(f"Error checking book: {e_inner}. Retrying placement...")
-                        continue
-                except NetworkException:
-                    logger.warning(f"Network timeout during {transaction_type} {symbol}. Backing off 5s...")
-                    slack_bot_sendtext(f"APOLLO: Network timeout ({symbol}). Backing off 5s...", SLACK_ERRORS_CHANNEL)
-                    sleep(5); continue
+                        logger.error(f"Error checking book: {e_inner}. Retrying placement..."); continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
-                        logger.critical(f"Session failure detected: {e}. Aborting to Leto.")
-                        raise e
+                        logger.critical(f"Session failure detected: {e}. Aborting to Leto."); raise e
                     handle_exception(e); sleep(1)
                 _reset_counters()
-
         return orderid_list
 
     def _fetch_order_book(self):
@@ -1091,63 +1075,84 @@ class Apollo:
             sleep(1)
             _reset_counters()
 
-    def _fetch_order_details(self, orderid_list, token):
+    def _fetch_order_details(self, orderid_list, token, expected_lots=0):
         if DRY_RUN:
             fill = self.feed.get_ltp(token)
             if fill is None or fill == 0.0:
                 try:
-                    row = self.instrument_df[
-                        self.instrument_df['token'].astype(str) == str(token)]
+                    row = self.instrument_df[self.instrument_df['token'].astype(str) == str(token)]
                     if not row.empty:
                         symbol = row['symbol'].iloc[0]
                         fill   = self._fetch_option_ltp(symbol, token)
                     else:
                         fill = 0.0
                 except Exception as e:
-                    handle_exception(e)
-                    fill = 0.0
+                    handle_exception(e); fill = 0.0
             fill_time = datetime.now()
-            logger.info(
-                f"[DRY RUN] Fill for token {token}: {fill:.2f} at {fill_time:%H:%M:%S}")
+            logger.info(f"[DRY RUN] Fill for token {token}: {fill:.2f} at {fill_time:%H:%M:%S}")
             return fill, fill_time
 
-        def get_details(order_book, orderid_list):
-            price_list = []
-            qty_list   = []
-            time_list  = []
-            for oid in orderid_list:
-                for order in order_book['data']:
-                    if order['orderid'] == oid:
-                        price = order['averageprice']
-                        qty   = int(order['quantity'])
-                        price_list.append(price * qty)
-                        qty_list.append(qty)
-                        time_list.append(
-                            datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S'))
-            return price_list, qty_list, time_list
-
-        executed_price = None
-        fill_time      = None
-        price_list     = []
-        qty_list       = []
-
-        while (executed_price is None or fill_time is None or
-               any(p == 0 for p in price_list) or
-               any(q == 0 for q in qty_list)):
-            price_list, qty_list, time_list = get_details(
-                self.order_book, orderid_list)
-            if price_list and qty_list and sum(qty_list) > 0:
-                executed_price = sum(price_list) / sum(qty_list)
-                fill_time      = max(time_list) if time_list else None
-            if (executed_price is None or fill_time is None or
-                    any(p == 0 for p in price_list) or
-                    any(q == 0 for q in qty_list)):
-                sleep(1)
-                _reset_counters()
+        start_time = datetime.now()
+        timeout = 10 # 10s timeout for fill verification
+        
+        while True:
+            try:
                 self._fetch_order_book()
+                book = self.order_book.get('data', [])
+                
+                total_qty = 0
+                total_val = 0.0
+                fill_time = datetime.now()
+                matched_ids = []
+                
+                for oid in orderid_list:
+                    for order in book:
+                        if order['orderid'] == oid:
+                            matched_ids.append(oid)
+                            q = int(order['filledshares'])
+                            p = float(order['averageprice'])
+                            total_qty += q
+                            total_val += (p * q)
+                            try:
+                                ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                if ft > fill_time: fill_time = ft
+                            except: pass
+                
+                filled_lots = int(total_qty // LOT_SIZE)
+                all_ids_found = all(oid in matched_ids for oid in orderid_list)
+                
+                # 1. SUCCESS: All IDs found AND quantity matches expectation
+                if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
 
-        logger.info(f"Order fill: {executed_price:.2f} at {fill_time}")
-        return executed_price, fill_time
+                # 2. FAILURE: Terminal states reached but not filled
+                all_final = all_ids_found
+                if all_ids_found:
+                    for oid in orderid_list:
+                        for order in book:
+                            if order['orderid'] == oid:
+                                if order['status'] not in ('complete', 'rejected', 'cancelled'):
+                                    all_final = False; break
+                        if not all_final: break
+                
+                if all_final:
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
+
+                # 3. TIMEOUT
+                if (datetime.now() - start_time).total_seconds() >= timeout:
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, fill_time
+                
+                sleep(0.5)
+                
+            except Exception as e:
+                handle_exception(e)
+                if (datetime.now() - start_time).total_seconds() >= timeout: break
+                sleep(0.5)
+                
+        return 0.0, datetime.now()
 
     def _fetch_option_ltp(self, symbol, token):
         while True:
