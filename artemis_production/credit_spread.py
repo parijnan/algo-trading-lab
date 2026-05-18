@@ -204,12 +204,12 @@ class CreditSpread:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                     return avg_price, fill_time
                 
-                sleep(0.5)
+                sleep(1)
                 
             except Exception as e:
                 handle_exception(e)
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
-                sleep(0.5)
+                sleep(1)
                 
         return 0.0, datetime.now()
         

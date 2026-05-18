@@ -352,12 +352,12 @@ class Athena:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                     return avg_price, int(total_qty // LOT_SIZE), fill_time
                 
-                sleep(0.5)
+                sleep(1)
 
             except Exception as e:
                 logger.error(f"Error in _fetch_order_details for {symbol}: {e}")
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
-                sleep(0.5)
+                sleep(1)
                 
         return 0.0, 0, datetime.now()
 
