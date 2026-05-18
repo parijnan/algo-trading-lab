@@ -105,16 +105,15 @@ class CreditSpread:
                         if rejection_count >= 3:
                             slack_bot_sendtext(f"*Artemis*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", "#error-alerts")
                             break
-                        sleep(1)
-                        continue
+                        sleep(1); reset_counters(); continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
                         slack_bot_sendtext(f"ARTEMIS: Rate limit hit ({symbol}). Retrying in 2s...", "#error-alerts")
-                        sleep(2); continue
+                        sleep(2); reset_counters(); continue
 
                     slack_bot_sendtext(f"ARTEMIS: {type(e).__name__} ({symbol}). Verifying order book via ID-exclusion...", "#error-alerts")
-                    sleep(2)
+                    sleep(2); reset_counters()
                     try:
                         book_res = self.obj.orderBook()
                         increment_order_book_poll()
@@ -229,12 +228,12 @@ class CreditSpread:
                         slack_bot_sendtext(f"*Artemis*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", "#error-alerts")
                     return avg_price, filled_lots, fill_time
 
-                sleep(1)
+                sleep(1); reset_counters()
 
             except Exception as e:
                 handle_exception(e)
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
-                sleep(1)
+                sleep(1); reset_counters()
 
         if expected_lots > 0:
             slack_bot_sendtext(f"*Artemis*: Zero fills on {symbol}. Expected {expected_lots} lots.", "#error-alerts")

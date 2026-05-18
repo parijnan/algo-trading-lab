@@ -273,7 +273,7 @@ class Apollo:
                 elapsed = 0
                 while elapsed < seconds_to_close - 2:
                     self._check_slack_commands()
-                    sleep(1)
+                    sleep(1); _reset_counters()
                     elapsed += 1
                     self._update_elapsed += 1
 
@@ -1035,14 +1035,14 @@ class Apollo:
                         if rejection_count >= 3:
                             slack_bot_sendtext(f"⚠️ *Apollo*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", SLACK_ERRORS_CHANNEL)
                             break
-                        sleep(1); continue
+                        sleep(1); _reset_counters(); continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
-                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
+                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); _reset_counters(); continue
 
                     logger.warning(f"Connectivity issue ({type(e).__name__}) during {symbol}. Verifying order book via ID-exclusion...")
-                    sleep(2)
+                    sleep(2); _reset_counters()
                     try:
                         book_res = self.obj.orderBook()
                         _increment_order_book_poll()
@@ -1163,12 +1163,12 @@ class Apollo:
                         slack_bot_sendtext(f"⚠️ *Apollo*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
 
-                sleep(1)
+                sleep(1); _reset_counters()
 
             except Exception as e:
                 handle_exception(e)
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
-                sleep(1)
+                sleep(1); _reset_counters()
 
         if expected_lots > 0:
             logger.warning(f"Zero fills for {symbol}: expected {expected_lots} lots.")

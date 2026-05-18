@@ -256,21 +256,20 @@ class Athena:
                         if rejection_count >= 3:
                             slack_bot_sendtext(f"⚠️ *Athena*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", SLACK_ERRORS_CHANNEL)
                             break
-                        sleep(1)
-                        continue
+                        sleep(1); _reset_counters(); continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
-                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
+                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); _reset_counters(); continue
 
                     logger.warning(f"Connectivity issue ({type(e).__name__}) during {symbol}. Verifying order book...")
-                    sleep(2)
+                    sleep(2); _reset_counters()
                     try:
                         book = self.obj.orderBook()['data']
                         _increment_order_book_poll()
                         found = False
                         for order in book:
-                            if (order['tradingsymbol'] == symbol and 
+                            if (order['tradingsymbol'] == symbol and
                                 order['transactiontype'] == transaction_type and
                                 int(order['quantity']) == qty_shares and
                                 order['status'] in ('complete', 'open', 'validation pending')):
@@ -290,7 +289,7 @@ class Athena:
 
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
                         logger.critical(f"Session failure detected: {e}. Aborting to Leto."); raise e
-                    handle_exception(e); sleep(1)
+                    handle_exception(e); sleep(1); _reset_counters()
         return orderid_list
 
     def _fetch_order_details(self, orderid_list, token, symbol, expected_lots=0):
@@ -366,12 +365,12 @@ class Athena:
                         slack_bot_sendtext(f"⚠️ *Athena*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_at_timeout}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_at_timeout, fill_time
 
-                sleep(1)
+                sleep(1); _reset_counters()
 
             except Exception as e:
                 logger.error(f"Error in _fetch_order_details for {symbol}: {e}")
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
-                sleep(1)
+                sleep(1); _reset_counters()
 
         if expected_lots > 0:
             slack_bot_sendtext(f"⚠️ *Athena*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
@@ -406,7 +405,7 @@ class Athena:
                 lots = max(1, min(lots_by_capital, lots_by_cash))
                 logger.info(f"Lot sizing: Power={total_power:,.0f} | Cash={pure_cash:,.0f} | Cap={lots_by_capital} | Cash={lots_by_cash} | Final={lots}")
                 return lots
-            except Exception as e: handle_exception(e); sleep(1)
+            except Exception as e: handle_exception(e); sleep(1); _reset_counters()
 
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
