@@ -300,7 +300,7 @@ class Athena:
         start_time = datetime.now()
         timeout = ORDER_TIMEOUT_SEC
         
-        while (datetime.now() - start_time).total_seconds() < timeout:
+        while True:
             total_qty = 0
             total_val = 0.0
             fill_time = datetime.now()
@@ -309,81 +309,64 @@ class Athena:
                 book_res = self.obj.orderBook()
                 _increment_order_book_poll()
                 
-                if not book_res or not book_res.get('status'):
-                    logger.warning(f"Order book fetch failed for {symbol}. Retrying...")
-                    sleep(0.5)
-                    continue
+                if book_res and book_res.get('status'):
+                    book = book_res['data']
+                    matched_ids = []
                     
-                book = book_res['data']
-                matched_count = 0
-                
-                for oid in orderid_list:
-                    for order in book:
-                        if order['orderid'] == oid:
-                            matched_count += 1
-                            q = int(order['filledshares'])
-                            p = float(order['averageprice'])
-                            total_qty += q
-                            total_val += (p * q)
-                            try:
-                                # Update to latest fill time
-                                ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
-                                if ft > fill_time: fill_time = ft
-                            except:
-                                pass
-                
-                filled_lots = int(total_qty // LOT_SIZE)
-                
-                # Success Condition: All expected lots are filled
-                if expected_lots > 0 and filled_lots >= expected_lots:
-                    avg_price = round(total_val / total_qty, 2)
-                    return avg_price, filled_lots, fill_time
-                
-                # Failure Condition: All orders are in a final non-complete state
-                all_final = True
-                if matched_count < len(orderid_list):
-                    all_final = False
-                else:
                     for oid in orderid_list:
                         for order in book:
                             if order['orderid'] == oid:
-                                if order['status'] not in ('complete', 'rejected', 'cancelled'):
-                                    all_final = False
-                                    break
-                        if not all_final: break
-                
-                if all_final:
-                    if total_qty > 0:
-                        logger.info(f"Order sequence for {symbol} finalized with partial fill: {filled_lots}/{expected_lots} lots.")
-                        avg_price = round(total_val / total_qty, 2)
+                                matched_ids.append(oid)
+                                q = int(order['filledshares'])
+                                p = float(order['averageprice'])
+                                total_qty += q
+                                total_val += (p * q)
+                                try:
+                                    ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                    if ft > fill_time: fill_time = ft
+                                except: pass
+                    
+                    filled_lots = int(total_qty // LOT_SIZE)
+                    all_ids_found = all(oid in matched_ids for oid in orderid_list)
+                    
+                    # 1. SUCCESS: All IDs found AND quantity matches/exceeds expectation
+                    if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
+                        avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                         return avg_price, filled_lots, fill_time
-                    else:
-                        logger.warning(f"Order sequence for {symbol} finalized with ZERO fills.")
-                        return 0.0, 0, datetime.now()
-                        
+
+                    # 2. FAILURE: All orders reached a final terminal state but didn't fill as expected
+                    all_final = all_ids_found
+                    if all_ids_found:
+                        for oid in orderid_list:
+                            for order in book:
+                                if order['orderid'] == oid:
+                                    if order['status'] not in ('complete', 'rejected', 'cancelled'):
+                                        all_final = False; break
+                            if not all_final: break
+                    
+                    if all_final:
+                        if total_qty > 0:
+                            logger.info(f"Order sequence for {symbol} finalized with partial fill: {filled_lots}/{expected_lots} lots.")
+                            return round(total_val/total_qty, 2), filled_lots, fill_time
+                        else:
+                            logger.warning(f"Order sequence for {symbol} finalized with ZERO fills.")
+                            return 0.0, 0, datetime.now()
+
+                # 3. DISCREPANCY/LATENCY: We either didn't find the IDs yet or it's a slow partial fill.
+                elapsed = (datetime.now() - start_time).total_seconds()
+                if elapsed >= timeout:
+                    logger.warning(f"Timeout reaching {timeout}s for {symbol}. Returning current state.")
+                    avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    return avg_price, int(total_qty // LOT_SIZE), fill_time
+                
+                sleep(0.5)
+
             except Exception as e:
                 logger.error(f"Error in _fetch_order_details for {symbol}: {e}")
-            
-            sleep(0.5)
-            _reset_counters()
-            
-        # Timeout reached
-        total_qty = 0
-        total_val = 0.0
-        try:
-            book = self.obj.orderBook().get('data', [])
-            for oid in orderid_list:
-                for order in book:
-                    if order['orderid'] == oid:
-                        q = int(order['filledshares'])
-                        total_qty += q
-                        total_val += (float(order['averageprice']) * q)
-        except: pass
-        
-        avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-        filled_lots = int(total_qty // LOT_SIZE)
-        logger.warning(f"Timeout reached verifying {symbol}. Found {filled_lots} lots.")
-        return avg_price, filled_lots, datetime.now()
+                if (datetime.now() - start_time).total_seconds() >= timeout: break
+                sleep(0.5)
+                
+        return 0.0, 0, datetime.now()
 
     def _calculate_lots(self, strikes_dict=None):
         if not LOT_CALC: return LOT_COUNT
