@@ -115,4 +115,5 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 - [x] SL handling and spread adjustment — validated
 - [x] ELM adjustment — validated
 - [x] Trade archival — validated
+- [x] Orphan fill cleanup — implemented across all execution paths (entry, exit, adjust, ELM)
 - [x] Leto integration — session management moved to Leto

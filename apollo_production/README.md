@@ -126,4 +126,5 @@ warmup is always complete and ST values match the backtest exactly.
 - [x] Signal generation (D-R-D06g filters) — live
 - [x] Clean shutdown (Ctrl+C / kill) — validated
 - [x] Missed flip recovery on restart — implemented
+- [x] Orphan fill cleanup — ported from Athena; excess fills on any entry leg are squared off immediately
 - [x] Leto integration — session management moved to Leto
