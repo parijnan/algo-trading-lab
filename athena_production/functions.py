@@ -1,14 +1,13 @@
 """
 functions.py — Athena Production Utility Functions
-Slack messaging, Telegram messaging, and exception handling.
-
-Reused from Apollo/Artemis with minimal changes for Athena.
+Hardened Rate Limiting & Messaging.
 """
 
 import os
+import logging
 from requests import get, post
 from re import sub
-from time import sleep
+from time import sleep, time
 from traceback import format_exc
 from datetime import datetime
 
@@ -19,151 +18,89 @@ from configs_live import (
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
 
+logger = logging.getLogger("athena.functions")
+
 # ---------------------------------------------------------------------------
-# Rate limit counters
+# Hardened Rate Limit Counters
 # ---------------------------------------------------------------------------
-_rms_poll_counter = 0
-_order_book_poll_counter = 0
-_ltp_poll_counter = 0
-_candle_poll_counter = 0
-_order_counter = 0
+_counters = {
+    'rms': {'count': 0, 'limit': RMS_POLL_LIMIT, 'last_reset': 0},
+    'order_book': {'count': 0, 'limit': ORDER_BOOK_POLL_LIMIT, 'last_reset': 0},
+    'ltp': {'count': 0, 'limit': LTP_POLL_LIMIT, 'last_reset': 0},
+    'candle': {'count': 0, 'limit': CANDLE_POLL_LIMIT, 'last_reset': 0},
+    'order': {'count': 0, 'limit': ORDER_LIMIT, 'last_reset': 0}
+}
 
-
-def _increment_rms_poll():
-    global _rms_poll_counter
-    _rms_poll_counter += 1
-    if _rms_poll_counter >= RMS_POLL_LIMIT:
-        sleep(1)
+def _check_limit(key):
+    global _counters
+    now = time()
+    c = _counters[key]
+    
+    # Self-healing: If 1s has passed, this specific bucket is fresh
+    if now - c['last_reset'] > 1.0:
+        c['count'] = 0
+        c['last_reset'] = now
+    
+    # If we are about to EXCEED the limit, sleep and reset EVERY bucket
+    if c['count'] >= c['limit']:
+        logger.warning(f"Rate limit hit for {key.upper()}. Enforcing 1.1s cooldown and resetting all budgets...")
+        sleep(1.1)
         _reset_counters()
+        return
 
+    c['count'] += 1
 
-def _increment_order_book_poll():
-    global _order_book_poll_counter
-    _order_book_poll_counter += 1
-    if _order_book_poll_counter >= ORDER_BOOK_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_ltp_poll():
-    global _ltp_poll_counter
-    _ltp_poll_counter += 1
-    if _ltp_poll_counter >= LTP_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_candle_poll():
-    global _candle_poll_counter
-    _candle_poll_counter += 1
-    if _candle_poll_counter >= CANDLE_POLL_LIMIT:
-        sleep(1)
-        _reset_counters()
-
-
-def _increment_order():
-    global _order_counter
-    _order_counter += 1
-    if _order_counter >= ORDER_LIMIT:
-        sleep(1)
-        _reset_counters()
-
+def _increment_rms_poll(): _check_limit('rms')
+def _increment_order_book_poll(): _check_limit('order_book')
+def _increment_ltp_poll(): _check_limit('ltp')
+def _increment_candle_poll(): _check_limit('candle')
+def _increment_order(): _check_limit('order')
 
 def _reset_counters():
-    global _rms_poll_counter, _order_book_poll_counter, _ltp_poll_counter, _order_counter
-    _rms_poll_counter = 0
-    _order_book_poll_counter = 0
-    _ltp_poll_counter = 0
-    _order_counter = 0
-
+    """Manual reset of all counters — call after any significant sleep."""
+    global _counters
+    now = time()
+    for k in _counters:
+        _counters[k]['count'] = 0
+        _counters[k]['last_reset'] = now
 
 # ---------------------------------------------------------------------------
 # Messaging
 # ---------------------------------------------------------------------------
 
 def slack_bot_sendtext(msg, channel):
-    """
-    Send a Slack message via the bot. Fails silently — never crashes the caller.
-    Logs failure to error_log.txt and attempts Telegram fallback.
-    """
+    """Send a Slack message via the bot. Fails silently."""
     url = "https://slack.com/api/chat.postMessage"
-    headers = {
-        "Authorization": f"Bearer {slack_token}",
-        "Content-Type":  "application/json",
-    }
+    headers = {"Authorization": f"Bearer {slack_token}", "Content-Type": "application/json"}
     payload = {"channel": channel, "text": msg}
     try:
-        response = post(url, headers=headers, json=payload, timeout=5)
-        return response.json() if 'response' in dir() else None
+        post(url, headers=headers, json=payload, timeout=5)
     except Exception as e:
-        trace_msg = format_exc()
-        msg_txt = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\n"
-                   f"Slack message failed.\nException:\n{format(e)}\n{trace_msg}")
-        print(msg_txt)
-        telegram_bot_sendtext("Athena: Slack message failed. Check log.", 'bot')
-        _write_error_log(msg_txt)
+        logger.error(f"Slack message failed: {e}")
+        telegram_bot_sendtext(f"Athena: Slack failed. {msg[:50]}...", 'bot')
     return None
-
 
 def telegram_bot_sendtext(bot_message, medium='channel'):
-    """
-    Send a Telegram message. Used as fallback when Slack fails.
-    medium='bot'     — muted private bot message
-    medium='channel' — channel notification
-    """
+    """Telegram fallback."""
     def _escape_markdown_v2(text):
-        escape_chars = r'[_*[\]()~`>#+-=|{}.!]'
-        return sub(escape_chars, r'\\\g<0>', text)
-
-    bot_chat_id  = bot_id if medium == 'bot' else channel_id
-    bot_message  = _escape_markdown_v2(bot_message)
-    send_text    = (
-        f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        f"?chat_id={bot_chat_id}&parse_mode=MarkdownV2&text={bot_message}"
-    )
+        return sub(r'[_*[\]()~`>#+-=|{}.!]', r'\\\g<0>', text)
+    bot_chat_id = bot_id if medium == 'bot' else channel_id
+    bot_message = _escape_markdown_v2(bot_message)
+    send_text = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={bot_chat_id}&parse_mode=MarkdownV2&text={bot_message}"
     try:
-        response = get(send_text, timeout=5)
-        return response.json()
-    except Exception as e:
-        trace_msg = format_exc()
-        msg_txt = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\n"
-                   f"Telegram message failed.\nException:\n{format(e)}\n{trace_msg}")
-        print(msg_txt)
-        _write_error_log(msg_txt)
-        sleep(1)
-        try:
-            response = get(send_text, timeout=5)
-            return response.json()
-        except Exception:
-            pass
+        get(send_text, timeout=5)
+    except: pass
     return None
 
-
 def handle_exception(e):
-    """
-    Log exception with full traceback to console and error_log.txt.
-    Send Slack error alert.
-    """
+    """Global exception handler with Slack alerting."""
     trace_msg = format_exc()
-    msg_txt_detailed = (
-        f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\n"
-        f"Exception:\n{format(e)}\n{trace_msg}"
-    )
-    print(msg_txt_detailed)
-    slack_bot_sendtext(
-        f"ATHENA ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
-        f"{format(e)} — check logs.",
-        SLACK_ERRORS_CHANNEL
-    )
-    _write_error_log(msg_txt_detailed)
-
+    logger.error(f"EXCEPTION: {e}\n{trace_msg}")
+    slack_bot_sendtext(f"🚨 *ATHENA ERROR*: {format(e)} — check logs.", SLACK_ERRORS_CHANNEL)
+    _write_error_log(f"{datetime.now()}: {e}\n{trace_msg}")
 
 def _write_error_log(msg):
-    """Append message to data/error_log.txt."""
-    log_path = os.path.join(DATA_DIR, 'error_log.txt')
-    mode = 'a' if os.path.exists(log_path) else 'w'
     try:
-        with open(log_path, mode) as f:
+        with open(os.path.join(DATA_DIR, 'error_log.txt'), 'a') as f:
             f.write(msg + '\n')
-    except Exception:
-        pass
+    except: pass

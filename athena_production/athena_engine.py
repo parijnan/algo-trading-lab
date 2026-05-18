@@ -289,7 +289,7 @@ class Athena:
                         logger.critical(f"Session failure detected: {e}. Aborting to Leto.")
                         raise e
                     handle_exception(e); sleep(1)
-        return orderid_list
+                return orderid_list
 
     def _fetch_order_details(self, orderid_list, token, symbol, expected_lots=0):
         if DRY_RUN:
