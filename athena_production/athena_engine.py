@@ -250,26 +250,25 @@ class Athena:
                         logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}"); break
                     else:
                         logger.error(f"Order rejected: {response.get('message')}"); break
-                except DataException as e:
+                except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
-                    if "access rate" in err_msg: logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
-                    
-                    logger.warning(f"DataException ({symbol}). Verifying order book via ID-exclusion...")
+                    if "access rate" in err_msg:
+                        logger.warning(f"Rate limit hit ({symbol}). Cooling down 2s..."); sleep(2); continue
+
+                    logger.warning(f"Connectivity issue ({type(e).__name__}) during {symbol}. Verifying order book...")
                     sleep(2)
                     try:
                         book = self.obj.orderBook()['data']
                         _increment_order_book_poll()
                         found = False
                         for order in book:
-                            # Match on standard documented fields
                             if (order['tradingsymbol'] == symbol and 
                                 order['transactiontype'] == transaction_type and
-                                int(order['quantity']) == qty_shares):
-                                
+                                int(order['quantity']) == qty_shares and
+                                order['status'] in ('complete', 'open', 'validation pending')):
+
                                 oid = order['orderid']
-                                # ONLY recover if this is a NEW ID we haven't processed yet
                                 if oid not in self._placed_order_ids:
-                                    # Ensure it's recent (within 60s)
                                     ut = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
                                     if (datetime.now() - ut).total_seconds() < 60:
                                         orderid_list.append(oid); self._placed_order_ids.add(oid)
@@ -279,9 +278,8 @@ class Athena:
                         else: logger.info("Order not found in book. Retrying placement..."); continue
                     except Exception as e_inner:
                         logger.error(f"Error checking book: {e_inner}. Retrying placement..."); continue
-                except NetworkException:
-                    logger.warning(f"Network timeout ({symbol}). Backing off 5s..."); sleep(5); continue
                 except Exception as e:
+
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
                         logger.critical(f"Session failure detected: {e}. Aborting to Leto."); raise e
                     handle_exception(e); sleep(1)
