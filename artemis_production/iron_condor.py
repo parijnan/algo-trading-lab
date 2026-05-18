@@ -11,11 +11,16 @@ Changes from original:
   All trading logic is completely unchanged.
 """
 
+import os
 from credit_spread import CreditSpread
 from datetime import datetime, timedelta
 from math import floor
 from functions import sleep, exists, handle_exception, slack_bot_sendtext, reset_counters, increment_rms_poll
-from configs import pd, lot_size, monitor_frequency, lot_calc, lot_capital, vix_threshold, entry_window_minutes, exchange_segment, instrument, underlying_token
+from configs import (
+    pd, lot_size, monitor_frequency, lot_calc, lot_capital, 
+    vix_threshold, entry_window_minutes, exchange_segment, 
+    instrument, underlying_token, REPO_ROOT
+)
 
 # IronCondor class consisting of pe and ce credit spreads
 class IronCondor:

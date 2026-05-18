@@ -8,8 +8,12 @@ so all relative paths (data/contracts.csv etc.) resolve correctly without
 any chdir inside the module.
 """
 
+import os
 import pandas as pd
 from datetime import time
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR  = os.path.join(REPO_ROOT, "data")
 
 # Session hours
 opening_time = time(9, 15)
