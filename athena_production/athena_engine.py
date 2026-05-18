@@ -240,6 +240,7 @@ class Athena:
                 "ordertype": "MARKET", "producttype": "CARRYFORWARD",
                 "duration": "DAY", "quantity": str(qty_shares)
             }
+            rejection_count = 0
             while True:
                 try:
                     response = self.obj.placeOrderFullResponse(orderparams)
@@ -249,7 +250,14 @@ class Athena:
                         orderid_list.append(oid); self._placed_order_ids.add(oid)
                         logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}"); break
                     else:
-                        logger.error(f"Order rejected: {response.get('message')}"); break
+                        rejection_count += 1
+                        err_msg = response.get('message', 'Unknown error')
+                        logger.error(f"Order rejected ({rejection_count}/3): {symbol} — {err_msg}")
+                        if rejection_count >= 3:
+                            slack_bot_sendtext(f"⚠️ *Athena*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", SLACK_ERRORS_CHANNEL)
+                            break
+                        sleep(1)
+                        continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
@@ -340,9 +348,12 @@ class Athena:
                     if all_final:
                         if total_qty > 0:
                             logger.info(f"Order sequence for {symbol} finalized with partial fill: {filled_lots}/{expected_lots} lots.")
+                            slack_bot_sendtext(f"⚠️ *Athena*: Partial fill on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                             return round(total_val/total_qty, 2), filled_lots, fill_time
                         else:
                             logger.warning(f"Order sequence for {symbol} finalized with ZERO fills.")
+                            if expected_lots > 0:
+                                slack_bot_sendtext(f"⚠️ *Athena*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
                             return 0.0, 0, datetime.now()
 
                 # 3. DISCREPANCY/LATENCY: We either didn't find the IDs yet or it's a slow partial fill.
@@ -350,15 +361,20 @@ class Athena:
                 if elapsed >= timeout:
                     logger.warning(f"Timeout reaching {timeout}s for {symbol}. Returning current state.")
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
-                    return avg_price, int(total_qty // LOT_SIZE), fill_time
-                
+                    filled_at_timeout = int(total_qty // LOT_SIZE)
+                    if expected_lots > 0 and filled_at_timeout < expected_lots:
+                        slack_bot_sendtext(f"⚠️ *Athena*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_at_timeout}.", SLACK_ERRORS_CHANNEL)
+                    return avg_price, filled_at_timeout, fill_time
+
                 sleep(1)
 
             except Exception as e:
                 logger.error(f"Error in _fetch_order_details for {symbol}: {e}")
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
                 sleep(1)
-                
+
+        if expected_lots > 0:
+            slack_bot_sendtext(f"⚠️ *Athena*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
         return 0.0, 0, datetime.now()
 
     def _calculate_lots(self, strikes_dict=None):

@@ -751,15 +751,22 @@ class Apollo:
 
         # 2. Verify Fills (Verification-Second)
         # Using the hardened _fetch_order_details with sub-second polling
-        buy_fill, buy_filled_lots, buy_time = self._fetch_order_details(buy_orderid_list, buy_token, expected_lots=lots)
+        buy_fill, buy_filled_lots, buy_time = self._fetch_order_details(buy_orderid_list, buy_token, expected_lots=lots, symbol=buy_symbol)
         logger.info(f"Buy fill: {buy_fill:.2f} at {buy_time}")
 
-        sell_fill, sell_filled_lots, sell_time = self._fetch_order_details(sell_orderid_list, sell_token, expected_lots=lots)
+        sell_fill, sell_filled_lots, sell_time = self._fetch_order_details(sell_orderid_list, sell_token, expected_lots=lots, symbol=sell_symbol)
         logger.info(f"Sell fill: {sell_fill:.2f} at {sell_time}")
 
         confirmed_lots = min(buy_filled_lots, sell_filled_lots)
         self._cleanup_orphan_fill('BUY',  buy_symbol,  buy_token,  buy_filled_lots,  confirmed_lots)
         self._cleanup_orphan_fill('SELL', sell_symbol, sell_token, sell_filled_lots, confirmed_lots)
+
+        if confirmed_lots == 0:
+            logger.error("Entry aborted — zero lots filled after verification.")
+            slack_bot_sendtext("⚠️ *Apollo*: Entry aborted — zero lots filled after verification.", SLACK_ERRORS_CHANNEL)
+            clear_trade_fields(self.state)
+            save_state(self.state)
+            return
 
         net_debit         = buy_fill - sell_fill
         max_profit        = HEDGE_POINTS - net_debit
@@ -942,10 +949,10 @@ class Apollo:
         buy_close_ids = self._place_order('SELL', self.state.buy_symbol, self.state.buy_token, lots)
 
         # 2. Verify Fills (Verification-Second)
-        sell_exit_fill, _sf, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token, expected_lots=lots)
+        sell_exit_fill, _sf, _ = self._fetch_order_details(sell_close_ids, self.state.sell_token, expected_lots=lots, symbol=self.state.sell_symbol)
         logger.info(f"Sell leg exit fill: {sell_exit_fill:.2f}")
 
-        buy_exit_fill, _bf, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token, expected_lots=lots)
+        buy_exit_fill, _bf, _ = self._fetch_order_details(buy_close_ids, self.state.buy_token, expected_lots=lots, symbol=self.state.buy_symbol)
         logger.info(f"Buy leg exit fill: {buy_exit_fill:.2f}")
 
         pl_points = round(
@@ -1011,6 +1018,7 @@ class Apollo:
                 "ordertype": "MARKET", "producttype": "CARRYFORWARD",
                 "duration": "DAY", "quantity": str(qty_shares)
             }
+            rejection_count = 0
             while True:
                 try:
                     response = self.obj.placeOrderFullResponse(orderparams)
@@ -1021,7 +1029,13 @@ class Apollo:
                         logger.info(f"Order placed: {transaction_type} {symbol} ID: {oid}")
                         break
                     else:
-                        logger.error(f"Order rejected: {response.get('message')}"); break
+                        rejection_count += 1
+                        err_msg = response.get('message', 'Unknown error')
+                        logger.error(f"Order rejected ({rejection_count}/3): {symbol} — {err_msg}")
+                        if rejection_count >= 3:
+                            slack_bot_sendtext(f"⚠️ *Apollo*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", SLACK_ERRORS_CHANNEL)
+                            break
+                        sleep(1); continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
@@ -1073,7 +1087,7 @@ class Apollo:
             sleep(1)
             _reset_counters()
 
-    def _fetch_order_details(self, orderid_list, token, expected_lots=0):
+    def _fetch_order_details(self, orderid_list, token, expected_lots=0, symbol=''):
         if DRY_RUN:
             fill = self.feed.get_ltp(token)
             if fill is None or fill == 0.0:
@@ -1136,11 +1150,17 @@ class Apollo:
 
                 if all_final:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    if expected_lots > 0 and filled_lots < expected_lots:
+                        logger.warning(f"Partial fill on {symbol}: expected {expected_lots}, filled {filled_lots}.")
+                        slack_bot_sendtext(f"⚠️ *Apollo*: Partial fill on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
 
                 # 3. TIMEOUT
                 if (datetime.now() - start_time).total_seconds() >= timeout:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    if expected_lots > 0 and filled_lots < expected_lots:
+                        logger.warning(f"Partial fill (timeout) on {symbol}: expected {expected_lots}, filled {filled_lots}.")
+                        slack_bot_sendtext(f"⚠️ *Apollo*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
 
                 sleep(1)
@@ -1150,6 +1170,9 @@ class Apollo:
                 if (datetime.now() - start_time).total_seconds() >= timeout: break
                 sleep(1)
 
+        if expected_lots > 0:
+            logger.warning(f"Zero fills for {symbol}: expected {expected_lots} lots.")
+            slack_bot_sendtext(f"⚠️ *Apollo*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
         return 0.0, 0, datetime.now()
 
     def _cleanup_orphan_fill(self, tx_type, symbol, token, filled_lots, expected_lots):
