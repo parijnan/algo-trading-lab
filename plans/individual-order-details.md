@@ -93,14 +93,56 @@ Expected (based on orderBook field names, which the endpoint should mirror):
 | Metric | Before | After |
 |---|---|---|
 | Calls per fill verification (1 orderid) | 1 `orderBook()` per poll | 1 `individual_order_details()` per poll |
-| Rate limit headroom | 1/sec (shared with other book polls) | 10/sec (dedicated endpoint) |
-| `_increment_order_book_poll()` counter | Incremented each poll | Not applicable — remove for this path |
+| Rate limit headroom | 1/sec (shared with other book polls) | 10/sec (same as order placement) |
+| `_increment_order_book_poll()` counter | Incremented each poll | Removed from this path |
+| New counter | — | `_increment_individual_order_poll()` per call |
 | Sleep between polls | 1s | 0.5s viable |
 
-The `_increment_order_book_poll()` / `_reset_counters()` bookkeeping used by Apollo and
-Artemis applies to the `orderBook` endpoint specifically. Calls to
-`individual_order_details` do not count against the orderBook rate limit and should not
-increment that counter.
+`individual_order_details` has the same rate limit as order placement (10/sec). Since the
+fill-verification loop makes only 1–2 calls per 0.5s poll cycle, it will never come close
+to the limit — no additional delays from the counter.
+
+`_increment_order_book_poll()` / `_reset_counters()` applies to the `orderBook` endpoint
+only and must be removed from the `_fetch_order_details` path. Each call to
+`individual_order_details` in the polling loop must call the new counter instead.
+
+---
+
+## Counter Infrastructure Changes
+
+### Apollo and Athena (`configs_live.py` + `functions.py`)
+
+`configs_live.py` already defines `ORDER_BOOK_POLL_LIMIT`, `LTP_POLL_LIMIT`, etc. as
+named constants, which are imported by `functions.py`.
+
+Add to each `configs_live.py`:
+```python
+INDIVIDUAL_ORDER_POLL_LIMIT = 10
+```
+
+Add to each `functions.py`:
+- Import `INDIVIDUAL_ORDER_POLL_LIMIT` from `configs_live`
+- Add `'individual_order': {'count': 0, 'limit': INDIVIDUAL_ORDER_POLL_LIMIT, 'last_reset': 0}` to `_counters`
+- Add `def _increment_individual_order_poll(): _check_limit('individual_order')`
+
+### Artemis (`configs.py` + `functions.py`)
+
+Artemis `functions.py` currently hardcodes the limits directly in `_counters` (2, 1, 10,
+10). These should be named constants in `configs.py` (not CSV-sourced — these are API
+rate limits, not trade parameters).
+
+Add to `configs.py`:
+```python
+RMS_POLL_LIMIT               = 2
+ORDER_BOOK_POLL_LIMIT        = 1
+LTP_POLL_LIMIT               = 10
+ORDER_LIMIT                  = 10
+INDIVIDUAL_ORDER_POLL_LIMIT  = 10
+```
+
+Update `functions.py` to import all five constants from `configs`, and replace the
+hardcoded values in `_counters` with the imported names. Add the `'individual_order'`
+bucket and `increment_individual_order_poll()` wrapper.
 
 ---
 
@@ -116,13 +158,31 @@ rate-limit counter. After this change, `_fetch_order_details` will no longer cal
 ## Implementation Steps
 
 1. Confirm response field names and `filledshares` type from live ws_order_test.py output.
-2. **Apollo** `_fetch_order_details` (line ~1096): replace `_fetch_order_book()` call and
-   book scan loop with `individual_order_details(oid)` calls per orderid. Remove
-   `_increment_order_book_poll()` / `_reset_counters()` from this path. Halve sleep to 0.5s.
-3. **Artemis** `_fetch_order_details`: same replacement.
-4. **Athena** `_fetch_order_details`: same replacement.
-5. Verify: grep for `_fetch_order_book` — should only appear in `_place_order`'s
-   ghost-recovery path, not in `_fetch_order_details`.
+
+**Counter infrastructure (do before touching `_fetch_order_details`):**
+
+2. **Apollo `configs_live.py`**: add `INDIVIDUAL_ORDER_POLL_LIMIT = 10`.
+3. **Apollo `functions.py`**: import the new constant; add `'individual_order'` bucket to
+   `_counters`; add `_increment_individual_order_poll()` wrapper.
+4. **Athena `configs_live.py`**: same as step 2.
+5. **Athena `functions.py`**: same as step 3.
+6. **Artemis `configs.py`**: add all five rate limit constants (`RMS_POLL_LIMIT`,
+   `ORDER_BOOK_POLL_LIMIT`, `LTP_POLL_LIMIT`, `ORDER_LIMIT`,
+   `INDIVIDUAL_ORDER_POLL_LIMIT`).
+7. **Artemis `functions.py`**: import all five constants; replace hardcoded values in
+   `_counters` with the imported names; add `'individual_order'` bucket and
+   `increment_individual_order_poll()` wrapper.
+
+**`_fetch_order_details` replacement:**
+
+8. **Apollo** (line ~1096): replace `_fetch_order_book()` call and book scan with
+   `individual_order_details(oid)` per orderid. Call
+   `_increment_individual_order_poll()` per call. Remove `_increment_order_book_poll()`
+   from this path. Halve sleep to 0.5s.
+9. **Artemis** `_fetch_order_details`: same replacement.
+10. **Athena** `_fetch_order_details`: same replacement.
+11. Verify: grep for `_fetch_order_book` — should only appear in `_place_order`'s
+    ghost-recovery path, not in `_fetch_order_details`.
 
 ---
 
