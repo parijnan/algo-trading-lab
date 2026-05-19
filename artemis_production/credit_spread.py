@@ -308,7 +308,7 @@ class CreditSpread:
             self.additional_pl = self.trade_params_df.iloc[0].loc['additional_pl']
             self.time_to_expiry = (self.expiry - self.current_datetime)
             self.days_to_expiry = self.time_to_expiry.days
-            if self.spread_status != 'closed' or self.spread_status != 'open':
+            if self.spread_status not in ('closed', 'open'):
                 self._set_sl()
             else:
                 self.option_sl = self.trade_params_df.iloc[0].loc['option_sl']

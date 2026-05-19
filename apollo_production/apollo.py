@@ -451,6 +451,7 @@ class Apollo:
                     self._execute_entry(direction, ts)
 
         except Exception as e:
+            if "Session terminated" in str(e): raise
             handle_exception(e)
 
         finally:
@@ -518,6 +519,11 @@ class Apollo:
                 f"Missed flip at {flip_ts:%H:%M} — blocked by entry filter "
                 f"(direction={direction} day={flip_ts.dayofweek} "
                 f"time={flip_ts.strftime('%H:%M')}). Skipping.")
+            return
+
+        if not self._vix_gate_passes():
+            logger.info(
+                f"Missed flip at {flip_ts:%H:%M} — VIX gate blocked. Skipping.")
             return
 
         logger.info(
