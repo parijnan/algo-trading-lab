@@ -643,9 +643,14 @@ class Athena:
                     sym, tok = self._fetch_symbol_and_token(stk, 'ce', buy_exp)
                     if sym:
                         oids = self._place_order('BUY', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
+                        self.state.emer_attempts += 1
                         if fill > 0:
-                            self.state.emer_active = True; self.state.emer_strike = stk; self.state.emer_symbol = sym; self.state.emer_token = tok; self.state.emer_entry = fill; self.state.emer_attempts += 1; save_state(self.state)
+                            self.state.emer_active = True; self.state.emer_strike = stk; self.state.emer_symbol = sym; self.state.emer_token = tok; self.state.emer_entry = fill; save_state(self.state)
                             slack_bot_sendtext(f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}", SLACK_TRADE_ALERTS)
+                        else:
+                            save_state(self.state)
+                            logger.warning(f"Emer hedge zero fill. Attempt {self.state.emer_attempts}/{EMERGENCY_MAX_ATTEMPTS}.")
+                            slack_bot_sendtext(f"⚠️ *Athena*: Emer hedge zero fill (attempt {self.state.emer_attempts}/{EMERGENCY_MAX_ATTEMPTS}).", SLACK_ERRORS_CHANNEL)
         elif self.state.emer_active:
             if current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
                 self._close_emer_if_active()
