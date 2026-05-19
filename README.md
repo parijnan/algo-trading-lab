@@ -324,9 +324,12 @@ algo-trading-lab/
 ├── README.md
 ├── REQUIREMENTS.md                 # System dependencies and Python modules
 ├── .gitignore
-├── analyze_broker_state.py         # Utility for post-market margin and orderbook analysis
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
+├── tests/                          # Standalone test and diagnostic scripts
+│   ├── analyze_broker_state.py     # Post-market margin and order book analysis
+│   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
+│   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype
 ├── data/                           # Shared runtime data (credentials, holidays)
 │   ├── user_credentials.csv        # not in git
 │   └── holidays.csv
@@ -364,8 +367,6 @@ algo-trading-lab/
 │   ├── functions.py
 │   ├── logger_setup.py
 │   ├── technical_indicators.py
-│   ├── tests/
-│   │   └── ws_test.py
 │   ├── data/
 │   │   ├── user_credentials.csv    # symlink → ../data/user_credentials.csv
 │   │   ├── holidays.csv            # symlink → ../data/holidays.csv

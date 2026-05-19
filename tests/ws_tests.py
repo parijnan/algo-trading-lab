@@ -10,11 +10,11 @@ Tests:
   5. Clean shutdown: close_connection() + ctypes fallback if thread survives
   6. Thread safety: shared state read from main thread every 5s throughout
 
-Run from the artemis directory on delos:
-  /home/parijnan/anaconda3/bin/python ws_test.py
+Run from the repo root on delos:
+  /home/parijnan/anaconda3/bin/python tests/ws_tests.py
 
 Requires:
-  - data/user_credentials.csv  (same file Artemis uses)
+  - data/user_credentials.csv  (shared credentials file)
   - A test option token passed as TEST_OPTION_TOKEN below
 """
 
@@ -22,6 +22,7 @@ import ctypes
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from pyotp import TOTP
 from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
@@ -213,7 +214,7 @@ def _wait_with_status(seconds, interval=5):
 
 def login():
     print(f"[{_ts()}] Loading credentials...")
-    creds = pd.read_csv("/home/parijnan/scripts/algo-trading-lab/apollo_production/data/user_credentials.csv")
+    creds = pd.read_csv(Path(__file__).parent.parent / "data" / "user_credentials.csv")
     row = creds.iloc[0]
     api_key   = row["api_key"]
     user_name = row["user_name"]

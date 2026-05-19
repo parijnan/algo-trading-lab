@@ -8,7 +8,7 @@ import json
 # ---------------------------------------------------------------------------
 # Credentials Loading
 # ---------------------------------------------------------------------------
-REPO_ROOT      = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR       = os.path.join(REPO_ROOT, "data")
 CREDENTIALS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 
