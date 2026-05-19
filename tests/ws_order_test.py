@@ -196,6 +196,38 @@ class OrderUpdateProbe(SmartWebSocketOrderUpdate):
 # SmartConnect order helpers
 # ---------------------------------------------------------------------------
 
+def fetch_individual_order(smart_obj: SmartConnect, orderid: str, label: str = "") -> dict | None:
+    tag = f"  [{label}]" if label else ""
+    ts = datetime.now()
+    resp = smart_obj.individual_order_details(orderid)
+    latency_ms = (datetime.now() - ts).total_seconds() * 1000
+    print(f"\n{'~'*60}")
+    print(f"[{_ts()}] individual_order_details{tag}  ({latency_ms:.0f} ms)")
+    if not resp:
+        print("  response: None / error")
+        return None
+    data = resp.get("data") if isinstance(resp, dict) else None
+    if not data:
+        print(f"  raw response: {resp}")
+        return None
+    fields = [
+        ("status",          data.get("status")),
+        ("orderstatus",     data.get("orderstatus")),
+        ("orderid",         data.get("orderid")),
+        ("tradingsymbol",   data.get("tradingsymbol")),
+        ("transactiontype", data.get("transactiontype")),
+        ("quantity",        data.get("quantity")),
+        ("filledshares",    f"{data.get('filledshares')!r}  (type: {type(data.get('filledshares')).__name__})"),
+        ("averageprice",    f"{data.get('averageprice')!r}  (type: {type(data.get('averageprice')).__name__})"),
+        ("unfilledshares",  data.get("unfilledshares")),
+        ("updatetime",      data.get("updatetime")),
+    ]
+    for k, v in fields:
+        print(f"  {k:18}: {v}")
+    print(f"{'~'*60}")
+    return data
+
+
 def place_test_order(smart_obj: SmartConnect, symbol: str, token: str,
                      txn_type: str, qty: int, exchange: str = "NFO") -> str:
     params = {
@@ -244,17 +276,22 @@ def run_basic_test(smart_obj, probe, symbol, token, lot_size, exchange="NFO"):
         print(f"[{_ts()}] BUY order failed — aborting test.", file=sys.stderr)
         return False
     probe.mark_order_placed(buy_id)
+    fetch_individual_order(smart_obj, buy_id, "BUY immediate")
 
     print(f"[{_ts()}] Waiting 30s for order lifecycle messages…")
     time.sleep(30)
+    fetch_individual_order(smart_obj, buy_id, "BUY after 30s")
 
     print(f"\n[{_ts()}] Placing closing SELL order: {symbol}")
     sell_id = place_test_order(smart_obj, symbol, token, "SELL", lot_size, exchange)
     if sell_id:
         probe.mark_order_placed(sell_id)
+        fetch_individual_order(smart_obj, sell_id, "SELL immediate")
 
     print(f"[{_ts()}] Waiting 30s for closing lifecycle messages…")
     time.sleep(30)
+    if sell_id:
+        fetch_individual_order(smart_obj, sell_id, "SELL after 30s")
 
     return True
 
