@@ -212,12 +212,10 @@ def place_test_order(smart_obj: SmartConnect, symbol: str, token: str,
         "stoploss":         "0",
         "quantity":         str(qty),
     }
-    resp = smart_obj.placeOrder(params)
-    if not isinstance(resp, dict) or not resp.get("status"):
-        msg = resp.get("message", "unknown error") if isinstance(resp, dict) else repr(resp)
-        print(f"[{_ts()}] Order FAILED: {txn_type} {qty}x {symbol} — {msg}", file=sys.stderr)
+    orderid = smart_obj.placeOrder(params)  # returns orderid string on success, None on failure
+    if not orderid:
+        print(f"[{_ts()}] Order FAILED: {txn_type} {qty}x {symbol} — check logs above", file=sys.stderr)
         return ""
-    orderid = resp.get("data", {}).get("orderid", "")
     print(f"[{_ts()}] Order placed: {txn_type} {qty}x {symbol} → orderid={orderid!r}")
     return orderid
 
