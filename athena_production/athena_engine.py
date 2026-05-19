@@ -516,6 +516,7 @@ class Athena:
 
     def _execute_exit(self, reason):
         logger.info(f"=== EXECUTING EXIT: {reason.upper()} ===")
+        self._close_emer_if_active()
         lots = self.state.lots; self.state.status = 'exiting'; save_state(self.state)
         
         # 1. Define all exit legs
@@ -615,6 +616,23 @@ class Athena:
         msg = f"*Athena* UPDATE | Lots: {self.state.lots} | Spot: {p['spot']:.2f} | P&L: {pl_pts:+.1f} pts ({pl_rs_per_lot:+,.0f} Rs/lot) | Peak: {self.state.max_unrealised_pl:+.1f} pts"
         logger.info(msg.replace('*', '')); slack_bot_sendtext(msg, SLACK_TRADE_UPDATES)
 
+    def _close_emer_if_active(self):
+        if not self.state.emer_active:
+            return
+        oids = self._place_order('SELL', self.state.emer_symbol, self.state.emer_token, self.state.lots)
+        fill, q, ft = self._fetch_order_details(oids, self.state.emer_token, self.state.emer_symbol, self.state.lots)
+        if fill > 0:
+            realised = round(fill - self.state.emer_entry, 2)
+            self.state.running_realised_pl += realised
+            slack_bot_sendtext(
+                f"🏁 *Athena EMERGENCY*: Closed Parachute CE {self.state.emer_strike} @ {fill:.1f} | Realised: {realised:+.1f} pts",
+                SLACK_TRADE_ALERTS
+            )
+            self.state.emer_active = False
+            self.state.emer_strike = self.state.emer_symbol = self.state.emer_token = None
+            self.state.emer_entry = 0.0
+            save_state(self.state)
+
     def _manage_emergency_hedge(self, current_spot):
         if not ENABLE_EMERGENCY_HEDGE: return
         if not self.state.emer_active and self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS:
@@ -630,10 +648,7 @@ class Athena:
                             slack_bot_sendtext(f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}", SLACK_TRADE_ALERTS)
         elif self.state.emer_active:
             if current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
-                sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
-                if fill > 0:
-                    realised = round(fill - self.state.emer_entry, 2); self.state.running_realised_pl += realised; slack_bot_sendtext(f"🏁 *Athena EMERGENCY*: Sold Parachute CE {self.state.emer_strike} @ {fill:.1f} | Realised: {realised:+.1f} pts", SLACK_TRADE_ALERTS)
-                    self.state.emer_active = False; self.state.emer_strike = None; self.state.emer_symbol = None; self.state.emer_token = None; self.state.emer_entry = 0.0; save_state(self.state)
+                self._close_emer_if_active()
 
     def _check_slack_commands(self):
         """
@@ -696,9 +711,6 @@ class Athena:
                                     return False # Exit Athena run loop
             if self.state.status == 'in_trade' and self.state.exit_timestamp:
                 if now >= datetime.fromisoformat(self.state.exit_timestamp):
-                    if self.state.emer_active:
-                        sym = self.state.emer_symbol; tok = self.state.emer_token; oids = self._place_order('SELL', sym, tok, self.state.lots); fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
-                        self.state.running_realised_pl += round(fill - self.state.emer_entry, 2); self.state.emer_active = False
                     self._execute_exit(reason='pre_expiry')
             if self.state.status == 'in_trade':
                 try:
