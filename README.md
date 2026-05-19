@@ -326,6 +326,14 @@ algo-trading-lab/
 ├── .gitignore
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
+├── plans/                          # Implementation plans
+│   ├── individual-order-details.md # [PENDING] Replace orderBook scan with individual_order_details()
+│   ├── orphan-fill-cleanup.md      # [IMPLEMENTED] Detect and square off partial fills on entry legs
+│   ├── phase-4-convergence.md      # [COMPLETED] Unified Nifty ecosystem research — decided against
+│   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
+│   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
+│   ├── universal-ltp-websocket.md  # [ON HOLD] Shared WebSocket LTP feed — no immediate benefit
+│   └── websocket-order-updates.md  # [PENDING] Real-time order fill confirmation via WS
 ├── tests/                          # Standalone test and diagnostic scripts
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
