@@ -11,7 +11,7 @@ import os
 INSTRUMENT = 'nifty'
 
 # Paths
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PIPELINE_DATA = os.path.join(REPO_ROOT, 'data_pipeline', 'data')
 NIFTY_INDEX_FILE = os.path.join(PIPELINE_DATA, 'indices', 'nifty.csv')
 VIX_INDEX_FILE = os.path.join(PIPELINE_DATA, 'indices', 'india_vix.csv')

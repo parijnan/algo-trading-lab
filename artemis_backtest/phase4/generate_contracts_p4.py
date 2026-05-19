@@ -12,7 +12,7 @@ import pandas as pd
 from datetime import timedelta
 
 # Paths
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PIPELINE_CFG = os.path.join(REPO_ROOT, 'data_pipeline', 'config')
 HOLIDAYS_FILE = os.path.join(PIPELINE_CFG, 'holidays.csv')
 NIFTY_LIST_FILE = os.path.join(PIPELINE_CFG, 'options_list_nf.csv')

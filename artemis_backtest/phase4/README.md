@@ -31,10 +31,10 @@ Borrowed from the Athena strategy, this mechanism protects the portfolio against
 ## How to Run
 1. Generate the contracts:
    ```bash
-   python artemis_backtest_phase4/generate_contracts_p4.py
+   python artemis_backtest/phase4/generate_contracts_p4.py
    ```
 2. Run the backtest:
    ```bash
-   python artemis_backtest_phase4/backtest_p4.py
+   python artemis_backtest/phase4/backtest_p4.py
    ```
 3. Review results in `data/trade_summary_p4.csv`.

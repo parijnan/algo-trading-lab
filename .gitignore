@@ -293,7 +293,7 @@ athena_production/logs/
 CLAUDE.md
 
 # Artemis Phase 4 Research
-artemis_backtest_phase4/data/
+artemis_backtest/phase4/data/
 
 # Gemini Context
 GEMINI.md
