@@ -213,8 +213,8 @@ def place_test_order(smart_obj: SmartConnect, symbol: str, token: str,
         "quantity":         str(qty),
     }
     resp = smart_obj.placeOrder(params)
-    if not resp or not resp.get("status"):
-        msg = resp.get("message", "unknown error") if resp else "None response"
+    if not isinstance(resp, dict) or not resp.get("status"):
+        msg = resp.get("message", "unknown error") if isinstance(resp, dict) else repr(resp)
         print(f"[{_ts()}] Order FAILED: {txn_type} {qty}x {symbol} — {msg}", file=sys.stderr)
         return ""
     orderid = resp.get("data", {}).get("orderid", "")
@@ -242,6 +242,9 @@ def run_basic_test(smart_obj, probe, symbol, token, lot_size, exchange="NFO"):
 
     print(f"\n[{_ts()}] Placing opening BUY order: {symbol}")
     buy_id = place_test_order(smart_obj, symbol, token, "BUY", lot_size, exchange)
+    if not buy_id:
+        print(f"[{_ts()}] BUY order failed — aborting test.", file=sys.stderr)
+        return False
     probe.mark_order_placed(buy_id)
 
     print(f"[{_ts()}] Waiting 30s for order lifecycle messages…")
@@ -249,7 +252,8 @@ def run_basic_test(smart_obj, probe, symbol, token, lot_size, exchange="NFO"):
 
     print(f"\n[{_ts()}] Placing closing SELL order: {symbol}")
     sell_id = place_test_order(smart_obj, symbol, token, "SELL", lot_size, exchange)
-    probe.mark_order_placed(sell_id)
+    if sell_id:
+        probe.mark_order_placed(sell_id)
 
     print(f"[{_ts()}] Waiting 30s for closing lifecycle messages…")
     time.sleep(30)
