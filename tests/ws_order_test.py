@@ -43,7 +43,7 @@ CREDS_PATH = Path(__file__).parent.parent / "data" / "user_credentials.csv"
 def load_credentials():
     df = pd.read_csv(CREDS_PATH)
     row = df.iloc[0]
-    return row["api_key"], row["user_name"], row["password"], row["qr_code"]
+    return row["api_key"], row["user_name"], str(row["password"]), row["qr_code"]
 
 
 def login(api_key, user_name, password, qr_code):
@@ -372,13 +372,19 @@ def main():
     parser.add_argument("--lot-size",       default=75,    type=int, help="Lot size (default 75 for Nifty)")
     parser.add_argument("--exchange",       default="NFO", help="Exchange (default NFO)")
     parser.add_argument("--reconnect-test", action="store_true", help="Also run the pre-connection recovery test")
+    parser.add_argument("--connect-only",   action="store_true",
+                        help="Connect, wait for AB00, listen for 30s, then exit — no orders placed")
+    parser.add_argument("--listen",         default=30,    type=int,
+                        help="Seconds to listen in --connect-only mode (default 30)")
     parser.add_argument("--bearer",         action="store_true",
                         help="Prepend 'Bearer ' to auth_token in headers (test if required)")
     args = parser.parse_args()
 
-    if not args.symbol or not args.token:
-        print("ERROR: --symbol and --token are required.", file=sys.stderr)
-        print("  Example:")
+    if not args.connect_only and (not args.symbol or not args.token):
+        print("ERROR: --symbol and --token are required (or use --connect-only).", file=sys.stderr)
+        print("  Connection-only test (no orders):")
+        print("    python tests/ws_order_test.py --connect-only")
+        print("  Full order lifecycle test:")
         print("    python tests/ws_order_test.py \\")
         print("      --symbol NIFTY25MAY24600CE \\")
         print("      --token 12345 \\")
@@ -410,9 +416,20 @@ def main():
     print(f"[{_ts()}] WebSocket thread started")
 
     try:
-        ok = run_basic_test(smart_obj, probe, args.symbol, args.token, args.lot_size, args.exchange)
-        if ok and args.reconnect_test:
-            run_reconnect_test(smart_obj, probe, args.symbol, args.token, args.lot_size, args.exchange)
+        if args.connect_only:
+            print("\n" + "#"*60)
+            print("CONNECTION-ONLY TEST (no orders)")
+            print("#"*60)
+            print(f"[{_ts()}] Waiting for AB00 connection-ack (up to 15s)…")
+            if probe.ready.wait(timeout=15):
+                print(f"[{_ts()}] AB00 received. Listening for {args.listen}s…")
+                time.sleep(args.listen)
+            else:
+                print("ERROR: AB00 not received within 15s.", file=sys.stderr)
+        else:
+            ok = run_basic_test(smart_obj, probe, args.symbol, args.token, args.lot_size, args.exchange)
+            if ok and args.reconnect_test:
+                run_reconnect_test(smart_obj, probe, args.symbol, args.token, args.lot_size, args.exchange)
     except KeyboardInterrupt:
         print(f"\n[{_ts()}] Interrupted by user")
     finally:
