@@ -20,7 +20,7 @@ matching order IDs. This is wasteful and slow:
 
 - `orderBook()` rate limit: **1/sec**
 - `orderBook()` returns all orders for the day — O(N) scan per poll
-- Polling loop runs up to 10s with 1s sleep between each full-book fetch
+- Polling loop runs up to 1.1s with 1s sleep between each full-book fetch
 
 `individual_order_details(orderid)` is a targeted GET to
 `/rest/secure/angelbroking/order/v1/details/{orderid}` with a rate limit of **10/sec**.
@@ -51,7 +51,7 @@ so the full book scan is the only viable path there.
 
 ```
 _fetch_order_details(orderid_list, ...)
-  loop until filled / terminal / 10s timeout:
+  loop until filled / terminal / 1.1s timeout:
     _fetch_order_book()          ← orderBook() — 1/sec rate limit
     scan entire book for each oid in orderid_list
     accumulate filledshares, averageprice
@@ -65,7 +65,7 @@ _fetch_order_details(orderid_list, ...)
 
 ```
 _fetch_order_details(orderid_list, ...)
-  loop until filled / terminal / 10s timeout:
+  loop until filled / terminal / 1.1s timeout:
     for oid in orderid_list:
       data = obj.individual_order_details(oid)   ← targeted GET — 10/sec
       accumulate filledshares, averageprice

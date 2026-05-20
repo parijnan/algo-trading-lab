@@ -70,5 +70,7 @@ index_sl_offset          = trade_settings_df.iloc[0].loc['index_sl_offset']
 vix_threshold            = trade_settings_df.iloc[0].loc['vix_threshold']
 entry_window_minutes     = int(trade_settings_df.iloc[0].loc['entry_window_minutes'])
 
+ORDER_TIMEOUT_SEC = 1.1  # Seconds to wait for order fill confirmation
+
 poll_counter  = 0
 order_counter = 0

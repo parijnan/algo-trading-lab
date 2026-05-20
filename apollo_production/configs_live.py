@@ -148,7 +148,7 @@ QTY_FREEZE              = 1800      # Angel One qty freeze for Nifty
 SLIPPAGE_POINTS         = 1.0
 
 # Order management
-ORDER_TIMEOUT_SEC       = 10        # Seconds to wait for order fill confirmation
+ORDER_TIMEOUT_SEC       = 1.1       # Seconds to wait for order fill confirmation
 ORDER_LIMIT             = 10        # Orders per second limit
 
 # Rate Limits (Polls per second)

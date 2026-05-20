@@ -12,7 +12,7 @@ from functions import (
     increment_poll_counter, increment_order_counter,
     increment_order_book_poll, increment_rms_poll, reset_counters,
 )
-from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset
+from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset, ORDER_TIMEOUT_SEC
 
 # Main class for option spread
 class CreditSpread:
@@ -175,7 +175,7 @@ class CreditSpread:
 
         # --- WebSocket fast path ---
         if self._order_watcher is not None and self._order_watcher._ws_ready.is_set():
-            while (datetime.now() - start_time).total_seconds() < 10:
+            while (datetime.now() - start_time).total_seconds() < ORDER_TIMEOUT_SEC:
                 with self._order_watcher._lock:
                     orders = dict(self._order_watcher.live_orders)
                 if all(oid in orders for oid in orderID_list):
@@ -209,7 +209,7 @@ class CreditSpread:
 
         # --- REST fallback path ---
         start_time = datetime.now()
-        timeout = 10
+        timeout = ORDER_TIMEOUT_SEC
 
         while True:
             try:
