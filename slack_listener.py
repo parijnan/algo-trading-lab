@@ -24,8 +24,7 @@ ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_set
 # Strategy State File Paths
 ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
 APOLLO_STATE  = os.path.join(BASE_DIR, "apollo_production",  "data", "apollo_state.csv")
-ARTEMIS_PE    = os.path.join(BASE_DIR, "artemis_production", "data", "pe_trade_params.csv")
-ARTEMIS_CE    = os.path.join(BASE_DIR, "artemis_production", "data", "ce_trade_params.csv")
+ARTEMIS_DATA  = os.path.join(BASE_DIR, "artemis_production", "data")
 
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -170,19 +169,89 @@ CONTROL_PANEL_BLOCKS = [
 # Action Handlers
 # ---------------------------------------------------------------------------
 
+def _archive_artemis():
+    """
+    Mirror Artemis's _archive_trade() for use outside the strategy process.
+    If both trade_params files exist: sets spread_status=closed, marks
+    trade_book rows active→expired, then moves all files to archived/.
+    If already archived: cleans up any orphaned support files.
+    Returns a result string.
+    """
+    pe_path  = os.path.join(ARTEMIS_DATA, "pe_trade_params.csv")
+    ce_path  = os.path.join(ARTEMIS_DATA, "ce_trade_params.csv")
+    tb_path  = os.path.join(ARTEMIS_DATA, "trade_book.csv")
+    tl_path  = os.path.join(ARTEMIS_DATA, "trade_log.csv")
+    el_path  = os.path.join(ARTEMIS_DATA, "error_log.txt")
+    arch_dir = os.path.join(ARTEMIS_DATA, "archived")
+
+    if all(os.path.exists(p) for p in [pe_path, ce_path, tb_path, tl_path]):
+        try:
+            pe_df = pd.read_csv(pe_path)
+            ce_df = pd.read_csv(ce_path)
+
+            # Get archive prefix from expiry (column index 3)
+            prefix = pd.to_datetime(pe_df.iloc[0, 3]).strftime('%Y-%m-%d')
+
+            # Mark spread as closed
+            pe_df.at[0, 'spread_status'] = 'closed'
+            ce_df.at[0, 'spread_status'] = 'closed'
+            pe_df.to_csv(pe_path, index=False)
+            ce_df.to_csv(ce_path, index=False)
+
+            # Mark trade_book rows active → expired
+            tb_df = pd.read_csv(tb_path)
+            tb_df.loc[tb_df['status'] == 'active', 'status'] = 'expired'
+            tb_df.to_csv(tb_path, index=False)
+
+            # Move files to archived/
+            os.makedirs(arch_dir, exist_ok=True)
+            for src, name in [
+                (pe_path, f"{prefix} pe_trade_params.csv"),
+                (ce_path, f"{prefix} ce_trade_params.csv"),
+                (tb_path, f"{prefix} trade_book.csv"),
+                (tl_path, f"{prefix} trade_log.csv"),
+            ]:
+                os.rename(src, os.path.join(arch_dir, name))
+
+            if os.path.exists(el_path):
+                os.rename(el_path, os.path.join(arch_dir, f"{prefix} error_log.txt"))
+
+            for extra in ['instrument_master.csv', 'scrip_master.csv']:
+                p = os.path.join(ARTEMIS_DATA, extra)
+                if os.path.exists(p):
+                    os.remove(p)
+
+            logger.info(f"Artemis trade archived under prefix {prefix}")
+            return f"Artemis: archived to `{prefix}/`"
+
+        except Exception as e:
+            logger.error(f"Failed to archive Artemis state: {e}")
+            return f"Artemis: ERROR — {e}"
+
+    else:
+        # No active trade — clean up any orphaned support files
+        cleaned = []
+        for name in ['trade_book.csv', 'error_log.txt', 'instrument_master.csv', 'scrip_master.csv']:
+            p = os.path.join(ARTEMIS_DATA, name)
+            if os.path.exists(p):
+                os.remove(p)
+                cleaned.append(name)
+        if cleaned:
+            return f"Artemis: no active trade; removed {', '.join(cleaned)}"
+        return "Artemis: no active trade (nothing to reset)"
+
+
 def reset_all_states():
     """
-    Reset all strategy state files to idle/closed.
+    Reset all strategy state files without placing any orders.
+    Apollo/Athena: set status=idle. Artemis: full archive (mirrors _archive_trade).
     Returns a list of result strings for the Slack confirmation message.
-    No orders are placed — purely a file operation.
     """
     results = []
 
-    for label, path, col, val in [
-        ("Athena",     ATHENA_STATE, "status",       "idle"),
-        ("Apollo",     APOLLO_STATE, "status",       "idle"),
-        ("Artemis PE", ARTEMIS_PE,   "spread_status", "closed"),
-        ("Artemis CE", ARTEMIS_CE,   "spread_status", "closed"),
+    for label, path, col in [
+        ("Athena", ATHENA_STATE, "status"),
+        ("Apollo", APOLLO_STATE, "status"),
     ]:
         if not os.path.exists(path):
             results.append(f"{label}: not found (skipped)")
@@ -193,14 +262,15 @@ def reset_all_states():
                 results.append(f"{label}: nothing to reset")
                 continue
             current = str(df.at[0, col])
-            df.at[0, col] = val
+            df.at[0, col] = 'idle'
             df.to_csv(path, index=False)
-            results.append(f"{label}: `{current}` → `{val}`")
-            logger.info(f"Reset {label} state: {current} → {val}")
+            results.append(f"{label}: `{current}` → `idle`")
+            logger.info(f"Reset {label} state: {current} → idle")
         except Exception as e:
             logger.error(f"Failed to reset {label} state: {e}")
             results.append(f"{label}: ERROR — {e}")
 
+    results.append(_archive_artemis())
     return results
 
 
