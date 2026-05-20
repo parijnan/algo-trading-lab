@@ -50,25 +50,33 @@ Live testing via `tests/ws_order_test.py` on both NFO (Nifty) and BFO (Sensex) c
 confirmed-filled orders on this account (both NFO and BFO). REST polling via `orderBook()`
 remains the fallback. See `plans/individual-order-details.md`.
 
-### Phase 2: Athena Integration (High Priority)
-- Introduce the threading and WebSocket initialization to `athena_engine.py`.
-- Rewrite `_fetch_order_details` to use local memory.
-- Add a fallback mechanism (if the WebSocket disconnects, fallback to REST polling).
-- Test entry and exit sequence timing.
+### Phase 2: Athena Integration — COMPLETE (2026-05-20)
 
-### Phase 3: Artemis & Apollo Integration
-- Port the validated WebSocket architecture to `iron_condor.py` (Artemis).
-- Port the architecture to `apollo.py` (Apollo).
-- Note: Apollo already has a market data WebSocket. Ensure the Order WebSocket does not conflict or block the Market Data WebSocket.
+`OrderFillWatcher` daemon added to `athena_production/functions.py`. `_order_watcher` instantiated in `Athena.__init__`, started at the top of `Athena.run()` via `obj.getfeedToken()`. `_fetch_order_details` rewritten with WS fast-path prepended to REST fallback. All 5 call sites unpack 3-tuple `(avg_price, filled_lots, fill_time)`.
 
-### Phase 4: Cleanup
-- Remove rate limit counters and sleep delays previously used for the `OrderBook` API calls.
-- Optimize the multi-leg order placement flow to fire subsequent legs immediately upon WebSocket confirmation.
+### Phase 3: Artemis & Apollo Integration — COMPLETE (2026-05-20)
 
-## 5. Verification & Testing
-- **Paper Testing:** Run the bots with 1 lot deep OTM options to trigger real network flow and verify the WebSocket catches the fill.
-- **Disconnection Test:** Artificially close the WebSocket connection to ensure the daemon automatically reconnects or falls back to REST API safely without dropping the trade state.
+**Apollo:** `OrderFillWatcher` added to `apollo_production/functions.py`. Instantiated in `Apollo.__init__`, started in `_setup()`. WS fast-path added to `_fetch_order_details`. All 4 call sites updated.
 
-## 6. Migration & Rollback Strategy
-- The original REST API `_fetch_order_details` logic will be preserved in a renamed method (e.g., `_fetch_order_details_rest_fallback`).
-- If the WebSocket stream becomes unstable in live markets, a boolean flag `USE_WS_ORDERS = False` in `configs_live.py` can be flipped to instantly revert to the old synchronous polling method without needing a code rollback.
+**Artemis:** `OrderFillWatcher` added to `artemis_production/functions.py`. `_order_watcher = None` in `CreditSpread.__init__`; one shared watcher created in `IronCondor.set_session()` and assigned to both `pe_spread` and `ce_spread`. `auth_token` threaded through `leto._run_artemis()` → `artemis.run()` → `iron_condor.set_session()` → `watcher.start()`. All 17 call sites in `credit_spread.py` updated.
+
+### Phase 4: Cleanup — Partial (2026-05-20)
+
+Rate limit counters and REST polling are **retained** as the active fallback. The WS fast-path is prepended and transparent — if the socket is not ready or times out after `ORDER_TIMEOUT_SEC`, execution falls back to the original REST path with no disruption. The `USE_WS_ORDERS` flag from the original plan was not implemented; the WS path is always attempted first and silently skipped if not ready.
+
+## 5. Final Architecture
+
+```
+OrderFillWatcher (daemon thread)
+  ├── connects via SmartWebSocketOrderUpdate
+  ├── sets _ws_ready event on AB00 ack
+  ├── populates live_orders{orderid: orderData} on AB05/AB02/AB03
+  └── reconnects automatically on close
+
+_fetch_order_details()
+  ├── if _ws_ready: poll live_orders every 50ms for up to ORDER_TIMEOUT_SEC
+  │     └── on timeout or not ready: fall through to REST
+  └── REST fallback: original orderBook() polling loop (unchanged)
+```
+
+**Status: IMPLEMENTED** — Committed 2026-05-20 as `2016ff6 Feature: WebSocket order fill verification for Apollo, Athena, Artemis`.

@@ -94,6 +94,7 @@ All production strategies (Artemis, Apollo, Athena) implement a robust order pla
 - **Session Kill Switch:** Detects session-level failures (invalid tokens) and aborts execution to return control to Leto, preventing infinite failing retry loops.
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
 - **Orphan Fill Cleanup:** Post-burst audit after every entry. If one leg fills more than another, the excess is immediately squared off with a counter-order to maintain balanced exposure across all legs. Apollo records the confirmed (minimum) lot count to state; Athena additionally handles this across batches.
+- **WebSocket Order Fill Verification:** All strategies run a background `OrderFillWatcher` daemon thread (subclassing `SmartWebSocketOrderUpdate`) that captures AB05/AB02/AB03 events into a thread-safe `live_orders` dict. `_fetch_order_details` polls this dict every 50ms instead of calling `orderBook()`, reducing fill verification from ~1s REST round-trips to <300ms. If the socket is not ready or times out, the original REST fallback is used transparently.
 
 ## Slack Interactive Control
 
@@ -106,6 +107,7 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 - **`⏸️ Disable Algo`**: Sets a persistent flag that prevents Leto from starting any new sessions or routing to strategies.
 - **`✅ Clear Flag`**: Removes all blocking flags to resume normal automated operations.
 - **`🚀 Start Leto`**: Manually triggers the `leto.py` orchestrator outside of the standard cron schedule.
+- **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Apollo and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
 
 ### Remote Position Sizing
 The **`⚙️ Manage Sizing`** button triggers a Slack Modal for surgical configuration updates:
@@ -333,7 +335,7 @@ algo-trading-lab/
 │   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md  # [ON HOLD] Shared WebSocket LTP feed — no immediate benefit
-│   └── websocket-order-updates.md  # [PENDING] Real-time order fill confirmation via WS
+│   └── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
 ├── tests/                          # Standalone test and diagnostic scripts
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
