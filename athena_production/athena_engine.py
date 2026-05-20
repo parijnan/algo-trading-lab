@@ -17,7 +17,7 @@ import sys
 import signal
 import pandas as pd
 import mibian
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
 from time import sleep
 from SmartApi.smartExceptions import DataException, NetworkException
 
@@ -680,6 +680,7 @@ class Athena:
 
     def _manage_emergency_hedge(self, current_spot):
         if not ENABLE_EMERGENCY_HEDGE: return
+        if datetime.now().time() < time(9, 16): return
         if not self.state.emer_active and self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS:
             if current_spot >= (self.state.ce_sell_strike + EMERGENCY_TRIGGER_OFFSET):
                 buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date(); vix = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
