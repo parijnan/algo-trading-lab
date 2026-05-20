@@ -21,6 +21,12 @@ ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
 APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
 ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
 
+# Strategy State File Paths
+ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
+APOLLO_STATE  = os.path.join(BASE_DIR, "apollo_production",  "data", "apollo_state.csv")
+ARTEMIS_PE    = os.path.join(BASE_DIR, "artemis_production", "data", "pe_trade_params.csv")
+ARTEMIS_CE    = os.path.join(BASE_DIR, "artemis_production", "data", "ce_trade_params.csv")
+
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
 
@@ -121,6 +127,18 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "⏸️ Disable Algo"},
                 "action_id": "btn_disable_algo"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🔄 Reset State"},
+                "style": "danger",
+                "action_id": "btn_reset_state",
+                "confirm": {
+                    "title": {"type": "plain_text", "text": "Are you sure?"},
+                    "text": {"type": "plain_text", "text": "This resets ALL strategy state files to idle. Use this ONLY after manually closing positions via the broker. No orders will be placed."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Reset State"},
+                    "deny": {"type": "plain_text", "text": "Cancel"}
+                }
             }
         ]
     },
@@ -152,6 +170,40 @@ CONTROL_PANEL_BLOCKS = [
 # Action Handlers
 # ---------------------------------------------------------------------------
 
+def reset_all_states():
+    """
+    Reset all strategy state files to idle/closed.
+    Returns a list of result strings for the Slack confirmation message.
+    No orders are placed — purely a file operation.
+    """
+    results = []
+
+    for label, path, col, val in [
+        ("Athena",     ATHENA_STATE, "status",       "idle"),
+        ("Apollo",     APOLLO_STATE, "status",       "idle"),
+        ("Artemis PE", ARTEMIS_PE,   "spread_status", "closed"),
+        ("Artemis CE", ARTEMIS_CE,   "spread_status", "closed"),
+    ]:
+        if not os.path.exists(path):
+            results.append(f"{label}: not found (skipped)")
+            continue
+        try:
+            df = pd.read_csv(path)
+            if df.empty or col not in df.columns:
+                results.append(f"{label}: nothing to reset")
+                continue
+            current = str(df.at[0, col])
+            df.at[0, col] = val
+            df.to_csv(path, index=False)
+            results.append(f"{label}: `{current}` → `{val}`")
+            logger.info(f"Reset {label} state: {current} → {val}")
+        except Exception as e:
+            logger.error(f"Failed to reset {label} state: {e}")
+            results.append(f"{label}: ERROR — {e}")
+
+    return results
+
+
 def write_flag(command, user_id):
     try:
         with open(FLAG_FILE, "w") as f:
@@ -175,6 +227,14 @@ def handle_kill(ack, body, say):
     user_id = body["user"]["id"]
     if write_flag("KILL", user_id):
         say(channel="#tradebot-updates", text=f"🚨 *KILL SWITCH ENGAGED* by <@{user_id}>. Control dropped. Positions remain OPEN.")
+
+@app.action("btn_reset_state")
+def handle_reset_state(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    results = reset_all_states()
+    lines = "\n".join(f"• {r}" for r in results)
+    say(channel="#tradebot-updates", text=f"🔄 *STATE RESET* by <@{user_id}>:\n{lines}")
 
 @app.action("btn_disable_algo")
 def handle_disable(ack, body, say):
