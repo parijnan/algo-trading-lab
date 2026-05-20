@@ -6,6 +6,9 @@ Mirrors the structure of Artemis functions.py.
 Imports credentials from configs_live — loaded once at module level.
 """
 
+import json
+import threading
+
 from os.path import exists
 from requests import get, post
 from re import sub
@@ -13,6 +16,7 @@ from time import sleep, time
 from traceback import format_exc
 from datetime import datetime
 
+from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_ERRORS_CHANNEL,
@@ -63,6 +67,85 @@ def _reset_counters():
     for k in _counters:
         _counters[k]['count'] = 0
         _counters[k]['last_reset'] = now
+
+
+class OrderFillWatcher(SmartWebSocketOrderUpdate):
+    """
+    Background daemon for Angel One order update WebSocket.
+    Captures AB05 (complete), AB02 (cancelled), AB03 (rejected) events
+    into live_orders keyed by orderid. _ws_ready is set on AB00 ack.
+    Strategy polls live_orders instead of orderBook() for fill verification.
+    """
+
+    _TERMINAL_STATUSES = ('AB05', 'AB02', 'AB03')
+
+    def __init__(self):
+        # Skip parent __init__ — it runs logzero with a relative path
+        self.wsapp                  = None
+        self.last_pong_timestamp    = None
+        self.current_retry_attempt  = 0
+        self.auth_token             = None
+        self.api_key                = None
+        self.client_code            = None
+        self.feed_token             = None
+        self._ws_ready              = threading.Event()
+        self.live_orders            = {}
+        self._lock                  = threading.Lock()
+
+    def start(self, auth_token, api_key, client_code, feed_token):
+        self.auth_token  = auth_token
+        self.api_key     = api_key
+        self.client_code = client_code
+        self.feed_token  = feed_token
+        t = threading.Thread(target=self._run, daemon=True, name='OrderFillWatcher')
+        t.start()
+
+    def _run(self):
+        try:
+            self.connect()
+        except Exception:
+            pass  # Non-fatal — strategy falls back to REST orderBook
+
+    def on_open(self, wsapp):
+        pass
+
+    def on_message(self, wsapp, message):
+        self._handle(message)
+
+    def on_data(self, wsapp, message, data_type, continue_flag):
+        # AB00 ack arrives here, not on_message
+        self._handle(message)
+
+    def on_pong(self, wsapp, data):
+        heartbeat = getattr(self, 'HEARTBEAT_MESSAGE', None)
+        if heartbeat and data == heartbeat:
+            self.last_pong_timestamp = time()
+        else:
+            self._handle(data)
+
+    def on_error(self, wsapp, error):
+        pass
+
+    def on_close(self, wsapp, close_status_code, close_msg):
+        self._ws_ready.clear()
+        self.retry_connect()
+
+    def _handle(self, raw):
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+        except Exception:
+            return
+        status = parsed.get('order-status')
+        if status == 'AB00':
+            self._ws_ready.set()
+            return
+        if status in self._TERMINAL_STATUSES:
+            od = parsed.get('orderData')
+            if od:
+                oid = od.get('orderid')
+                if oid:
+                    with self._lock:
+                        self.live_orders[oid] = od
 
 
 def slack_bot_sendtext(msg, channel):

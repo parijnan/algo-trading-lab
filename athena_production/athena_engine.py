@@ -22,6 +22,7 @@ from time import sleep
 from SmartApi.smartExceptions import DataException, NetworkException
 
 from configs_live import (
+    api_key, user_name,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
     ENTRY_TIME, ELM_EXIT_TIME,
@@ -39,9 +40,10 @@ from configs_live import (
 )
 from state import AthenaState, load_state, save_state, clear_trade_fields
 from functions import (
-    slack_bot_sendtext, handle_exception, 
+    slack_bot_sendtext, handle_exception,
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
-    _increment_candle_poll, _increment_order, _reset_counters
+    _increment_candle_poll, _increment_order, _reset_counters,
+    OrderFillWatcher,
 )
 from logger_setup import get_logger
 
@@ -84,7 +86,9 @@ class Athena:
         
         # Qty freeze for Nifty on NFO
         self._qty_freeze    = QTY_FREEZE
-        
+
+        self._order_watcher = OrderFillWatcher()
+
         # Register signal handlers
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -296,23 +300,64 @@ class Athena:
         if DRY_RUN:
             fill = self._get_ltp(EXCHANGE_NFO, symbol, token) or 0.0
             return fill, expected_lots, datetime.now()
-        
+
         start_time = datetime.now()
-        timeout = ORDER_TIMEOUT_SEC
-        
+
+        # --- WebSocket fast path ---
+        if self._order_watcher._ws_ready.is_set():
+            while (datetime.now() - start_time).total_seconds() < ORDER_TIMEOUT_SEC:
+                with self._order_watcher._lock:
+                    orders = dict(self._order_watcher.live_orders)
+                if all(oid in orders for oid in orderid_list):
+                    total_qty = 0
+                    total_val = 0.0
+                    fill_time = datetime.now()
+                    for oid in orderid_list:
+                        od     = orders[oid]
+                        filled = int(od.get('filledshares') or 0)
+                        avg    = float(od.get('averageprice') or 0.0)
+                        total_qty += filled
+                        total_val += avg * filled
+                        try:
+                            ft = datetime.strptime(od['updatetime'], '%d-%b-%Y %H:%M:%S')
+                            if ft > fill_time:
+                                fill_time = ft
+                        except Exception:
+                            pass
+                    filled_lots = int(total_qty // LOT_SIZE)
+                    avg_price   = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    if expected_lots > 0 and filled_lots < expected_lots:
+                        logger.warning(f"Partial fill (WS) on {symbol}: expected {expected_lots}, filled {filled_lots}.")
+                        slack_bot_sendtext(
+                            f"⚠️ *Athena*: Partial fill (WS) on {symbol}. "
+                            f"Expected {expected_lots} lots, filled {filled_lots}.",
+                            SLACK_ERRORS_CHANNEL)
+                    return avg_price, filled_lots, fill_time
+                sleep(0.05)
+            logger.warning(f"WS fill timeout for {symbol}. Falling back to REST orderBook.")
+            slack_bot_sendtext(
+                f"⚠️ *Athena*: WS timeout for {symbol}. Switching to REST fallback.",
+                SLACK_ERRORS_CHANNEL)
+        else:
+            logger.info(f"Order WS not ready — using REST orderBook for {symbol}.")
+
+        # --- REST fallback path ---
+        start_time = datetime.now()
+        timeout    = ORDER_TIMEOUT_SEC
+
         while True:
             total_qty = 0
             total_val = 0.0
             fill_time = datetime.now()
-            
+
             try:
                 book_res = self.obj.orderBook()
                 _increment_order_book_poll()
-                
+
                 if book_res and book_res.get('status'):
                     book = book_res['data']
                     matched_ids = []
-                    
+
                     for oid in orderid_list:
                         for order in book:
                             if order['orderid'] == oid:
@@ -325,10 +370,10 @@ class Athena:
                                     ft = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
                                     if ft > fill_time: fill_time = ft
                                 except: pass
-                    
+
                     filled_lots = int(total_qty // LOT_SIZE)
                     all_ids_found = all(oid in matched_ids for oid in orderid_list)
-                    
+
                     # 1. SUCCESS: All IDs found AND quantity matches/exceeds expectation
                     if all_ids_found and (expected_lots == 0 or filled_lots >= expected_lots):
                         avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
@@ -343,7 +388,7 @@ class Athena:
                                     if order['status'] not in ('complete', 'rejected', 'cancelled'):
                                         all_final = False; break
                             if not all_final: break
-                    
+
                     if all_final:
                         if total_qty > 0:
                             logger.info(f"Order sequence for {symbol} finalized with partial fill: {filled_lots}/{expected_lots} lots.")
@@ -355,7 +400,7 @@ class Athena:
                                 slack_bot_sendtext(f"⚠️ *Athena*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
                             return 0.0, 0, datetime.now()
 
-                # 3. DISCREPANCY/LATENCY: We either didn't find the IDs yet or it's a slow partial fill.
+                # 3. DISCREPANCY/LATENCY: IDs not yet visible or slow partial fill.
                 elapsed = (datetime.now() - start_time).total_seconds()
                 if elapsed >= timeout:
                     logger.warning(f"Timeout reaching {timeout}s for {symbol}. Returning current state.")
@@ -695,6 +740,9 @@ class Athena:
         otherwise False.
         """
         logger.info("=== Athena run loop started ===")
+        feed_token = self.obj.getfeedToken()
+        self._order_watcher.start(self.auth_token, api_key, user_name, feed_token)
+        logger.info("Order fill WS daemon started.")
         while True:
             self._check_slack_commands()
             now = datetime.now()

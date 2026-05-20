@@ -15,11 +15,12 @@ import os
 from credit_spread import CreditSpread
 from datetime import datetime, timedelta
 from math import floor
-from functions import sleep, exists, handle_exception, slack_bot_sendtext, reset_counters, increment_rms_poll
+from functions import sleep, exists, handle_exception, slack_bot_sendtext, reset_counters, increment_rms_poll, OrderFillWatcher
 from configs import (
-    pd, lot_size, monitor_frequency, lot_calc, lot_capital, 
-    vix_threshold, entry_window_minutes, exchange_segment, 
-    instrument, underlying_token, REPO_ROOT
+    pd, lot_size, monitor_frequency, lot_calc, lot_capital,
+    vix_threshold, entry_window_minutes, exchange_segment,
+    instrument, underlying_token, REPO_ROOT,
+    api_key, user_name,
 )
 
 # IronCondor class consisting of pe and ce credit spreads
@@ -99,11 +100,11 @@ class IronCondor:
         if exists('data/trade_log.csv'):
             self.trade_log_df = pd.read_csv('data/trade_log.csv', parse_dates=['time_stamp'])
 
-    def set_session(self, obj, instrument_df):
+    def set_session(self, obj, auth_token, instrument_df):
         """
-        Receive the authenticated SmartConnect object and filtered Sensex
-        instrument DataFrame from Leto. Called immediately after
-        IronCondor() is instantiated.
+        Receive the authenticated SmartConnect object, JWT auth token, and
+        filtered Sensex instrument DataFrame from Leto. Called immediately
+        after IronCondor() is instantiated.
         """
         self._set_current_datetime()
         self.obj = obj
@@ -112,6 +113,12 @@ class IronCondor:
         # Propagate to both spreads
         self.pe_spread.obj = self.ce_spread.obj = self.obj
         self.pe_spread.instrument_df = self.ce_spread.instrument_df = self.instrument_df
+
+        # Start shared order fill WS daemon; assign to both spreads
+        feed_token = obj.getfeedToken()
+        watcher = OrderFillWatcher()
+        watcher.start(auth_token, api_key, user_name, feed_token)
+        self.pe_spread._order_watcher = self.ce_spread._order_watcher = watcher
 
         # Position sizing — only runs on a fresh trade (both spreads still 'open')
         if lot_calc and self.pe_spread.spread_status == 'open' and self.ce_spread.spread_status == 'open':

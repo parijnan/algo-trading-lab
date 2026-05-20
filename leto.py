@@ -340,7 +340,7 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     if _artemis_trade_open():
         logger.info(f"Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
         _slack(f"*Leto*: Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
-        return _run_artemis(obj, instrument_df_sensex)
+        return _run_artemis(obj, auth_token, instrument_df_sensex)
 
     # Priority 2: no open positions — route on current VIX
     vix = _get_vix(obj)
@@ -381,7 +381,7 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     if vix <= VIX_ARTEMIS_MAX:
         logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
-        return _run_artemis(obj, instrument_df_sensex)
+        return _run_artemis(obj, auth_token, instrument_df_sensex)
     elif vix <= VIX_ATHENA_MAX:
         logger.info(f"VIX {vix:.2f} in (16, 25]. Routing to Athena.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Athena*.")
@@ -423,7 +423,7 @@ def _run_athena(obj, auth_token, instrument_df_nifty):
     return bool(handoff)
 
 
-def _run_artemis(obj, instrument_df_sensex):
+def _run_artemis(obj, auth_token, instrument_df_sensex):
     """
     Run Artemis. Returns True if handed back for re-routing.
     """
@@ -432,7 +432,7 @@ def _run_artemis(obj, instrument_df_sensex):
     if ARTEMIS_DIR not in sys.path:
         sys.path.insert(0, ARTEMIS_DIR)
     import artemis  # type: ignore
-    handoff = artemis.run(obj, instrument_df_sensex)
+    handoff = artemis.run(obj, auth_token, instrument_df_sensex)
     os.chdir(REPO_ROOT)
     logger.info(f"Artemis returned. Handoff signal: {handoff}")
     return bool(handoff)

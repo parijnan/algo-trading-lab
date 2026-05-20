@@ -8,9 +8,10 @@ from SmartApi.smartExceptions import DataException, NetworkException
 from numpy import busday_count
 from math import floor, ceil
 from functions import (
-    slack_bot_sendtext, sleep, exists, handle_exception, 
-    increment_poll_counter, increment_order_counter, 
-    increment_order_book_poll, increment_rms_poll, reset_counters
+    slack_bot_sendtext, sleep, exists, handle_exception,
+    increment_poll_counter, increment_order_counter,
+    increment_order_book_poll, increment_rms_poll, reset_counters,
+    OrderFillWatcher,
 )
 from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset
 
@@ -172,7 +173,44 @@ class CreditSpread:
     # Private method to fetch average fill price and average fill time
     def _fetch_order_details(self, orderID_list, expected_lots=0, symbol=''):
         start_time = datetime.now()
-        timeout = 10 # 10s timeout for fill verification
+
+        # --- WebSocket fast path ---
+        if self._order_watcher is not None and self._order_watcher._ws_ready.is_set():
+            while (datetime.now() - start_time).total_seconds() < 10:
+                with self._order_watcher._lock:
+                    orders = dict(self._order_watcher.live_orders)
+                if all(oid in orders for oid in orderID_list):
+                    total_qty = 0
+                    total_val = 0.0
+                    fill_time = datetime.now()
+                    for oid in orderID_list:
+                        od     = orders[oid]
+                        filled = int(od.get('filledshares') or 0)
+                        avg    = float(od.get('averageprice') or 0.0)
+                        total_qty += filled
+                        total_val += avg * filled
+                        try:
+                            ft = datetime.strptime(od['updatetime'], '%d-%b-%Y %H:%M:%S')
+                            if ft > fill_time:
+                                fill_time = ft
+                        except Exception:
+                            pass
+                    filled_lots = int(total_qty // lot_size)
+                    avg_price   = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
+                    if expected_lots > 0 and filled_lots < expected_lots:
+                        slack_bot_sendtext(
+                            f"*Artemis*: Partial fill (WS) on {symbol}. "
+                            f"Expected {expected_lots} lots, filled {filled_lots}.",
+                            "#error-alerts")
+                    return avg_price, filled_lots, fill_time
+                sleep(0.05)
+            slack_bot_sendtext(
+                f"*Artemis*: WS timeout for {symbol}. Switching to REST fallback.",
+                "#error-alerts")
+
+        # --- REST fallback path ---
+        start_time = datetime.now()
+        timeout = 10
 
         while True:
             try:
@@ -391,7 +429,9 @@ class CreditSpread:
                                                 'additional_booked_pl': [self.additional_booked_pl],
                                                 'additional_pl': [self.additional_pl]})
             self.trade_params_df.to_csv(f"data/{spread_type}_trade_params.csv", index=False)
-        
+
+        self._order_watcher = None
+
     # Method to calculate and intialize initial trade parameters
     def initialize_spread(self):   
         self.current_datetime = datetime.now()

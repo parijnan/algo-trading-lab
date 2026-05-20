@@ -14,15 +14,16 @@ from configs import opening_time, closing_time
 from functions import handle_exception
 
 
-def run(obj, instrument_df):
+def run(obj, auth_token, instrument_df):
     """
     Main Artemis execution. Called by leto.py with an authenticated
-    SmartConnect object and the pre-filtered Sensex instrument DataFrame.
+    SmartConnect object, JWT auth token, and the pre-filtered Sensex
+    instrument DataFrame.
     """
     iron_condor = IronCondor()
 
     # Receive session from Leto
-    iron_condor.set_session(obj, instrument_df)
+    iron_condor.set_session(obj, auth_token, instrument_df)
 
     # Trade entry block — executes only if spreads are not yet active
     iron_condor.execute_trade()
