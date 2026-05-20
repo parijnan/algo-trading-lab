@@ -160,6 +160,11 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "⚙️ Manage Sizing"},
                 "action_id": "btn_pos_sizing"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⬇️ Git Pull"},
+                "action_id": "btn_git_pull"
             }
         ]
     }
@@ -364,6 +369,32 @@ def handle_start(ack, body, say):
         err_msg = f"Failed to start Leto: {e}"
         logger.error(err_msg)
         say(channel="#error-alerts", text=f"🚨 {err_msg}")
+
+@app.action("btn_git_pull")
+def handle_git_pull(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    say(channel="#tradebot-updates", text=f"⬇️ *Git pull* initiated by <@{user_id}>...")
+    try:
+        result = subprocess.run(
+            ["git", "pull"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0:
+            say(channel="#tradebot-updates", text=f"✅ *Git pull succeeded:*\n```{output}```")
+        else:
+            say(channel="#tradebot-updates", text=f"❌ *Git pull failed:*\n```{output}```")
+        logger.info(f"Git pull by <@{user_id}>: rc={result.returncode}")
+    except subprocess.TimeoutExpired:
+        say(channel="#tradebot-updates", text="❌ Git pull timed out after 30s.")
+        logger.error("Git pull timed out.")
+    except Exception as e:
+        say(channel="#tradebot-updates", text=f"❌ Git pull error: {e}")
+        logger.error(f"Git pull error: {e}")
 
 # ---------------------------------------------------------------------------
 # Position Sizing Modal
