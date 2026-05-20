@@ -15,7 +15,7 @@ Cron on delos:
     /home/parijnan/anaconda3/bin/python leto.py >> logs/leto_$(date +%%Y%%m%%d).log 2>&1
 
 Strategy interfaces:
-  Artemis : artemis.run(obj, instrument_df_sensex)        — returns True for hand-back
+  Artemis : artemis.run(obj, auth_token, instrument_df_sensex) — returns True for hand-back
   Athena  : athena_engine.Athena(obj, auth_token, instrument_df)  — returns True for hand-back
   Apollo  : apollo.Apollo(obj, auth_token, instrument_df)  — returns False (market close)
 """

@@ -11,7 +11,6 @@ from functions import (
     slack_bot_sendtext, sleep, exists, handle_exception,
     increment_poll_counter, increment_order_counter,
     increment_order_book_poll, increment_rms_poll, reset_counters,
-    OrderFillWatcher,
 )
 from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset
 
