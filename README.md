@@ -108,6 +108,7 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 - **`✅ Clear Flag`**: Removes all blocking flags to resume normal automated operations.
 - **`🚀 Start Leto`**: Manually triggers the `leto.py` orchestrator outside of the standard cron schedule.
 - **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Apollo and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
+- **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Eliminates the need to SSH in for routine code updates. Note: if `slack_listener.py` itself is updated, a manual restart of the listener is still required to pick up those changes.
 
 ### Remote Position Sizing
 The **`⚙️ Manage Sizing`** button triggers a Slack Modal for surgical configuration updates:
