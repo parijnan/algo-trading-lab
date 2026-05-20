@@ -678,8 +678,7 @@ class Athena:
                     msg = "🚨 *Athena*: Slack `Kill Switch` detected. Dropping control immediately."
                     logger.critical(msg.replace('*', ''))
                     slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
-                    self.state.status = 'idle'
-                    save_state(self.state)
+                    # Do not reset state — preserve it so the trade can be resumed on next restart.
                     raise Exception("Session terminated by Slack !kill command.")
                 
                 # If command == "DISABLE", we do nothing inside the loop. 
