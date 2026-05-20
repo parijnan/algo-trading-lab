@@ -42,6 +42,16 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
         self.feed_token  = feed_token
         t = threading.Thread(target=self._run, daemon=True, name='OrderFillWatcher')
         t.start()
+        hb = threading.Thread(target=self._heartbeat, daemon=True, name='OrderFillWatcherHB')
+        hb.start()
+
+    def _heartbeat(self):
+        while True:
+            sleep(900)
+            status = 'READY' if self._ws_ready.is_set() else 'NOT READY'
+            with self._lock:
+                n = len(self.live_orders)
+            print(f"{datetime.now():%Y-%m-%d %H:%M:%S} [INFO] OrderFillWatcher heartbeat: WS {status}, {n} orders tracked", flush=True)
 
     def _run(self):
         try:
