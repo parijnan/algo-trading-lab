@@ -1,9 +1,14 @@
 import os
+import sys
 import pandas as pd
 from pyotp import TOTP
 from SmartApi import SmartConnect
 from datetime import datetime
+from io import StringIO
+from urllib.request import urlopen
 import json
+
+_SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 # ---------------------------------------------------------------------------
 # Credentials Loading
@@ -81,5 +86,34 @@ def capture_analysis_data():
     print(f"Full analysis data saved to: {output_file}")
     print("="*40)
 
+def lookup_scrip(symbol_contains: str, exch_seg: str = "NFO", name: str = "NIFTY"):
+    """Download public scrip master and filter by symbol substring."""
+    print(f"\nDownloading scrip master (public, no auth)...")
+    df = pd.read_json(StringIO(urlopen(_SCRIP_MASTER_URL).read().decode()))
+    print(f"Downloaded {len(df):,} rows.")
+    result = df[
+        (df['exch_seg'] == exch_seg) &
+        (df['name'] == name) &
+        (df['symbol'].str.contains(symbol_contains, case=False))
+    ][['symbol', 'token', 'expiry', 'strike', 'instrumenttype']]
+    if result.empty:
+        print(f"No match for '{symbol_contains}' in {exch_seg}/{name}.")
+    else:
+        print(result.to_string(index=False))
+
+
 if __name__ == "__main__":
-    capture_analysis_data()
+    if len(sys.argv) > 1 and sys.argv[1] == "--scrip":
+        # Usage: python tests/analyze_broker_state.py --scrip 26MAY2525000CE
+        # Optional: --exchange BFO --name SENSEX
+        symbol_filter = sys.argv[2] if len(sys.argv) > 2 else ""
+        exch = "NFO"
+        idx = "NIFTY"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--exchange" and i + 1 < len(sys.argv):
+                exch = sys.argv[i + 1]
+            if arg == "--name" and i + 1 < len(sys.argv):
+                idx = sys.argv[i + 1]
+        lookup_scrip(symbol_filter, exch, idx)
+    else:
+        capture_analysis_data()
