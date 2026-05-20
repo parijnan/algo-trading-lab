@@ -10,6 +10,9 @@ from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 from configs import slack_token, bot_token, bot_id, channel_id, order_limit, poll_limit, poll_counter, order_counter
+from logger_setup import get_logger
+
+logger = get_logger('artemis.functions')
 
 
 class OrderFillWatcher(SmartWebSocketOrderUpdate):
@@ -51,7 +54,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             status = 'READY' if self._ws_ready.is_set() else 'NOT READY'
             with self._lock:
                 n = len(self.live_orders)
-            print(f"{datetime.now():%Y-%m-%d %H:%M:%S} [INFO] OrderFillWatcher heartbeat: WS {status}, {n} orders tracked", flush=True)
+            logger.info(f"OrderFillWatcher heartbeat: WS {status}, {n} orders tracked")
             if not self._ws_ready.is_set():
                 slack_bot_sendtext(
                     f"*Artemis*: OrderFillWatcher WS not ready — REST fallback active.",
@@ -120,7 +123,7 @@ def slack_bot_sendtext(msg, channel):
     except Exception as e:
         trace_msg = format_exc()
         msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
-        print(msg_txt_detailed)
+        logger.error(msg_txt_detailed)
         telegram_bot_sendtext("Slack Message Failed. Check log for details.", 'bot')
         mode = 'a' if exists('data/error_log.txt') else 'w'
         with open('data/error_log.txt', mode) as error_log:
@@ -144,7 +147,7 @@ def telegram_bot_sendtext(bot_message, medium='channel'):
     except Exception as e:
         trace_msg = format_exc()
         msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
-        print(msg_txt_detailed)
+        logger.error(msg_txt_detailed)
         slack_bot_sendtext("Telegram Message Failed. Check log for details.", "#error-alerts")
         mode = 'a' if exists('data/error_log.txt') else 'w'
         with open('data/error_log.txt', mode) as error_log:
@@ -157,7 +160,7 @@ def telegram_bot_sendtext(bot_message, medium='channel'):
 def handle_exception(e):
     trace_msg = format_exc()
     msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
-    print(msg_txt_detailed)
+    logger.error(msg_txt_detailed)
     slack_bot_sendtext(
         f"ARTEMIS ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
         f"{format(e)} — check logs.",

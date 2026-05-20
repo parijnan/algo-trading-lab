@@ -22,6 +22,9 @@ from configs import (
     instrument, underlying_token, REPO_ROOT,
     api_key, user_name,
 )
+from logger_setup import get_logger
+
+logger = get_logger('artemis.iron_condor')
 
 # IronCondor class consisting of pe and ce credit spreads
 class IronCondor:
@@ -140,7 +143,7 @@ class IronCondor:
             reset_counters()
 
         msg_txt = f"Artemis session ready at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
-        print(msg_txt)
+        logger.info(msg_txt)
         slack_bot_sendtext(msg_txt, "#tradebot-updates")
 
     # Method to execute trade
@@ -158,7 +161,7 @@ class IronCondor:
             if self.current_datetime < self.pe_spread.entry:
                 msg_txt = (f"Waiting till {self.pe_spread.entry:%H:%M} to execute trade. "
                            f"*Lots that will be traded:* _{self.lots}_")
-                print(msg_txt)
+                logger.info(msg_txt)
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 sleep(int((self.pe_spread.entry - datetime.now()).total_seconds()))
                 reset_counters()
@@ -169,7 +172,7 @@ class IronCondor:
             if self.current_datetime > entry_by:
                 msg_txt = (f"Entry window closed at {entry_by:%H:%M}. "
                            f"Standing down for the week.")
-                print(msg_txt)
+                logger.info(msg_txt)
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 self._cleanup_state_files()
                 return
@@ -179,7 +182,7 @@ class IronCondor:
             if vix > vix_threshold:
                 msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
                            f"Standing down for the week.")
-                print(msg_txt)
+                logger.info(msg_txt)
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 self._cleanup_state_files()
                 return
@@ -550,7 +553,7 @@ class IronCondor:
                 
                 if command == "EXIT":
                     msg = "⚠️ *Artemis*: Slack `Exit Trade` detected. Liquidating..."
-                    print(msg.replace('*', ''))
+                    logger.warning(msg.replace('*', ''))
                     slack_bot_sendtext(msg, "#trade-alerts")
                     if self.trade_status:
                         self.pe_spread.exit_spread()
@@ -561,7 +564,7 @@ class IronCondor:
                 
                 elif command == "KILL":
                     msg = "🚨 *Artemis*: Slack `Kill Switch` detected. Dropping control immediately."
-                    print(msg.replace('*', ''))
+                    logger.warning(msg.replace('*', ''))
                     slack_bot_sendtext(msg, "#trade-alerts")
                     # We don't reset state so it can be resumed manually if needed
                     raise Exception("Session terminated by Slack !kill command.")
@@ -672,7 +675,7 @@ class IronCondor:
             if path_exists('data/scrip_master.csv'):
                 remove('data/scrip_master.csv')
             msg_txt = f"*Artemis:*\nTrade has been archived at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
-            print(msg_txt)
+            logger.info(msg_txt)
             slack_bot_sendtext(msg_txt, "#tradebot-updates")
         else:
             from os import remove
@@ -682,7 +685,7 @@ class IronCondor:
                 if path_exists(file):
                     remove(file)
             msg_txt = "Trade has already been archived."
-            print(msg_txt)
+            logger.info(msg_txt)
             slack_bot_sendtext(msg_txt, "#tradebot-updates")
 
     # Private method to send status update
@@ -699,7 +702,7 @@ class IronCondor:
     # Private method to send message if trade is closed
     def _communicate_closed_status(self):
         msg_txt = f"*Artemis:*\nThis trade is closed.\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
-        print(msg_txt)
+        logger.info(msg_txt)
         slack_bot_sendtext(msg_txt, "#trade-updates")
 
     def _sleep_for_set_time(self):
@@ -721,5 +724,5 @@ class IronCondor:
                 self._communicate_closed_status()
                 self._archive_trade()
         msg_txt = f"Artemis session complete at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
-        print(msg_txt)
+        logger.info(msg_txt)
         slack_bot_sendtext(msg_txt, "#tradebot-updates")

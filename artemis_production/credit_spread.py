@@ -13,6 +13,9 @@ from functions import (
     increment_order_book_poll, increment_rms_poll, reset_counters,
 )
 from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset, ORDER_TIMEOUT_SEC
+from logger_setup import get_logger
+
+logger = get_logger('artemis.credit_spread')
 
 # Main class for option spread
 class CreditSpread:
@@ -101,7 +104,7 @@ class CreditSpread:
                     else:
                         rejection_count += 1
                         err_msg = order_response.get('message', 'Unknown error')
-                        print(f"ARTEMIS: Order rejected ({rejection_count}/3): {symbol} — {err_msg}")
+                        logger.warning(f"Order rejected ({rejection_count}/3): {symbol} — {err_msg}")
                         if rejection_count >= 3:
                             slack_bot_sendtext(f"*Artemis*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", "#error-alerts")
                             break
@@ -535,7 +538,7 @@ class CreditSpread:
             # Update index ltp even if spread is not initialized to ensure trade_log is updated
             self.index_ltp = self._fetch_ltp(exchange_segment, instrument, underlying_token)
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be initialized after ELM cutoff time.\n*Lots:* _{self.lots}_"
-            print(msg_txt)
+            logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
             slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -594,13 +597,13 @@ class CreditSpread:
             self.trade_params_df.iloc[0, 23] = self.sell_ltp
             self.trade_params_df.to_csv(f"data/{self.spread_type}_trade_params.csv", index=False)
             # Send update
-            print(msg_txt)
+            logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
             slack_bot_sendtext(msg_txt, "#trade-alerts")
         else:
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be executed after ELM cutoff time.\n*Lots:* _{self.lots}_"
-            print(msg_txt)
+            logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
             slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -665,7 +668,7 @@ class CreditSpread:
         self.trade_params_df.iloc[0, 22] = self.buy_ltp
         self.trade_params_df.iloc[0, 23] = self.sell_ltp
         self.trade_params_df.to_csv(f"data/{self.spread_type}_trade_params.csv", index=False)
-        print(msg_txt)
+        logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
         slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -734,7 +737,7 @@ class CreditSpread:
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread adjusted at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.lots}_\nAdditional {self.spread_type.upper()} Spread executed at {self.current_datetime:%Y-%m-%d %H:%M:%S}.\n*Lots:* _{self.additional_lots}_"
         if self.current_datetime > self.elm_time:
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be adjusted after ELM cutoff time.\n*Lots:* _{self.lots}_"
-            print(msg_txt)
+            logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
             slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -774,7 +777,7 @@ class CreditSpread:
             self.trade_params_df.iloc[0, 31] = self.additional_buy_ltp
             self.trade_params_df.iloc[0, 34] = self.additional_pl
         self.trade_params_df.to_csv(f"data/{self.spread_type}_trade_params.csv", index=False)
-        print(msg_txt)
+        logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
         slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -865,7 +868,7 @@ class CreditSpread:
         self.trade_params_df.iloc[0, 21] = self.booked_pl
         self.trade_params_df.iloc[0, 22] = self.buy_ltp
         self.trade_params_df.to_csv(f"data/{self.spread_type}_trade_params.csv", index=False)
-        print(msg_txt)
+        logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
         slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -892,7 +895,7 @@ class CreditSpread:
                 return 'index_sl'
             else:
                 msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
-                print(msg_txt)
+                logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -908,7 +911,7 @@ class CreditSpread:
                 return 'index_sl'
             else:
                 msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Index SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
-                print(msg_txt)
+                logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
@@ -924,7 +927,7 @@ class CreditSpread:
                 return 'option_sl'
             else:
                 msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread Option SL hit at {self.current_datetime:%Y-%m-%d %H:%M:%S}. Waiting till 9:16 to take exit decision."
-                print(msg_txt)
+                logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
                 slack_bot_sendtext(msg_txt, "#trade-alerts")

@@ -14,6 +14,7 @@ from datetime import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR  = os.path.join(REPO_ROOT, "data")
+LOGS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 # Session hours
 opening_time = time(9, 15)
@@ -71,6 +72,9 @@ vix_threshold            = trade_settings_df.iloc[0].loc['vix_threshold']
 entry_window_minutes     = int(trade_settings_df.iloc[0].loc['entry_window_minutes'])
 
 ORDER_TIMEOUT_SEC = 1.1  # Seconds to wait for order fill confirmation
+
+# Set to "DEBUG" during testing, "INFO" for production.
+LOG_LEVEL = "DEBUG"
 
 poll_counter  = 0
 order_counter = 0
