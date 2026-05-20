@@ -108,6 +108,10 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             with self._lock:
                 n = len(self.live_orders)
             logger.info(f"OrderFillWatcher heartbeat: WS {status}, {n} orders tracked")
+            if not self._ws_ready.is_set():
+                slack_bot_sendtext(
+                    f"⚠️ *Athena*: OrderFillWatcher WS not ready — REST fallback active.",
+                    SLACK_ERRORS_CHANNEL)
 
     def _run(self):
         try:

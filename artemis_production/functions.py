@@ -52,6 +52,10 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             with self._lock:
                 n = len(self.live_orders)
             print(f"{datetime.now():%Y-%m-%d %H:%M:%S} [INFO] OrderFillWatcher heartbeat: WS {status}, {n} orders tracked", flush=True)
+            if not self._ws_ready.is_set():
+                slack_bot_sendtext(
+                    f"*Artemis*: OrderFillWatcher WS not ready — REST fallback active.",
+                    "#error-alerts")
 
     def _run(self):
         try:
