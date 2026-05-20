@@ -22,9 +22,33 @@ Migrating to the **Order Update WebSocket** will eliminate polling by pushing re
 
 ## 4. Implementation Steps
 
-### Phase 1: Research & Prototyping
-- Review the official `SmartApi` Python SDK for the specific Order Update WebSocket implementation. (Ensure distinction between Market Data WS and Order Update WS).
-- Build a standalone prototype script `ws_order_test.py` to authenticate, connect, place a dummy order, and log the exact JSON payload structure returned by Angel One.
+### Phase 1: Research & Prototyping — COMPLETE (2026-05-20)
+
+Live testing via `tests/ws_order_test.py` on both NFO (Nifty) and BFO (Sensex) confirmed:
+
+**Delivery path:**
+- AB00 (connection-ack) arrives on `on_data`, not `on_message`
+- All order events arrive on `on_data`
+
+**Event sequence (consistent across both exchanges):**
+- AB09 (after-market-delete) fires first, then AB01 (open), then AB05 (complete) — all
+  within ~1ms of each other. AB09 must **not** be treated as a terminal event; always wait
+  for AB05 before treating an order as done.
+
+**Field types (from live `orderData` payload):**
+| Field | Type | Notes |
+|---|---|---|
+| `filledshares` | `str` | Cast required: `int(data['filledshares'])`. Empty string `''` on non-filled states. |
+| `averageprice` | `float` | No cast needed. |
+| `updatetime` | `str` | Format: `'%d-%b-%Y %H:%M:%S'` (e.g. `20-May-2026 11:13:29`) |
+| `orderid` | `str` | Echo of the placed order ID |
+| `quantity` | `str` | Total requested quantity |
+
+**Latency:** 150–290ms from `placeOrder()` call to WS event arrival (VPS → broker → VPS round trip).
+
+**`individual_order_details()` ruled out:** Returns `AB1007: Order not found` for all
+confirmed-filled orders on this account (both NFO and BFO). REST polling via `orderBook()`
+remains the fallback. See `plans/individual-order-details.md`.
 
 ### Phase 2: Athena Integration (High Priority)
 - Introduce the threading and WebSocket initialization to `athena_engine.py`.

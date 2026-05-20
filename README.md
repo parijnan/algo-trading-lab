@@ -327,7 +327,7 @@ algo-trading-lab/
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
 ├── plans/                          # Implementation plans
-│   ├── individual-order-details.md # [PENDING] Replace orderBook scan with individual_order_details()
+│   ├── individual-order-details.md # [BLOCKED] individual_order_details() returns AB1007 on this account
 │   ├── orphan-fill-cleanup.md      # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md      # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons

@@ -1,6 +1,14 @@
 # Plan: Replace orderBook() scan in _fetch_order_details with individual_order_details()
 
-## Status: PENDING — awaiting live ws_order_test.py run to confirm response field names
+## Status: BLOCKED — individual_order_details() non-functional on this account
+
+Live testing on 2026-05-20 confirmed that `individual_order_details(orderid)` returns
+`AB1007: Order not found` for every call — immediately after fill and 30 seconds later —
+for both NFO (Nifty) and BFO (Sensex) orders that are confirmed complete via WebSocket
+(AB05). The endpoint is non-functional on this account, likely an API plan restriction.
+
+`orderBook()` remains in use for fill verification. This plan is shelved until Angel One
+confirms the endpoint is accessible or the account tier changes.
 
 ---
 
