@@ -84,7 +84,7 @@ LOT_SIZE            = 65            # Nifty lot size — update if SEBI changes 
 
 # Lot sizing
 LOT_CALC            = True
-LOT_COUNT           = 1             # lots per signal when LOT_CALC = False
+LOT_COUNT           = 40            # lots per signal when LOT_CALC = False
 LOT_CAPITAL         = 200000        # capital per lot for auto-calculation (Rs)
 CASH_PER_LOT_REQUIRED = 15000       # upfront pure cash required per lot
 
