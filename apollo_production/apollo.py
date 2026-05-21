@@ -478,6 +478,11 @@ class Apollo:
                     f"*Apollo*: Market close with open trade. "
                     f"Holding overnight. Expiry: {self.state.expiry}.",
                     SLACK_TRADEBOT_CHANNEL)
+                self._summary.update({
+                    'exit_reason':  'overnight_hold',
+                    'exit_time':    None,
+                    'peak_pnl_pts': self.state.max_unrealised_pl,
+                })
 
             # Always stop the feed before returning to Leto
             self._teardown()

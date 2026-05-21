@@ -503,7 +503,9 @@ def _send_session_report(summaries, session_date):
 
         lines.append(f"  ↳ Entry: {entry_time}   Exit: {exit_time}  ·  {exit_str}")
 
-        if pnl_pts is not None:
+        if exit_raw == 'overnight_hold':
+            lines.append(f"  ↳ P&L        : *Position carried forward overnight*")
+        elif pnl_pts is not None:
             lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*")
         else:
             lines.append(f"  ↳ P&L        : *{pnl_rs:+,.0f} Rs*")

@@ -24,8 +24,11 @@ Design principles:
 """
 
 import ctypes
+import logging
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 
@@ -432,8 +435,7 @@ class SharedFeed:
 
         for attempt in range(self._max_reconnect_attempts):
             delay = _BACKOFF[min(attempt, len(_BACKOFF) - 1)]
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"SharedFeed: WS disconnected. "
                 f"Reconnect attempt {attempt + 1}/{self._max_reconnect_attempts} in {delay}s.")
 
@@ -476,7 +478,7 @@ class SharedFeed:
 
                 if self.is_connected():
                     msg = f"WS reconnected after {attempt + 1} attempt(s). Resubscribing."
-                    logging.getLogger(__name__).info(f"SharedFeed: {msg}")
+                    logger.info(f"SharedFeed: {msg}")
                     if self._alert_callback:
                         try:
                             self._alert_callback(f"✅ SharedFeed: {msg}")
@@ -485,17 +487,17 @@ class SharedFeed:
                     self.resubscribe_all()
                     return
 
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     f"SharedFeed: Reconnect attempt {attempt + 1} — no connect within 10s.")
 
             except Exception as exc:
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     f"SharedFeed: Reconnect attempt {attempt + 1} failed: {exc}")
 
         # All attempts exhausted
         msg = (f"WS reconnect failed after {self._max_reconnect_attempts} attempts "
                f"— REST fallback active.")
-        logging.getLogger(__name__).error(f"SharedFeed: {msg}")
+        logger.error(f"SharedFeed: {msg}")
         if self._alert_callback:
             try:
                 self._alert_callback(f"⚠️ SharedFeed: {msg}")
