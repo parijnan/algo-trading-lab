@@ -215,6 +215,7 @@ Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maint
 - 1-minute OHLCV data, saved as CSV, organised by expiry date
 - Sensex and Nifty options: one file per contract (`{strike}{ce|pe}.csv`), one folder per expiry (`YYYY-MM-DD/`)
 - Index files: single rolling CSV per index (`sensex.csv`, `nifty.csv`, `india_vix.csv`)
+- Data integrity check on every index update: if fewer than 375 rows (one full trading day) are added, an alert fires to `#error-alerts` identifying the affected file
 - Incremental saves — each file is written after every 2-day chunk, no data loss on interruption
 - Resume on restart — picks up from the last saved timestamp in each file
 - Sliding-window rate limiter enforcing broker API limits (AngelOne: 2/sec, 180/min, 5000/hr; Breeze: 100/min, 5000/day)
