@@ -122,54 +122,43 @@ def slack_bot_sendtext(msg, channel):
     try:
         response = post(url, headers=headers, json=payload, timeout=5)
     except Exception as e:
-        trace_msg = format_exc()
-        msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
-        logger.error(msg_txt_detailed)
-        telegram_bot_sendtext("Slack Message Failed. Check log for details.", 'bot')
-        mode = 'a' if exists('data/error_log.txt') else 'w'
-        with open('data/error_log.txt', mode) as error_log:
-            error_log.writelines(msg_txt_detailed)
+        logger.error(f"Slack message failed: {e}")
+        telegram_bot_sendtext("Artemis: Slack message failed. Check log for details.", 'bot')
     return response.json() if 'response' in locals() else None
 
 # Function for alerts from Telegram. To be called when an order is executed or to send any other alert
 def telegram_bot_sendtext(bot_message, medium='channel'):
-    # Private helper function to handle special characters in Telegram messages. Only needed by this function
     def _escape_markdown_v2(text):
         escape_chars = r'[_*[\]()~`>#+-=|{}.!]'
         return sub(escape_chars, r'\\\g<0>', text)
 
-    # Set bot_chat_ID based on whether I want a muted or unmuted notification
     bot_chat_ID = bot_id if medium == 'bot' else channel_id
-    # Escape special characters in the message
     bot_message = _escape_markdown_v2(bot_message)
     send_text = 'https://api.telegram.org/bot' + bot_token + '/sendMessage?chat_id=' + bot_chat_ID + '&parse_mode=MarkdownV2&text=' + bot_message
     try:
         response = get(send_text)
     except Exception as e:
-        trace_msg = format_exc()
-        msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
-        logger.error(msg_txt_detailed)
-        slack_bot_sendtext("Telegram Message Failed. Check log for details.", "#error-alerts")
-        mode = 'a' if exists('data/error_log.txt') else 'w'
-        with open('data/error_log.txt', mode) as error_log:
-            error_log.writelines(msg_txt_detailed)
-        sleep(1)
-        response = get(send_text)
-    return response.json()
-    
+        logger.error(f"Telegram message failed: {e}")
+    return response.json() if 'response' in locals() else None
+
 # Function to handle exceptions
 def handle_exception(e):
     trace_msg = format_exc()
-    msg_txt_detailed = (f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}")
+    msg_txt_detailed = f"Time: {datetime.now():%Y-%m-%d %H:%M:%S}.\nException:\n {format(e)} \n{trace_msg}"
     logger.error(msg_txt_detailed)
     slack_bot_sendtext(
         f"ARTEMIS ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
         f"{format(e)} — check logs.",
         "#error-alerts"
     )
-    mode = 'a' if exists('data/error_log.txt') else 'w'
-    with open('data/error_log.txt', mode) as error_log:
-        error_log.writelines(msg_txt_detailed)
+    _write_error_log(msg_txt_detailed)
+
+def _write_error_log(msg):
+    try:
+        with open('data/error_log.txt', 'a') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Hardened Rate Limit Counters
