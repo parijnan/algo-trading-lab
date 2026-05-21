@@ -347,7 +347,9 @@ algo-trading-lab/
 │   ├── universal-ltp-websocket.md  # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
 │   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Universal WS LTP feed — Apollo, Athena, Artemis; 500ms SL loops; REST fallback
 │   └── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
-├── tests/                          # Standalone test and diagnostic scripts
+├── tests/                          # Automated tests and diagnostic scripts
+│   ├── test_state_roundtrip.py     # State CSV round-trip — Apollo and Athena (type safety, None/bool/int fidelity)
+│   ├── test_strike_math.py         # Apollo ATM rounding and strike pair selection (banker's rounding, offset/width)
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
 │   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype
