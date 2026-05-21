@@ -240,7 +240,7 @@ class IronCondor:
                     if tok and isinstance(tok, str) and tok.strip():
                         tokens.append(tok)
         if tokens:
-            self.feed.subscribe_options(tokens)
+            self.feed.subscribe_options(tokens, EXCHANGE_BSE_FO)
 
     # Private method to clean up state files when standing down before entry
     def _cleanup_state_files(self):

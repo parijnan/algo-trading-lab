@@ -134,20 +134,25 @@ class SharedFeed:
                 "Check auth_token, feed_token, and network connectivity."
             )
 
-    def subscribe_options(self, tokens):
+    def subscribe_options(self, tokens, exchange_type=None):
         """
         Subscribe to LTP feed for option leg tokens after entry.
         Initialises a fresh OHLC window for each token.
 
         Parameters
         ----------
-        tokens : list of str
+        tokens        : list of str
+        exchange_type : int, optional
+            Exchange type constant (default: EXCHANGE_NSE_FO).
+            Pass EXCHANGE_BSE_FO for Artemis (Sensex BFO options).
         """
+        if exchange_type is None:
+            exchange_type = EXCHANGE_NSE_FO
         new_tokens = [t for t in tokens if t not in self._subscribed_options]
         if not new_tokens:
             return
 
-        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": new_tokens}]
+        token_list = [{"exchangeType": exchange_type, "tokens": new_tokens}]
         self._sws.subscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:
@@ -162,20 +167,25 @@ class SharedFeed:
         if tokens:
             self.unsubscribe_options(tokens)
 
-    def unsubscribe_options(self, tokens):
+    def unsubscribe_options(self, tokens, exchange_type=None):
         """
         Unsubscribe option leg tokens after exit.
         Clears LTP and OHLC entries from shared state.
 
         Parameters
         ----------
-        tokens : list of str
+        tokens        : list of str
+        exchange_type : int, optional
+            Exchange type constant (default: EXCHANGE_NSE_FO).
+            Pass EXCHANGE_BSE_FO for Artemis (Sensex BFO options).
         """
+        if exchange_type is None:
+            exchange_type = EXCHANGE_NSE_FO
         current = [t for t in tokens if t in self._subscribed_options]
         if not current:
             return
 
-        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": current}]
+        token_list = [{"exchangeType": exchange_type, "tokens": current}]
         self._sws.unsubscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:

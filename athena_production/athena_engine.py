@@ -626,7 +626,7 @@ class Athena:
         for key in keys:
             tok = getattr(self.state, f"{key}_token")
             ltp = self.feed.get_ltp(tok)
-            if ltp is None: ltp = getattr(self.state, f"last_{key}_ltp") or getattr(self.state, f"{key}_entry")
+            if ltp is None: ltp = getattr(self.state, f"last_{key}_ltp", None) or getattr(self.state, f"{key}_entry", 0.0)
             prices[key] = ltp
         return prices
 
@@ -637,7 +637,7 @@ class Athena:
         if self.state.emer_active: keys += ['emer']
         for key in keys:
             sym = getattr(self.state, f"{key}_symbol"); tok = getattr(self.state, f"{key}_token"); ltp = self._get_ltp(EXCHANGE_NFO, sym, tok)
-            if ltp is None: ltp = getattr(self.state, f"last_{key}_ltp") or getattr(self.state, f"{key}_entry")
+            if ltp is None: ltp = getattr(self.state, f"last_{key}_ltp", None) or getattr(self.state, f"{key}_entry", 0.0)
             prices[key] = ltp
         return prices
 
