@@ -9,7 +9,7 @@ from traceback import format_exc
 from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
-from configs import slack_token, bot_token, bot_id, channel_id, SLACK_TRADEBOT_CHANNEL
+from configs import slack_token, bot_token, bot_id, channel_id, SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL
 from logger_setup import get_logger
 
 logger = get_logger('artemis.functions')
@@ -58,7 +58,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             if not self._ws_ready.is_set():
                 slack_bot_sendtext(
                     "*Artemis*: OrderFillWatcher WS not ready — REST fallback active.",
-                    "#error-alerts")
+                    SLACK_ERRORS_CHANNEL)
 
     def _run(self):
         try:
@@ -156,10 +156,11 @@ def telegram_bot_sendtext(bot_message, medium='channel'):
     bot_message = _escape_markdown_v2(bot_message)
     send_text = 'https://api.telegram.org/bot' + bot_token + '/sendMessage?chat_id=' + bot_chat_ID + '&parse_mode=MarkdownV2&text=' + bot_message
     try:
-        response = get(send_text)
+        response = get(send_text, timeout=5)
+        return response.json()
     except Exception as e:
         logger.error(f"Telegram message failed: {e}")
-    return response.json() if 'response' in locals() else None
+    return None
 
 # Function to handle exceptions
 def handle_exception(e):
@@ -169,7 +170,7 @@ def handle_exception(e):
     slack_bot_sendtext(
         f"ARTEMIS ERROR at {datetime.now():%Y-%m-%d %H:%M:%S} — "
         f"{format(e)} — check logs.",
-        "#error-alerts"
+        SLACK_ERRORS_CHANNEL
     )
 
 # ---------------------------------------------------------------------------
