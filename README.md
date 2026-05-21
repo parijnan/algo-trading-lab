@@ -95,7 +95,9 @@ All production strategies (Artemis, Apollo, Athena) implement a robust order pla
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
 - **Orphan Fill Cleanup:** Post-burst audit after every entry. If one leg fills more than another, the excess is immediately squared off with a counter-order to maintain balanced exposure across all legs. Apollo records the confirmed (minimum) lot count to state; Athena additionally handles this across batches.
 - **WebSocket Order Fill Verification:** All strategies run a background `OrderFillWatcher` daemon thread (subclassing `SmartWebSocketOrderUpdate`) that captures AB05/AB02/AB03 events into a thread-safe `live_orders` dict. `_fetch_order_details` polls this dict every 50ms instead of calling `orderBook()`, reducing fill verification from ~1s REST round-trips to <300ms. If the socket is not ready or times out, the original REST fallback is used transparently.
-- **Real-Time WebSocket LTP Feed:** All strategies start a `SharedFeed` daemon thread (`websocket_feed.py`) at session open. Index tokens (Nifty or Sensex) are pre-subscribed at connect; option leg tokens are subscribed after entry and unsubscribed after exit. In-trade monitoring loops run at 500ms intervals (versus previous 20–60s REST polling), decoupling sub-second SL/parachute reaction from the configurable Slack reporting cadence. If the WebSocket disconnects mid-session, strategies automatically fall back to REST polling at the full configured interval and alert `#error-alerts`.
+- **Real-Time WebSocket LTP Feed:** All strategies start a `SharedFeed` daemon thread (`websocket_feed.py`) at session open. Index tokens (Nifty or Sensex) are pre-subscribed at connect; option leg tokens are subscribed after entry and unsubscribed after exit. In-trade monitoring loops run at 500ms intervals (versus previous 20–60s REST polling), decoupling sub-second SL/parachute reaction from the configurable Slack reporting cadence. If the WebSocket disconnects mid-session, `SharedFeed` attempts reconnection with exponential backoff (5→10→20→40→60s, up to 5 attempts), resubscribes all tokens on success, and sends a Slack alert via the caller's `alert_callback`. During reconnect, strategies fall back to REST polling at the full configured interval. If all reconnect attempts fail, the REST fallback remains active and a final alert fires to `#error-alerts`.
+- **Tick Error Debouncing:** Malformed or undecodable WS ticks are silently discarded by the feed thread and counted. After 10+ errors within a 5-minute window, a single Slack alert fires to `#error-alerts`. Repeated flapping is suppressed by a 300s cooldown on alerts.
+- **Position Reconciliation on Restart:** When Leto routes to a strategy that already has an open trade in state (e.g., after a VPS reboot), the strategy calls `obj.position()` and compares broker-reported quantities against state. Mismatches generate an immediate Slack alert to `#error-alerts` before monitoring resumes; the system never auto-corrects — manual verification is required.
 
 ## Slack Interactive Control
 
@@ -139,9 +141,13 @@ The laboratory is integrated with Slack for real-time monitoring and alerting. E
 | :--- | :--- | :--- |
 | **`#trade-alerts`** | High-priority trade events: entries, exits, adjustments, and SL hits. | Artemis, Athena, Apollo |
 | **`#trade-updates`** | Periodic status updates: LTP tracking, current P&L, and peak drawdown/profit. | Artemis, Athena, Apollo |
-| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, WebSocket LTP/order-fill feed startup, session termination, and archival. | Leto, Artemis, Athena, Apollo |
+| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, WebSocket LTP/order-fill feed startup, session termination, archival, and end-of-day session report. | Leto, Artemis, Athena, Apollo |
 | **`#error-alerts`** | Fatal exceptions, rate limit cooling, ghost order recoveries, and network timeouts. | All Strategies, Leto, Data Pipeline |
 | **`#data-alerts`** | Pipeline status: Start/End notifications and daily download completion reports. | Data Pipeline |
+
+### End-of-Day Session Report
+
+After session teardown, Leto posts a formatted summary to `#tradebot-updates` covering every strategy that ran that day. Each block shows entry/exit times, P&L in points and rupees, peak unrealised P&L, and a strategy-specific context line (Apollo: direction; Athena: spot move entry→exit; Artemis: outcome — neutral / PE side closed / CE side closed). Trades held overnight show `Position carried forward overnight` instead of a P&L figure. A session total in rupees appears at the foot when at least one strategy traded.
 
 ### Automated Pipeline Messaging
 

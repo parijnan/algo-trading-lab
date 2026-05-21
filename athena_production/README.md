@@ -69,3 +69,4 @@ Athena runs a `SharedFeed` WebSocket daemon (`websocket_feed.py`) for real-time 
 - **Capital-Efficient Sequence:** Always places **MONTHLY BUY** orders first in the burst to establish the calendar spread and secure margin benefits before selling weekly legs. Finally buys the PE wing using generated credit.
 - **Dry Run Mode:** Set `DRY_RUN = True` in `configs_live.py` to test strike selection and logging without placing real orders.
 - **Error Recovery:** State is persisted on every poll; the script automatically resumes tracking open positions if restarted. On restart with an active trade, all live leg tokens are re-subscribed to the WebSocket feed.
+- **Position Reconciliation on Restart:** On every in-trade restart, Athena calls `obj.position()` and compares all active leg quantities (including optional PE wing and emergency hedge) against state. Any mismatch generates a Slack alert to `#error-alerts`; no auto-correction is performed.

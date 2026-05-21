@@ -117,5 +117,7 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 - [x] ELM adjustment — validated
 - [x] Trade archival — validated
 - [x] Orphan fill cleanup — implemented across all execution paths (entry, exit, adjust, ELM)
-- [x] WebSocket LTP feed — 500ms SL monitoring with REST fallback; Sensex index pre-subscribed at session start
+- [x] WebSocket LTP feed — 500ms SL monitoring with REST fallback; Sensex index pre-subscribed at session start; auto-reconnect with exponential backoff
+- [x] Position reconciliation on restart — sign-only broker position check on every in-trade restart; mismatch alerts to `#error-alerts`
+- [x] Session summary — `run()` returns a summary dict to Leto (outcome, lots, P&L, exit reason) for the end-of-day session report
 - [x] Leto integration — session management moved to Leto

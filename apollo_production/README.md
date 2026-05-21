@@ -127,5 +127,7 @@ warmup is always complete and ST values match the backtest exactly.
 - [x] Clean shutdown (Ctrl+C / kill) — validated
 - [x] Missed flip recovery on restart — implemented
 - [x] Orphan fill cleanup — ported from Athena; excess fills on any entry leg are squared off immediately
-- [x] WebSocket LTP feed — migrated to shared `SharedFeed` (`../websocket_feed.py`); Nifty and VIX pre-subscribed at connect
+- [x] WebSocket LTP feed — migrated to shared `SharedFeed` (`../websocket_feed.py`); Nifty and VIX pre-subscribed at connect; auto-reconnect with exponential backoff; tick error debouncing
+- [x] Position reconciliation on restart — broker quantities checked against state on every in-trade restart; mismatch alerts to `#error-alerts`
+- [x] Session summary — `run()` returns a summary dict to Leto for inclusion in the end-of-day session report; overnight holds are flagged rather than showing a zero P&L
 - [x] Leto integration — session management moved to Leto
