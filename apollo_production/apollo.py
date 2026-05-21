@@ -195,6 +195,14 @@ class Apollo:
                 f"Buy {self.state.buy_strike} @ {self.state.buy_entry:.1f} | "
                 f"Sell {self.state.sell_strike} @ {self.state.sell_entry:.1f}",
                 SLACK_TRADE_ALERTS)
+            _entry_dt = datetime.fromisoformat(self.state.entry_time) if self.state.entry_time else None
+            self._summary.update({
+                'traded':     True,
+                'direction':  self.state.direction,
+                'lots':       self.state.lots,
+                'entry_time': _entry_dt.strftime('%d %b %H:%M') if _entry_dt else '?',
+                'spot_entry': self.state.entry_spot,
+            })
 
         if self.state.status == 'exiting':
             logger.warning("Restarted with status=exiting. Manual intervention required.")
@@ -477,11 +485,21 @@ class Apollo:
                 slack_bot_sendtext(
                     f"*Apollo*: Market close with open trade. "
                     f"Holding overnight. Expiry: {self.state.expiry}.",
-                    SLACK_TRADEBOT_CHANNEL)
+                    SLACK_TRADE_UPDATES)
+                buy_ltp  = self.feed.get_ltp(self.state.buy_token)
+                sell_ltp = self.feed.get_ltp(self.state.sell_token)
+                if buy_ltp is not None and sell_ltp is not None:
+                    _pnl_pts = round((buy_ltp - self.state.buy_entry) - (sell_ltp - self.state.sell_entry), 2)
+                    _pnl_rs  = round(_pnl_pts * self.state.lots * LOT_SIZE, 2)
+                else:
+                    _pnl_pts = None
+                    _pnl_rs  = None
                 self._summary.update({
                     'exit_reason':  'overnight_hold',
                     'exit_time':    None,
                     'peak_pnl_pts': self.state.max_unrealised_pl,
+                    'pnl_pts':      _pnl_pts,
+                    'pnl_rs':       _pnl_rs,
                 })
 
             # Always stop the feed before returning to Leto

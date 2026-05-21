@@ -21,7 +21,7 @@ from configs import (
     vix_threshold, entry_window_minutes, exchange_segment,
     instrument, underlying_token, REPO_ROOT,
     api_key, user_name,
-    SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
+    SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
 )
 from logger_setup import get_logger
 from websocket_feed import SharedFeed, EXCHANGE_BSE_CM, EXCHANGE_BSE_FO
@@ -776,7 +776,7 @@ class IronCondor:
                 self._archive_trade()
         msg_txt = f"Artemis session complete at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
         logger.info(msg_txt)
-        slack_bot_sendtext(msg_txt, "#tradebot-updates")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_UPDATES)
 
     def _reconcile_positions(self):
         """
@@ -850,7 +850,17 @@ class IronCondor:
              (self.ce_spread.additional_pl  * add_lots / max(self.ce_spread.lots, 1))
             ) * lot_size, 2)
 
-        exit_reason = 'Expiry' if self.current_datetime > self.expiry else 'Market close'
+        if self.current_datetime > self.expiry:
+            exit_reason = 'Expiry'
+        elif pe_st == 'closed' and ce_st == 'closed':
+            exit_reason = 'Market close'
+        else:
+            exit_reason = 'overnight_hold'
+
+        try:
+            entry_str = self.trade_book_df.iloc[0]['entry_time'].strftime('%d %b %H:%M')
+        except Exception:
+            entry_str = '?'
 
         return {
             'strategy':    'Artemis',
@@ -859,4 +869,5 @@ class IronCondor:
             'outcome':     outcome,
             'pnl_rs':      pl_rs,
             'exit_reason': exit_reason,
+            'entry_time':  entry_str,
         }

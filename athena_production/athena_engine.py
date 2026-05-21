@@ -841,6 +841,13 @@ class Athena:
             slack_bot_sendtext("⚠️ *Athena*: WS LTP feed failed to start — REST fallback active.", SLACK_ERRORS_CHANNEL)
         if self.state.status == 'in_trade':
             self._reconcile_positions()
+            _entry_dt = datetime.fromisoformat(self.state.entry_time) if self.state.entry_time else None
+            self._summary.update({
+                'traded':     True,
+                'lots':       self.state.lots,
+                'entry_time': _entry_dt.strftime('%d %b %H:%M') if _entry_dt else '?',
+                'spot_entry': self.state.entry_spot,
+            })
         if self.state.status == 'in_trade' and self.feed.is_connected():
             leg_tokens = [
                 self.state.ce_sell_token, self.state.pe_sell_token,
@@ -907,6 +914,37 @@ class Athena:
         if self.state.status == 'in_trade':
             try: self._send_trade_update()
             except: pass
-        else: slack_bot_sendtext("*Athena*: Standing down for the day. No active positions.", SLACK_TRADE_UPDATES)
+            slack_bot_sendtext(
+                f"*Athena*: Market close with open trade. Holding overnight. "
+                f"Sell expiry: {self.state.sell_expiry}.",
+                SLACK_TRADE_UPDATES)
+            try:
+                p = self._poll_prices()
+                _pnl_pts = round(
+                    (p['ce_buy'] - self.state.ce_buy_entry) +
+                    (p['pe_buy'] - self.state.pe_buy_entry) +
+                    (self.state.ce_sell_entry - p['ce_sell']) +
+                    (self.state.pe_sell_entry - p['pe_sell']), 2)
+                if self.state.wings_enabled and p.get('pe_wing'):
+                    _pnl_pts = round(_pnl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
+                if self.state.emer_active and p.get('emer'):
+                    _pnl_pts = round(_pnl_pts + (p['emer'] - self.state.emer_entry), 2)
+                _pnl_pts = round(_pnl_pts + self.state.running_realised_pl, 2)
+                _pnl_rs  = round(_pnl_pts * self.state.lots * LOT_SIZE, 2)
+                _spot    = p.get('spot')
+            except Exception:
+                _pnl_pts = None
+                _pnl_rs  = None
+                _spot    = None
+            self._summary.update({
+                'exit_reason':  'overnight_hold',
+                'exit_time':    None,
+                'peak_pnl_pts': self.state.max_unrealised_pl,
+                'pnl_pts':      _pnl_pts,
+                'pnl_rs':       _pnl_rs,
+                'spot_exit':    round(_spot, 2) if _spot else None,
+            })
+        else:
+            slack_bot_sendtext("*Athena*: Standing down for the day. No active positions.", SLACK_TRADE_UPDATES)
         logger.info("Market closed. Athena finished for the day.")
         return False, self._summary

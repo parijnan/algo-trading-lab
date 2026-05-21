@@ -482,7 +482,8 @@ def _send_session_report(summaries, session_date):
         pnl_pts    = s.get('pnl_pts')
         pnl_rs     = s.get('pnl_rs', 0) or 0
         peak       = s.get('peak_pnl_pts')
-        total_rs  += pnl_rs
+        if exit_raw != 'overnight_hold':
+            total_rs += pnl_rs
 
         if strategy == 'Apollo':
             direction = s.get('direction', '?').capitalize()
@@ -504,7 +505,10 @@ def _send_session_report(summaries, session_date):
         lines.append(f"  ↳ Entry: {entry_time}   Exit: {exit_time}  ·  {exit_str}")
 
         if exit_raw == 'overnight_hold':
-            lines.append(f"  ↳ P&L        : *Position carried forward overnight*")
+            if pnl_pts is not None:
+                lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*  _(unrealised at close)_")
+            else:
+                lines.append(f"  ↳ P&L        : *Position carried forward overnight*")
         elif pnl_pts is not None:
             lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*")
         else:
