@@ -42,9 +42,10 @@ graph TD
     Status -- Idle --> DayCheck{Entry Day 10:30?}
     DayCheck -- Yes --> Strikes[Select Double Calendar Strikes]
     Strikes --> Entry[Batch Entry: Buy Monthly -> Sell Weekly -> Buy PE Wing]
-    Entry --> Poll[Polling Loop: Every 20s]
+    Entry --> Poll[Monitoring Loop: 500ms WS / TRADE_UPDATE_INTERVAL REST fallback]
     
-    Status -- In Trade --> Poll
+    Status -- In Trade --> WS[Start WebSocket LTP Feed]
+    WS --> Poll
     
     Poll -- Spot >= CE + Offset --> Hedge[Deploy Parachute CE Hedge]
     Poll -- Spot <= CE + Offset --> Unhedge[Exit Parachute CE Hedge]
@@ -53,18 +54,18 @@ graph TD
     ExitCheck -- Yes --> Close[Close All Legs: Buy Weekly first]
     Close --> End([Athena Complete])
     
-    Poll -- Market Close --> Sleep[Sleep]
+    Poll -- Market Close --> Sleep[Sleep 500ms]
     Sleep --> Poll
     
     DayCheck -- No --> StandDown[Stand Down]
 ```
 
 ## Monitoring
-Athena uses REST API polling (every 20 seconds) to fetch LTPs, calculate unrealised P&L, and log detailed snapshots to `data/trade_logs/`.
+Athena runs a `SharedFeed` WebSocket daemon (`websocket_feed.py`) for real-time LTP. Nifty spot and VIX index tokens are pre-subscribed at session start; option leg tokens are subscribed after entry and unsubscribed on exit. The in-trade loop runs at **500ms** intervals for sub-second SL and parachute reaction. Slack updates and `data/trade_logs/` snapshots fire every `TRADE_UPDATE_INTERVAL` seconds (counter-gated). If the WebSocket disconnects, the loop automatically falls back to REST polling at the full `TRADE_UPDATE_INTERVAL` interval.
 
 ## Execution Safety
 - **Proactive Rate Limiting:** Client-side gatekeeper prevents the 11th order in a 1-second window, enforcing a 1.1s sleep *before* any violation.
 - **ID-Exclusion Ghost Recovery:** Maintains a session list of processed `orderid`s. On network or data failure, it reconciles the Order Book using documented fields, preventing double-fills across batches.
 - **Capital-Efficient Sequence:** Always places **MONTHLY BUY** orders first in the burst to establish the calendar spread and secure margin benefits before selling weekly legs. Finally buys the PE wing using generated credit.
 - **Dry Run Mode:** Set `DRY_RUN = True` in `configs_live.py` to test strike selection and logging without placing real orders.
-- **Error Recovery:** State is persisted on every poll; the script automatically resumes tracking open positions if restarted.
+- **Error Recovery:** State is persisted on every poll; the script automatically resumes tracking open positions if restarted. On restart with an active trade, all live leg tokens are re-subscribed to the WebSocket feed.

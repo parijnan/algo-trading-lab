@@ -95,6 +95,7 @@ All production strategies (Artemis, Apollo, Athena) implement a robust order pla
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
 - **Orphan Fill Cleanup:** Post-burst audit after every entry. If one leg fills more than another, the excess is immediately squared off with a counter-order to maintain balanced exposure across all legs. Apollo records the confirmed (minimum) lot count to state; Athena additionally handles this across batches.
 - **WebSocket Order Fill Verification:** All strategies run a background `OrderFillWatcher` daemon thread (subclassing `SmartWebSocketOrderUpdate`) that captures AB05/AB02/AB03 events into a thread-safe `live_orders` dict. `_fetch_order_details` polls this dict every 50ms instead of calling `orderBook()`, reducing fill verification from ~1s REST round-trips to <300ms. If the socket is not ready or times out, the original REST fallback is used transparently.
+- **Real-Time WebSocket LTP Feed:** All strategies start a `SharedFeed` daemon thread (`websocket_feed.py`) at session open. Index tokens (Nifty or Sensex) are pre-subscribed at connect; option leg tokens are subscribed after entry and unsubscribed after exit. In-trade monitoring loops run at 500ms intervals (versus previous 20–60s REST polling), decoupling sub-second SL/parachute reaction from the configurable Slack reporting cadence. If the WebSocket disconnects mid-session, strategies automatically fall back to REST polling at the full configured interval and alert `#error-alerts`.
 
 ## Slack Interactive Control
 
@@ -138,7 +139,7 @@ The laboratory is integrated with Slack for real-time monitoring and alerting. E
 | :--- | :--- | :--- |
 | **`#trade-alerts`** | High-priority trade events: entries, exits, adjustments, and SL hits. | Artemis, Athena, Apollo |
 | **`#trade-updates`** | Periodic status updates: LTP tracking, current P&L, and peak drawdown/profit. | Artemis, Athena, Apollo |
-| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, session termination, and archival. | Leto, Artemis, Apollo |
+| **`#tradebot-updates`** | Session lifecycle: Login success, strategy routing, WebSocket LTP/order-fill feed startup, session termination, and archival. | Leto, Artemis, Athena, Apollo |
 | **`#error-alerts`** | Fatal exceptions, rate limit cooling, ghost order recoveries, and network timeouts. | All Strategies, Leto, Data Pipeline |
 | **`#data-alerts`** | Pipeline status: Start/End notifications and daily download completion reports. | Data Pipeline |
 
@@ -336,7 +337,8 @@ algo-trading-lab/
 │   ├── phase-4-convergence.md      # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
-│   ├── universal-ltp-websocket.md  # [ON HOLD] Shared WebSocket LTP feed — no immediate benefit
+│   ├── universal-ltp-websocket.md  # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
+│   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Shared WebSocket LTP feed — Apollo, Athena, Artemis
 │   └── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
 ├── tests/                          # Standalone test and diagnostic scripts
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis

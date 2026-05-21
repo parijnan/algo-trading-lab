@@ -127,4 +127,5 @@ warmup is always complete and ST values match the backtest exactly.
 - [x] Clean shutdown (Ctrl+C / kill) — validated
 - [x] Missed flip recovery on restart — implemented
 - [x] Orphan fill cleanup — ported from Athena; excess fills on any entry leg are squared off immediately
+- [x] WebSocket LTP feed — migrated to shared `SharedFeed` (`../websocket_feed.py`); Nifty and VIX pre-subscribed at connect
 - [x] Leto integration — session management moved to Leto

@@ -43,8 +43,9 @@ graph TD
     Monday -- Yes --> SetupIC[Sell Iron Condor as per expected premium defined in configs]
     Monday -- No --> StandDown[Stand Down]
     
-    EntryCheck -- Yes --> Monitor[Monitor Loop: Every 20s]
-    SetupIC --> Monitor
+    EntryCheck -- Yes --> Monitor[Monitor Loop: 500ms WS / monitor_frequency REST fallback]
+    SetupIC --> WS[Start WebSocket LTP Feed]
+    WS --> Monitor
     
     Monitor --> SLHit{Stop Loss Hit?}
     SLHit -- Yes --> Transform[Transform: Close Tested Side, Roll & Reinforce Winning Side]
@@ -107,7 +108,7 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 | `sl_0_dte` to `sl_4_dte` | Option SL multipliers by days to expiry |
 | `adj_dist` | Strike adjustment distance on SL hit |
 | `index_sl_offset` | Index SL offset from sell strike |
-| `monitor_frequency` | Monitoring loop sleep interval (seconds) |
+| `monitor_frequency` | Slack/log reporting interval (seconds) — WS enables 500ms SL checks; this gates status updates |
 
 ## Status
 
@@ -116,4 +117,5 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 - [x] ELM adjustment — validated
 - [x] Trade archival — validated
 - [x] Orphan fill cleanup — implemented across all execution paths (entry, exit, adjust, ELM)
+- [x] WebSocket LTP feed — 500ms SL monitoring with REST fallback; Sensex index pre-subscribed at session start
 - [x] Leto integration — session management moved to Leto
