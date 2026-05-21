@@ -148,7 +148,15 @@ The laboratory is integrated with Slack for real-time monitoring and alerting. E
 
 ### End-of-Day Session Report
 
-After session teardown, Leto posts a formatted summary to `#tradebot-updates` covering every strategy that ran that day. Each block shows entry/exit times, P&L in points and rupees, peak unrealised P&L, and a strategy-specific context line (Apollo: direction; Athena: spot move entry→exit; Artemis: outcome — neutral / PE side closed / CE side closed). Trades held overnight show `Position carried forward overnight` instead of a P&L figure. A session total in rupees appears at the foot when at least one strategy traded.
+After session teardown, Leto posts a formatted summary to `#tradebot-updates` covering every strategy that ran that day. Each block includes:
+
+- **Entry/exit times** — when a trade was resumed from a prior session, the entry date is shown (`20 May 10:30`) so it is clearly distinguished from a same-day entry.
+- **Strategy context** — Apollo: direction; Athena: spot move entry→exit; Artemis: outcome (Neutral / PE side closed — CE reinforced / CE side closed — PE reinforced).
+- **P&L** — points and rupees for exited trades. For overnight holds: unrealised P&L snapshotted at market close from live LTPs, labelled `(unrealised at close)`. Falls back to `Position carried forward overnight` if the feed is unavailable at close.
+- **Peak unrealised P&L** — high-water mark for the trade, shown for all strategies.
+- **Session total** — realised P&L only; overnight hold unrealised figures are excluded from the total.
+
+Overnight hold notifications (market close with open trade) are posted to `#trade-updates`. Artemis reports the outcome of any directional transformation that occurred during the week, and shows the original Monday entry time sourced from the trade book.
 
 ### Automated Pipeline Messaging
 
