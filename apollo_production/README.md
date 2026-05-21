@@ -14,7 +14,7 @@ and design decisions.
 |---|---|
 | `apollo.py` | Entry point — `Apollo(obj, auth_token, instrument_df)` called by Leto |
 | `configs_live.py` | All parameters — strategy + live execution |
-| `websocket_feed.py` | WebSocket wrapper — connect, subscribe, OHLC aggregation, shutdown |
+| `../websocket_feed.py` | Shared WebSocket LTP feed (`SharedFeed`) — used by all strategies |
 | `supertrend.py` | Supertrend seeding and incremental updates |
 | `state.py` | Atomic trade state persistence |
 | `functions.py` | Slack/Telegram messaging and exception handling |

@@ -1,14 +1,15 @@
 """
-websocket_feed.py — Apollo Production WebSocket Feed
+websocket_feed.py — Shared WebSocket LTP Feed
 Wraps SmartWebSocketV2 with thread management, shared state, and clean shutdown.
+Used by Apollo, Athena, and Artemis.
 
-Public interface (all apollo.py ever calls):
-    feed.start(smart_connect_obj, auth_token, user_name)
-    feed.subscribe_options(buy_token, sell_token)
-    feed.unsubscribe_options(buy_token, sell_token)
-    feed.get_ltp(token)            -> float | None
-    feed.get_ohlc(token)           -> dict {open, high, low, close} | None
-    feed.is_connected()            -> bool
+Public interface:
+    feed.start(auth_token, api_key, client_code, feed_token, startup_tokens=None)
+    feed.subscribe_options(tokens)       # list of token strings
+    feed.unsubscribe_options(tokens)     # list of token strings
+    feed.get_ltp(token)                  -> float | None
+    feed.get_ohlc(token)                 -> dict {open, high, low, close} | None
+    feed.is_connected()                  -> bool
     feed.resubscribe_all()
     feed.stop()
 
@@ -38,23 +39,24 @@ EXCHANGE_NSE_FO = 2   # NSE F&O           — Nifty options
 MODE_LTP = 1
 
 # Correlation ID used for all subscribe/unsubscribe calls
-_CORRELATION_ID = "apollo_feed"
+_CORRELATION_ID = "shared_feed"
 
-# Index tokens — fixed, never change
+# Well-known index tokens — re-exported for caller convenience
 NIFTY_TOKEN = "99926000"
 VIX_TOKEN   = "99926017"
 
 
-class ApolloFeed:
+class SharedFeed:
     """
-    WebSocket feed manager for Apollo live execution.
+    WebSocket feed manager. Strategy-agnostic — works for Apollo, Athena, Artemis.
 
     Lifecycle:
-        feed = ApolloFeed()
-        feed.start(obj, auth_token, user_name)    # called once at session start
-        feed.subscribe_options(buy_tok, sell_tok) # called after entry
-        feed.unsubscribe_options(buy_tok, sell_tok) # called after exit
-        feed.stop()                               # called at session end
+        feed = SharedFeed()
+        feed.start(auth_token, api_key, client_code, feed_token,
+                   startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_TOKEN), ...])
+        feed.subscribe_options([buy_tok, sell_tok])   # after entry
+        feed.unsubscribe_options([buy_tok, sell_tok]) # after exit
+        feed.stop()                                   # session end
     """
 
     def __init__(self):
@@ -75,31 +77,36 @@ class ApolloFeed:
         self._subscribed_index   = set()
         self._subscribed_options = set()
 
+        # Tokens to subscribe immediately on connect
+        self._startup_tokens = []   # list of (exchange_type_int, token_str)
+
     # -----------------------------------------------------------------------
     # Public interface
     # -----------------------------------------------------------------------
 
-    def start(self, smart_connect_obj, auth_token, user_name):
+    def start(self, auth_token, api_key, client_code, feed_token, startup_tokens=None):
         """
         Initialise and start the WebSocket feed.
 
         Parameters
         ----------
-        smart_connect_obj : SmartConnect
-            Authenticated SmartConnect instance.
-            api_key read from smart_connect_obj.api_key.
-            Feed token fetched via getfeedToken().
-        auth_token : str
+        auth_token     : str
             JWT token from login response (data['data']['jwtToken']).
-        user_name : str
-            Angel One client code — required by SmartWebSocketV2.__init__().
+        api_key        : str
+            Angel One API key.
+        client_code    : str
+            Angel One client code (user name).
+        feed_token     : str
+            Feed token from SmartConnect.getfeedToken().
+        startup_tokens : list of (int, str), optional
+            Exchange/token pairs to subscribe immediately on connect.
+            e.g. [(EXCHANGE_NSE_CM, NIFTY_TOKEN), (EXCHANGE_NSE_CM, VIX_TOKEN)]
         """
-        api_key    = smart_connect_obj.api_key
-        feed_token = smart_connect_obj.getfeedToken()
+        self._startup_tokens = startup_tokens or []
 
         self._sws = SmartWebSocketV2(
-            auth_token, api_key, user_name, feed_token,
-            max_retry_attempt=0   # no auto-reconnect — apollo.py decides
+            auth_token, api_key, client_code, feed_token,
+            max_retry_attempt=0   # no auto-reconnect — caller decides
         )
 
         self._sws.on_open  = self._on_open
@@ -109,7 +116,7 @@ class ApolloFeed:
 
         self._ws_thread = threading.Thread(
             target=self._sws.connect,
-            name="apollo-ws-feed",
+            name="shared-ws-feed",
             daemon=True
         )
         self._ws_thread.start()
@@ -125,61 +132,61 @@ class ApolloFeed:
                 "Check auth_token, feed_token, and network connectivity."
             )
 
-    def subscribe_options(self, buy_token, sell_token):
+    def subscribe_options(self, tokens):
         """
-        Subscribe to LTP feed for both option legs after entry.
+        Subscribe to LTP feed for option leg tokens after entry.
         Initialises a fresh OHLC window for each token.
+
+        Parameters
+        ----------
+        tokens : list of str
         """
-        tokens = [t for t in [buy_token, sell_token]
-                  if t not in self._subscribed_options]
-        if not tokens:
+        new_tokens = [t for t in tokens if t not in self._subscribed_options]
+        if not new_tokens:
             return
 
-        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": tokens}]
+        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": new_tokens}]
         self._sws.subscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:
-            for t in tokens:
+            for t in new_tokens:
                 self._subscribed_options.add(t)
                 self._ohlc[t] = self._empty_ohlc()
 
-    def unsubscribe_options(self, buy_token, sell_token):
+    def unsubscribe_options(self, tokens):
         """
         Unsubscribe option leg tokens after exit.
         Clears LTP and OHLC entries from shared state.
+
+        Parameters
+        ----------
+        tokens : list of str
         """
-        tokens = [t for t in [buy_token, sell_token]
-                  if t in self._subscribed_options]
-        if not tokens:
+        current = [t for t in tokens if t in self._subscribed_options]
+        if not current:
             return
 
-        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": tokens}]
+        token_list = [{"exchangeType": EXCHANGE_NSE_FO, "tokens": current}]
         self._sws.unsubscribe(_CORRELATION_ID, MODE_LTP, token_list)
 
         with self._lock:
-            for t in tokens:
+            for t in current:
                 self._subscribed_options.discard(t)
                 self._ltp.pop(t, None)
                 self._tick_count.pop(t, None)
                 self._ohlc.pop(t, None)
 
     def get_ltp(self, token):
-        """
-        Get the last traded price for a token.
-        Returns float or None if no tick received yet.
-        """
+        """Return last traded price for a token, or None if no tick yet."""
         with self._lock:
             return self._ltp.get(token)
 
     def get_ohlc(self, token):
         """
-        Get the OHLC aggregated from ticks since the last call for this token,
+        Get OHLC aggregated from ticks since the last call for this token,
         and reset the window for the next interval.
 
-        Returns dict with keys {open, high, low, close} or None if no ticks
-        have been received since the last reset.
-
-        Called every TRADE_UPDATE_INTERVAL seconds from apollo.py.
+        Returns dict {open, high, low, close} or None if no ticks received.
         """
         with self._lock:
             window = self._ohlc.get(token)
@@ -191,7 +198,6 @@ class ApolloFeed:
                 'low':   window['low'],
                 'close': window['close'],
             }
-            # Reset window for next interval
             self._ohlc[token] = self._empty_ohlc()
             return result
 
@@ -208,7 +214,7 @@ class ApolloFeed:
     def resubscribe_all(self):
         """
         Resubscribe all currently tracked tokens using our own registry.
-        Call from apollo.py after a reconnect. Fixes SDK RESUBSCRIBE_FLAG bug:
+        Call after a reconnect. Fixes SDK RESUBSCRIBE_FLAG bug:
         only currently-wanted tokens are resubscribed, not stale ones.
         """
         with self._lock:
@@ -265,16 +271,23 @@ class ApolloFeed:
         with self._lock:
             self._connected = True
 
-        # Subscribe Nifty index and VIX immediately on connect
-        # Initialise OHLC windows for index tokens
-        token_list = [{"exchangeType": EXCHANGE_NSE_CM,
-                       "tokens": [NIFTY_TOKEN, VIX_TOKEN]}]
-        self._sws.subscribe(_CORRELATION_ID, MODE_LTP, token_list)
+        if not self._startup_tokens:
+            return
 
-        with self._lock:
-            for t in [NIFTY_TOKEN, VIX_TOKEN]:
-                self._subscribed_index.add(t)
-                self._ohlc[t] = self._empty_ohlc()
+        # Group startup tokens by exchange type for a single subscribe call each
+        by_exchange = {}
+        for exchange_type, token in self._startup_tokens:
+            by_exchange.setdefault(exchange_type, []).append(token)
+
+        for exchange_type, tokens in by_exchange.items():
+            self._sws.subscribe(
+                _CORRELATION_ID, MODE_LTP,
+                [{"exchangeType": exchange_type, "tokens": tokens}]
+            )
+            with self._lock:
+                for t in tokens:
+                    self._subscribed_index.add(t)
+                    self._ohlc[t] = self._empty_ohlc()
 
     def _on_data(self, wsapp, message):
         """
@@ -291,17 +304,14 @@ class ApolloFeed:
             ltp = float(raw) / 100.0
 
             with self._lock:
-                # Update LTP
                 self._ltp[token]        = ltp
                 self._tick_count[token] = self._tick_count.get(token, 0) + 1
 
-                # Update OHLC window
                 if token not in self._ohlc:
                     self._ohlc[token] = self._empty_ohlc()
 
                 window = self._ohlc[token]
                 if not window['has_tick']:
-                    # First tick in this interval — set open
                     window['open']     = ltp
                     window['high']     = ltp
                     window['low']      = ltp
@@ -331,7 +341,6 @@ class ApolloFeed:
 
     @staticmethod
     def _empty_ohlc():
-        """Return a fresh empty OHLC window."""
         return {'open': None, 'high': None, 'low': None, 'close': None, 'has_tick': False}
 
     @staticmethod

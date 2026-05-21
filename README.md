@@ -329,6 +329,7 @@ algo-trading-lab/
 ├── .gitignore
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
+├── websocket_feed.py               # Shared WebSocket LTP feed (SharedFeed) — used by all strategies
 ├── plans/                          # Implementation plans
 │   ├── individual-order-details.md # [BLOCKED] individual_order_details() returns AB1007 on this account
 │   ├── orphan-fill-cleanup.md      # [IMPLEMENTED] Detect and square off partial fills on entry legs
@@ -381,7 +382,6 @@ algo-trading-lab/
 │   ├── apollo.py
 │   ├── supertrend.py
 │   ├── state.py
-│   ├── websocket_feed.py
 │   ├── functions.py
 │   ├── logger_setup.py
 │   ├── technical_indicators.py

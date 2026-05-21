@@ -8,7 +8,7 @@ Called by leto.py — not run directly.
 Architecture:
     - Apollo class owns ST seed, run loop, entry/exit logic, order placement, feed teardown
     - leto.py owns login, market/holiday check, scrip master, session teardown
-    - websocket_feed.ApolloFeed     — tick feed, LTP/OHLC access, option subscribe/unsub
+    - websocket_feed.SharedFeed      — tick feed, LTP/OHLC access, option subscribe/unsub
     - supertrend.SupertrendManager  — ST seeding and 15-min candle updates
     - state.ApolloState             — persistent trade state across restarts
     - functions.py                  — Slack/Telegram messaging, exception handling
@@ -56,7 +56,7 @@ from configs_live import (
     TRADES_FILE, DATA_DIR,
     CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL,
 )
-from websocket_feed import ApolloFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN
+from websocket_feed import SharedFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN, EXCHANGE_NSE_CM
 from supertrend import SupertrendManager
 from state import ApolloState, load_state, save_state, clear_trade_fields
 from functions import (
@@ -106,7 +106,7 @@ class Apollo:
         self.holidays       = set()
         self._load_holidays()
 
-        self.feed           = ApolloFeed()
+        self.feed           = SharedFeed()
         self.st             = SupertrendManager()
         self.state          = load_state()
 
@@ -159,9 +159,11 @@ class Apollo:
             f"75-min trend: {'bullish' if self.st.get_current_trend_75() else 'bearish'}.",
             SLACK_TRADEBOT_CHANNEL)
 
-        self.feed.start(self.obj, self.auth_token, user_name)
-
         feed_token = self.obj.getfeedToken()
+        self.feed.start(
+            self.auth_token, api_key, user_name, feed_token,
+            startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_TOKEN), (EXCHANGE_NSE_CM, FEED_VIX_TOKEN)]
+        )
         self._order_watcher.start(self.auth_token, api_key, user_name, feed_token)
         logger.info("Order fill WS daemon started.")
 
@@ -182,7 +184,7 @@ class Apollo:
                 f"Direction: {self.state.direction}. "
                 f"Buy: {self.state.buy_strike} @ {self.state.buy_entry}. "
                 f"Sell: {self.state.sell_strike} @ {self.state.sell_entry}.")
-            self.feed.subscribe_options(self.state.buy_token, self.state.sell_token)
+            self.feed.subscribe_options([self.state.buy_token, self.state.sell_token])
             self._load_trade_log()
             slack_bot_sendtext(
                 f"*Apollo*: Restarted — resuming active {self.state.direction.upper()} trade. "
@@ -829,7 +831,7 @@ class Apollo:
         self._trade_log      = []
         self._update_elapsed = 0
 
-        self.feed.subscribe_options(buy_token, sell_token)
+        self.feed.subscribe_options([buy_token, sell_token])
 
         slack_bot_sendtext(
             f"*Apollo* ENTRY {direction.upper()} | "
@@ -984,7 +986,7 @@ class Apollo:
             realised_pl_rs=round(pl_points * lots * LOT_SIZE, 2))
         self._save_trade_log()
 
-        self.feed.unsubscribe_options(self.state.buy_token, self.state.sell_token)
+        self.feed.unsubscribe_options([self.state.buy_token, self.state.sell_token])
 
         self._log_trade(reason, buy_exit_fill, sell_exit_fill, pl_points, round(pl_points * lots * LOT_SIZE, 2))
 
