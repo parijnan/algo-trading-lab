@@ -187,7 +187,8 @@ def telegram_bot_sendtext(bot_message, medium='channel'):
     send_text = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={bot_chat_id}&parse_mode=MarkdownV2&text={bot_message}"
     try:
         get(send_text, timeout=5)
-    except: pass
+    except Exception as e:
+        logger.error(f"Telegram message failed: {e}")
     return None
 
 def handle_exception(e):
