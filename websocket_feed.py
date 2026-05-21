@@ -47,6 +47,10 @@ _CORRELATION_ID = "shared_feed"
 NIFTY_TOKEN = "99926000"
 VIX_TOKEN   = "99926017"
 
+# Tick error debouncing — alert after N errors, then silence for cooldown period
+_TICK_ERROR_ALERT_THRESHOLD = 10
+_TICK_ERROR_COOLDOWN_S      = 300   # 5 minutes
+
 
 class SharedFeed:
     """
@@ -82,11 +86,28 @@ class SharedFeed:
         # Tokens to subscribe immediately on connect
         self._startup_tokens = []   # list of (exchange_type_int, token_str)
 
+        # Reconnect state
+        self._stop_requested         = False
+        self._reconnect_thread       = None
+        self._max_reconnect_attempts = 5
+        self._alert_callback         = None
+
+        # Saved connection params — used to rebuild SmartWebSocketV2 on reconnect
+        self._auth_token  = None
+        self._api_key     = None
+        self._client_code = None
+        self._feed_token  = None
+
+        # Tick error tracking — written by WS thread only, no lock needed
+        self._tick_errors          = 0
+        self._tick_err_since_alert = 0
+        self._last_err_alert_ts    = 0.0
+
     # -----------------------------------------------------------------------
     # Public interface
     # -----------------------------------------------------------------------
 
-    def start(self, auth_token, api_key, client_code, feed_token, startup_tokens=None):
+    def start(self, auth_token, api_key, client_code, feed_token, startup_tokens=None, alert_callback=None):
         """
         Initialise and start the WebSocket feed.
 
@@ -104,7 +125,15 @@ class SharedFeed:
             Exchange/token pairs to subscribe immediately on connect.
             e.g. [(EXCHANGE_NSE_CM, NIFTY_TOKEN), (EXCHANGE_NSE_CM, VIX_TOKEN)]
         """
-        self._startup_tokens = startup_tokens or []
+        self._startup_tokens  = startup_tokens or []
+        self._alert_callback  = alert_callback
+        self._stop_requested  = False       # Reset on each start
+
+        # Save for reconnect
+        self._auth_token  = auth_token
+        self._api_key     = api_key
+        self._client_code = client_code
+        self._feed_token  = feed_token
 
         self._sws = SmartWebSocketV2(
             auth_token, api_key, client_code, feed_token,
@@ -225,6 +254,10 @@ class SharedFeed:
         with self._lock:
             return self._tick_count.get(token, 0)
 
+    def get_tick_errors(self):
+        """Return total tick decode error count since feed started."""
+        return self._tick_errors
+
     def is_connected(self):
         """True if the WebSocket connection is open and on_open has fired."""
         with self._lock:
@@ -256,11 +289,13 @@ class SharedFeed:
         Shut down the WebSocket feed cleanly.
 
         Sequence:
-          1. Close underlying socket to unblock C-level recv()
-          2. Call close_connection() for SDK clean path
-          3. Join thread with 5s timeout
-          4. ctypes hard kill as fallback if thread survives
+          1. Set _stop_requested to suppress reconnect attempts
+          2. Close underlying socket to unblock C-level recv()
+          3. Call close_connection() for SDK clean path
+          4. Join thread with 5s timeout
+          5. ctypes hard kill as fallback if thread survives
         """
+        self._stop_requested = True
         if self._ws_thread is None:
             return
 
@@ -344,15 +379,128 @@ class SharedFeed:
                     window['close']    = ltp
 
         except Exception:
-            pass   # never let a tick handler exception crash the WS thread
+            # Never let a tick handler exception crash the WS thread.
+            # Count errors and fire a debounced alert if they pile up.
+            self._tick_errors += 1
+            self._tick_err_since_alert += 1
+            now = time.time()
+            if (self._tick_err_since_alert >= _TICK_ERROR_ALERT_THRESHOLD and
+                    now - self._last_err_alert_ts >= _TICK_ERROR_COOLDOWN_S):
+                self._tick_err_since_alert = 0
+                self._last_err_alert_ts    = now
+                if self._alert_callback:
+                    try:
+                        self._alert_callback(
+                            f"⚠️ SharedFeed: {_TICK_ERROR_ALERT_THRESHOLD}+ tick decode "
+                            f"errors detected — possible malformed data from broker.")
+                    except Exception:
+                        pass
 
     def _on_error(self, wsapp, error):
         with self._lock:
             self._connected = False
+        if not self._stop_requested:
+            self._trigger_reconnect()
 
     def _on_close(self, wsapp):
         with self._lock:
             self._connected = False
+        if not self._stop_requested:
+            self._trigger_reconnect()
+
+    # -----------------------------------------------------------------------
+    # Reconnect logic
+    # -----------------------------------------------------------------------
+
+    def _trigger_reconnect(self):
+        """Spawn a reconnect worker thread if one is not already running."""
+        with self._lock:
+            if self._reconnect_thread and self._reconnect_thread.is_alive():
+                return
+        t = threading.Thread(target=self._reconnect_worker, name="ws-reconnect", daemon=True)
+        with self._lock:
+            self._reconnect_thread = t
+        t.start()
+
+    def _reconnect_worker(self):
+        """
+        Attempt to reconnect with exponential backoff (max _max_reconnect_attempts).
+        On success: resubscribes all previously registered tokens.
+        On exhaustion: fires alert_callback and gives up — REST fallback remains active.
+        """
+        _BACKOFF = [5, 10, 20, 40, 60]
+
+        for attempt in range(self._max_reconnect_attempts):
+            delay = _BACKOFF[min(attempt, len(_BACKOFF) - 1)]
+            import logging
+            logging.getLogger(__name__).warning(
+                f"SharedFeed: WS disconnected. "
+                f"Reconnect attempt {attempt + 1}/{self._max_reconnect_attempts} in {delay}s.")
+
+            # Interruptible sleep — exits promptly if stop() is called
+            end = time.time() + delay
+            while time.time() < end:
+                if self._stop_requested:
+                    return
+                time.sleep(0.5)
+
+            if self._stop_requested:
+                return
+
+            try:
+                new_sws = SmartWebSocketV2(
+                    self._auth_token, self._api_key,
+                    self._client_code, self._feed_token,
+                    max_retry_attempt=0
+                )
+                new_sws.on_open  = self._on_open
+                new_sws.on_data  = self._on_data
+                new_sws.on_error = self._on_error
+                new_sws.on_close = self._on_close
+
+                new_thread = threading.Thread(
+                    target=new_sws.connect, name="shared-ws-feed", daemon=True)
+
+                # Swap sws BEFORE starting thread so _on_open uses the new instance
+                with self._lock:
+                    self._sws       = new_sws
+                    self._ws_thread = new_thread
+                new_thread.start()
+
+                # Wait up to 10s for _on_open to fire
+                deadline = time.time() + 10
+                while not self.is_connected() and time.time() < deadline:
+                    if self._stop_requested:
+                        return
+                    time.sleep(0.1)
+
+                if self.is_connected():
+                    msg = f"WS reconnected after {attempt + 1} attempt(s). Resubscribing."
+                    logging.getLogger(__name__).info(f"SharedFeed: {msg}")
+                    if self._alert_callback:
+                        try:
+                            self._alert_callback(f"✅ SharedFeed: {msg}")
+                        except Exception:
+                            pass
+                    self.resubscribe_all()
+                    return
+
+                logging.getLogger(__name__).warning(
+                    f"SharedFeed: Reconnect attempt {attempt + 1} — no connect within 10s.")
+
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    f"SharedFeed: Reconnect attempt {attempt + 1} failed: {exc}")
+
+        # All attempts exhausted
+        msg = (f"WS reconnect failed after {self._max_reconnect_attempts} attempts "
+               f"— REST fallback active.")
+        logging.getLogger(__name__).error(f"SharedFeed: {msg}")
+        if self._alert_callback:
+            try:
+                self._alert_callback(f"⚠️ SharedFeed: {msg}")
+            except Exception:
+                pass
 
     # -----------------------------------------------------------------------
     # Internal helpers

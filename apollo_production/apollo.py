@@ -127,6 +127,8 @@ class Apollo:
 
         self._order_watcher = OrderFillWatcher()
 
+        self._summary = {'strategy': 'Apollo', 'traded': False, 'no_trade_reason': 'No signal'}
+
         # Register signal handlers for clean shutdown
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -162,7 +164,8 @@ class Apollo:
         feed_token = self.obj.getfeedToken()
         self.feed.start(
             self.auth_token, api_key, user_name, feed_token,
-            startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_TOKEN), (EXCHANGE_NSE_CM, FEED_VIX_TOKEN)]
+            startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_TOKEN), (EXCHANGE_NSE_CM, FEED_VIX_TOKEN)],
+            alert_callback=lambda msg: slack_bot_sendtext(f"⚠️ *Apollo*: {msg}", SLACK_ERRORS_CHANNEL)
         )
         self._order_watcher.start(self.auth_token, api_key, user_name, feed_token)
         logger.info("Order fill WS daemon started.")
@@ -477,8 +480,8 @@ class Apollo:
 
             # Always stop the feed before returning to Leto
             self._teardown()
-        
-        return False
+
+        return False, self._summary
 
     # -----------------------------------------------------------------------
     # Missed flip recovery on restart
@@ -831,6 +834,14 @@ class Apollo:
         self._trade_log      = []
         self._update_elapsed = 0
 
+        self._summary.update({
+            'traded':     True,
+            'direction':  direction,
+            'lots':       confirmed_lots,
+            'entry_time': datetime.now().strftime('%H:%M'),
+            'spot_entry': self.state.entry_spot,
+        })
+
         self.feed.subscribe_options([buy_token, sell_token])
 
         slack_bot_sendtext(
@@ -998,6 +1009,14 @@ class Apollo:
             f"Lots: {lots} | "
             f"P&L: {pl_points:+.1f} pts ({pl_rupees_per_lot:+,.0f} Rs/lot)",
             SLACK_TRADE_ALERTS)
+
+        self._summary.update({
+            'exit_time':    datetime.now().strftime('%H:%M'),
+            'exit_reason':  reason,
+            'pnl_pts':      pl_points,
+            'pnl_rs':       round(pl_points * lots * LOT_SIZE, 2),
+            'peak_pnl_pts': self.state.max_unrealised_pl,
+        })
 
         clear_trade_fields(self.state)
         save_state(self.state)

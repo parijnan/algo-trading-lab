@@ -131,7 +131,8 @@ class IronCondor:
         try:
             self.feed.start(
                 auth_token, api_key, user_name, feed_token,
-                startup_tokens=[(EXCHANGE_BSE_CM, underlying_token)]
+                startup_tokens=[(EXCHANGE_BSE_CM, underlying_token)],
+                alert_callback=lambda msg: slack_bot_sendtext(f"⚠️ *Artemis*: {msg}", SLACK_ERRORS_CHANNEL)
             )
             index_ltp = self.feed.get_ltp(underlying_token)
             slack_bot_sendtext(
@@ -775,3 +776,43 @@ class IronCondor:
         msg_txt = f"Artemis session complete at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
         logger.info(msg_txt)
         slack_bot_sendtext(msg_txt, "#tradebot-updates")
+
+    def get_session_summary(self):
+        """
+        Build a session summary dict for the end-of-day report.
+        Must be called BEFORE logout() so spread statuses reflect the live session
+        (logout/archive sets both to 'closed', erasing the outcome signal).
+        """
+        pe_st = self.pe_spread.spread_status
+        ce_st = self.ce_spread.spread_status
+
+        traded = not (pe_st == 'open' and ce_st == 'open')
+        if not traded:
+            return {'strategy': 'Artemis', 'traded': False, 'no_trade_reason': 'Stand-down'}
+
+        # Outcome: if one side was SL-hit and closed during the week, its status
+        # is 'closed' while the other is still active/adjusted.
+        if pe_st == 'closed' and ce_st not in ('closed', 'open'):
+            outcome = 'PE side closed — CE reinforced'
+        elif ce_st == 'closed' and pe_st not in ('closed', 'open'):
+            outcome = 'CE side closed — PE reinforced'
+        else:
+            outcome = 'Neutral'
+
+        add_lots = self.pe_spread.additional_lots
+        pl_rs = round(
+            (self.pe_spread.pl + self.ce_spread.pl +
+             (self.pe_spread.additional_pl  * add_lots / max(self.pe_spread.lots, 1)) +
+             (self.ce_spread.additional_pl  * add_lots / max(self.ce_spread.lots, 1))
+            ) * lot_size, 2)
+
+        exit_reason = 'Expiry' if self.current_datetime > self.expiry else 'Market close'
+
+        return {
+            'strategy':    'Artemis',
+            'traded':      True,
+            'lots':        self.pe_spread.lots,
+            'outcome':     outcome,
+            'pnl_rs':      pl_rs,
+            'exit_reason': exit_reason,
+        }

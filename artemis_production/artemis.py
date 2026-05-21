@@ -33,7 +33,7 @@ def run(obj, auth_token, instrument_df):
     if (iron_condor.pe_spread.spread_status == 'open' and
             iron_condor.ce_spread.spread_status == 'open'):
         iron_condor.logout()
-        return True # Hand back to Leto for re-routing
+        return True, None  # Hand back to Leto for re-routing
 
     # Trade monitoring loop
     while iron_condor.current_time > opening_time and iron_condor.current_time < closing_time:
@@ -49,6 +49,7 @@ def run(obj, auth_token, instrument_df):
             handle_exception(e)
             continue
 
-    # Final update and archive (no session termination)
+    # Build summary before logout so spread statuses are still live
+    summary = iron_condor.get_session_summary()
     iron_condor.logout()
-    return False
+    return False, summary

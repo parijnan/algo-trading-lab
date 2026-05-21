@@ -93,6 +93,8 @@ class Athena:
 
         self._order_watcher = OrderFillWatcher()
 
+        self._summary = {'strategy': 'Athena', 'traded': False, 'no_trade_reason': 'No signal'}
+
         # Register signal handlers
         signal.signal(signal.SIGINT,  self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -553,6 +555,12 @@ class Athena:
                 if filled_q < total_actual_lots: total_actual_lots = filled_q
 
         self.state.status = 'in_trade'; self.state.lots = total_actual_lots; self.state.entry_time = datetime.now().isoformat()
+        self._summary.update({
+            'traded':     True,
+            'lots':       total_actual_lots,
+            'entry_time': datetime.now().strftime('%H:%M'),
+            'spot_entry': round(spot, 2),
+        })
         sell_exp_dt = strikes_dict['sell_expiry']; exit_day = self._last_trading_day_before(sell_exp_dt)
         self.state.exit_timestamp = datetime.combine(exit_day, self._exit_time).isoformat()
         self.state.entry_spot = spot; self.state.entry_vix = vix; self.state.sell_expiry = strikes_dict['sell_expiry'].isoformat()
@@ -614,6 +622,14 @@ class Athena:
         slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
         
         self.feed.unsubscribe_all_options()
+        self._summary.update({
+            'exit_time':    datetime.now().strftime('%H:%M'),
+            'exit_reason':  reason,
+            'pnl_pts':      pl_pts,
+            'pnl_rs':       round(pl_pts * lots * LOT_SIZE, 2),
+            'peak_pnl_pts': self.state.max_unrealised_pl,
+            'spot_exit':    round(self.feed.get_ltp(NIFTY_INDEX_TOKEN) or 0, 2),
+        })
         clear_trade_fields(self.state); save_state(self.state); return True
 
     def _poll_prices(self):
@@ -768,7 +784,8 @@ class Athena:
         try:
             self.feed.start(
                 self.auth_token, api_key, user_name, feed_token,
-                startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_INDEX_TOKEN), (EXCHANGE_NSE_CM, VIX_TOKEN)]
+                startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_INDEX_TOKEN), (EXCHANGE_NSE_CM, VIX_TOKEN)],
+                alert_callback=lambda msg: slack_bot_sendtext(f"⚠️ *Athena*: {msg}", SLACK_ERRORS_CHANNEL)
             )
             nifty_ltp = self.feed.get_ltp(NIFTY_INDEX_TOKEN)
             vix_ltp   = self.feed.get_ltp(VIX_TOKEN)
@@ -802,13 +819,16 @@ class Athena:
                     if is_entry_day and now.time() >= self._entry_time:
                         spot = self.feed.get_ltp(NIFTY_INDEX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)
                         vix  = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN)
-                        if vix and not (VIX_FILTER_LOW <= vix <= VIX_FILTER_HIGH): return True
+                        if vix and not (VIX_FILTER_LOW <= vix <= VIX_FILTER_HIGH):
+                            self._summary['no_trade_reason'] = 'VIX out of range at entry'
+                            return True, self._summary
                         if spot and vix:
                             strikes = self._select_all_strikes(spot, vix)
                             if strikes:
                                 if not self._execute_entry(strikes, spot, vix):
                                     logger.error("Entry failed. Standing down to prevent accidental retries.")
-                                    return False # Exit Athena run loop
+                                    self._summary['no_trade_reason'] = 'Entry failed'
+                                    return False, self._summary
                                 leg_tokens = [
                                     self.state.ce_sell_token, self.state.pe_sell_token,
                                     self.state.ce_buy_token,  self.state.pe_buy_token,
@@ -844,4 +864,5 @@ class Athena:
             try: self._send_trade_update()
             except: pass
         else: slack_bot_sendtext("*Athena*: Standing down for the day. No active positions.", SLACK_TRADE_UPDATES)
-        logger.info("Market closed. Athena finished for the day."); return False
+        logger.info("Market closed. Athena finished for the day.")
+        return False, self._summary

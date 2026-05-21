@@ -321,7 +321,7 @@ VIX_ATHENA_MAX  = 25.0
 def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     """
     Decide which strategy to run, then run it.
-    Returns True if control should be handed back for re-routing.
+    Returns (should_reroute: bool, summary: dict | None).
     """
     is_friday = datetime.now().weekday() == 4
 
@@ -329,18 +329,20 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     if _apollo_trade_open():
         logger.info("Open Apollo trade detected. Routing to Apollo.")
         _slack("*Leto*: Open Apollo trade detected. Routing to Apollo.")
-        _run_apollo(obj, auth_token, instrument_df_nifty)
-        return False # No re-routing if position open
+        _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
+        return False, summary  # No re-routing if position open
 
     if _athena_trade_open():
         logger.info("Open Athena trade detected. Routing to Athena.")
         _slack("*Leto*: Open Athena trade detected. Routing to Athena.")
-        return _run_athena(obj, auth_token, instrument_df_nifty)
+        handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+        return handoff, summary
 
     if _artemis_trade_open():
         logger.info(f"Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
         _slack(f"*Leto*: Open Artemis trade detected. Routing to Artemis {'(Friday)' if is_friday else ''}.")
-        return _run_artemis(obj, auth_token, instrument_df_sensex)
+        handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
+        return handoff, summary
 
     # Priority 2: no open positions — route on current VIX
     vix = _get_vix(obj)
@@ -348,7 +350,7 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         if is_friday:
             logger.info("Friday and no open positions — standing down.")
             _slack("*Leto*: Friday, no open positions. Standing down.")
-            return False
+            return False, None
         logger.warning("Could not fetch VIX. Defaulting to Artemis.")
         _slack("*Leto* ALERT: Could not fetch VIX. Defaulting to Artemis.")
         vix = 0.0
@@ -367,30 +369,34 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         if vix > VIX_ATHENA_MAX:
             logger.info(f"Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
             _slack(f"*Leto*: Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
-            _run_apollo(obj, auth_token, instrument_df_nifty)
+            _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
+            return False, summary
         elif force_athena and vix > VIX_ARTEMIS_MAX:
             logger.info(f"Friday (FORCED). VIX {vix:.2f} in (16, 25]. Routing to Athena.")
             _slack(f"*Leto*: Friday (FORCED). VIX {vix:.2f}. Routing to *Athena*.")
-            _run_athena(obj, auth_token, instrument_df_nifty)
+            _, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+            return False, summary
         else:
             logger.info(f"Friday. VIX {vix:.2f} <= {VIX_ATHENA_MAX}. Standing down.")
             _slack(f"*Leto*: Friday. VIX {vix:.2f}. No fresh entries today.")
-        return False
+            return False, None
 
     # Priority 3: Mon–Thu, no open positions — 3-way route
     if vix <= VIX_ARTEMIS_MAX:
         logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
-        return _run_artemis(obj, auth_token, instrument_df_sensex)
+        handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
+        return handoff, summary
     elif vix <= VIX_ATHENA_MAX:
         logger.info(f"VIX {vix:.2f} in (16, 25]. Routing to Athena.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Athena*.")
-        return _run_athena(obj, auth_token, instrument_df_nifty)
+        handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+        return handoff, summary
     else:
         logger.info(f"VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Apollo*.")
-        _run_apollo(obj, auth_token, instrument_df_nifty)
-        return False
+        _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
+        return False, summary
 
 
 # ---------------------------------------------------------------------------
@@ -398,44 +404,120 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
 # ---------------------------------------------------------------------------
 
 def _run_apollo(obj, auth_token, instrument_df_nifty):
-    """Run Apollo. Returns handback signal."""
+    """Run Apollo. Returns (handback: bool, summary: dict)."""
     logger.info("Starting Apollo.")
     if APOLLO_DIR not in sys.path:
         sys.path.insert(0, APOLLO_DIR)
     from apollo import Apollo  # type: ignore
     apollo = Apollo(obj, auth_token, instrument_df_nifty)
-    handoff = apollo.run()
+    handoff, summary = apollo.run()
     logger.info(f"Apollo returned. Handoff signal: {handoff}")
-    return bool(handoff)
+    return bool(handoff), summary
 
 
 def _run_athena(obj, auth_token, instrument_df_nifty):
-    """
-    Run Athena. Returns True if handed back for re-routing.
-    """
+    """Run Athena. Returns (handback: bool, summary: dict)."""
     logger.info("Starting Athena.")
     if ATHENA_DIR not in sys.path:
         sys.path.insert(0, ATHENA_DIR)
     import athena_engine  # type: ignore
     engine = athena_engine.Athena(obj, auth_token, instrument_df_nifty)
-    handoff = engine.run()
+    handoff, summary = engine.run()
     logger.info(f"Athena returned. Handoff signal: {handoff}")
-    return bool(handoff)
+    return bool(handoff), summary
 
 
 def _run_artemis(obj, auth_token, instrument_df_sensex):
-    """
-    Run Artemis. Returns True if handed back for re-routing.
-    """
+    """Run Artemis. Returns (handback: bool, summary: dict | None)."""
     logger.info("Starting Artemis.")
     os.chdir(ARTEMIS_DIR)
     if ARTEMIS_DIR not in sys.path:
         sys.path.insert(0, ARTEMIS_DIR)
     import artemis  # type: ignore
-    handoff = artemis.run(obj, auth_token, instrument_df_sensex)
+    handoff, summary = artemis.run(obj, auth_token, instrument_df_sensex)
     os.chdir(REPO_ROOT)
     logger.info(f"Artemis returned. Handoff signal: {handoff}")
-    return bool(handoff)
+    return bool(handoff), summary
+
+
+# ---------------------------------------------------------------------------
+# Session report
+# ---------------------------------------------------------------------------
+
+_STRATEGY_SUBTITLE = {
+    'Apollo':  'Nifty Debit Spread',
+    'Athena':  'Nifty Double Calendar',
+    'Artemis': 'Sensex Iron Condor',
+}
+
+
+def _send_session_report(summaries, session_date):
+    """Format and post the end-of-day session summary to Slack."""
+    day_str = session_date.strftime('%a %d %b %Y')
+    lines   = [f"📊 *Algo Trading Lab — Session Report*  |  {day_str}", ""]
+
+    total_rs  = 0.0
+    any_trade = False
+
+    for s in summaries:
+        strategy = s.get('strategy', '?')
+        subtitle = _STRATEGY_SUBTITLE.get(strategy, '')
+        header   = f"*{strategy}*" + (f"  ·  _{subtitle}_" if subtitle else "")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append(header)
+
+        if not s.get('traded'):
+            reason = s.get('no_trade_reason', 'No signal')
+            lines.append(f"  ↳ No trade today — {reason}")
+            lines.append("")
+            continue
+
+        any_trade = True
+        lots       = s.get('lots', '?')
+        entry_time = s.get('entry_time') or '?'
+        exit_time  = s.get('exit_time')  or '—'
+        exit_raw   = s.get('exit_reason', '')
+        exit_str   = exit_raw.replace('_', ' ').title() if exit_raw else '?'
+        pnl_pts    = s.get('pnl_pts')
+        pnl_rs     = s.get('pnl_rs', 0) or 0
+        peak       = s.get('peak_pnl_pts')
+        total_rs  += pnl_rs
+
+        if strategy == 'Apollo':
+            direction = s.get('direction', '?').capitalize()
+            lines.append(f"  ↳ Direction  : {direction}  |  Lots: {lots}")
+        elif strategy == 'Athena':
+            sp_in  = s.get('spot_entry')
+            sp_out = s.get('spot_exit')
+            if sp_in and sp_out:
+                delta  = sp_out - sp_in
+                lines.append(
+                    f"  ↳ Spot move  : {sp_in:,.2f} → {sp_out:,.2f}  ({delta:+.0f} pts)"
+                    f"  |  Lots: {lots}")
+            else:
+                lines.append(f"  ↳ Lots: {lots}")
+        elif strategy == 'Artemis':
+            outcome = s.get('outcome', 'Neutral')
+            lines.append(f"  ↳ Outcome    : {outcome}  |  Lots: {lots}")
+
+        lines.append(f"  ↳ Entry: {entry_time}   Exit: {exit_time}  ·  {exit_str}")
+
+        if pnl_pts is not None:
+            lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*")
+        else:
+            lines.append(f"  ↳ P&L        : *{pnl_rs:+,.0f} Rs*")
+
+        if peak is not None:
+            lines.append(f"  ↳ Peak       : {peak:+.1f} pts")
+        lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    if any_trade or len(summaries) > 1:
+        lines.append(f"*Session Total  :  {total_rs:+,.0f} Rs*")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    _slack('\n'.join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +527,9 @@ def _run_artemis(obj, auth_token, instrument_df_sensex):
 if __name__ == '__main__':
     logger.info("=== Leto starting ===")
     _check_circuit_breaker()
-    obj        = None
-    auth_token = None
+    obj           = None
+    auth_token    = None
+    all_summaries = []
 
     try:
         obj, auth_token = _login()
@@ -456,10 +539,13 @@ if __name__ == '__main__':
 
         # Re-routing loop: allows strategies to hand back control if VIX breaches at entry
         while True:
-            should_reroute = _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex)
+            should_reroute, summary = _route(
+                obj, auth_token, instrument_df_nifty, instrument_df_sensex)
+            if summary:
+                all_summaries.append(summary)
             if not should_reroute:
                 break
-            
+
             logger.info("Strategy handed back control. Re-evaluating routing...")
             _slack("*Leto*: Strategy returned control. Re-evaluating routing based on new VIX...")
             sleep(5) # breather before re-fetch
@@ -489,5 +575,11 @@ if __name__ == '__main__':
                     f"{datetime.now():%Y-%m-%d %H:%M:%S}.")
             except Exception as e:
                 logger.error(f"terminateSession failed: {e}")
+
+        if all_summaries:
+            try:
+                _send_session_report(all_summaries, datetime.now().date())
+            except Exception as e:
+                logger.error(f"Session report failed: {e}")
 
     logger.info("=== Leto complete ===")
