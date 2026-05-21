@@ -344,7 +344,7 @@ algo-trading-lab/
 │   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md  # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
-│   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Shared WebSocket LTP feed — Apollo, Athena, Artemis
+│   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Universal WS LTP feed — Apollo, Athena, Artemis; 500ms SL loops; REST fallback
 │   └── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
 ├── tests/                          # Standalone test and diagnostic scripts
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis

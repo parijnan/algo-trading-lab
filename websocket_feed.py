@@ -9,6 +9,7 @@ Public interface:
     feed.unsubscribe_options(tokens)     # list of token strings
     feed.get_ltp(token)                  -> float | None
     feed.get_ohlc(token)                 -> dict {open, high, low, close} | None
+    feed.get_last_tick_age(token)        -> float | None  (seconds since last tick)
     feed.is_connected()                  -> bool
     feed.resubscribe_all()
     feed.stop()
@@ -54,6 +55,12 @@ VIX_TOKEN   = "99926017"
 _TICK_ERROR_ALERT_THRESHOLD = 10
 _TICK_ERROR_COOLDOWN_S      = 300   # 5 minutes
 
+# Stale tick watchdog — alert if a subscribed token has no tick for this long
+# Covers illiquid contracts (e.g. deep OTM PE wing) and zombie connection scenarios.
+# Broker sends ping/pong every 10s so a live connection with no ticks means illiquidity.
+_STALE_TICK_THRESHOLD_S = 120   # 2 minutes
+_STALE_ALERT_COOLDOWN_S = 300   # re-alert cooldown per token
+
 
 class SharedFeed:
     """
@@ -84,7 +91,7 @@ class SharedFeed:
 
         # Subscription registry — our source of truth, fixes SDK RESUBSCRIBE_FLAG bug
         self._subscribed_index   = set()
-        self._subscribed_options = set()
+        self._subscribed_options = {}    # {token: exchange_type_int}
 
         # Tokens to subscribe immediately on connect
         self._startup_tokens = []   # list of (exchange_type_int, token_str)
@@ -105,6 +112,11 @@ class SharedFeed:
         self._tick_errors          = 0
         self._tick_err_since_alert = 0
         self._last_err_alert_ts    = 0.0
+
+        # Stale tick watchdog state
+        self._last_tick_ts  = {}   # {token: float} — time.time() at last tick
+        self._stale_alerted = {}   # {token: float} — time.time() of last stale alert
+        self._watchdog_thread = None
 
     # -----------------------------------------------------------------------
     # Public interface
@@ -166,6 +178,10 @@ class SharedFeed:
                 "Check auth_token, feed_token, and network connectivity."
             )
 
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_worker, name="ws-feed-watchdog", daemon=True)
+        self._watchdog_thread.start()
+
     def subscribe_options(self, tokens, exchange_type=None):
         """
         Subscribe to LTP feed for option leg tokens after entry.
@@ -189,15 +205,17 @@ class SharedFeed:
 
         with self._lock:
             for t in new_tokens:
-                self._subscribed_options.add(t)
+                self._subscribed_options[t] = exchange_type
                 self._ohlc[t] = self._empty_ohlc()
 
     def unsubscribe_all_options(self):
         """Unsubscribe all currently-subscribed option tokens."""
         with self._lock:
-            tokens = list(self._subscribed_options)
-        if tokens:
-            self.unsubscribe_options(tokens)
+            by_exchange = {}
+            for tok, exch in self._subscribed_options.items():
+                by_exchange.setdefault(exch, []).append(tok)
+        for exch, tokens in by_exchange.items():
+            self.unsubscribe_options(tokens, exch)
 
     def unsubscribe_options(self, tokens, exchange_type=None):
         """
@@ -222,10 +240,12 @@ class SharedFeed:
 
         with self._lock:
             for t in current:
-                self._subscribed_options.discard(t)
+                self._subscribed_options.pop(t, None)
                 self._ltp.pop(t, None)
                 self._tick_count.pop(t, None)
                 self._ohlc.pop(t, None)
+                self._last_tick_ts.pop(t, None)
+                self._stale_alerted.pop(t, None)
 
     def get_ltp(self, token):
         """Return last traded price for a token, or None if no tick yet."""
@@ -261,6 +281,17 @@ class SharedFeed:
         """Return total tick decode error count since feed started."""
         return self._tick_errors
 
+    def get_last_tick_age(self, token):
+        """
+        Seconds elapsed since the last tick for this token.
+        Returns None if no tick has ever been received (normal before market open).
+        Useful for detecting illiquid contracts — if the broker's ping/pong is
+        healthy but this returns > 120s for an option leg, the contract has no trades.
+        """
+        with self._lock:
+            ts = self._last_tick_ts.get(token)
+        return None if ts is None else time.time() - ts
+
     def is_connected(self):
         """True if the WebSocket connection is open and on_open has fired."""
         with self._lock:
@@ -271,20 +302,24 @@ class SharedFeed:
         Resubscribe all currently tracked tokens using our own registry.
         Call after a reconnect. Fixes SDK RESUBSCRIBE_FLAG bug:
         only currently-wanted tokens are resubscribed, not stale ones.
+        Groups option tokens by exchange type so BSE (Artemis) and NSE options
+        are resubscribed to the correct exchange after reconnect.
         """
         with self._lock:
-            index_tokens  = list(self._subscribed_index)
-            option_tokens = list(self._subscribed_options)
+            index_tokens    = list(self._subscribed_index)
+            options_by_exch = {}
+            for tok, exch in self._subscribed_options.items():
+                options_by_exch.setdefault(exch, []).append(tok)
 
         if index_tokens:
             self._sws.subscribe(
                 _CORRELATION_ID, MODE_LTP,
                 [{"exchangeType": EXCHANGE_NSE_CM, "tokens": index_tokens}]
             )
-        if option_tokens:
+        for exch, tokens in options_by_exch.items():
             self._sws.subscribe(
                 _CORRELATION_ID, MODE_LTP,
-                [{"exchangeType": EXCHANGE_NSE_FO, "tokens": option_tokens}]
+                [{"exchangeType": exch, "tokens": tokens}]
             )
 
     def stop(self):
@@ -363,6 +398,7 @@ class SharedFeed:
             with self._lock:
                 self._ltp[token]        = ltp
                 self._tick_count[token] = self._tick_count.get(token, 0) + 1
+                self._last_tick_ts[token] = time.time()
 
                 if token not in self._ohlc:
                     self._ohlc[token] = self._empty_ohlc()
@@ -503,6 +539,54 @@ class SharedFeed:
                 self._alert_callback(f"⚠️ SharedFeed: {msg}")
             except Exception:
                 pass
+
+    # -----------------------------------------------------------------------
+    # Stale tick watchdog
+    # -----------------------------------------------------------------------
+
+    def _watchdog_worker(self):
+        """
+        Background thread: checks all subscribed tokens every ~30s for stale ticks.
+        Only fires when is_connected() is True — a live connection with no ticks
+        on a subscribed token indicates an illiquid contract, not a feed failure.
+        (Feed failures trigger on_close/on_error and are handled by _reconnect_worker.)
+
+        Alerts via alert_callback, debounced per token by _STALE_ALERT_COOLDOWN_S.
+        """
+        while not self._stop_requested:
+            for _ in range(60):   # 60 × 0.5s = 30s between checks
+                if self._stop_requested:
+                    return
+                time.sleep(0.5)
+
+            if not self.is_connected():
+                continue
+
+            now = time.time()
+            with self._lock:
+                check_tokens = list(self._subscribed_index) + list(self._subscribed_options)
+
+            for token in check_tokens:
+                with self._lock:
+                    ts         = self._last_tick_ts.get(token)
+                    last_alert = self._stale_alerted.get(token, 0.0)
+                if ts is None:
+                    continue   # never ticked — normal before market open
+                age = now - ts
+                if (age >= _STALE_TICK_THRESHOLD_S and
+                        now - last_alert >= _STALE_ALERT_COOLDOWN_S):
+                    with self._lock:
+                        self._stale_alerted[token] = now
+                    logger.warning(
+                        f"SharedFeed: No tick for token {token} in {age:.0f}s "
+                        f"— possible illiquid contract.")
+                    if self._alert_callback:
+                        try:
+                            self._alert_callback(
+                                f"No tick for token {token} in {age:.0f}s "
+                                f"— possible illiquid contract or stale feed.")
+                        except Exception:
+                            pass
 
     # -----------------------------------------------------------------------
     # Internal helpers

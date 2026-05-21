@@ -1,4 +1,4 @@
-# Plan: Universal LTP WebSocket Migration (Athena + Artemis)
+# Plan: Universal LTP WebSocket Migration (Athena + Artemis) — [IMPLEMENTED]
 
 ## Context
 
