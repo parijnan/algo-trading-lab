@@ -171,7 +171,7 @@ class IronCondor:
 
         msg_txt = f"Artemis session ready at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
         logger.info(msg_txt)
-        slack_bot_sendtext(msg_txt, "#tradebot-updates")
+        slack_bot_sendtext(msg_txt, SLACK_TRADEBOT_CHANNEL)
 
     # Method to execute trade
     def execute_trade(self):
@@ -251,15 +251,13 @@ class IronCondor:
         before executing any trade. Leaves data/ clean for next week.
         Called when the entry window has passed or VIX check fails.
         """
-        from os import remove
-        from os.path import exists as path_exists
         for filepath in [
             'data/pe_trade_params.csv',
             'data/ce_trade_params.csv',
             'data/trade_book.csv',
         ]:
-            if path_exists(filepath):
-                remove(filepath)
+            if exists(filepath):
+                os.remove(filepath)
 
     # Private method to update trade log at chosen interval
     def _update_trade_log(self):
@@ -588,9 +586,8 @@ class IronCondor:
         Check for persistent Slack command flags during the live trade.
         Handles EXIT (liquidate) and KILL (halt immediately).
         """
-        from os.path import exists as path_exists
         flag_path = os.path.join(REPO_ROOT, 'data', 'SLACK_COMMAND.flag')
-        if path_exists(flag_path):
+        if exists(flag_path):
             try:
                 with open(flag_path, 'r') as f:
                     command = f.read().strip()
@@ -705,33 +702,29 @@ class IronCondor:
                 if self.trade_book_df.iloc[status, 4] == 'active':
                     self.trade_book_df.iloc[status, 4] = 'expired'
             self.trade_book_df.to_csv('data/trade_book.csv', index=False)
-            from os import rename, remove
-            rename("data/pe_trade_params.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} pe_trade_params.csv")
-            rename("data/ce_trade_params.csv", f"data/archived/{self.ce_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} ce_trade_params.csv")
-            rename("data/trade_book.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_book.csv")
-            rename("data/trade_log.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_log.csv")
+            os.rename("data/pe_trade_params.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} pe_trade_params.csv")
+            os.rename("data/ce_trade_params.csv", f"data/archived/{self.ce_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} ce_trade_params.csv")
+            os.rename("data/trade_book.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_book.csv")
+            os.rename("data/trade_log.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_log.csv")
             # instrument_master.csv and scrip_master.csv are no longer written
             # to artemis_production/data/ — Leto owns the scrip master.
             # Guards prevent FileNotFoundError on weeks where these files exist
             # from a manual run of the old codebase.
-            from os.path import exists as path_exists
-            if path_exists('data/instrument_master.csv'):
-                remove('data/instrument_master.csv')
-            if path_exists('data/scrip_master.csv'):
-                remove('data/scrip_master.csv')
+            if exists('data/instrument_master.csv'):
+                os.remove('data/instrument_master.csv')
+            if exists('data/scrip_master.csv'):
+                os.remove('data/scrip_master.csv')
             msg_txt = f"*Artemis:*\nTrade has been archived at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
             logger.info(msg_txt)
-            slack_bot_sendtext(msg_txt, "#tradebot-updates")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_UPDATES)
         else:
-            from os import remove
-            from os.path import exists as path_exists
             for file in ['data/trade_book.csv',
                          'data/instrument_master.csv', 'data/scrip_master.csv']:
-                if path_exists(file):
-                    remove(file)
+                if exists(file):
+                    os.remove(file)
             msg_txt = "Trade has already been archived."
             logger.info(msg_txt)
-            slack_bot_sendtext(msg_txt, "#tradebot-updates")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_UPDATES)
 
     # Private method to send status update
     def _send_status_update(self):
