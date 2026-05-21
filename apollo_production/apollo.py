@@ -33,10 +33,10 @@ from SmartApi.smartExceptions import DataException, NetworkException
 
 from configs_live import (
     api_key, user_name,
-    NIFTY_INDEX_TOKEN, VIX_TOKEN,
+    NIFTY_INDEX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
     VIX_THRESHOLD,
-    SPREAD_TYPE, BUY_LEG_OFFSET, HEDGE_POINTS, STRIKE_STEP, MIN_DTE, LOT_SIZE,
+    BUY_LEG_OFFSET, HEDGE_POINTS, STRIKE_STEP, LOT_SIZE,
     LOT_CALC, LOT_COUNT, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     EXCLUDE_TRADE_DAYS, EXCLUDE_SIGNAL_CANDLES,
     EXCLUDE_BEARISH_DAYS, EXCLUDE_BULLISH_DAYS,
@@ -58,7 +58,7 @@ from configs_live import (
 )
 from websocket_feed import SharedFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN, EXCHANGE_NSE_CM
 from supertrend import SupertrendManager
-from state import ApolloState, load_state, save_state, clear_trade_fields
+from state import load_state, save_state, clear_trade_fields
 from functions import (
     slack_bot_sendtext, handle_exception,
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,

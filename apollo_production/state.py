@@ -18,8 +18,8 @@ Design:
 
 import os
 import pandas as pd
-from dataclasses import dataclass, field, fields
-from datetime import date, datetime
+from dataclasses import dataclass, fields
+from datetime import datetime
 from typing import Optional
 
 from configs_live import STATE_FILE

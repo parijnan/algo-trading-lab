@@ -4,21 +4,19 @@ Hardened Rate Limiting & Messaging.
 """
 
 import json
-import os
 import logging
 import threading
 from requests import get, post
 from re import sub
 from time import sleep, time
 from traceback import format_exc
-from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
-    DATA_DIR, ORDER_LIMIT,
+    ORDER_LIMIT,
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
 

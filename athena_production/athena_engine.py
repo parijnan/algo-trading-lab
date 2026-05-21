@@ -36,17 +36,17 @@ from configs_live import (
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL, QTY_FREEZE,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
-    DATA_DIR, TRADE_LOGS_DIR, RISK_FREE_RATE
+    TRADE_LOGS_DIR, RISK_FREE_RATE
 )
-from state import AthenaState, load_state, save_state, clear_trade_fields
+from state import load_state, save_state, clear_trade_fields
 from functions import (
     slack_bot_sendtext, handle_exception,
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
-    _increment_candle_poll, _increment_order, _reset_counters,
+    _increment_order, _reset_counters,
     OrderFillWatcher,
 )
 from logger_setup import get_logger
-from websocket_feed import SharedFeed, EXCHANGE_NSE_CM, EXCHANGE_NSE_FO
+from websocket_feed import SharedFeed, EXCHANGE_NSE_CM
 
 logger = get_logger(__name__)
 

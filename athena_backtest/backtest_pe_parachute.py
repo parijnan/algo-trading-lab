@@ -23,7 +23,6 @@ import warnings
 from datetime import date, timedelta
 
 import pandas as pd
-import numpy as np
 import mibian
 
 # Add parent directory to path so we can import from apollo_backtest

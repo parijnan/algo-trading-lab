@@ -31,7 +31,6 @@ import warnings
 import pandas as pd
 import numpy as np
 from math import floor, ceil
-from datetime import time as dtime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -43,10 +42,9 @@ from configs import (
     CONTRACTS_FILE, HOLIDAYS_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
-    INDEX_SL_OFFSET, INDEX_SL_OFFSETS,
+    INDEX_SL_OFFSETS,
     ADJUSTMENT_DISTANCE, MINIMUM_GAP, MINIMUM_GAP_ITERATOR,
     VIX_THRESHOLD,
-    SL_4_DTE, SL_3_DTE, SL_2_DTE, SL_1_DTE, SL_0_DTE,
     SL_DTE_MULTIPLIERS,
     VIX_BAND_LT12, VIX_BAND_12_14, VIX_BAND_14_16,
     ENABLE_INDEX_SL, ENABLE_OPTION_SL,
@@ -56,7 +54,7 @@ from configs import (
 )
 from data_loader import (
     load_index_data, load_vix_daily, load_option_data,
-    get_price, get_index_price, get_next_open, get_index_next_open,
+    get_price, get_index_price,
     scan_strikes_for_premium,
 )
 

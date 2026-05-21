@@ -27,7 +27,6 @@ import logging
 import warnings
 from datetime import timedelta
 import pandas as pd
-import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -37,7 +36,7 @@ from configs_debit import (
     NIFTY_15MIN_FILE, NIFTY_75MIN_FILE, VIX_DAILY_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     VIX_THRESHOLD,
-    HEDGE_POINTS, STRIKE_STEP, MIN_DTE, BUY_LEG_OFFSET,
+    HEDGE_POINTS, STRIKE_STEP, BUY_LEG_OFFSET,
     NO_EXIT_BEFORE,
     ENABLE_PROFIT_TARGET, ENABLE_TIME_GATE, ENABLE_TRAILING_PROFIT,
     ENABLE_HARD_STOP, HARD_STOP_POINTS,

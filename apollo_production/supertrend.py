@@ -38,7 +38,7 @@ from logger_setup import get_logger
 from configs_live import (
     ST_15MIN_PERIOD, ST_15MIN_MULTIPLIER,
     ST_75MIN_PERIOD, ST_75MIN_MULTIPLIER,
-    TF_LOW, TF_HIGH,
+    TF_HIGH,
     ST_HISTORY_CANDLES,
     NIFTY_INDEX_TOKEN,
     ST_CACHE_FILE,

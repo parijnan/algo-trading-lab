@@ -19,7 +19,7 @@ from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
-    DATA_DIR, ORDER_LIMIT,
+    ORDER_LIMIT,
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
 from logger_setup import get_logger

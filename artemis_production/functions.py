@@ -1,7 +1,6 @@
 import json
 import threading
 
-from os.path import exists
 from requests import get, post
 from re import sub
 from time import sleep, time
@@ -9,7 +8,7 @@ from traceback import format_exc
 from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
-from configs import slack_token, bot_token, bot_id, channel_id, order_limit, poll_limit, poll_counter, order_counter, SLACK_TRADEBOT_CHANNEL
+from configs import slack_token, bot_token, bot_id, channel_id, SLACK_TRADEBOT_CHANNEL
 from logger_setup import get_logger
 
 logger = get_logger('artemis.functions')

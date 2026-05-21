@@ -23,7 +23,6 @@ import warnings
 from datetime import date, timedelta
 
 import pandas as pd
-import numpy as np
 import mibian
 
 # Add parent directory to path so we can import from apollo_backtest
@@ -45,7 +44,7 @@ from configs_adaptive_exit import (
     ENABLE_ASYMMETRIC_DELTA, DELTA_TESTED_SIDE, DELTA_SAFE_SIDE,
     ENABLE_SAFETY_WINGS, SAFETY_WING_DELTA,
     ELM_EXIT_TIME,
-    VIX_HANDOFF_THRESHOLD, EARLY_EXIT_TIME, LATE_EXIT_TIME,
+    VIX_HANDOFF_THRESHOLD,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_WING_THRESHOLD, ADJUSTMENT_MIN_CREDIT_GAIN,
     ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_EXCLUDED_DAYS,

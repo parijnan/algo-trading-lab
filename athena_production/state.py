@@ -10,7 +10,7 @@ Adapted for Athena's Phase 2 structure:
 
 import os
 import pandas as pd
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Optional
 

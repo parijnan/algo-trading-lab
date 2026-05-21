@@ -23,7 +23,6 @@ import warnings
 from datetime import date, timedelta
 
 import pandas as pd
-import numpy as np
 import mibian
 
 # Add parent directory to path so we can import from apollo_backtest
@@ -33,7 +32,7 @@ from apollo_backtest.technical_indicators import SupertrendIndicator
 from configs_realtime import (
     NIFTY_INDEX_FILE, VIX_INDEX_FILE,
     NIFTY_OPTIONS_PATH, NIFTY_OPTIONS_FALLBACK, CONTRACT_LIST_FILE,
-    DATA_DIR, TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
+    TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     ENTRY_TIME, STRIKE_STEP, BUY_LEG_MIN_DTE,
     VIX_DELTA_BANDS,
     ENABLE_VIX_FILTER, VIX_FILTER_LOW, VIX_FILTER_HIGH,

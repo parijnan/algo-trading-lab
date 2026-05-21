@@ -6,9 +6,6 @@ Logic: When the CE Parachute is triggered, exit the PE Wing immediately.
 import os
 import sys
 import logging
-import pandas as pd
-import numpy as np
-from datetime import datetime
 
 # Path setup
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -6,7 +6,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 from io import StringIO
 from urllib.request import urlopen
-from requests import post
 from pyotp import TOTP
 from SmartApi import SmartConnect
 
