@@ -710,8 +710,6 @@ class IronCondor:
             rename("data/ce_trade_params.csv", f"data/archived/{self.ce_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} ce_trade_params.csv")
             rename("data/trade_book.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_book.csv")
             rename("data/trade_log.csv", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} trade_log.csv")
-            if exists("data/error_log.txt"):
-                rename("data/error_log.txt", f"data/archived/{self.pe_spread.trade_params_df.iloc[0].iloc[3]:%Y-%m-%d} error_log.txt")
             # instrument_master.csv and scrip_master.csv are no longer written
             # to artemis_production/data/ — Leto owns the scrip master.
             # Guards prevent FileNotFoundError on weeks where these files exist
@@ -727,7 +725,7 @@ class IronCondor:
         else:
             from os import remove
             from os.path import exists as path_exists
-            for file in ['data/trade_book.csv', 'data/error_log.txt',
+            for file in ['data/trade_book.csv',
                          'data/instrument_master.csv', 'data/scrip_master.csv']:
                 if path_exists(file):
                     remove(file)

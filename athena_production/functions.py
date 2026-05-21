@@ -195,10 +195,3 @@ def handle_exception(e):
     trace_msg = format_exc()
     logger.error(f"EXCEPTION: {e}\n{trace_msg}")
     slack_bot_sendtext(f"🚨 *ATHENA ERROR*: {format(e)} — check logs.", SLACK_ERRORS_CHANNEL)
-    _write_error_log(f"{datetime.now()}: {e}\n{trace_msg}")
-
-def _write_error_log(msg):
-    try:
-        with open(os.path.join(DATA_DIR, 'error_log.txt'), 'a') as f:
-            f.write(msg + '\n')
-    except: pass

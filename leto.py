@@ -106,19 +106,6 @@ def _slack(msg):
 
 
 # ---------------------------------------------------------------------------
-# Error log helper
-# ---------------------------------------------------------------------------
-
-def _write_error_log(msg):
-    log_path = os.path.join(DATA_DIR, 'leto_error_log.txt')
-    try:
-        with open(log_path, 'a') as f:
-            f.write(msg + '\n')
-    except Exception:
-        pass
-
-
-# ---------------------------------------------------------------------------
 # Circuit Breaker Check
 # ---------------------------------------------------------------------------
 
@@ -160,7 +147,6 @@ def _login():
         except Exception as e:
             msg = f"Login failed: {e}\n{format_exc()}"
             logger.error(msg)
-            _write_error_log(msg)
             sleep(1)
 
     auth_token = data['data']['jwtToken']
@@ -567,7 +553,6 @@ if __name__ == '__main__':
         )
         logger.error(msg)
         _slack(f"*Leto* ERROR: {e} — check logs.")
-        _write_error_log(msg)
 
     finally:
         # Always terminate session if obj exists and we didn't already exit

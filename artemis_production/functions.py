@@ -151,14 +151,6 @@ def handle_exception(e):
         f"{format(e)} — check logs.",
         "#error-alerts"
     )
-    _write_error_log(msg_txt_detailed)
-
-def _write_error_log(msg):
-    try:
-        with open('data/error_log.txt', 'a') as f:
-            f.write(msg + '\n')
-    except Exception:
-        pass
 
 # ---------------------------------------------------------------------------
 # Hardened Rate Limit Counters

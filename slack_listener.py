@@ -186,7 +186,6 @@ def _archive_artemis():
     ce_path  = os.path.join(ARTEMIS_DATA, "ce_trade_params.csv")
     tb_path  = os.path.join(ARTEMIS_DATA, "trade_book.csv")
     tl_path  = os.path.join(ARTEMIS_DATA, "trade_log.csv")
-    el_path  = os.path.join(ARTEMIS_DATA, "error_log.txt")
     arch_dir = os.path.join(ARTEMIS_DATA, "archived")
 
     if all(os.path.exists(p) for p in [pe_path, ce_path, tb_path, tl_path]):
@@ -218,9 +217,6 @@ def _archive_artemis():
             ]:
                 os.rename(src, os.path.join(arch_dir, name))
 
-            if os.path.exists(el_path):
-                os.rename(el_path, os.path.join(arch_dir, f"{prefix} error_log.txt"))
-
             for extra in ['instrument_master.csv', 'scrip_master.csv']:
                 p = os.path.join(ARTEMIS_DATA, extra)
                 if os.path.exists(p):
@@ -236,7 +232,7 @@ def _archive_artemis():
     else:
         # No active trade — clean up any orphaned support files
         cleaned = []
-        for name in ['trade_book.csv', 'error_log.txt', 'instrument_master.csv', 'scrip_master.csv']:
+        for name in ['trade_book.csv', 'instrument_master.csv', 'scrip_master.csv']:
             p = os.path.join(ARTEMIS_DATA, name)
             if os.path.exists(p):
                 os.remove(p)
