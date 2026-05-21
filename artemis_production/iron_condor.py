@@ -148,6 +148,7 @@ class IronCondor:
         # Subscribe existing leg tokens on restart (if already in_trade)
         if self.trade_status:
             self._subscribe_active_tokens()
+            self._reconcile_positions()
 
         # Position sizing — only runs on a fresh trade (both spreads still 'open')
         if lot_calc and self.pe_spread.spread_status == 'open' and self.ce_spread.spread_status == 'open':
@@ -776,6 +777,49 @@ class IronCondor:
         msg_txt = f"Artemis session complete at {self.current_datetime:%Y-%m-%d %H:%M:%S}."
         logger.info(msg_txt)
         slack_bot_sendtext(msg_txt, "#tradebot-updates")
+
+    def _reconcile_positions(self):
+        """
+        Compare broker position data against local state on restart.
+        Checks sign only (long/short) for each active spread leg — exact qty
+        is not verified because additional lots complicate the expected count.
+        Alerts on mismatch — does not auto-correct.
+        """
+        try:
+            resp = self.obj.position()
+            data = (resp or {}).get('data') or []
+        except Exception as e:
+            logger.warning(f"Position reconciliation: broker call failed ({e}). Proceeding without check.")
+            return
+
+        pos = {str(p['symboltoken']): int(p.get('netqty', 0))
+               for p in data if p.get('symboltoken')}
+        mismatches = []
+
+        for side, spread in [('PE', self.pe_spread), ('CE', self.ce_spread)]:
+            if spread.spread_status == 'closed':
+                continue
+            for attr, expected_sign, label in [
+                ('sell_token', -1, 'sell'),
+                ('buy_token',  +1, 'buy'),
+            ]:
+                tok = str(getattr(spread, attr, '') or '')
+                if not tok:
+                    continue
+                actual = pos.get(tok, 0)
+                if expected_sign == -1 and actual >= 0:
+                    mismatches.append(f"{side} {label} token={tok}: expected short, broker={actual:+d}")
+                elif expected_sign == +1 and actual <= 0:
+                    mismatches.append(f"{side} {label} token={tok}: expected long, broker={actual:+d}")
+
+        if mismatches:
+            msg = ("*Artemis* ALERT: Position mismatch on restart — "
+                   + " | ".join(mismatches)
+                   + " — verify manually before trading continues.")
+            logger.error(f"Position reconciliation FAILED: {mismatches}")
+            slack_bot_sendtext(msg, SLACK_ERRORS_CHANNEL)
+        else:
+            logger.info("Position reconciliation OK — broker positions match state.")
 
     def get_session_summary(self):
         """

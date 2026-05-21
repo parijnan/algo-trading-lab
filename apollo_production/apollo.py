@@ -187,6 +187,7 @@ class Apollo:
                 f"Direction: {self.state.direction}. "
                 f"Buy: {self.state.buy_strike} @ {self.state.buy_entry}. "
                 f"Sell: {self.state.sell_strike} @ {self.state.sell_entry}.")
+            self._reconcile_positions()
             self.feed.subscribe_options([self.state.buy_token, self.state.sell_token])
             self._load_trade_log()
             slack_bot_sendtext(
@@ -727,6 +728,40 @@ class Apollo:
     # -----------------------------------------------------------------------
     # Entry execution
     # -----------------------------------------------------------------------
+
+    def _reconcile_positions(self):
+        """
+        Compare broker position data against local state on restart.
+        Alerts if quantities don't match — does not auto-correct.
+        """
+        try:
+            resp = self.obj.position()
+            data = (resp or {}).get('data') or []
+        except Exception as e:
+            logger.warning(f"Position reconciliation: broker call failed ({e}). Proceeding without check.")
+            return
+
+        pos = {str(p['symboltoken']): int(p.get('netqty', 0))
+               for p in data if p.get('symboltoken')}
+
+        expected = {
+            str(self.state.buy_token):  +self.state.lots * LOT_SIZE,
+            str(self.state.sell_token): -self.state.lots * LOT_SIZE,
+        }
+        mismatches = [
+            f"token={tok}: expected {exp:+d}, broker={pos.get(tok, 0):+d}"
+            for tok, exp in expected.items()
+            if pos.get(tok, 0) != exp
+        ]
+
+        if mismatches:
+            msg = ("*Apollo* ALERT: Position mismatch on restart — "
+                   + " | ".join(mismatches)
+                   + " — verify manually before trading continues.")
+            logger.error(f"Position reconciliation FAILED: {mismatches}")
+            slack_bot_sendtext(msg, SLACK_ERRORS_CHANNEL)
+        else:
+            logger.info("Position reconciliation OK — broker positions match state.")
 
     def _execute_entry(self, direction, signal_ts):
         spot = self.feed.get_ltp(NIFTY_TOKEN)

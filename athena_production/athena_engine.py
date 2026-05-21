@@ -458,6 +458,48 @@ class Athena:
                 return lots
             except Exception as e: handle_exception(e); sleep(1); _reset_counters()
 
+    def _reconcile_positions(self):
+        """
+        Compare broker position data against local state on restart.
+        Alerts if quantities don't match — does not auto-correct.
+        """
+        try:
+            resp = self.obj.position()
+            data = (resp or {}).get('data') or []
+        except Exception as e:
+            logger.warning(f"Position reconciliation: broker call failed ({e}). Proceeding without check.")
+            return
+
+        pos = {str(p['symboltoken']): int(p.get('netqty', 0))
+               for p in data if p.get('symboltoken')}
+        lots = self.state.lots
+
+        expected = {
+            str(self.state.ce_sell_token): -lots * LOT_SIZE,
+            str(self.state.pe_sell_token): -lots * LOT_SIZE,
+            str(self.state.ce_buy_token):  +lots * LOT_SIZE,
+            str(self.state.pe_buy_token):  +lots * LOT_SIZE,
+        }
+        if self.state.wings_enabled and self.state.pe_wing_token:
+            expected[str(self.state.pe_wing_token)] = +lots * LOT_SIZE
+        if self.state.emer_active and self.state.emer_token:
+            expected[str(self.state.emer_token)] = +lots * LOT_SIZE
+
+        mismatches = [
+            f"token={tok}: expected {exp:+d}, broker={pos.get(tok, 0):+d}"
+            for tok, exp in expected.items()
+            if pos.get(tok, 0) != exp
+        ]
+
+        if mismatches:
+            msg = ("*Athena* ALERT: Position mismatch on restart — "
+                   + " | ".join(mismatches)
+                   + " — verify manually before trading continues.")
+            logger.error(f"Position reconciliation FAILED: {mismatches}")
+            slack_bot_sendtext(msg, SLACK_ERRORS_CHANNEL)
+        else:
+            logger.info(f"Position reconciliation OK — {len(expected)} legs match broker.")
+
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
         target_lots = self._calculate_lots(strikes_dict)
@@ -797,6 +839,8 @@ class Athena:
         except Exception as e:
             logger.warning(f"WS LTP feed failed to start: {e}. Using REST fallback.")
             slack_bot_sendtext("⚠️ *Athena*: WS LTP feed failed to start — REST fallback active.", SLACK_ERRORS_CHANNEL)
+        if self.state.status == 'in_trade':
+            self._reconcile_positions()
         if self.state.status == 'in_trade' and self.feed.is_connected():
             leg_tokens = [
                 self.state.ce_sell_token, self.state.pe_sell_token,
