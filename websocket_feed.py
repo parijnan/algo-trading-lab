@@ -34,6 +34,8 @@ from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 # ---------------------------------------------------------------------------
 EXCHANGE_NSE_CM = 1   # NSE Cash / Index  — Nifty index, VIX
 EXCHANGE_NSE_FO = 2   # NSE F&O           — Nifty options
+EXCHANGE_BSE_CM = 3   # BSE Cash / Index  — Sensex
+EXCHANGE_BSE_FO = 4   # BSE F&O           — Sensex options
 
 # Subscription mode
 MODE_LTP = 1

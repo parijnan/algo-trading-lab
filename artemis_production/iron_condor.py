@@ -21,8 +21,10 @@ from configs import (
     vix_threshold, entry_window_minutes, exchange_segment,
     instrument, underlying_token, REPO_ROOT,
     api_key, user_name,
+    SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
 )
 from logger_setup import get_logger
+from websocket_feed import SharedFeed, EXCHANGE_BSE_CM, EXCHANGE_BSE_FO
 
 logger = get_logger('artemis.iron_condor')
 
@@ -66,6 +68,8 @@ class IronCondor:
         self.lots = self.pe_spread.lots
         self.additional_lots = self.lots//2
         self.elm_time = self.pe_spread.elm_time
+        self.feed = SharedFeed()
+        self._update_elapsed = 0.0
         # Check and set ELM status
         if self.current_datetime > self.elm_time:
             if self.ce_spread.spread_status == 'active' and self.pe_spread.spread_status == 'active':
@@ -123,6 +127,27 @@ class IronCondor:
         watcher.start(auth_token, api_key, user_name, feed_token)
         self.pe_spread._order_watcher = self.ce_spread._order_watcher = watcher
 
+        # Start LTP WebSocket feed; propagate to both spreads
+        try:
+            self.feed.start(
+                auth_token, api_key, user_name, feed_token,
+                startup_tokens=[(EXCHANGE_BSE_CM, underlying_token)]
+            )
+            index_ltp = self.feed.get_ltp(underlying_token)
+            slack_bot_sendtext(
+                (f"✅ *Artemis*: WebSocket LTP feed live. {instrument}: {index_ltp:.2f}"
+                 if index_ltp
+                 else "✅ *Artemis*: WebSocket LTP feed live. LTPs not yet available."),
+                SLACK_TRADEBOT_CHANNEL)
+        except Exception as e:
+            logger.warning(f"WS LTP feed failed to start: {e}. Using REST fallback.")
+            slack_bot_sendtext("⚠️ *Artemis*: WS LTP feed failed to start — REST fallback active.", SLACK_ERRORS_CHANNEL)
+        self.pe_spread.feed = self.ce_spread.feed = self.feed
+
+        # Subscribe existing leg tokens on restart (if already in_trade)
+        if self.trade_status:
+            self._subscribe_active_tokens()
+
         # Position sizing — only runs on a fresh trade (both spreads still 'open')
         if lot_calc and self.pe_spread.spread_status == 'open' and self.ce_spread.spread_status == 'open':
             while True:
@@ -178,7 +203,8 @@ class IronCondor:
                 return
 
             # Gate 2: VIX check at entry time
-            vix = self.pe_spread._fetch_ltp(exchange_segment, instrument, underlying_token)
+            vix = (self.feed.get_ltp(underlying_token) or
+                   self.pe_spread._fetch_ltp(exchange_segment, instrument, underlying_token))
             if vix > vix_threshold:
                 msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
                            f"Standing down for the week.")
@@ -199,6 +225,22 @@ class IronCondor:
             except Exception as e:
                 handle_exception(e)
                 continue
+        self._subscribe_active_tokens()
+        self._update_elapsed = 0.0
+
+    def _subscribe_active_tokens(self):
+        """Subscribe WS LTP for all currently active spread leg tokens."""
+        if not self.feed.is_connected():
+            return
+        tokens = []
+        for spread in [self.pe_spread, self.ce_spread]:
+            if spread.spread_status != 'closed':
+                for attr in ('buy_token', 'sell_token', 'additional_buy_token'):
+                    tok = getattr(spread, attr, None)
+                    if tok and isinstance(tok, str) and tok.strip():
+                        tokens.append(tok)
+        if tokens:
+            self.feed.subscribe_options(tokens)
 
     # Private method to clean up state files when standing down before entry
     def _cleanup_state_files(self):
@@ -591,9 +633,11 @@ class IronCondor:
     # Method to update everything and send update before sleeping for specified time
     def continue_monitoring(self):
         if (self.ce_spread_result in ('continue', 'closed')) and (self.pe_spread_result in ('continue', 'closed')):
-            self._update_trade_book()
-            self._update_trade_log()
-            self._send_status_update()
+            if self._update_elapsed >= monitor_frequency or not self.feed.is_connected():
+                self._update_trade_book()
+                self._update_trade_log()
+                self._send_status_update()
+                self._update_elapsed = 0.0
             self._sleep_for_set_time()
             self._set_current_datetime()
 
@@ -623,6 +667,7 @@ class IronCondor:
             else:
                 self.pe_spread.adjust_spread()
                 self._update_trade_book_adjustment()
+        self._subscribe_active_tokens()
 
     # Method to handle the extra 2% Extra Loss Margin for expiry day
     def evaluate_adjust_for_elm(self):
@@ -706,8 +751,12 @@ class IronCondor:
         slack_bot_sendtext(msg_txt, "#trade-updates")
 
     def _sleep_for_set_time(self):
-        sleep(monitor_frequency)
-        reset_counters()
+        if not self.feed.is_connected():
+            sleep(monitor_frequency)
+            reset_counters()
+            return
+        sleep(0.5)
+        self._update_elapsed += 0.5
 
     def logout(self):
         """

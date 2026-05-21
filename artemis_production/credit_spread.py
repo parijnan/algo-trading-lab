@@ -56,6 +56,14 @@ class CreditSpread:
         if self.spread_type == 'ce':
             self.index_sl = self.sell_strike - index_sl_offset
 
+    def _get_ltp_ws(self, token, exchange, symbol):
+        """Get LTP from WS feed if available and connected, else fall back to REST."""
+        if self.feed is not None and self.feed.is_connected():
+            ltp = self.feed.get_ltp(token)
+            if ltp is not None:
+                return ltp
+        return self._fetch_ltp(exchange, symbol, token)
+
     # Private method to fetch ltp of an instrument or index
     def _fetch_ltp(self, exchange, symbol, token):
         while True:
@@ -433,6 +441,7 @@ class CreditSpread:
             self.trade_params_df.to_csv(f"data/{spread_type}_trade_params.csv", index=False)
 
         self._order_watcher = None
+        self.feed = None
 
     # Method to calculate and intialize initial trade parameters
     def initialize_spread(self):   
@@ -878,13 +887,13 @@ class CreditSpread:
         self.current_datetime = datetime.now()
         if self.spread_status == 'closed':
             return 'closed'
-        self.index_ltp = self._fetch_ltp(exchange_segment, instrument, underlying_token)
-        self.buy_ltp = self._fetch_ltp(fo_exchange_segment, self.buy_symbol, self.buy_token)
-        self.sell_ltp = self._fetch_ltp(fo_exchange_segment, self.sell_symbol, self.sell_token)
+        self.index_ltp = self._get_ltp_ws(underlying_token, exchange_segment, instrument)
+        self.buy_ltp = self._get_ltp_ws(self.buy_token, fo_exchange_segment, self.buy_symbol)
+        self.sell_ltp = self._get_ltp_ws(self.sell_token, fo_exchange_segment, self.sell_symbol)
         self.pl = self.booked_pl + self.buy_ltp - self.buy_entry + self.sell_entry - self.sell_ltp
         if self.spread_status == 'adjusted_additional' or self.spread_status == 'active_additional':
             if self.spread_status == 'adjusted_additional':
-                self.additional_buy_ltp = self._fetch_ltp(fo_exchange_segment, self.additional_buy_symbol, self.additional_buy_token)
+                self.additional_buy_ltp = self._get_ltp_ws(self.additional_buy_token, fo_exchange_segment, self.additional_buy_symbol)
             else:
                 self.additional_buy_ltp = self.buy_ltp
             self.additional_pl = self.additional_booked_pl + self.additional_buy_ltp - self.additional_buy_entry + self.sell_entry - self.sell_ltp
@@ -901,7 +910,7 @@ class CreditSpread:
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
-                self.index_ltp = self._fetch_ltp(exchange_segment, instrument, underlying_token)
+                self.index_ltp = self._get_ltp_ws(underlying_token, exchange_segment, instrument)
                 if self.index_ltp > self.index_sl:
                     return'index_sl'
                 else:
@@ -917,7 +926,7 @@ class CreditSpread:
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
-                self.index_ltp = self._fetch_ltp(exchange_segment, instrument, underlying_token)
+                self.index_ltp = self._get_ltp_ws(underlying_token, exchange_segment, instrument)
                 if self.index_ltp < self.index_sl:
                     return'index_sl'
                 else:
@@ -933,7 +942,7 @@ class CreditSpread:
                 slack_bot_sendtext(msg_txt, "#trade-alerts")
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
-                self.sell_ltp = self._fetch_ltp(fo_exchange_segment, self.sell_symbol, self.sell_token)
+                self.sell_ltp = self._get_ltp_ws(self.sell_token, fo_exchange_segment, self.sell_symbol)
                 if self.sell_ltp > self.option_sl:
                     return'option_sl'
                 else:
