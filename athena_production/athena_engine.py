@@ -35,7 +35,7 @@ from configs_live import (
     LOT_CALC, LOT_CAPITAL, CASH_PER_LOT_REQUIRED,
     DRY_RUN, FORCE_ENTRY, TRADE_UPDATE_INTERVAL, QTY_FREEZE,
     EXCHANGE_NSE, EXCHANGE_NFO, FO_EXCHANGE_SEGMENT,
-    SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
+    SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     DATA_DIR, TRADE_LOGS_DIR, RISK_FREE_RATE
 )
 from state import AthenaState, load_state, save_state, clear_trade_fields
@@ -46,6 +46,7 @@ from functions import (
     OrderFillWatcher,
 )
 from logger_setup import get_logger
+from websocket_feed import SharedFeed, EXCHANGE_NSE_CM, EXCHANGE_NSE_FO
 
 logger = get_logger(__name__)
 
@@ -86,6 +87,9 @@ class Athena:
         
         # Qty freeze for Nifty on NFO
         self._qty_freeze    = QTY_FREEZE
+
+        self.feed           = SharedFeed()
+        self._update_elapsed = 0.0
 
         self._order_watcher = OrderFillWatcher()
 
@@ -609,9 +613,24 @@ class Athena:
         msg = f"*Athena* EXIT {reason.upper()} | Lots: {lots} | Final P&L: {pl_pts:+.1f} pts ({pl_rs_per_lot:+,.0f} Rs/lot)"
         slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
         
+        self.feed.unsubscribe_all_options()
         clear_trade_fields(self.state); save_state(self.state); return True
 
     def _poll_prices(self):
+        if not self.feed.is_connected():
+            return self._poll_prices_rest()
+        prices = {'spot': self.feed.get_ltp(NIFTY_INDEX_TOKEN)}
+        keys = ['ce_sell', 'pe_sell', 'ce_buy', 'pe_buy']
+        if self.state.wings_enabled: keys += ['pe_wing']
+        if self.state.emer_active: keys += ['emer']
+        for key in keys:
+            tok = getattr(self.state, f"{key}_token")
+            ltp = self.feed.get_ltp(tok)
+            if ltp is None: ltp = getattr(self.state, f"last_{key}_ltp") or getattr(self.state, f"{key}_entry")
+            prices[key] = ltp
+        return prices
+
+    def _poll_prices_rest(self):
         prices = {'spot': self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)}
         keys = ['ce_sell', 'pe_sell', 'ce_buy', 'pe_buy']
         if self.state.wings_enabled: keys += ['pe_wing']
@@ -683,7 +702,8 @@ class Athena:
         if datetime.now().time() < time(9, 16): return
         if not self.state.emer_active and self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS:
             if current_spot >= (self.state.ce_sell_strike + EMERGENCY_TRIGGER_OFFSET):
-                buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date(); vix = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
+                buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date()
+                vix = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
                 stk = self._find_delta_strike(current_spot, vix, buy_exp, EMERGENCY_HEDGE_DELTA, 'ce')
                 if stk:
                     sym, tok = self._fetch_symbol_and_token(stk, 'ce', buy_exp)
@@ -692,6 +712,7 @@ class Athena:
                         self.state.emer_attempts += 1
                         if fill > 0:
                             self.state.emer_active = True; self.state.emer_strike = stk; self.state.emer_symbol = sym; self.state.emer_token = tok; self.state.emer_entry = fill; save_state(self.state)
+                            self.feed.subscribe_options([tok])
                             slack_bot_sendtext(f"🪂 *Athena EMERGENCY*: Bought Parachute CE {stk} @ {fill:.1f}", SLACK_TRADE_ALERTS)
                         else:
                             save_state(self.state)
@@ -744,6 +765,31 @@ class Athena:
         feed_token = self.obj.getfeedToken()
         self._order_watcher.start(self.auth_token, api_key, user_name, feed_token)
         logger.info("Order fill WS daemon started.")
+        try:
+            self.feed.start(
+                self.auth_token, api_key, user_name, feed_token,
+                startup_tokens=[(EXCHANGE_NSE_CM, NIFTY_INDEX_TOKEN), (EXCHANGE_NSE_CM, VIX_TOKEN)]
+            )
+            nifty_ltp = self.feed.get_ltp(NIFTY_INDEX_TOKEN)
+            vix_ltp   = self.feed.get_ltp(VIX_TOKEN)
+            slack_bot_sendtext(
+                (f"✅ *Athena*: WebSocket LTP feed live. Nifty: {nifty_ltp:.2f}  VIX: {vix_ltp:.2f}"
+                 if nifty_ltp and vix_ltp
+                 else "✅ *Athena*: WebSocket LTP feed live. LTPs not yet available."),
+                SLACK_TRADEBOT_CHANNEL)
+        except Exception as e:
+            logger.warning(f"WS LTP feed failed to start: {e}. Using REST fallback.")
+            slack_bot_sendtext("⚠️ *Athena*: WS LTP feed failed to start — REST fallback active.", SLACK_ERRORS_CHANNEL)
+        if self.state.status == 'in_trade' and self.feed.is_connected():
+            leg_tokens = [
+                self.state.ce_sell_token, self.state.pe_sell_token,
+                self.state.ce_buy_token,  self.state.pe_buy_token,
+            ]
+            if self.state.wings_enabled and self.state.pe_wing_token:
+                leg_tokens.append(self.state.pe_wing_token)
+            if self.state.emer_active and self.state.emer_token:
+                leg_tokens.append(self.state.emer_token)
+            self.feed.subscribe_options([t for t in leg_tokens if t])
         while True:
             self._check_slack_commands()
             now = datetime.now()
@@ -754,7 +800,8 @@ class Athena:
                     entry_day = self._last_trading_day_before(sell_exp); is_entry_day = (now.date() == entry_day)
                     if FORCE_ENTRY: is_entry_day = True
                     if is_entry_day and now.time() >= self._entry_time:
-                        spot = self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN); vix = self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN)
+                        spot = self.feed.get_ltp(NIFTY_INDEX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)
+                        vix  = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN)
                         if vix and not (VIX_FILTER_LOW <= vix <= VIX_FILTER_HIGH): return True
                         if spot and vix:
                             strikes = self._select_all_strikes(spot, vix)
@@ -762,17 +809,37 @@ class Athena:
                                 if not self._execute_entry(strikes, spot, vix):
                                     logger.error("Entry failed. Standing down to prevent accidental retries.")
                                     return False # Exit Athena run loop
+                                leg_tokens = [
+                                    self.state.ce_sell_token, self.state.pe_sell_token,
+                                    self.state.ce_buy_token,  self.state.pe_buy_token,
+                                ]
+                                if self.state.wings_enabled and self.state.pe_wing_token:
+                                    leg_tokens.append(self.state.pe_wing_token)
+                                self.feed.subscribe_options([t for t in leg_tokens if t])
+                                self._update_elapsed = 0.0
             if self.state.status == 'in_trade' and self.state.exit_timestamp:
                 if now >= datetime.fromisoformat(self.state.exit_timestamp):
                     self._execute_exit(reason='pre_expiry')
             if self.state.status == 'in_trade':
                 try:
                     prices = self._poll_prices(); spot = prices.get('spot')
-                    if spot: self._manage_emergency_hedge(spot); self._append_trade_log_row(prices=prices); self._send_trade_update(prices=prices)
+                    if spot:
+                        self._manage_emergency_hedge(spot)
+                        if self._update_elapsed >= TRADE_UPDATE_INTERVAL:
+                            self._append_trade_log_row(prices=prices)
+                            self._send_trade_update(prices=prices)
+                            self._update_elapsed = 0.0
                 except Exception as e: handle_exception(e)
-                sleep(TRADE_UPDATE_INTERVAL)
-            else: sleep(60)
-            _reset_counters()
+                if self.feed.is_connected():
+                    sleep(0.5)
+                    self._update_elapsed += 0.5
+                else:
+                    sleep(TRADE_UPDATE_INTERVAL)
+                    _reset_counters()
+                    self._update_elapsed = TRADE_UPDATE_INTERVAL
+            else:
+                sleep(60)
+                _reset_counters()
         if self.state.status == 'in_trade':
             try: self._send_trade_update()
             except: pass

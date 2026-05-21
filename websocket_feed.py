@@ -153,6 +153,13 @@ class SharedFeed:
                 self._subscribed_options.add(t)
                 self._ohlc[t] = self._empty_ohlc()
 
+    def unsubscribe_all_options(self):
+        """Unsubscribe all currently-subscribed option tokens."""
+        with self._lock:
+            tokens = list(self._subscribed_options)
+        if tokens:
+            self.unsubscribe_options(tokens)
+
     def unsubscribe_options(self, tokens):
         """
         Unsubscribe option leg tokens after exit.
