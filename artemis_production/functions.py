@@ -9,7 +9,7 @@ from traceback import format_exc
 from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
-from configs import slack_token, bot_token, bot_id, channel_id, order_limit, poll_limit, poll_counter, order_counter
+from configs import slack_token, bot_token, bot_id, channel_id, order_limit, poll_limit, poll_counter, order_counter, SLACK_TRADEBOT_CHANNEL
 from logger_setup import get_logger
 
 logger = get_logger('artemis.functions')
@@ -98,6 +98,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
         status = parsed.get('order-status')
         if status == 'AB00':
             self._ws_ready.set()
+            slack_bot_sendtext("✅ *Artemis*: Order fill WS connected and ready.", SLACK_TRADEBOT_CHANNEL)
             return
         if status in self._TERMINAL_STATUSES:
             od = parsed.get('orderData')

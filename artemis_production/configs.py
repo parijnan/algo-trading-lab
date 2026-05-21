@@ -73,6 +73,12 @@ entry_window_minutes     = int(trade_settings_df.iloc[0].loc['entry_window_minut
 
 ORDER_TIMEOUT_SEC = 1.1  # Seconds to wait for order fill confirmation
 
+# Slack channels
+SLACK_TRADEBOT_CHANNEL = "#tradebot-updates"  # Login, logout, WS status
+SLACK_TRADE_ALERTS     = "#trade-alerts"
+SLACK_TRADE_UPDATES    = "#trade-updates"
+SLACK_ERRORS_CHANNEL   = "#error-alerts"
+
 # Set to "DEBUG" during testing, "INFO" for production.
 LOG_LEVEL = "DEBUG"
 

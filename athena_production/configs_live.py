@@ -123,9 +123,10 @@ FO_EXCHANGE_SEGMENT = "NFO"
 # ---------------------------------------------------------------------------
 # Slack channels
 # ---------------------------------------------------------------------------
-SLACK_TRADE_ALERTS   = "#trade-alerts"
-SLACK_TRADE_UPDATES  = "#trade-updates"
-SLACK_ERRORS_CHANNEL = "#error-alerts"
+SLACK_TRADEBOT_CHANNEL = "#tradebot-updates"  # Login, logout, WS status
+SLACK_TRADE_ALERTS     = "#trade-alerts"
+SLACK_TRADE_UPDATES    = "#trade-updates"
+SLACK_ERRORS_CHANNEL   = "#error-alerts"
 
 # ---------------------------------------------------------------------------
 # Logging

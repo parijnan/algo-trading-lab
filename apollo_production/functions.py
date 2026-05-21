@@ -19,7 +19,7 @@ from datetime import datetime
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 from configs_live import (
     slack_token, bot_token, bot_id, channel_id,
-    SLACK_ERRORS_CHANNEL,
+    SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
     DATA_DIR, ORDER_LIMIT,
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
@@ -155,6 +155,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
         status = parsed.get('order-status')
         if status == 'AB00':
             self._ws_ready.set()
+            slack_bot_sendtext("✅ *Apollo*: Order fill WS connected and ready.", SLACK_TRADEBOT_CHANNEL)
             return
         if status in self._TERMINAL_STATUSES:
             od = parsed.get('orderData')
