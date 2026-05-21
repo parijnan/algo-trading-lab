@@ -17,6 +17,9 @@ This document lists the third-party libraries and system-level dependencies requ
 - **mibian:** Option pricing model for calculating Greeks (Delta, Theta, Vega).
 - **technical_indicators (custom/local):** Implementation of Supertrend, EMA, and RSI.
 
+### Testing
+- **pytest:** Test runner for `tests/`. Standard `unittest` module (stdlib) is used for test case authoring; `pytest` is used for discovery and execution (`python -m pytest tests/`).
+
 ### Slack Interaction & Monitoring
 - **slack-bolt:** Framework for building interactive Slack apps (Circuit Breakers/Modals).
 - **slack-sdk:** Underlying SDK for sending alerts and updates.
@@ -40,7 +43,7 @@ This document lists the third-party libraries and system-level dependencies requ
 
 ```bash
 # Core execution & strategy
-pip install SmartApi breeze-connect pandas numpy pyotp requests websocket-client mibian
+pip install SmartApi breeze-connect pandas numpy pyotp requests websocket-client mibian pytest
 
 # Slack Listener
 pip install slack-bolt
