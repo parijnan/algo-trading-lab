@@ -5,6 +5,7 @@ Hardened Rate Limiting & Messaging.
 
 import json
 import logging
+import queue
 import threading
 from requests import get, post
 from re import sub
@@ -108,7 +109,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             logger.info(f"OrderFillWatcher heartbeat: WS {status}, {n} orders tracked")
             if not self._ws_ready.is_set():
                 slack_bot_sendtext(
-                    f"⚠️ *Athena*: OrderFillWatcher WS not ready — REST fallback active.",
+                    "⚠️ *Athena*: OrderFillWatcher WS not ready — REST fallback active.",
                     SLACK_ERRORS_CHANNEL)
 
     def _run(self):
@@ -164,8 +165,30 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
 # Messaging
 # ---------------------------------------------------------------------------
 
+# Async Slack worker — fire-and-forget, bounded queue
+_slack_queue = queue.Queue(maxsize=200)
+
+def _slack_worker():
+    while True:
+        try:
+            msg, channel = _slack_queue.get()
+            _send_slack_raw(msg, channel)
+            _slack_queue.task_done()
+        except Exception as e:
+            logger.error(f"SlackWorker unexpected error: {e}")
+
+threading.Thread(target=_slack_worker, daemon=True, name='SlackWorker').start()
+
+
 def slack_bot_sendtext(msg, channel):
-    """Send a Slack message via the bot. Fails silently."""
+    """Enqueue a Slack message. Returns immediately — never blocks the caller."""
+    try:
+        _slack_queue.put_nowait((msg, channel))
+    except queue.Full:
+        logger.warning(f"SlackWorker queue full — dropping message to {channel}")
+
+
+def _send_slack_raw(msg, channel):
     url = "https://slack.com/api/chat.postMessage"
     headers = {"Authorization": f"Bearer {slack_token}", "Content-Type": "application/json"}
     payload = {"channel": channel, "text": msg}
@@ -174,7 +197,6 @@ def slack_bot_sendtext(msg, channel):
     except Exception as e:
         logger.error(f"Slack message failed: {e}")
         telegram_bot_sendtext(f"Athena: Slack failed. {msg[:50]}...", 'bot')
-    return None
 
 def telegram_bot_sendtext(bot_message, medium='channel'):
     """Telegram fallback."""

@@ -7,6 +7,7 @@ Imports credentials from configs_live — loaded once at module level.
 """
 
 import json
+import queue
 import threading
 
 from requests import get, post
@@ -113,7 +114,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
             logger.info(f"OrderFillWatcher heartbeat: WS {status}, {n} orders tracked")
             if not self._ws_ready.is_set():
                 slack_bot_sendtext(
-                    f"⚠️ *Apollo*: OrderFillWatcher WS not ready — REST fallback active.",
+                    "⚠️ *Apollo*: OrderFillWatcher WS not ready — REST fallback active.",
                     SLACK_ERRORS_CHANNEL)
 
     def _run(self):
@@ -165,8 +166,32 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
                         self.live_orders[oid] = od
 
 
+# ---------------------------------------------------------------------------
+# Async Slack worker — fire-and-forget, bounded queue
+# ---------------------------------------------------------------------------
+_slack_queue = queue.Queue(maxsize=200)
+
+def _slack_worker():
+    while True:
+        try:
+            msg, channel = _slack_queue.get()
+            _send_slack_raw(msg, channel)
+            _slack_queue.task_done()
+        except Exception as e:
+            logger.error(f"SlackWorker unexpected error: {e}")
+
+threading.Thread(target=_slack_worker, daemon=True, name='SlackWorker').start()
+
+
 def slack_bot_sendtext(msg, channel):
-    """Send a Slack message via the bot. Fails silently — never crashes the caller."""
+    """Enqueue a Slack message. Returns immediately — never blocks the caller."""
+    try:
+        _slack_queue.put_nowait((msg, channel))
+    except queue.Full:
+        logger.warning(f"SlackWorker queue full — dropping message to {channel}")
+
+
+def _send_slack_raw(msg, channel):
     url = "https://slack.com/api/chat.postMessage"
     headers = {
         "Authorization": f"Bearer {slack_token}",
@@ -174,12 +199,10 @@ def slack_bot_sendtext(msg, channel):
     }
     payload = {"channel": channel, "text": msg}
     try:
-        response = post(url, headers=headers, json=payload, timeout=5)
-        return response.json() if 'response' in dir() else None
+        post(url, headers=headers, json=payload, timeout=5)
     except Exception as e:
         logger.error(f"Slack message failed: {e}")
         telegram_bot_sendtext("Apollo: Slack message failed. Check log.", 'bot')
-    return None
 
 
 def telegram_bot_sendtext(bot_message, medium='channel'):
