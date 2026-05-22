@@ -6,7 +6,7 @@
 REPO_DIR="/home/parijnan/scripts/algo-trading-lab"
 PIPELINE_DIR="$REPO_DIR/data_pipeline"
 PYTHON="/home/parijnan/anaconda3/bin/python"
-SCRIPT="$PIPELINE_DIR/weekly_option_data_sensex.py"
+SCRIPT="$PIPELINE_DIR/data_downloader_angelone.py"
 CONFIG_FILE="$PIPELINE_DIR/config/options_list_sensex.csv"
 CREDENTIALS="$PIPELINE_DIR/data/user_credentials_angel.csv"
 LOG="$PIPELINE_DIR/cron.log"
@@ -47,7 +47,7 @@ send_slack_error() {
 # ---------------------------------------------------------------------------
 # Step 1 — Send Slack warning
 # ---------------------------------------------------------------------------
-send_slack_msg "<@$SLACK_MEMBER_ID> ⚠️ *Sensex Downloader* – Run started. Do not push updates to GitHub until downloads are complete."
+send_slack_msg "<@$SLACK_MEMBER_ID> ⚠️ *Data Downloader* – Run started. Do not push updates to GitHub until downloads are complete."
 echo "$(date '+%Y-%m-%d %H:%M:%S') Slack warning sent." >> "$LOG"
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ cd "$REPO_DIR"
 git pull >> "$LOG" 2>&1
 if [ $? -ne 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git pull failed." >> "$LOG"
-    send_slack_error "🚨 *Sensex Downloader* – git pull failed. Check cron.log on VPS."
+    send_slack_error "🚨 *Data Downloader* – git pull failed. Check cron.log on VPS."
     exit 1
 fi
 
@@ -80,7 +80,7 @@ if ! git diff --quiet "$CONFIG_FILE"; then
     git push >> "$LOG" 2>&1
     if [ $? -ne 0 ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git push failed." >> "$LOG"
-        send_slack_error "🚨 *Sensex Downloader* – git push failed after download. Manual push required."
+        send_slack_error "🚨 *Data Downloader* – git push failed after download. Manual push required."
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_sensex.csv pushed to GitHub." >> "$LOG"
     fi
@@ -92,9 +92,9 @@ fi
 # Step 5 — Final Slack notification
 # ---------------------------------------------------------------------------
 if [ $PY_EXIT_CODE -eq 0 ]; then
-    send_slack_msg "<@$SLACK_MEMBER_ID> ✅ *Sensex Downloader* – Run completed successfully. Safe to push updates to GitHub."
+    send_slack_msg "<@$SLACK_MEMBER_ID> ✅ *Data Downloader* – Run completed successfully. Safe to push updates to GitHub."
 else
-    send_slack_msg "<@$SLACK_MEMBER_ID> 🚨 *Sensex Downloader* – Run completed with errors. Check cron.log on VPS."
+    send_slack_msg "<@$SLACK_MEMBER_ID> 🚨 *Data Downloader* – Run completed with errors. Check cron.log on VPS."
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') Wrapper script complete." >> "$LOG"

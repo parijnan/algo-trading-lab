@@ -6,7 +6,7 @@
 REPO_DIR="/home/parijnan/scripts/algo-trading-lab"
 PIPELINE_DIR="$REPO_DIR/data_pipeline"
 PYTHON="/home/parijnan/anaconda3/bin/python"
-SCRIPT="$PIPELINE_DIR/weekly_option_data_nifty.py"
+SCRIPT="$PIPELINE_DIR/data_downloader_icicidirect.py"
 CONFIG_FILE="$PIPELINE_DIR/config/options_list_nf.csv"
 CREDENTIALS="$PIPELINE_DIR/data/user_credentials_icici.csv"
 LOG="$PIPELINE_DIR/cron.log"
@@ -38,7 +38,7 @@ cd "$REPO_DIR"
 git pull >> "$LOG" 2>&1
 if [ $? -ne 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git pull failed." >> "$LOG"
-    send_slack "🚨 *Nifty Downloader* – git pull failed. Check cron.log on laptop."
+    send_slack "🚨 *Data Downloader* – git pull failed. Check cron.log on laptop."
     exit 1
 fi
 
@@ -59,7 +59,7 @@ if ! git diff --quiet "$CONFIG_FILE"; then
     git push >> "$LOG" 2>&1
     if [ $? -ne 0 ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git push failed." >> "$LOG"
-        send_slack "🚨 *Nifty Downloader* – git push failed after download. Manual push required."
+        send_slack "🚨 *Data Downloader* – git push failed after download. Manual push required."
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') options_list_nf.csv pushed to GitHub." >> "$LOG"
     fi

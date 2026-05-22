@@ -2,7 +2,7 @@ import os
 import time
 import logging
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from collections import deque
 from io import StringIO
 from urllib.request import urlopen
@@ -49,6 +49,15 @@ INDEX_INSTRUMENTS = [
     ("Nifty",     "NSE", "99926000", "nifty.csv"),
     ("India VIX", "NSE", "99926017", "india_vix.csv"),
 ]
+
+# Daily index instruments for range detection research
+# Fetched with ONE_DAY interval — official close, date-only timestamps
+DAILY_INDEX_INSTRUMENTS = [
+    ("Nifty",     "NSE", "99926000", "nifty_daily.csv"),
+    ("Sensex",    "BSE", "99919000", "sensex_daily.csv"),
+    ("India VIX", "NSE", "99926017", "india_vix_daily.csv"),
+]
+DAILY_HISTORY_YEARS = 3
 
 # ---------------------------------------------------------------------------
 # Paths  (script lives in the parent directory of "data")
@@ -334,6 +343,82 @@ def update_all_indices(obj):
 
 
 # ===========================================================================
+# Daily index updater (ONE_DAY interval — official close, date-only timestamps)
+# ===========================================================================
+
+def update_daily_index(obj, display_name: str, exchange: str,
+                       symbol_token: str, filename: str):
+    """
+    Fetch and append ONE_DAY bars for an index.
+    Timestamps stored as date-only strings (YYYY-MM-DD).
+    Incremental: first run fetches DAILY_HISTORY_YEARS of history;
+    subsequent runs append from last saved date onwards.
+    """
+    filepath = os.path.join(INDICES_DIR, filename)
+    today    = date.today()
+
+    if os.path.exists(filepath):
+        existing  = pd.read_csv(filepath)
+        last_date = pd.to_datetime(existing["time_stamp"]).max().date()
+        if last_date >= today:
+            logger.info(f"[{display_name} daily] already up to date.")
+            return
+        from_date = last_date + timedelta(days=1)
+    else:
+        from_date = date(today.year - DAILY_HISTORY_YEARS, today.month, today.day)
+        existing  = None
+        logger.info(f"[{display_name} daily] first run – fetching "
+                    f"{DAILY_HISTORY_YEARS}-year history from {from_date}")
+
+    from_str = f"{from_date.strftime('%Y-%m-%d')} {MARKET_OPEN}"
+    to_str   = f"{today.strftime('%Y-%m-%d')} {MARKET_CLOSE}"
+    logger.info(f"[{display_name} daily] fetching {from_date} → {today}")
+
+    _rate_limiter.wait()
+    try:
+        response = obj.getCandleData({
+            "exchange":    exchange,
+            "symboltoken": symbol_token,
+            "interval":    "ONE_DAY",
+            "fromdate":    from_str,
+            "todate":      to_str,
+        })
+    except Exception as e:
+        logger.warning(f"[{display_name} daily] API error: {e}")
+        return
+
+    raw = response.get("data") if isinstance(response, dict) else None
+    if not raw:
+        logger.info(f"[{display_name} daily] no data returned.")
+        return
+
+    new_df = pd.DataFrame(raw, columns=["time_stamp", "open", "high", "low", "close", "volume"])
+    new_df["time_stamp"] = pd.to_datetime(new_df["time_stamp"]).dt.date.astype(str)
+    new_df["oi"] = 0
+    for col in ("open", "high", "low", "close", "volume"):
+        new_df[col] = pd.to_numeric(new_df[col], errors="coerce")
+    new_df = new_df.sort_values("time_stamp").reset_index(drop=True)
+
+    if existing is not None and not existing.empty:
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset="time_stamp", keep="last")
+    else:
+        combined = new_df
+
+    combined = combined.sort_values("time_stamp").reset_index(drop=True)
+    os.makedirs(INDICES_DIR, exist_ok=True)
+    combined.to_csv(filepath, index=False)
+    logger.info(f"[{display_name} daily] saved {len(combined)} total rows "
+                f"(+{len(new_df)} new) → {filename}")
+
+
+def update_all_daily_indices(obj):
+    """Update daily OHLC for Nifty and India VIX."""
+    for display_name, exchange, symbol_token, filename in DAILY_INDEX_INSTRUMENTS:
+        update_daily_index(obj, display_name, exchange, symbol_token, filename)
+
+
+# ===========================================================================
 # Options downloader
 # ===========================================================================
 
@@ -524,7 +609,7 @@ if __name__ == "__main__":
         logger.info("Authentication successful.")
     except Exception as e:
         logger.error(f"Authentication failed: {e}")
-        slack_bot_sendtext(f"🚨 *Historical Data Downloader* – Authentication failed: {e}",
+        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Authentication failed: {e}",
                            SLACK_ERROR_CHANNEL)
         raise SystemExit(1)
 
@@ -542,16 +627,24 @@ if __name__ == "__main__":
         logger.info(f"Instrument master saved – {len(instruments_df)} contracts.")
     except Exception as e:
         logger.error(f"Instrument master refresh failed: {e}")
-        slack_bot_sendtext(f"🚨 *Historical Data Downloader* – Instrument master refresh failed: {e}",
+        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Instrument master refresh failed: {e}",
                            SLACK_ERROR_CHANNEL)
         raise SystemExit(1)
 
-    # --- Download all index data ---
+    # --- Download all index data (1-min) ---
     try:
         update_all_indices(obj)
     except Exception as e:
         logger.error(f"Index data download failed: {e}")
-        slack_bot_sendtext(f"🚨 *Historical Data Downloader* – Index data download failed: {e}",
+        slack_bot_sendtext(f"🚨 *Data Downloader* – Index data download failed: {e}",
+                           SLACK_ERROR_CHANNEL)
+
+    # --- Download daily index data (Nifty + VIX) ---
+    try:
+        update_all_daily_indices(obj)
+    except Exception as e:
+        logger.error(f"Daily index data download failed: {e}")
+        slack_bot_sendtext(f"🚨 *Data Downloader* – Daily index download failed: {e}",
                            SLACK_ERROR_CHANNEL)
 
     # --- Download options data ---
@@ -560,7 +653,7 @@ if __name__ == "__main__":
         download_all_options(obj, contracts_df, instruments_df)
     except Exception as e:
         logger.error(f"Options data download failed: {e}")
-        slack_bot_sendtext(f"🚨 *Historical Data Downloader* – Options data download failed: {e}",
+        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Options data download failed: {e}",
                            SLACK_ERROR_CHANNEL)
 
     # --- Terminate session ---

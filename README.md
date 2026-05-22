@@ -164,10 +164,10 @@ Overnight hold notifications (market close with open trade) are posted to `#trad
 The `data_pipeline/` infrastructure uses a dual-layer messaging system:
 
 1.  **Shell Wrappers (`run_*.sh`):**
-    -   **Start Warning:** Posts to `#data-alerts` when the downloader starts (e.g., "⚠️ *Sensex Downloader* – Run started. Do not push to GitHub.").
+    -   **Start Warning:** Posts to `#data-alerts` when the downloader starts (e.g., "⚠️ *AngelOne Downloader* – Run started. Do not push to GitHub.").
     -   **System Errors:** Posts to `#error-alerts` if `git pull` or `git push` fails during the sync process.
     -   **Final Status:** Posts a success (✅) or failure (🚨) notification with a mention (`<@MEMBER_ID>`) upon completion.
-2.  **Python Downloaders (`weekly_option_data_*.py`):**
+2.  **Python Downloaders (`data_downloader_*.py`):**
     -   Post detailed completion summaries and any API-level warnings to `#data-alerts`.
 
 ## VIX Regime
@@ -208,8 +208,8 @@ Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maint
 
 | Data | Source | Schedule | Coverage |
 |---|---|---|---|
-| Sensex options + all indices | Angel Broking — VPS cron via `run_sensex_downloader.sh` | Daily at 15:45 | Mid-2024 onwards |
-| Nifty options | ICICI Breeze — laptop cron via `run_nifty_downloader.sh` | Tuesdays at 23:30 | May 2019 onwards |
+| Sensex options + all 1-min indices + daily Nifty, Sensex & VIX | Angel Broking — VPS cron via `run_angelone_downloader.sh` | Daily at 15:45 | Mid-2024 onwards |
+| Nifty options | ICICI Breeze — laptop cron via `run_icicidirect_downloader.sh` | Wednesdays at 23:30 | May 2019 onwards |
 | Nifty options (Real-time) | Angel Broking — Manual via `angel_nifty_backtest_data.py` | As needed | Apr 2026 onwards |
 
 ### Pipeline design
@@ -256,9 +256,10 @@ data/
 ├── indices/
 │   ├── sensex.csv
 │   ├── nifty.csv               # 1-min Nifty (last traded price)
-│   ├── nifty_daily.csv         # Official daily Nifty via ICICI Breeze
-│   ├── nifty_daily_angel.csv   # Official daily Nifty via AngelOne (same-day, preferred)
-│   └── india_vix.csv
+│   ├── india_vix.csv           # 1-min India VIX
+│   ├── nifty_daily.csv         # Official daily Nifty OHLC (AngelOne, same-day)
+│   ├── sensex_daily.csv        # Official daily Sensex OHLC (AngelOne, same-day)
+│   └── india_vix_daily.csv     # Official daily VIX OHLC (AngelOne, same-day)
 └── sensex/
     └── YYYY-MM-DD/
         ├── 78000ce.csv
@@ -470,10 +471,11 @@ algo-trading-lab/
 │       └── outputs/                # Generated charts and exports (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
-    ├── weekly_option_data_sensex.py
-    ├── weekly_option_data_nifty.py
-    ├── run_sensex_downloader.sh
-    ├── run_nifty_downloader.sh
+    ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
+    ├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
+    ├── run_angelone_downloader.sh      # VPS cron wrapper
+    ├── run_icicidirect_downloader.sh   # Laptop cron wrapper
+    ├── nifty_daily_index.py            # Backup: daily Nifty via ICICI Breeze
     ├── rename_legacy_files.py
     ├── delete_empty_files.py
     ├── config/
