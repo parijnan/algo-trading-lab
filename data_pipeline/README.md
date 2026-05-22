@@ -13,6 +13,7 @@ For full details on design decisions, API behaviour, deployment, and file format
 | `run_sensex_downloader.sh` | Wrapper: git pull → run Sensex downloader → git push if config changed | VPS (`delos`) | Weekdays 15:45 IST |
 | `run_nifty_downloader.sh` | Wrapper: git pull → run Nifty downloader → git push if config changed | Laptop | Wednesdays 23:30 IST |
 | `nifty_daily_index.py` | Downloads official daily Nifty 50 OHLC (NSE weighted-avg close) via ICICI Breeze | Laptop | Manual / as needed |
+| `nifty_daily_index_angel.py` | Same as above via AngelOne — updates same-day after market close (preferred live source) | VPS or Laptop | Manual / as needed |
 | `rename_legacy_files.py` | One-time utility to rename legacy Sensex option files | Laptop | Manual |
 | `delete_empty_files.py` | One-time utility to delete empty option CSV files | Laptop | Manual |
 
@@ -25,7 +26,8 @@ To ensure high-fidelity historical data, `weekly_option_data_sensex.py` implemen
 data_pipeline/
 ├── weekly_option_data_sensex.py
 ├── weekly_option_data_nifty.py
-├── nifty_daily_index.py            # Official daily Nifty OHLC (NSE weighted-avg close)
+├── nifty_daily_index.py            # Official daily Nifty OHLC via ICICI Breeze
+├── nifty_daily_index_angel.py      # Same via AngelOne — same-day updates (preferred live source)
 ├── rename_legacy_files.py
 ├── delete_empty_files.py
 ├── README.md
@@ -39,7 +41,8 @@ data_pipeline/
     ├── indices/
     │   ├── sensex.csv
     │   ├── nifty.csv               # 1-min Nifty index (last traded price)
-    │   ├── nifty_daily.csv         # Official daily Nifty OHLC (NSE weighted-avg close)
+    │   ├── nifty_daily.csv         # Official daily Nifty via ICICI Breeze
+    │   ├── nifty_daily_angel.csv   # Official daily Nifty via AngelOne (same-day, preferred)
     │   └── india_vix.csv
     ├── sensex/                     # Sensex options — one folder per expiry
     │   └── YYYY-MM-DD/

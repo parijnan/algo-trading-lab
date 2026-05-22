@@ -171,14 +171,11 @@ def fetch_daily_nifty(breeze, from_dt: datetime, to_dt: datetime) -> pd.DataFram
     df = pd.DataFrame(result["Success"])
     logger.info(f"Received {len(df)} rows")
 
-    # Normalise datetime → time_stamp in IST
-    IST = timezone(timedelta(hours=5, minutes=30))
-    def _to_ist(ts_str):
-        # Breeze returns e.g. "2023-05-22T00:00:00.000Z"
-        dt = pd.to_datetime(ts_str, utc=True).tz_convert(IST)
-        return dt
-
-    df["time_stamp"] = df["datetime"].apply(_to_ist)
+    # Normalise datetime → date-only string (YYYY-MM-DD)
+    df["time_stamp"] = pd.to_datetime(df["datetime"], utc=True) \
+                         .dt.tz_convert("Asia/Kolkata") \
+                         .dt.date \
+                         .astype(str)
 
     # Keep only columns we need; add oi=0 (index has no OI)
     df = df[["time_stamp", "open", "high", "low", "close", "volume"]].copy()
@@ -201,8 +198,7 @@ def update_nifty_daily(breeze):
 
     if os.path.exists(OUTPUT_FILE):
         existing = pd.read_csv(OUTPUT_FILE)
-        existing["time_stamp"] = pd.to_datetime(existing["time_stamp"], utc=True)
-        last_date = existing["time_stamp"].max().date()
+        last_date = pd.to_datetime(existing["time_stamp"]).max().date()
 
         if last_date >= today:
             logger.info(f"Already up to date (last row: {last_date}). Nothing to do.")
@@ -229,9 +225,7 @@ def update_nifty_daily(breeze):
 
     if existing is not None and not existing.empty:
         combined = pd.concat([existing, new_df], ignore_index=True)
-        # Drop any duplicates (same date appearing in both)
-        combined["_date"] = pd.to_datetime(combined["time_stamp"]).dt.date
-        combined = combined.drop_duplicates(subset="_date", keep="last").drop(columns="_date")
+        combined = combined.drop_duplicates(subset="time_stamp", keep="last")
     else:
         combined = new_df
 

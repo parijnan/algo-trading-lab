@@ -256,7 +256,8 @@ data/
 ├── indices/
 │   ├── sensex.csv
 │   ├── nifty.csv               # 1-min Nifty (last traded price)
-│   ├── nifty_daily.csv         # Official daily Nifty (NSE weighted-avg close)
+│   ├── nifty_daily.csv         # Official daily Nifty via ICICI Breeze
+│   ├── nifty_daily_angel.csv   # Official daily Nifty via AngelOne (same-day, preferred)
 │   └── india_vix.csv
 └── sensex/
     └── YYYY-MM-DD/
