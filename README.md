@@ -255,7 +255,8 @@ data/
 ├── instrument_master.csv         # not in git — auto-refreshed daily
 ├── indices/
 │   ├── sensex.csv
-│   ├── nifty.csv
+│   ├── nifty.csv               # 1-min Nifty (last traded price)
+│   ├── nifty_daily.csv         # Official daily Nifty (NSE weighted-avg close)
 │   └── india_vix.csv
 └── sensex/
     └── YYYY-MM-DD/
