@@ -356,7 +356,8 @@ algo-trading-lab/
 │   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md  # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
 │   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Universal WS LTP feed — Apollo, Athena, Artemis; 500ms SL loops; REST fallback
-│   └── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
+│   ├── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
+│   └── range-detection-research.md # [EXPLORATORY] ADX-gated index range detection — use cases TBD after backtesting
 ├── tests/                          # Automated tests and diagnostic scripts
 │   ├── test_state_roundtrip.py     # State CSV round-trip — Apollo and Athena (type safety, None/bool/int fidelity)
 │   ├── test_strike_math.py         # Apollo ATM rounding and strike pair selection (banker's rounding, offset/width)
@@ -461,6 +462,10 @@ algo-trading-lab/
 │   └── data_adaptive_exit/         # Experiment results (gitignored)
 │       ├── trade_summary.csv
 │       └── trade_logs/
+├── research/                       # Exploratory research modules (not used by production code)
+│   └── range_detection/            # ADX-gated Nifty range detection prototype
+│       ├── range_detector.py       # Standalone script — daily OHLC, ADX, swing detection, range bounds
+│       └── outputs/                # Generated charts and exports (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
     ├── weekly_option_data_sensex.py
