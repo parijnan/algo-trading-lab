@@ -287,7 +287,6 @@ def get_end_date(expiry_date: date, contracts_df: pd.DataFrame) -> pd.Timestamp:
     Look up the accurate end_date (15:30 timestamp) for a given expiry date.
     Returns None if not found in contract list.
     """
-    target = pd.Timestamp(expiry_date)
     mask   = contracts_df['expiry_date'].dt.date == expiry_date
     rows   = contracts_df[mask]
     if rows.empty:
@@ -1091,7 +1090,7 @@ def save_trade_summary(all_trades: list):
     logger.info(f"  Max consec losses  : {max_streak}")
     logger.info(f"  Total P&L (₹)      : {total_pl:+,.0f}")
     logger.info(f"  Adjustments made   : {adj_count}")
-    logger.info(f"  Exit breakdown:")
+    logger.info("  Exit breakdown:")
     for reason, count in df['exit_reason'].value_counts().items():
         logger.info(f"    {reason:25s}: {count}")
     logger.info("=" * 60)
@@ -1529,7 +1528,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             roll_spot = get_1min_value(nifty_1m, roll_ts, 'close') or spot
 
             win  = adj_winning_side   # side being rolled ('ce' or 'pe')
-            lose = 'pe' if win == 'ce' else 'ce'  # untouched side
+
 
             # Step 1: compute new sell strike — step existing sell strike toward spot
             # CE roll (Trigger B): new CE sell = ce_sell_strike - distance (moves down toward spot)

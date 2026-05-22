@@ -48,7 +48,7 @@ def append_1min_snapshots_window_salvage(from_ts, to_ts, nifty_1m, vix_1m,
     running_pe_sell, running_pe_buy = last_pe_sell_ltp, last_pe_buy_ltp
     running_ce_wing, running_pe_wing = last_ce_wing_ltp, last_pe_wing_ltp
     window_realised_pl = 0.0
-    emer_active, emer_strike, emer_entry, emer_ltp, emer_df, emer_attempts = False, None, 0.0, 0.0, None, 0
+    emer_active, emer_entry, emer_ltp, emer_df, emer_attempts = False, 0.0, 0.0, None, 0
     sl_hit_ts, sl_hit_reason, adj_trigger_ts, adj_winning_side = None, None, None, None
 
     # Track Salvage state
@@ -58,8 +58,7 @@ def append_1min_snapshots_window_salvage(from_ts, to_ts, nifty_1m, vix_1m,
 
     for ts, row in window.iterrows():
         spot = float(row['close'])
-        vix = bt.get_1min_value(vix_1m, ts, 'close')
-        
+
         # Update LTPs
         v = bt.get_option_price(ce_sell_df, ts, 'close'); 
         if v is not None: running_ce_sell = v
@@ -79,7 +78,7 @@ def append_1min_snapshots_window_salvage(from_ts, to_ts, nifty_1m, vix_1m,
             if spot >= ce_sell_strike - bt.EMERGENCY_TRIGGER_OFFSET:
                 stk, pr = bt.select_strike(spot, buy_expiry_end, ts, 'ce', opt_df_cache, bt.EMERGENCY_HEDGE_DELTA)
                 if stk:
-                    emer_strike, emer_entry, emer_ltp = stk, bt.apply_slippage(pr, True), pr
+                    _, emer_entry, emer_ltp = stk, bt.apply_slippage(pr, True), pr
                     emer_df = opt_df_cache.get((buy_expiry_end, stk, 'ce'))
                     emer_active = True
                     emer_attempts += 1

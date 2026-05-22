@@ -67,7 +67,7 @@ def make_spread_p4(spread_type):
 # ---------------------------------------------------------------------------
 
 def run_backtest():
-    logger.info(f"Starting Phase 4.1: Unified Nifty Backtest (2020-Present)")
+    logger.info("Starting Phase 4.1: Unified Nifty Backtest (2020-Present)")
     
     index_df = load_index_data(NIFTY_INDEX_FILE)
     vix_raw  = load_vix_daily(VIX_INDEX_FILE)

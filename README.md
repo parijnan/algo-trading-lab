@@ -360,6 +360,8 @@ algo-trading-lab/
 ├── tests/                          # Automated tests and diagnostic scripts
 │   ├── test_state_roundtrip.py     # State CSV round-trip — Apollo and Athena (type safety, None/bool/int fidelity)
 │   ├── test_strike_math.py         # Apollo ATM rounding and strike pair selection (banker's rounding, offset/width)
+│   ├── test_artemis_strike_math.py # Artemis DTE-based SL multiplier ladder and index SL offset (CE vs PE)
+│   ├── test_athena_strike_math.py  # Athena delta-based strike selection (OTM direction, wing ordering, accuracy)
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
 │   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype

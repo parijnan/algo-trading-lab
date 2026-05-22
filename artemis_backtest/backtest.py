@@ -39,7 +39,7 @@ from configs import (
     BACKTEST_START_DATE, BACKTEST_END_DATE,
     SENSEX_INDEX_FILE, NIFTY_INDEX_FILE, VIX_INDEX_FILE,
     SENSEX_OPTIONS_PATH, NIFTY_OPTIONS_PATH,
-    CONTRACTS_FILE, HOLIDAYS_FILE,
+    CONTRACTS_FILE,
     TRADE_LOGS_DIR, TRADE_SUMMARY_FILE,
     LOT_SIZE, STRIKE_INTERVAL, EXPECTED_PREMIUM, HEDGE_POINTS,
     INDEX_SL_OFFSETS,
@@ -750,7 +750,6 @@ def _build_summary_record(contract: pd.Series, entry_ts: pd.Timestamp,
 
     # Combined P&L: base lots + additional lots (additional_lots = lots // 2)
     # normalised to per-base-lot as in live code
-    add_lots    = lots // 2
     pe_base_pl  = _r(pe['pl'])
     ce_base_pl  = _r(ce['pl'])
     pe_add_pl   = _r(pe['add_pl'])
@@ -836,10 +835,10 @@ def print_summary(all_records: list):
     logger.info(f"  Total P&L (pts)    : {traded['total_pl_points'].sum():.2f}")
     logger.info(f"  Total P&L (Rs)     : {traded['total_pl_rupees'].sum():,.0f}")
 
-    logger.info(f"  PE exit breakdown:")
+    logger.info("  PE exit breakdown:")
     for reason, count in traded['pe_exit_reason'].value_counts().items():
         logger.info(f"    {reason:25s}: {count}")
-    logger.info(f"  CE exit breakdown:")
+    logger.info("  CE exit breakdown:")
     for reason, count in traded['ce_exit_reason'].value_counts().items():
         logger.info(f"    {reason:25s}: {count}")
     logger.info('=' * 60)
@@ -881,10 +880,6 @@ def run_backtest():
     vix_df   = load_vix_daily(VIX_INDEX_FILE)
     vix_map  = dict(zip(vix_df['date'], vix_df['vix_open']))
     logger.info(f"  Index rows : {len(index_df):,}")
-
-    # --- Load holidays ---
-    holidays_df = pd.read_csv(HOLIDAYS_FILE, parse_dates=['date'])
-    holidays    = set(holidays_df['date'].dt.date)
 
     os.makedirs(os.path.dirname(TRADE_SUMMARY_FILE), exist_ok=True)
     if ENABLE_TRADE_LOGS:
@@ -971,7 +966,7 @@ def run_backtest():
         ce_ok = execute_spread_at(ce, exec_ts, expiry_ts, dte, lots, vix_band)
 
         if not pe_ok or not ce_ok:
-            logger.warning(f"  Entry failed — skipping week")
+            logger.warning("  Entry failed — skipping week")
             all_records.append(
                 _build_summary_record(contract, exec_ts, entry_spot, entry_vix,
                                       lots, pe, ce, skipped='skipped_entry_failed'))
