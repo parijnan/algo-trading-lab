@@ -1,7 +1,4 @@
-"""
-credit_spread.py — Artemis Production Credit Spread
-No changes to trading logic. chdir removed — Leto sets cwd.
-"""
+"""credit_spread.py — Artemis Production Credit Spread"""
 
 from datetime import datetime, time
 from SmartApi.smartExceptions import DataException, NetworkException
@@ -12,7 +9,7 @@ from functions import (
     increment_poll_counter, increment_order_counter,
     increment_order_book_poll, reset_counters,
 )
-from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset, ORDER_TIMEOUT_SEC
+from configs import pd, contracts_df, strike_iteration_interval, hedge_points, expected_option_premium, strike_values_iterator, qty_freeze, lot_size, lot_count, sl_4_dte, sl_3_dte, sl_2_dte, sl_1_dte, sl_0_dte, adjustment_distance, instrument, underlying_token, exchange_segment, fo_exchange_segment, minimum_gap, minimum_gap_iterator, index_sl_offset, ORDER_TIMEOUT_SEC, SLACK_TRADE_ALERTS, SLACK_ERRORS_CHANNEL
 from logger_setup import get_logger
 
 logger = get_logger('artemis.credit_spread')
@@ -114,16 +111,16 @@ class CreditSpread:
                         err_msg = order_response.get('message', 'Unknown error')
                         logger.warning(f"Order rejected ({rejection_count}/3): {symbol} — {err_msg}")
                         if rejection_count >= 3:
-                            slack_bot_sendtext(f"*Artemis*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", "#error-alerts")
+                            slack_bot_sendtext(f"*Artemis*: Order rejected 3× for {symbol}. {err_msg}. Stopping.", SLACK_ERRORS_CHANNEL)
                             break
                         sleep(1); reset_counters(); continue
                 except (DataException, NetworkException) as e:
                     err_msg = str(e).lower()
                     if "access rate" in err_msg:
-                        slack_bot_sendtext(f"ARTEMIS: Rate limit hit ({symbol}). Retrying in 2s...", "#error-alerts")
+                        slack_bot_sendtext(f"ARTEMIS: Rate limit hit ({symbol}). Retrying in 2s...", SLACK_ERRORS_CHANNEL)
                         sleep(2); reset_counters(); continue
 
-                    slack_bot_sendtext(f"ARTEMIS: {type(e).__name__} ({symbol}). Verifying order book via ID-exclusion...", "#error-alerts")
+                    slack_bot_sendtext(f"ARTEMIS: {type(e).__name__} ({symbol}). Verifying order book via ID-exclusion...", SLACK_ERRORS_CHANNEL)
                     sleep(2); reset_counters()
                     try:
                         book_res = self.obj.orderBook()
@@ -142,11 +139,11 @@ class CreditSpread:
                                         ut = datetime.strptime(order['updatetime'], '%d-%b-%Y %H:%M:%S')
                                         if (datetime.now() - ut).total_seconds() < 60:
                                             orderID_list.append(oid); self._placed_order_ids.add(oid)
-                                            slack_bot_sendtext(f"ARTEMIS: Ghost order RECOVERED ({symbol})", "#error-alerts")
+                                            slack_bot_sendtext(f"ARTEMIS: Ghost order RECOVERED ({symbol})", SLACK_ERRORS_CHANNEL)
                                             found = True; break
                             if found: break
                             else: continue
-                    except Exception as e_inner:
+                    except Exception:
                         continue
                 except Exception as e:
                     if "token" in str(e).lower() or "invalid" in str(e).lower():
@@ -177,7 +174,7 @@ class CreditSpread:
             f"*Artemis*: Orphan fill in {symbol}. "
             f"Filled {filled_lots} vs expected {expected_lots}. "
             f"Liquidating {excess_lots} excess lots ({counter_tx}).",
-            "#error-alerts")
+            SLACK_ERRORS_CHANNEL)
         self._place_order(counter_tx, symbol, token, excess_lots)
 
     # Private method to fetch average fill price and average fill time
@@ -211,12 +208,12 @@ class CreditSpread:
                         slack_bot_sendtext(
                             f"*Artemis*: Partial fill (WS) on {symbol}. "
                             f"Expected {expected_lots} lots, filled {filled_lots}.",
-                            "#error-alerts")
+                            SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
                 sleep(0.05)
             slack_bot_sendtext(
                 f"*Artemis*: WS timeout for {symbol}. Switching to REST fallback.",
-                "#error-alerts")
+                SLACK_ERRORS_CHANNEL)
 
         # --- REST fallback path ---
         start_time = datetime.now()
@@ -266,14 +263,14 @@ class CreditSpread:
                 if all_final:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                     if expected_lots > 0 and filled_lots < expected_lots:
-                        slack_bot_sendtext(f"*Artemis*: Partial fill on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", "#error-alerts")
+                        slack_bot_sendtext(f"*Artemis*: Partial fill on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
 
                 # 3. TIMEOUT
                 if (datetime.now() - start_time).total_seconds() >= timeout:
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                     if expected_lots > 0 and filled_lots < expected_lots:
-                        slack_bot_sendtext(f"*Artemis*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", "#error-alerts")
+                        slack_bot_sendtext(f"*Artemis*: Partial fill (timeout) on {symbol}. Expected {expected_lots} lots, filled {filled_lots}.", SLACK_ERRORS_CHANNEL)
                     return avg_price, filled_lots, fill_time
 
                 sleep(1); reset_counters()
@@ -284,7 +281,7 @@ class CreditSpread:
                 sleep(1); reset_counters()
 
         if expected_lots > 0:
-            slack_bot_sendtext(f"*Artemis*: Zero fills on {symbol}. Expected {expected_lots} lots.", "#error-alerts")
+            slack_bot_sendtext(f"*Artemis*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
         return 0.0, 0, datetime.now()
         
     # Method to intialize object
@@ -550,7 +547,7 @@ class CreditSpread:
             logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
-            slack_bot_sendtext(msg_txt, "#trade-alerts")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
 
     # Method to execute the spread orders        
     def execute_spread(self):
@@ -574,7 +571,7 @@ class CreditSpread:
             self._cleanup_orphan_fill('BUY',  self.buy_symbol,  self.buy_token,  buy_filled_lots,  confirmed_total_lots)
             self._cleanup_orphan_fill('SELL', self.sell_symbol, self.sell_token, sell_filled_lots, confirmed_total_lots)
             if confirmed_total_lots == 0:
-                slack_bot_sendtext(f"*Artemis*: Zero fills on both legs for {self.spread_type.upper()}. Aborting entry.", "#error-alerts")
+                slack_bot_sendtext(f"*Artemis*: Zero fills on both legs for {self.spread_type.upper()}. Aborting entry.", SLACK_ERRORS_CHANNEL)
                 return
             if confirmed_total_lots < total_lots:
                 self.lots = confirmed_total_lots
@@ -609,13 +606,13 @@ class CreditSpread:
             logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
-            slack_bot_sendtext(msg_txt, "#trade-alerts")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
         else:
             msg_txt = f"*Artemis:*\n{self.spread_type.upper()} Spread wont be executed after ELM cutoff time.\n*Lots:* _{self.lots}_"
             logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
-            slack_bot_sendtext(msg_txt, "#trade-alerts")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
 
     # Method to exit spread    
     def exit_spread(self):
@@ -680,7 +677,7 @@ class CreditSpread:
         logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
-        slack_bot_sendtext(msg_txt, "#trade-alerts")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
 
     # Method to adjust spread            
     def adjust_spread(self):
@@ -749,7 +746,7 @@ class CreditSpread:
             logger.info(msg_txt)
             #telegram_bot_sendtext(msg_txt)
             #telegram_bot_sendtext(msg_txt, 'bot')
-            slack_bot_sendtext(msg_txt, "#trade-alerts")
+            slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
             return
         # Update the variables
         self.booked_pl = self.booked_pl + self.sell_entry - self.sell_exit
@@ -789,7 +786,7 @@ class CreditSpread:
         logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
-        slack_bot_sendtext(msg_txt, "#trade-alerts")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
     
     # Method to bring in hedge to within 'hedge_points' points and / or exit additional spread          
     def adjust_for_elm(self):
@@ -880,7 +877,7 @@ class CreditSpread:
         logger.info(msg_txt)
         #telegram_bot_sendtext(msg_txt)
         #telegram_bot_sendtext(msg_txt, 'bot')
-        slack_bot_sendtext(msg_txt, "#trade-alerts")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
 
     # Method to monitor spread
     def monitor_spread(self):
@@ -907,7 +904,7 @@ class CreditSpread:
                 logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
                 self.index_ltp = self._get_ltp_ws(underlying_token, exchange_segment, instrument)
@@ -923,7 +920,7 @@ class CreditSpread:
                 logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
                 self.index_ltp = self._get_ltp_ws(underlying_token, exchange_segment, instrument)
@@ -939,7 +936,7 @@ class CreditSpread:
                 logger.warning(msg_txt)
                 #telegram_bot_sendtext(msg_txt)
                 #telegram_bot_sendtext(msg_txt, 'bot')
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 sleep((datetime.combine(self.current_datetime.date(), time(9, 16)) - datetime.now()).total_seconds())
                 reset_counters()
                 self.sell_ltp = self._get_ltp_ws(self.sell_token, fo_exchange_segment, self.sell_symbol)

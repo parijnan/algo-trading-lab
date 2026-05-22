@@ -50,7 +50,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
 
     def _heartbeat(self):
         while True:
-            sleep(900)
+            sleep(300)
             status = 'READY' if self._ws_ready.is_set() else 'NOT READY'
             with self._lock:
                 n = len(self.live_orders)
@@ -119,6 +119,7 @@ def _slack_worker():
             msg, channel = _slack_queue.get()
             _send_slack_raw(msg, channel)
             _slack_queue.task_done()
+            logger.debug(f"SlackWorker queue depth: {_slack_queue.qsize()}")
         except Exception as e:
             logger.error(f"SlackWorker unexpected error: {e}")
 
@@ -154,7 +155,7 @@ def telegram_bot_sendtext(bot_message, medium='channel'):
 
     bot_chat_ID = bot_id if medium == 'bot' else channel_id
     bot_message = _escape_markdown_v2(bot_message)
-    send_text = 'https://api.telegram.org/bot' + bot_token + '/sendMessage?chat_id=' + bot_chat_ID + '&parse_mode=MarkdownV2&text=' + bot_message
+    send_text = f'https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={bot_chat_ID}&parse_mode=MarkdownV2&text={bot_message}'
     try:
         response = get(send_text, timeout=5)
         return response.json()

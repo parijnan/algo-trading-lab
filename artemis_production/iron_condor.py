@@ -1,15 +1,4 @@
-"""
-iron_condor.py — Artemis Production Iron Condor
-Changes from original:
-  1. chdir removed — Leto sets cwd to artemis_production/
-  2. login() removed entirely — Leto owns market/holiday checks and session
-  3. set_session(obj, instrument_df) receives authenticated object and
-     filtered Sensex instrument DataFrame from Leto
-  4. logout() does not call terminateSession — Leto owns that
-  5. _archive_trade() remove() calls guarded with exists() — instrument_master.csv
-     and scrip_master.csv are no longer written to artemis_production/data/
-  All trading logic is completely unchanged.
-"""
+"""iron_condor.py — Artemis Production Iron Condor"""
 
 import os
 from credit_spread import CreditSpread
@@ -21,7 +10,7 @@ from configs import (
     vix_threshold, entry_window_minutes, exchange_segment,
     instrument, underlying_token, REPO_ROOT,
     api_key, user_name,
-    SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
+    SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
 )
 from logger_setup import get_logger
 from websocket_feed import SharedFeed, EXCHANGE_BSE_CM, EXCHANGE_BSE_FO
@@ -189,7 +178,7 @@ class IronCondor:
                 msg_txt = (f"Waiting till {self.pe_spread.entry:%H:%M} to execute trade. "
                            f"*Lots that will be traded:* _{self.lots}_")
                 logger.info(msg_txt)
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 sleep(int((self.pe_spread.entry - datetime.now()).total_seconds()))
                 reset_counters()
                 self._set_current_datetime()
@@ -200,7 +189,7 @@ class IronCondor:
                 msg_txt = (f"Entry window closed at {entry_by:%H:%M}. "
                            f"Standing down for the week.")
                 logger.info(msg_txt)
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 self._cleanup_state_files()
                 return
 
@@ -211,7 +200,7 @@ class IronCondor:
                 msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
                            f"Standing down for the week.")
                 logger.info(msg_txt)
-                slack_bot_sendtext(msg_txt, "#trade-alerts")
+                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
                 self._cleanup_state_files()
                 return
 
@@ -595,7 +584,7 @@ class IronCondor:
                 if command == "EXIT":
                     msg = "⚠️ *Artemis*: Slack `Exit Trade` detected. Liquidating..."
                     logger.warning(msg.replace('*', ''))
-                    slack_bot_sendtext(msg, "#trade-alerts")
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
                     if self.trade_status:
                         self.pe_spread.exit_spread()
                         self.ce_spread.exit_spread()
@@ -606,7 +595,7 @@ class IronCondor:
                 elif command == "KILL":
                     msg = "🚨 *Artemis*: Slack `Kill Switch` detected. Dropping control immediately."
                     logger.warning(msg.replace('*', ''))
-                    slack_bot_sendtext(msg, "#trade-alerts")
+                    slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
                     # We don't reset state so it can be resumed manually if needed
                     raise Exception("Session terminated by Slack !kill command.")
                 
@@ -735,13 +724,13 @@ class IronCondor:
             index_ltp = self.ce_spread.index_ltp
             current_datetime = self.ce_spread.current_datetime
         msg_txt = f"*Artemis:*\n*Time:* _{current_datetime:%Y-%m-%d %H:%M:%S}_\n*Index Value:* _{index_ltp}_\n*PE Spread PL:* _{self.pe_spread.pl*lot_size:.2f}_\n*PE Spread Status:* _{self._format_status(self.pe_spread.spread_status)}_\n*Additional PE Spread PL:* _{self.pe_spread.additional_pl*lot_size*self.pe_spread.additional_lots/self.pe_spread.lots:.2f}_\n*CE Spread PL:* _{self.ce_spread.pl*lot_size:.2f}_\n*CE Spread Status:* _{self._format_status(self.ce_spread.spread_status)}_\n*Additional CE Spread PL:* _{self.ce_spread.additional_pl*lot_size*self.ce_spread.additional_lots/self.ce_spread.lots:.2f}_\n*Lots:* _{self.pe_spread.lots}_\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
-        slack_bot_sendtext(msg_txt, "#trade-updates")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_UPDATES)
 
     # Private method to send message if trade is closed
     def _communicate_closed_status(self):
         msg_txt = f"*Artemis:*\nThis trade is closed.\n*Overall PL:* _{(self.pe_spread.pl+self.ce_spread.pl+(self.pe_spread.additional_pl*self.pe_spread.additional_lots/self.pe_spread.lots)+(self.ce_spread.additional_pl*self.ce_spread.additional_lots/self.ce_spread.lots))*lot_size:.2f}_"
         logger.info(msg_txt)
-        slack_bot_sendtext(msg_txt, "#trade-updates")
+        slack_bot_sendtext(msg_txt, SLACK_TRADE_UPDATES)
 
     def _sleep_for_set_time(self):
         if not self.feed.is_connected():

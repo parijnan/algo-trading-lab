@@ -102,7 +102,7 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate):
 
     def _heartbeat(self):
         while True:
-            sleep(900)
+            sleep(300)
             status = 'READY' if self._ws_ready.is_set() else 'NOT READY'
             with self._lock:
                 n = len(self.live_orders)
@@ -174,6 +174,7 @@ def _slack_worker():
             msg, channel = _slack_queue.get()
             _send_slack_raw(msg, channel)
             _slack_queue.task_done()
+            logger.debug(f"SlackWorker queue depth: {_slack_queue.qsize()}")
         except Exception as e:
             logger.error(f"SlackWorker unexpected error: {e}")
 

@@ -47,6 +47,9 @@ except Exception as e:
 
 app = App(token=bot_token)
 
+_CH        = "#tradebot-updates"
+_CH_ERRORS = "#error-alerts"
+
 # ---------------------------------------------------------------------------
 # Config Editors
 # ---------------------------------------------------------------------------
@@ -290,14 +293,14 @@ def handle_exit(ack, body, say):
     ack()
     user_id = body["user"]["id"]
     if write_flag("EXIT", user_id):
-        say(channel="#tradebot-updates", text=f"⚠️ *EXIT INITIATED* by <@{user_id}>. Liquidating and halting...")
+        say(channel=_CH, text=f"⚠️ *EXIT INITIATED* by <@{user_id}>. Liquidating and halting...")
 
 @app.action("btn_kill_switch")
 def handle_kill(ack, body, say):
     ack()
     user_id = body["user"]["id"]
     if write_flag("KILL", user_id):
-        say(channel="#tradebot-updates", text=f"🚨 *KILL SWITCH ENGAGED* by <@{user_id}>. Control dropped. Positions remain OPEN.")
+        say(channel=_CH, text=f"🚨 *KILL SWITCH ENGAGED* by <@{user_id}>. Control dropped. Positions remain OPEN.")
 
 @app.action("btn_reset_state")
 def handle_reset_state(ack, body, say):
@@ -305,14 +308,14 @@ def handle_reset_state(ack, body, say):
     user_id = body["user"]["id"]
     results = reset_all_states()
     lines = "\n".join(f"• {r}" for r in results)
-    say(channel="#tradebot-updates", text=f"🔄 *STATE RESET* by <@{user_id}>:\n{lines}")
+    say(channel=_CH, text=f"🔄 *STATE RESET* by <@{user_id}>:\n{lines}")
 
 @app.action("btn_disable_algo")
 def handle_disable(ack, body, say):
     ack()
     user_id = body["user"]["id"]
     if write_flag("DISABLE", user_id):
-        say(channel="#tradebot-updates", text=f"⏸️ *ALGO DISABLED* by <@{user_id}>. Future runs paused.")
+        say(channel=_CH, text=f"⏸️ *ALGO DISABLED* by <@{user_id}>. Future runs paused.")
 
 @app.action("btn_clear_flag")
 def handle_clear(ack, body, say):
@@ -321,9 +324,9 @@ def handle_clear(ack, body, say):
     if os.path.exists(FLAG_FILE):
         os.remove(FLAG_FILE)
         logger.info(f"Flag cleared by <@{user_id}>.")
-        say(channel="#tradebot-updates", text=f"✅ *CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
+        say(channel=_CH, text=f"✅ *CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
     else:
-        say(channel="#tradebot-updates", text="No active circuit breaker flag found.")
+        say(channel=_CH, text="No active circuit breaker flag found.")
 
 @app.action("btn_start_leto")
 def handle_start(ack, body, say):
@@ -335,14 +338,14 @@ def handle_start(ack, body, say):
         with open(FLAG_FILE, "r") as f:
             cmd = f.read().strip()
         if cmd in ["EXIT", "KILL", "DISABLE"]:
-            say(channel="#tradebot-updates", text=f"❌ Cannot start Leto. Persistent flag *{cmd}* is active. Clear it first.")
+            say(channel=_CH, text=f"❌ Cannot start Leto. Persistent flag *{cmd}* is active. Clear it first.")
             return
 
     # Check if Leto is already running
     try:
         pgrep = subprocess.run(["pgrep", "-f", "python.*leto.py"], capture_output=True, text=True)
         if pgrep.stdout.strip():
-            say(channel="#tradebot-updates", text="❌ Leto is already running. Duplicate process prevented.")
+            say(channel=_CH, text="❌ Leto is already running. Duplicate process prevented.")
             return
     except Exception as e:
         logger.error(f"pgrep failed: {e}")
@@ -359,18 +362,18 @@ def handle_start(ack, body, say):
                 start_new_session=True,
                 cwd=BASE_DIR
             )
-        say(channel="#tradebot-updates", text=f"🚀 *LETO STARTED* manually by <@{user_id}>. Log: `{os.path.basename(log_name)}`")
+        say(channel=_CH, text=f"🚀 *LETO STARTED* manually by <@{user_id}>. Log: `{os.path.basename(log_name)}`")
         logger.info(f"Leto manually started by <@{user_id}>.")
     except Exception as e:
         err_msg = f"Failed to start Leto: {e}"
         logger.error(err_msg)
-        say(channel="#error-alerts", text=f"🚨 {err_msg}")
+        say(channel=_CH_ERRORS, text=f"🚨 {err_msg}")
 
 @app.action("btn_git_pull")
 def handle_git_pull(ack, body, say):
     ack()
     user_id = body["user"]["id"]
-    say(channel="#tradebot-updates", text=f"⬇️ *Git pull* initiated by <@{user_id}>...")
+    say(channel=_CH, text=f"⬇️ *Git pull* initiated by <@{user_id}>...")
     try:
         result = subprocess.run(
             ["git", "pull"],
@@ -381,15 +384,15 @@ def handle_git_pull(ack, body, say):
         )
         output = (result.stdout + result.stderr).strip()
         if result.returncode == 0:
-            say(channel="#tradebot-updates", text=f"✅ *Git pull succeeded:*\n```{output}```")
+            say(channel=_CH, text=f"✅ *Git pull succeeded:*\n```{output}```")
         else:
-            say(channel="#tradebot-updates", text=f"❌ *Git pull failed:*\n```{output}```")
+            say(channel=_CH, text=f"❌ *Git pull failed:*\n```{output}```")
         logger.info(f"Git pull by <@{user_id}>: rc={result.returncode}")
     except subprocess.TimeoutExpired:
-        say(channel="#tradebot-updates", text="❌ Git pull timed out after 30s.")
+        say(channel=_CH, text="❌ Git pull timed out after 30s.")
         logger.error("Git pull timed out.")
     except Exception as e:
-        say(channel="#tradebot-updates", text=f"❌ Git pull error: {e}")
+        say(channel=_CH, text=f"❌ Git pull error: {e}")
         logger.error(f"Git pull error: {e}")
 
 # ---------------------------------------------------------------------------
@@ -480,11 +483,11 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     if success:
         mode_text = "Dynamic Auto-Sizing" if lot_calc else "Fixed Lots"
         msg = f"✅ *Position Sizing Updated* by <@{user_id}>\n*Strategy:* {strategy}\n*Mode:* {mode_text}\n*Lots:* {lots}"
-        client.chat_postMessage(channel="#tradebot-updates", text=msg)
+        client.chat_postMessage(channel=_CH, text=msg)
         logger.info(f"Position sizing updated for {strategy} by <@{user_id}>: Mode={mode_text}, Lots={lots}")
     else:
         err_msg = f"❌ *Error*: Failed to update configuration for {strategy}. Check daemon logs on VPS."
-        client.chat_postMessage(channel="#error-alerts", text=err_msg)
+        client.chat_postMessage(channel=_CH_ERRORS, text=err_msg)
 
 # ---------------------------------------------------------------------------
 # Initializer
