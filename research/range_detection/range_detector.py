@@ -1,8 +1,8 @@
 """
 range_detector.py — Nifty range detection prototype.
 
-Resamples 1-min data to daily OHLC, then for each day detects whether the
-market is range-bound (ADX < threshold) or trending, and computes adaptive
+Uses official daily Nifty OHLC (AngelOne nifty_daily.csv) to detect whether
+the market is range-bound (ADX < threshold) or trending, and computes adaptive
 range bounds using swing highs/lows anchored at the last trend breakout.
 
 Usage:
@@ -25,7 +25,7 @@ from plotly.subplots import make_subplots
 # ---------------------------------------------------------------------------
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT     = os.path.dirname(os.path.dirname(BASE_DIR))
-NIFTY_FILE    = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'indices', 'nifty.csv')
+NIFTY_DAILY_FILE = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'indices', 'nifty_daily.csv')
 OUTPUT_DIR    = os.path.join(BASE_DIR, 'outputs')
 OUTPUT_HTML   = os.path.join(OUTPUT_DIR, 'range_chart.html')
 
@@ -35,27 +35,18 @@ OUTPUT_HTML   = os.path.join(OUTPUT_DIR, 'range_chart.html')
 # ---------------------------------------------------------------------------
 
 def load_daily(months_back: int) -> pd.DataFrame:
-    df = pd.read_csv(NIFTY_FILE)
-    df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=True).dt.tz_convert('Asia/Kolkata')
+    df = pd.read_csv(NIFTY_DAILY_FILE)
+    df['time_stamp'] = pd.to_datetime(df['time_stamp'])
     df = df.set_index('time_stamp').sort_index()
+
+    df = df[df['close'].notna() & (df['close'] > 0)].copy()
 
     cutoff = df.index[-1] - pd.DateOffset(months=months_back)
     # Give ADX enough warm-up data — pull extra before the cutoff
     warmup_cutoff = cutoff - pd.DateOffset(months=2)
     df = df[df.index >= warmup_cutoff]
 
-    # Resample to daily OHLC (session close = 15:30 IST)
-    daily = df['close'].resample('1D').ohlc()
-    daily['high']   = df['high'].resample('1D').max()
-    daily['low']    = df['low'].resample('1D').min()
-    daily['open']   = df['open'].resample('1D').first()
-    daily['close']  = df['close'].resample('1D').last()
-    daily['volume'] = df['volume'].resample('1D').sum()
-
-    # Drop non-trading days (no close price — Nifty index has zero volume by design)
-    daily = daily[daily['close'].notna() & (daily['close'] > 0)].copy()
-    daily.index = daily.index.normalize()
-    return daily, cutoff
+    return df, cutoff
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +163,7 @@ def compute_ranges(daily: pd.DataFrame, adx: pd.Series, sh: pd.Series,
     result['swing_low']   = np.where(sl, daily['low'],  np.nan)
     result['range_high']  = np.nan
     result['range_low']   = np.nan
-    result['episode_start'] = pd.Series(pd.NaT, index=result.index, dtype='datetime64[ns, Asia/Kolkata]')
+    result['episode_start'] = pd.Series(pd.NaT, index=result.index, dtype='datetime64[ns]')
 
     highs  = result['high'].values
     lows   = result['low'].values
@@ -422,7 +413,7 @@ def main():
     parser.add_argument('--no-browser',    action='store_true',    help='Save HTML but do not open browser')
     args = parser.parse_args()
 
-    print(f"Loading Nifty data...")
+    print(f"Loading Nifty daily data...")
     daily, cutoff = load_daily(args.months)
     print(f"Daily candles loaded: {len(daily)}  |  Display from: {cutoff.date()}")
 
