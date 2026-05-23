@@ -279,6 +279,19 @@ data/
         └── YYYY-MM-DD/
 ```
 
+## Research
+
+Exploratory modules live under `research/`. Nothing here is imported by production code —
+all findings go through a dedicated backtest before any strategy wiring.
+
+| Module | Description | Status |
+|---|---|---|
+| [`research/range_detection/`](./research/range_detection/) | ADX-gated range episode detection for Nifty — daily and 75-min timeframes. Identifies consolidation episodes, tracks position-in-range, exports episode tables. | Validation complete — annotation next |
+
+See [`plans/range-detection-research.md`](./plans/range-detection-research.md) for the active research plan.
+
+---
+
 ## Consolidated Portfolio Performance (2020–2026)
 
 The following benchmark represents the \"Gold Standard\" performance of the lab's core strategies over a 6-year backtest (**2019-12-31 to 2026-04-20**). All results are **normalised to a ₹1.04L capital base** (Artemis base) for accurate portfolio comparison.
