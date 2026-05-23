@@ -180,7 +180,18 @@ def find_swings(df: pd.DataFrame, strength: int = 2) -> tuple[pd.Series, pd.Seri
 def compute_ranges(bars: pd.DataFrame, adx: pd.Series, sh: pd.Series,
                    sl: pd.Series, adx_threshold: float,
                    breakout_tolerance: float = 0.002,
-                   lookback_at_start: int = 4) -> pd.DataFrame:
+                   lookback_at_start: int = 4,
+                   bounds_mode: str = 'fractal',
+                   breakout_confirm: int = 1) -> pd.DataFrame:
+    """
+    bounds_mode:
+      'fractal'  — bounds expand only on confirmed Williams Fractal swings (original)
+      'realtime' — bounds expand immediately on any intra-episode new high/low
+
+    breakout_confirm:
+      Number of consecutive closes outside the tolerance band required to split.
+      1 = original behaviour (split on first violation).
+    """
     result = bars.copy()
     result['adx']          = adx
     result['is_ranging']   = adx < adx_threshold
@@ -195,43 +206,59 @@ def compute_ranges(bars: pd.DataFrame, adx: pd.Series, sh: pd.Series,
     closes = result['close'].values
     dates  = result.index
 
-    in_range      = False
-    episode_start = None
-    ep_high       = -np.inf
-    ep_low        =  np.inf
+    in_range       = False
+    episode_start  = None
+    ep_high        = -np.inf
+    ep_low         =  np.inf
+    outside_streak = 0
 
     def _start_episode(i, lb):
         h = float(np.max(highs[lb : i + 1]))
         l = float(np.min(lows[lb  : i + 1]))
         return dates[lb], h, l
 
+    def _expand_bounds(i):
+        nonlocal ep_high, ep_low
+        if bounds_mode == 'realtime':
+            ep_high = max(ep_high, highs[i])
+            ep_low  = min(ep_low,  lows[i])
+        else:
+            if not np.isnan(result['swing_high'].iloc[i]):
+                ep_high = max(ep_high, highs[i])
+            if not np.isnan(result['swing_low'].iloc[i]):
+                ep_low  = min(ep_low,  lows[i])
+
     for i in range(len(result)):
         idx     = dates[i]
         ranging = bool(result['is_ranging'].iloc[i])
 
         if not ranging:
-            in_range      = False
-            episode_start = None
-            ep_high       = -np.inf
-            ep_low        =  np.inf
+            in_range       = False
+            episode_start  = None
+            ep_high        = -np.inf
+            ep_low         =  np.inf
+            outside_streak = 0
             continue
 
         if not in_range:
             lb = max(0, i - lookback_at_start)
             episode_start, ep_high, ep_low = _start_episode(i, lb)
-            in_range = True
+            in_range       = True
+            outside_streak = 0
         else:
             close = closes[i]
             broke_low  = close < ep_low  * (1 - breakout_tolerance)
             broke_high = close > ep_high * (1 + breakout_tolerance)
 
             if broke_low or broke_high:
-                episode_start, ep_high, ep_low = _start_episode(i, i)
+                outside_streak += 1
+                if outside_streak >= breakout_confirm:
+                    episode_start, ep_high, ep_low = _start_episode(i, i)
+                    outside_streak = 0
+                # Don't expand bounds while a streak is building
             else:
-                if not np.isnan(result['swing_high'].iloc[i]):
-                    ep_high = max(ep_high, highs[i])
-                if not np.isnan(result['swing_low'].iloc[i]):
-                    ep_low  = min(ep_low,  lows[i])
+                outside_streak = 0
+                _expand_bounds(i)
 
         result.at[idx, 'range_high']    = ep_high
         result.at[idx, 'range_low']     = ep_low
@@ -457,13 +484,28 @@ def export_episodes_csv(result: pd.DataFrame, path: str):
 
 def main():
     parser = argparse.ArgumentParser(description='Nifty 75-min range detector')
-    parser.add_argument('--months',         type=int,   default=2,  help='Months to display (default 2)')
-    parser.add_argument('--adx-period',     type=int,   default=14, help='ADX period (default 14)')
-    parser.add_argument('--adx-threshold',  type=float, default=20, help='ADX ranging threshold (default 20)')
-    parser.add_argument('--swing-strength', type=int,   default=3,  help='Swing detection strength in bars (default 3)')
-    parser.add_argument('--no-browser',     action='store_true',    help='Save HTML but do not open browser')
-    parser.add_argument('--all',            action='store_true',    help='Plot all available data, one chart per year')
+    parser.add_argument('--months',             type=int,   default=2,        help='Months to display (default 2)')
+    parser.add_argument('--adx-period',         type=int,   default=14,       help='ADX period (default 14)')
+    parser.add_argument('--adx-threshold',      type=float, default=20,       help='ADX ranging threshold (default 20)')
+    parser.add_argument('--breakout-tolerance', type=float, default=0.002,    help='Price breakout tolerance as fraction (default 0.002 = 0.2%%)')
+    parser.add_argument('--bounds-mode',        type=str,   default='fractal',choices=['fractal', 'realtime'],
+                                                                               help='How bounds expand: fractal (Williams Fractal only) or realtime (any new H/L)')
+    parser.add_argument('--breakout-confirm',   type=int,   default=1,        help='Consecutive closes outside band required to split (default 1)')
+    parser.add_argument('--swing-strength',     type=int,   default=3,        help='Swing detection strength in bars (default 3)')
+    parser.add_argument('--no-browser',         action='store_true',          help='Save HTML but do not open browser')
+    parser.add_argument('--all',                action='store_true',          help='Plot all available data, one chart per year')
+    parser.add_argument('--years',              type=int,   nargs='+',        help='Restrict --all output to specific years (e.g. --years 2024 2026)')
+    parser.add_argument('--tag',                type=str,   default='',       help='Suffix appended to output filenames for parameter comparison runs')
     args = parser.parse_args()
+
+    tag     = f'_{args.tag}' if args.tag else ''
+    tol_pct = args.breakout_tolerance * 100
+    parts   = [f'ADX<{args.adx_threshold}', f'tol={tol_pct:.1f}%']
+    if args.bounds_mode == 'realtime':
+        parts.append('rt-bounds')
+    if args.breakout_confirm > 1:
+        parts.append(f'confirm={args.breakout_confirm}')
+    param_label = '  '.join(parts)
 
     print("Loading and resampling Nifty 1-min data to 75-min bars...")
     months = None if args.all else args.months
@@ -477,27 +519,34 @@ def main():
     sh, sl = find_swings(bars, strength=args.swing_strength)
 
     print("Computing range bounds...")
-    result = compute_ranges(bars, adx, sh, sl, adx_threshold=args.adx_threshold)
+    result = compute_ranges(bars, adx, sh, sl,
+                            adx_threshold=args.adx_threshold,
+                            breakout_tolerance=args.breakout_tolerance,
+                            bounds_mode=args.bounds_mode,
+                            breakout_confirm=args.breakout_confirm)
 
     if args.all:
         import webbrowser
-        years = sorted(result.index.year.unique())
+        all_years = sorted(result.index.year.unique())
+        years     = [y for y in all_years if y in args.years] if args.years else all_years
         generated = []
         for year in years:
             yr_data   = result[result.index.year == year]
             from_date = yr_data.index[0]
             to_date   = yr_data.index[-1]
-            print(f"\n--- {year} ---")
+            label     = f'{year}  |  {param_label}'
+            print(f"\n--- {year} ({param_label}) ---")
             print_summary(result, from_date, args.adx_threshold, to_date=to_date)
-            fig  = plot(result, from_date, args.adx_threshold, to_date=to_date, label=str(year))
-            path = os.path.join(OUTPUT_DIR, f'range_chart_75min_{year}.html')
+            fig  = plot(result, from_date, args.adx_threshold, to_date=to_date, label=label)
+            path = os.path.join(OUTPUT_DIR, f'range_chart_75min_{year}{tag}.html')
             fig.write_html(path, auto_open=False)
             print(f"Chart saved → {path}")
             generated.append(path)
 
-        csv_path = os.path.join(OUTPUT_DIR, 'range_episodes_75min.csv')
-        ep_df = export_episodes_csv(result, csv_path)
-        print(f"\nEpisodes CSV saved → {csv_path}  ({len(ep_df)} episodes)")
+        if not args.years:
+            csv_path = os.path.join(OUTPUT_DIR, f'range_episodes_75min{tag}.csv')
+            ep_df = export_episodes_csv(result, csv_path)
+            print(f"\nEpisodes CSV saved → {csv_path}  ({len(ep_df)} episodes)")
 
         if not args.no_browser:
             for path in generated:
@@ -505,9 +554,11 @@ def main():
     else:
         print_summary(result, cutoff, args.adx_threshold)
         print("Building chart...")
-        fig = plot(result, cutoff, args.adx_threshold, label=f'last {args.months} months')
-        fig.write_html(OUTPUT_HTML, auto_open=not args.no_browser)
-        print(f"Chart saved → {OUTPUT_HTML}")
+        fig = plot(result, cutoff, args.adx_threshold,
+                   label=f'last {args.months} months  |  {param_label}')
+        out = os.path.join(OUTPUT_DIR, f'range_chart_75min{tag}.html')
+        fig.write_html(out, auto_open=not args.no_browser)
+        print(f"Chart saved → {out}")
         if not args.no_browser:
             print("Opening in browser...")
 
