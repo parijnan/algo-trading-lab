@@ -34,18 +34,19 @@ OUTPUT_HTML   = os.path.join(OUTPUT_DIR, 'range_chart.html')
 # Data loading & resampling
 # ---------------------------------------------------------------------------
 
-def load_daily(months_back: int) -> pd.DataFrame:
+def load_daily(months_back=None) -> pd.DataFrame:
     df = pd.read_csv(NIFTY_DAILY_FILE)
     df['time_stamp'] = pd.to_datetime(df['time_stamp'])
     df = df.set_index('time_stamp').sort_index()
-
     df = df[df['close'].notna() & (df['close'] > 0)].copy()
+
+    if months_back is None:
+        return df, df.index[0]
 
     cutoff = df.index[-1] - pd.DateOffset(months=months_back)
     # Give ADX enough warm-up data — pull extra before the cutoff
     warmup_cutoff = cutoff - pd.DateOffset(months=2)
     df = df[df.index >= warmup_cutoff]
-
     return df, cutoff
 
 
@@ -227,8 +228,10 @@ def compute_ranges(daily: pd.DataFrame, adx: pd.Series, sh: pd.Series,
 # Plotting
 # ---------------------------------------------------------------------------
 
-def plot(result: pd.DataFrame, cutoff: pd.Timestamp, adx_threshold: float):
-    display = result[result.index >= cutoff.normalize()].copy()
+def plot(result: pd.DataFrame, from_date: pd.Timestamp, adx_threshold: float,
+         to_date: pd.Timestamp = None, label: str = ''):
+    to_date = to_date if to_date is not None else result.index[-1]
+    display = result[(result.index >= from_date) & (result.index <= to_date)].copy()
 
     fig = make_subplots(
         rows=2, cols=1,
@@ -339,7 +342,7 @@ def plot(result: pd.DataFrame, cutoff: pd.Timestamp, adx_threshold: float):
     fig.update_layout(
         template='plotly_dark',
         title=dict(
-            text=f'Nifty Range Detection — last 3 months  |  ADX threshold: {adx_threshold}',
+            text=f'Nifty Range Detection — {label}  |  ADX threshold: {adx_threshold}',
             font=dict(size=15),
         ),
         xaxis_rangeslider_visible=False,
@@ -359,8 +362,10 @@ def plot(result: pd.DataFrame, cutoff: pd.Timestamp, adx_threshold: float):
 # Summary table
 # ---------------------------------------------------------------------------
 
-def print_summary(result: pd.DataFrame, cutoff: pd.Timestamp, adx_threshold: float):
-    display = result[result.index >= cutoff.normalize()].copy()
+def print_summary(result: pd.DataFrame, from_date: pd.Timestamp, adx_threshold: float,
+                  to_date: pd.Timestamp = None):
+    to_date = to_date if to_date is not None else result.index[-1]
+    display = result[(result.index >= from_date) & (result.index <= to_date)].copy()
     ranging = display[display['range_high'].notna()]
 
     print(f"\n{'='*70}")
@@ -411,10 +416,12 @@ def main():
     parser.add_argument('--adx-threshold', type=float, default=20, help='ADX ranging threshold (default 20)')
     parser.add_argument('--swing-strength',type=int,   default=3,  help='Swing detection strength in bars (default 3)')
     parser.add_argument('--no-browser',    action='store_true',    help='Save HTML but do not open browser')
+    parser.add_argument('--all',           action='store_true',    help='Plot all available data, one chart per year')
     args = parser.parse_args()
 
-    print(f"Loading Nifty daily data...")
-    daily, cutoff = load_daily(args.months)
+    print("Loading Nifty daily data...")
+    months = None if args.all else args.months
+    daily, cutoff = load_daily(months)
     print(f"Daily candles loaded: {len(daily)}  |  Display from: {cutoff.date()}")
 
     print("Computing ADX...")
@@ -426,14 +433,33 @@ def main():
     print("Computing range bounds...")
     result = compute_ranges(daily, adx, sh, sl, adx_threshold=args.adx_threshold)
 
-    print_summary(result, cutoff, args.adx_threshold)
-
-    print("Building chart...")
-    fig = plot(result, cutoff, args.adx_threshold)
-    fig.write_html(OUTPUT_HTML, auto_open=not args.no_browser)
-    print(f"Chart saved → {OUTPUT_HTML}")
-    if not args.no_browser:
-        print("Opening in browser...")
+    if args.all:
+        import webbrowser
+        years = sorted(result.index.year.unique())
+        generated = []
+        for year in years:
+            yr_data = result[result.index.year == year]
+            from_date = yr_data.index[0]
+            to_date   = yr_data.index[-1]
+            label     = str(year)
+            print(f"\n--- {year} ---")
+            print_summary(result, from_date, args.adx_threshold, to_date=to_date)
+            fig  = plot(result, from_date, args.adx_threshold, to_date=to_date, label=label)
+            path = os.path.join(OUTPUT_DIR, f'range_chart_{year}.html')
+            fig.write_html(path, auto_open=False)
+            print(f"Chart saved → {path}")
+            generated.append(path)
+        if not args.no_browser:
+            for path in generated:
+                webbrowser.open(f'file://{os.path.abspath(path)}')
+    else:
+        print_summary(result, cutoff, args.adx_threshold)
+        print("Building chart...")
+        fig = plot(result, cutoff, args.adx_threshold, label=f'last {args.months} months')
+        fig.write_html(OUTPUT_HTML, auto_open=not args.no_browser)
+        print(f"Chart saved → {OUTPUT_HTML}")
+        if not args.no_browser:
+            print("Opening in browser...")
 
 
 if __name__ == '__main__':
