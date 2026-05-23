@@ -406,6 +406,39 @@ def print_summary(result: pd.DataFrame, from_date: pd.Timestamp, adx_threshold: 
 
 
 # ---------------------------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------------------------
+
+def export_episodes_csv(result: pd.DataFrame, path: str):
+    rows = []
+    ranging = result[result['range_high'].notna()]
+    for ep_start, grp in ranging.groupby('episode_start'):
+        ep_end     = grp.index[-1]
+        hi         = grp['range_high'].iloc[-1]
+        lo         = grp['range_low'].iloc[-1]
+        mid        = (hi + lo) / 2
+        width_pts  = hi - lo
+        width_pct  = width_pts / mid * 100
+        last_close = grp['close'].iloc[-1]
+        close_pct  = (last_close - lo) / width_pts * 100 if width_pts > 0 else 50.0
+        rows.append({
+            'episode_start': ep_start.date(),
+            'episode_end':   ep_end.date(),
+            'days':          len(grp),
+            'range_high':    round(hi, 2),
+            'range_low':     round(lo, 2),
+            'range_mid':     round(mid, 2),
+            'width_pts':     round(width_pts, 0),
+            'width_pct':     round(width_pct, 2),
+            'last_close':    round(last_close, 2),
+            'close_pct_in_range': round(close_pct, 1),
+        })
+    df = pd.DataFrame(rows)
+    df.to_csv(path, index=False)
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -449,6 +482,9 @@ def main():
             fig.write_html(path, auto_open=False)
             print(f"Chart saved → {path}")
             generated.append(path)
+        csv_path = os.path.join(OUTPUT_DIR, 'range_episodes.csv')
+        ep_df = export_episodes_csv(result, csv_path)
+        print(f"\nEpisodes CSV saved → {csv_path}  ({len(ep_df)} episodes)")
         if not args.no_browser:
             for path in generated:
                 webbrowser.open(f'file://{os.path.abspath(path)}')
