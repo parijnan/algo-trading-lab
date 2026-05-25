@@ -423,11 +423,11 @@ def main():
     trans = len(episodes) - est
     print(f'  {len(episodes)} episodes total — {est} established, {trans} transient')
 
+    csv_path = os.path.join(OUTPUT_DIR, f'range_episodes_pa_{tf_label}{tag}.csv')
+    export_episodes_csv(episodes, csv_path)
+
     if args.all:
         years = args.years or sorted({df.index[i].year for i in range(start_idx, len(df))})
-        csv_path = os.path.join(OUTPUT_DIR, f'range_episodes_pa_{tf_label}{tag}.csv')
-        export_episodes_csv(episodes, csv_path)
-
         for year in years:
             from_date = pd.Timestamp(f'{year}-01-01')
             to_date   = pd.Timestamp(f'{year}-12-31')
