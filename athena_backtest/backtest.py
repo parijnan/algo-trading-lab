@@ -866,6 +866,8 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         realised_emer = round(exit_pr - emer_entry, 2)
         window_realised_pl += realised_emer
         logger.info(f"  [EMERGENCY] Final Closure Parachute CE {emer_strike} @ {exit_pr:.1f} at {ts} | P&L: {realised_emer:.1f} | spot={spot:.0f}")
+        emer_entry = 0.0
+        emer_ltp   = 0.0
 
     return (running_ce_sell, running_ce_buy, running_pe_sell, running_pe_buy,
             sl_hit_ts, sl_hit_reason, running_peak_pl,
@@ -1990,7 +1992,6 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             untouched_buy_val     = None
             untouched_net_val     = None
 
-        total_pl = round(base_pl + (adj_pl_points or 0.0), 2)
         trade_counter += 1
 
         record = build_trade_record(
