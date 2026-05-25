@@ -236,33 +236,14 @@ def get_prior_expiry(sell_expiry_date: date,
     return prior[-1] if prior else None
 
 
-# Nifty weekly expiry moved from Thursday to Tuesday effective Sep 2025
-_EXPIRY_CHANGE_DATE    = date(2025, 9, 1)
-_EXPIRY_WEEKDAY_BEFORE = 3   # Thursday
-_EXPIRY_WEEKDAY_AFTER  = 1   # Tuesday
-
-
 def compute_entry_date(prior_expiry_date: date,
                        holidays_set: set) -> date:
     """
-    Entry = last trading day before prior_expiry_date.
-    Normally this is Wednesday (pre-Sep 2025) or Monday (post-Sep 2025).
-
-    Exception: if a holiday chain shifted prior_expiry_date earlier than its
-    expected weekday, enter ON prior_expiry_date itself.  The previous Athena
-    trade exits at 10:25; the new one enters at 10:30 — clean 5-min gap.
-
-    Example (normal):    prior_expiry=Thu 7 Aug  → entry=Wed 6 Aug
-    Example (holiday):   prior_expiry=Wed 6 Aug  → entry=Wed 6 Aug
-    Example (post-Sep):  prior_expiry=Tue 9 Sep 2025 → entry=Mon 8 Sep 2025
+    Return the last trading day strictly before prior_expiry_date.
+    Entry = last trading day before the expiry preceding the sell expiry.
+    Example: sell_expiry=14 Aug, prior_expiry=7 Aug → entry=6 Aug.
     """
-    expected_weekday = (_EXPIRY_WEEKDAY_AFTER
-                        if prior_expiry_date >= _EXPIRY_CHANGE_DATE
-                        else _EXPIRY_WEEKDAY_BEFORE)
-    if prior_expiry_date.weekday() == expected_weekday:
-        return last_trading_day_before(prior_expiry_date, holidays_set)
-    # Holiday-shifted prior expiry: enter on expiry day itself
-    return prior_expiry_date
+    return last_trading_day_before(prior_expiry_date, holidays_set)
 
 
 def select_buy_expiry(entry_date: date,
