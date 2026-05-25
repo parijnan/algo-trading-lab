@@ -286,7 +286,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 
 | Module | Description | Status |
 |---|---|---|
-| [`research/range_detection/`](./research/range_detection/) | ADX-gated range episode detection for Nifty — daily and 75-min timeframes. Identifies consolidation episodes, tracks position-in-range, exports episode tables. | Validation complete — annotation next |
+| [`research/range_detection/`](./research/range_detection/) | Two range detection methods for Nifty: ADX-gated (daily + 75-min) and price-action range setter (daily, any N-min). Visual comparison complete — hybrid combination in progress. | Active research |
 
 See [`plans/range-detection-research.md`](./plans/range-detection-research.md) for the active research plan.
 
@@ -479,8 +479,11 @@ algo-trading-lab/
 │       ├── trade_summary.csv
 │       └── trade_logs/
 ├── research/                       # Exploratory research modules (not used by production code)
-│   └── range_detection/            # ADX-gated Nifty range detection prototype
-│       ├── range_detector.py       # Standalone script — daily OHLC, ADX, swing detection, range bounds
+│   └── range_detection/            # Nifty range detection research (ADX + PA methods)
+│       ├── range_detector.py       # ADX-gated — daily OHLC
+│       ├── range_detector_75min.py # ADX-gated — 75-min (resampled from 1-min)
+│       ├── range_detector_pa.py    # Price-action range setters — daily / any N-min
+│       ├── resample.py             # Shared day-anchored N-min resampler
 │       └── outputs/                # Generated charts and exports (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md

@@ -1,107 +1,108 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: EXPLORATORY** — Two timeframes built. 75-min parameter tuning in progress. No use cases frozen. No production changes until backtested.
+**Status: EXPLORATORY** — Two detection methods built and visually validated on daily data.
+Hybrid combination in progress. No use cases frozen. No production changes until backtested.
 
 ---
 
 ## Context
 
 The daily Nifty chart regularly shows clear consolidation ranges that are visually obvious but
-hard to define algorithmically because their duration is variable (2 days to 2+ weeks). A fixed
-lookback window does not work. ADX-gated range detection solves this by using market state
-(ADX < 20 = consolidating) rather than a fixed window, and tracks episode bounds adaptively via
-confirmed swing highs/lows.
+hard to define algorithmically because their duration is variable (2 days to 2+ weeks). Two
+complementary methods have been built and compared:
 
-The core insight: knowing *where* spot is within an established range, and *whether* a range
-exists at all, is potentially useful information for multiple strategy decisions across the
-entire system — not just entry timing, and not restricted to any single strategy.
+- **ADX method** (`range_detector.py`, `range_detector_75min.py`): ADX < threshold = ranging
+  regime; episode bounds anchored via Williams Fractal swing highs/lows.
+- **PA method** (`range_detector_pa.py`): range setter candles (closes outside current range)
+  define bounds; wick extension allowed; gap openings anchor the inside bound to the previous
+  range's near boundary.
+
+Visual comparison on daily 2025 data shows: PA method produces better bounds most of the time;
+ADX method outperforms in trending stretches by correctly gating out non-ranges.
+
+**Core insight**: PA logic for bound definition + ADX for regime gating is the natural
+combination.
 
 ---
 
 ## What Was Built
 
-### `research/range_detection/range_detector.py` — Daily timeframe
+### `research/range_detection/range_detector.py` — Daily timeframe (ADX method)
 
 Reads official daily Nifty OHLC from `nifty_daily.csv` (AngelOne weighted-avg close).
-`--all` generates one chart per calendar year + `outputs/range_episodes.csv` (103 episodes, 2023–2026).
+`--all` generates one chart per calendar year + `outputs/range_episodes.csv`.
 Visual validation complete.
 
-### `research/range_detection/range_detector_75min.py` — 75-min timeframe
+### `research/range_detection/range_detector_75min.py` — 75-min timeframe (ADX method)
 
-1-min `nifty.csv` resampled to 75-min using Apollo's day-anchored approach (avoids pandas
-drift). Exactly 5 bars per session: 09:15, 10:30, 11:45, 13:00, 14:15. Chart uses Plotly
-`rangebreaks` to suppress overnight/weekend gaps.
-`--all` generates one chart per year + `outputs/range_episodes_75min.csv`.
-Visual validation complete (2019–2026).
+1-min `nifty.csv` resampled to 75-min using Apollo's day-anchored approach.
+Exactly 5 bars per session: 09:15, 10:30, 11:45, 13:00, 14:15.
+Round 2 parameter tuning (bounds_mode, breakout_confirm) generated but not evaluated —
+superseded by the PA approach which is being pursued instead.
+
+### `research/range_detection/resample.py` — Shared resampler module
+
+Day-anchored N-minute resampler used by `range_detector_pa.py`. Supports any integer
+timeframe (3, 5, 15, 75 min) plus `'daily'`. Extracted for reuse across scripts.
+
+### `research/range_detection/range_detector_pa.py` — All timeframes (PA method)
+
+Price-action range detection: range setter candles define bounds; wick extension; gap logic.
+Timeframe-agnostic via `--timeframe daily|N` (N = minutes).
+`--all` generates one chart per year + CSV. CSV always exported on every run.
+Visual validation complete on daily 2023–2026.
+75-min timeframe too noisy to be useful on its own — focus is daily.
 
 ---
 
-### Full Parameter Reference (75-min script)
+## PA Method — Full Parameter Reference
 
 | CLI flag | Default | Effect |
 |---|---|---|
-| `--adx-threshold` | 20 | ADX below this → ranging regime |
-| `--breakout-tolerance` | 0.002 (0.2%) | Close must exit episode bounds by this fraction to count as a breakout |
-| `--bounds-mode` | `fractal` | How bounds expand: `fractal` = Williams Fractal swings only; `realtime` = any intra-episode new H/L immediately |
-| `--breakout-confirm` | 1 | Consecutive closes outside the band required before splitting an episode |
-| `--lookback-at-start` | 4 bars | How far back to anchor bounds when a new episode begins |
-| `--swing-strength` | 3 bars | Williams Fractal lookahead/lookback window |
-| `--years` | (all) | Restrict `--all` output to specific years |
-| `--tag` | (none) | Suffix for output filenames — used to distinguish tuning runs |
+| `--timeframe` | `daily` | `daily` or integer minutes (e.g. `75`, `15`, `5`, `3`) |
+| `--start-date` | (required) | Initial range setter: `YYYY-MM-DD` or `"YYYY-MM-DD HH:MM"` |
+| `--min-range-bars` | 5 | Min bars for a range to be considered established (drawn solid) |
+| `--months` | (all from start) | Months to display in single-chart mode |
+| `--all` | off | Full history, one chart per year |
+| `--years` | (all) | Restrict `--all` to specific years |
+| `--tag` | (none) | Suffix for output filenames |
+| `--no-browser` | off | Save HTML without opening |
 
 ---
 
-## 75-min Tuning — Progress and Findings
+## Hybrid Combination — In Progress
 
-### Round 1 — `adx_threshold` and `breakout_tolerance`
+PA method for bound definition + ADX for regime gating. Three options to evaluate
+sequentially on the daily chart:
 
-Tested four combinations on 2024 and 2026 (reference years):
+### Option A — ADX as a hard gate on PA ranges
+A PA episode is only displayed as established if ADX was below threshold during it.
+In trending periods PA tracks range setters internally but nothing is drawn solid.
+Simplest implementation.
 
-| Tag | `adx_threshold` | `breakout_tolerance` | Verdict |
-|---|---|---|---|
-| (default) | 20 | 0.2% | Too fragmented — many 1-bar episodes throughout |
-| `adx15` | 15 | 0.2% | Fewer regime detections; doesn't help fragmentation |
-| `bt05` | 20 | 0.5% | **Best of this round** — cleaner but still too aggressive |
-| `adx15_bt05` | 15 | 0.5% | Misses genuine ranging periods |
+### Option B — ADX upgrades/downgrades PA episodes (recommended starting point)
+Each PA episode gets an ADX reading. If ADX < threshold → established (solid).
+If ADX ≥ threshold → transient (dashed), regardless of bar count.
+min_range_bars stays as a secondary condition (must satisfy both).
+Directly addresses the cases where ADX outperforms PA standalone.
 
-**Conclusion:** `adx_threshold=20`, `breakout_tolerance=0.5%` is the right base to build from.
-The remaining problem: episodes still split too readily on single-bar spikes within a genuine range.
+### Option C — Two-layer structure
+ADX defines the macro ranging regime (outer band). Within each ADX regime,
+PA logic tracks sub-ranges (inner levels). Most information-rich, most visually complex.
 
-### Round 2 — `bounds_mode` and `breakout_confirm` (on top of bt05)
-
-Two new mechanisms added to loosen the split criterion:
-
-- **`bounds_mode=realtime`**: bounds expand on every intra-episode new H/L immediately, rather
-  than waiting for Williams Fractal confirmation. Eliminates false splits caused by the 3-bar
-  fractal lag — price can reach a new high that isn't yet a confirmed fractal, triggering a
-  spurious breakout against stale bounds.
-
-- **`breakout_confirm=N`**: requires N consecutive closes outside the tolerance band before
-  splitting. Bounds do not expand while a streak is building; streak resets if price returns
-  inside. `N=2` means a single bar overshoot is ignored.
-
-Four charts generated for 2024 and 2026 — **not yet evaluated:**
-
-| Tag | `bounds_mode` | `breakout_confirm` |
-|---|---|---|
-| `bt05` | fractal | 1 (baseline) |
-| `bt05_rt` | realtime | 1 |
-| `bt05_conf2` | fractal | 2 |
-| `bt05_rt_conf2` | realtime | 2 |
-
-**Next session starts here**: open these four chart pairs, pick the combination that produces
-the cleanest multi-bar episodes without hiding genuine breakouts, then lock in as new defaults.
+**Next session starts here**: implement Option A, evaluate on 2023–2026 daily charts,
+then B, then C. Pick the winner; freeze defaults; consider annotating backtest trades.
 
 ---
 
 ## Probable Use Cases (not committed)
 
-- **Entry timing** — wait for spot to revert to range mid before entering (both legs symmetric)
+- **Entry timing** — wait for spot to revert to range mid before entering
 - **Strike selection** — use range bounds as reference alongside delta
-- **SL / exit calibration** — tighter stops when near boundary; range-boundary breach as additional trigger
+- **SL / exit calibration** — tighter stops when near boundary; boundary breach as exit trigger
 - **Position sizing** — scale by distance from range mid
-- **Skip / defer logic** — avoid entering a trending market (ADX ≥ threshold)
-- **Trade annotation** — tag historical trades with `range_pct` and `adx` at entry to surface P&L patterns
+- **Skip / defer logic** — avoid entering a trending market
+- **Trade annotation** — tag historical trades with range_pct and adx at entry
 
 All applications require backtesting across relevant strategies before any production wiring.
 
@@ -109,17 +110,14 @@ All applications require backtesting across relevant strategies before any produ
 
 ## Next Steps
 
-1. **Finish 75-min tuning** ← *resume here*
-   - Evaluate the four Round 2 chart pairs (`bt05`, `bt05_rt`, `bt05_conf2`, `bt05_rt_conf2`)
-   - Pick the winner; update script defaults; regenerate the full 2019–2026 run and CSV
-   - Decide whether to apply the same changes to the daily script
+1. **Implement hybrid options A, B, C** ← *resume here*
+   - Implement and chart each on 2023–2026 daily data
+   - Pick the winner; freeze as new default in `range_detector_pa.py`
 
 2. **Annotate historical backtest trades** — run existing Athena and Artemis backtests and tag
-   each trade with `range_pct`, `adx`, `episode_start` at entry. No strategy logic changes;
-   pure observational correlation between position-in-range and outcome.
+   each trade with `range_pct`, `adx`, `episode_start` at entry. Pure observational.
 
-3. **Decide use cases** — based on annotation results, pick highest-impact applications per
-   strategy and design targeted backtests.
+3. **Decide use cases** — based on annotation results, design targeted backtests.
 
 ---
 

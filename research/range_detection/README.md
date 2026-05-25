@@ -1,68 +1,106 @@
 # Range Detection
 
-ADX-gated range detection for Nifty. Identifies consolidation episodes by tracking
-when ADX drops below a threshold, anchoring episode bounds via Williams Fractal swing
-highs/lows, and splitting episodes on confirmed price breakouts.
+Two complementary approaches to identifying Nifty consolidation ranges. Visual comparison
+on daily data shows PA method produces better bounds; ADX method better filters trending
+stretches. A hybrid combining both is in development.
 
 See [`plans/range-detection-research.md`](../../plans/range-detection-research.md) for
-the full research plan, parameter tuning notes, and probable use cases.
+the full research plan, findings, and next steps.
+
+---
 
 ## Scripts
 
-| Script | Timeframe | Data Source | Bars/Session |
+| Script | Method | Timeframe | Data Source |
 |---|---|---|---|
-| `range_detector.py` | Daily | `nifty_daily.csv` (official weighted-avg close) | 1 |
-| `range_detector_75min.py` | 75-min | `nifty.csv` resampled (day-anchored, Apollo method) | 5 |
+| `range_detector.py` | ADX-gated + Williams Fractal | Daily | `nifty_daily.csv` |
+| `range_detector_75min.py` | ADX-gated + Williams Fractal | 75-min | `nifty.csv` resampled |
+| `range_detector_pa.py` | Price-action range setters | Daily / any N-min | `nifty_daily.csv` or `nifty.csv` resampled |
+| `resample.py` | — | — | Shared day-anchored resampler (used by `range_detector_pa.py`) |
+
+---
 
 ## Usage
 
+### ADX method (daily)
 ```bash
-# Single chart — last N months
 python range_detector.py [--months 3]
-python range_detector_75min.py [--months 2]
-
-# Full history — one chart per year + episodes CSV
 python range_detector.py --all [--no-browser]
+```
+
+### ADX method (75-min)
+```bash
+python range_detector_75min.py [--months 2]
 python range_detector_75min.py --all [--no-browser]
 ```
 
-### Key arguments
+### PA method
+```bash
+# Daily — single chart (last N months)
+python range_detector_pa.py --timeframe daily --start-date 2023-05-23 [--months 6]
+
+# Daily — full history
+python range_detector_pa.py --timeframe daily --start-date 2023-05-23 --all [--no-browser]
+
+# Intraday (e.g. 75-min)
+python range_detector_pa.py --timeframe 75 --start-date "2024-01-02 09:15" [--months 2]
+```
+
+### Key PA arguments
 
 | Flag | Default | Description |
 |---|---|---|
-| `--months N` | 3 (daily) / 2 (75-min) | Months to display in single-chart mode |
-| `--adx-threshold` | 20 | ADX below this = ranging |
-| `--adx-period` | 14 | Wilder ADX period |
-| `--swing-strength` | 3 | Williams Fractal lookahead/lookback in bars |
+| `--timeframe` | `daily` | `daily` or integer minutes (`75`, `15`, `5`, `3`) |
+| `--start-date` | (required) | Initial range setter: `YYYY-MM-DD` or `"YYYY-MM-DD HH:MM"` |
+| `--min-range-bars` | 5 | Min bars for established range (drawn solid; below = dashed) |
+| `--months N` | all from start | Months to display in single-chart mode |
 | `--all` | off | Full history, one chart per year |
 | `--no-browser` | off | Save HTML without opening |
+
+---
 
 ## Outputs (`outputs/`)
 
 HTML files and CSVs are gitignored — generated locally on demand.
 
-| File | Description |
-|---|---|
-| `range_chart.html` | Default single-chart (daily) |
-| `range_chart_YYYY.html` | Yearly chart (daily, `--all`) |
-| `range_chart_75min.html` | Default single-chart (75-min) |
-| `range_chart_75min_YYYY.html` | Yearly chart (75-min, `--all`) |
-| `range_episodes.csv` | Episode table — daily timeframe |
-| `range_episodes_75min.csv` | Episode table — 75-min timeframe |
+| File | Script | Description |
+|---|---|---|
+| `range_chart.html` | ADX daily | Default single chart |
+| `range_chart_YYYY.html` | ADX daily | Yearly chart (`--all`) |
+| `range_chart_75min.html` | ADX 75-min | Default single chart |
+| `range_chart_75min_YYYY.html` | ADX 75-min | Yearly chart (`--all`) |
+| `range_chart_pa_{tf}.html` | PA | Default single chart |
+| `range_chart_pa_{tf}_{YYYY}.html` | PA | Yearly chart (`--all`) |
+| `range_episodes.csv` | ADX daily | Episode table |
+| `range_episodes_75min.csv` | ADX 75-min | Episode table |
+| `range_episodes_pa_{tf}.csv` | PA | Episode table (always exported) |
 
-### Episode CSV columns
+### Episode CSV columns (PA method)
 
-`episode_start`, `episode_end`, `days` / `bars`, `range_high`, `range_low`,
-`range_mid`, `width_pts`, `width_pct`, `last_close`, `close_pct_in_range`
+`episode_id`, `episode_start`, `episode_end`, `bar_count`, `is_transient`, `direction`
+(`up`/`down`/`initial`), `gap_open`, `range_high`, `range_low`, `range_mid`,
+`width_pts`, `width_pct`
 
-`close_pct_in_range`: 0 = at range low, 100 = at range high.
+---
 
-## Detection Logic
+## PA Detection Logic
+
+1. **Bootstrap**: the candle at `--start-date` is the first range setter; its H/L are the
+   initial range bounds.
+2. **Wick expansion**: if a subsequent candle makes a new H or L but *closes* inside the
+   current bounds, the range expands to absorb the wick.
+3. **New range setter**: if a candle *closes* outside the current bounds, it becomes the new
+   range setter. Its H/L define the new range, subject to gap logic.
+4. **Gap logic**: if the new range setter's open is already outside the previous range
+   (gap open), the inside bound is anchored to the previous range's near boundary rather
+   than the candle's own wick.
+5. **Established vs transient**: episodes with `bar_count < min_range_bars` are drawn dashed
+   (transient); longer episodes are drawn solid (established).
+
+## ADX Detection Logic
 
 1. **Regime**: ADX (Wilder, 14-period) < threshold → ranging
 2. **Episode start**: when ADX first drops below threshold; bounds anchored 4 bars back
-   to capture the consolidation that precedes ADX confirmation lag
 3. **Bounds expansion**: episode high/low expand only on confirmed Williams Fractal swings
-4. **Episode split**: if close exits bounds by more than `breakout_tolerance` (0.2%) while
-   ADX is still low, a new episode starts at the breakout bar
+4. **Episode split**: close exits bounds by more than `breakout_tolerance` while ADX still low
 5. **Episode end**: ADX rises back above threshold
