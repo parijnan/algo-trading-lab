@@ -1,7 +1,8 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: EXPLORATORY** — PA method validated on daily data. Breakout confirmation N=2
-selected. Directional bias visualisation implemented. Use cases designed; none backtested yet.
+**Status: RESEARCH PHASE ACTIVE** — PA method validated. Athena annotation complete.
+VIX signal research spun out to `plans/athena-entry-filter.md`. Remaining range-specific
+work: key level hold rate, range duration distribution, Artemis annotation.
 
 ---
 
@@ -225,24 +226,36 @@ These questions need quantitative answers from the episode CSV + backtests:
 
 ---
 
+## Completed
+
+- **PA range detector validated** against visual inspection (2019–2026 daily data)
+- **Breakout confirmation N=2 selected** — clean durable ranges, false breakouts absorbed
+- **Athena trade annotation** — `research/range_detection/annotate_athena.py` tags all 121
+  historical trades with PA range state (`ep_direction`, `ep_committed`, `ep_established`,
+  `ep_entry_spot_pct`, `key_dist_pct`) and VIX indicators (`vix_st_daily`, `vix_st_75m`,
+  `vix_st_signal`, `vix_bb_pct`, `vix_bb_zone`).
+- **VIX signal analysis** — investigated up-biased underperformance; found that
+  `up + both_up ST + mid BB zone` is the structural weakness. Spun out to its own plan.
+  See `plans/athena-entry-filter.md`.
+
 ## Next Steps
 
 1. **Quantify key level hold rate** ← *resume here*
-   - From the episodes CSV, for each established episode calculate: did price close beyond
-     the key level at any point during the episode?
-   - This answers whether Range Anchor has a structural edge before touching options pricing
+   - From the episodes CSV, for each established episode: did price ever close beyond the
+     key level (range_low for up / range_high for down) during the episode?
+   - Answers whether Range Anchor has structural edge before touching options pricing.
 
-2. **Annotate historical Athena and Apollo backtest trades**
-   - Tag each trade with `range_pct`, `direction`, `episode_start` at entry
-   - Purely observational — identify whether range state at entry correlates with P&L
-
-3. **Range duration distribution**
+2. **Range duration distribution**
    - From the episodes CSV: bar_count distribution for established episodes (P25/P50/P75)
-   - Informs realistic theta collection window for Range Anchor
+   - Informs realistic theta collection window for Range Anchor.
 
-4. **Decide use cases**
-   - Based on above findings, decide which of the identified use cases to pursue first
-   - Design targeted backtests for each chosen application
+3. **Artemis trade annotation**
+   - Extend `resample.py` to support Sensex as a data source (trivial path constant change)
+   - Run the same PA range annotation on Artemis historical trades
+
+4. **Decide additional range-based use cases**
+   - After key level hold rate and duration distribution are quantified, decide whether to
+     build an entry filter, strike placement aid, or range-break exit for any strategy.
 
 ---
 
