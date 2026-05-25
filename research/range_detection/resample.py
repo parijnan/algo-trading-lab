@@ -2,8 +2,9 @@
 resample.py — shared data loading and resampling for range detection scripts.
 
 Supports:
-  - 'daily'  : reads nifty_daily.csv directly
-  - integer N: resamples 1-min nifty.csv to N-minute bars (day-anchored)
+  - 'daily'          : reads nifty_daily.csv directly (2023-05-23+)
+  - 'daily_extended' : resamples 1-min nifty.csv to daily (2019-01-28+, full history)
+  - integer N        : resamples 1-min nifty.csv to N-minute bars (day-anchored)
 """
 
 import os
@@ -19,7 +20,7 @@ MARKET_CLOSE = '15:30'
 
 
 def timeframe_label(timeframe) -> str:
-    if timeframe == 'daily':
+    if timeframe in ('daily', 'daily_extended'):
         return 'daily'
     return f'{timeframe}min'
 
@@ -80,13 +81,47 @@ def resample_intraday(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return result.set_index('time_stamp').sort_index()
 
 
+def resample_daily(df: pd.DataFrame) -> pd.DataFrame:
+    """Resample 1-min data to daily OHLC bars (day-anchored, market hours only)."""
+    open_time  = pd.Timestamp(MARKET_OPEN).time()
+    close_time = pd.Timestamp(MARKET_CLOSE).time()
+    candles = []
+
+    for date, day_df in df.groupby(df['time_stamp'].dt.date):
+        day_df = day_df[
+            (day_df['time_stamp'].dt.time >= open_time) &
+            (day_df['time_stamp'].dt.time <= close_time)
+        ]
+        if day_df.empty:
+            continue
+        candles.append({
+            'time_stamp': pd.Timestamp(date),
+            'open':   day_df['open'].iloc[0],
+            'high':   day_df['high'].max(),
+            'low':    day_df['low'].min(),
+            'close':  day_df['close'].iloc[-1],
+            'volume': day_df['volume'].sum(),
+        })
+
+    result = pd.DataFrame(candles).dropna(subset=['open', 'high', 'low', 'close'])
+    return result.set_index('time_stamp').sort_index()
+
+
+def load_daily_extended() -> pd.DataFrame:
+    """Daily OHLC resampled from 1-min data — full history from 2019-01-28."""
+    raw = _load_1min()
+    return resample_daily(raw)
+
+
 def load_data(timeframe) -> pd.DataFrame:
     """
     Load and return OHLC data for the given timeframe.
-    timeframe: 'daily' or int (minutes)
+    timeframe: 'daily' | 'daily_extended' | int (minutes)
     Returns DataFrame indexed by timestamp.
     """
     if timeframe == 'daily':
         return load_daily()
+    if timeframe == 'daily_extended':
+        return load_daily_extended()
     raw = _load_1min()
     return resample_intraday(raw, int(timeframe))

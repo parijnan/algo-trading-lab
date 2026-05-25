@@ -391,7 +391,7 @@ def compute_pa_ranges(df: pd.DataFrame, start_idx: int,
 
 def _find_start_idx(df: pd.DataFrame, start_date_str: str, timeframe) -> int:
     target = (pd.Timestamp(start_date_str).normalize()
-              if timeframe == 'daily' else pd.Timestamp(start_date_str))
+              if timeframe in ('daily', 'daily_extended') else pd.Timestamp(start_date_str))
     idx = df.index.searchsorted(target)
     if idx >= len(df):
         raise ValueError(f'--start-date {start_date_str} is beyond the data range.')
@@ -399,11 +399,11 @@ def _find_start_idx(df: pd.DataFrame, start_date_str: str, timeframe) -> int:
 
 
 def _is_intraday(timeframe) -> bool:
-    return timeframe != 'daily'
+    return timeframe not in ('daily', 'daily_extended')
 
 
 def _x_ext(timeframe):
-    return (pd.Timedelta(days=1) if timeframe == 'daily'
+    return (pd.Timedelta(days=1) if timeframe in ('daily', 'daily_extended')
             else pd.Timedelta(minutes=int(timeframe)))
 
 
