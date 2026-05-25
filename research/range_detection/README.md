@@ -53,6 +53,7 @@ python range_detector_pa.py --timeframe 75 --start-date "2024-01-02 09:15" [--mo
 | `--timeframe` | `daily` | `daily` or integer minutes (`75`, `15`, `5`, `3`) |
 | `--start-date` | (required) | Initial range setter: `YYYY-MM-DD` or `"YYYY-MM-DD HH:MM"` |
 | `--min-range-bars` | 5 | Min bars for established range (drawn solid; below = dashed) |
+| `--breakout-confirm` | 1 | Extra closes required outside range before committing a new setter (0 = immediate) |
 | `--months N` | all from start | Months to display in single-chart mode |
 | `--all` | off | Full history, one chart per year |
 | `--no-browser` | off | Save HTML without opening |
@@ -89,9 +90,11 @@ HTML files and CSVs are gitignored — generated locally on demand.
    initial range bounds.
 2. **Wick expansion**: if a subsequent candle makes a new H or L but *closes* inside the
    current bounds, the range expands to absorb the wick.
-3. **New range setter**: if a candle *closes* outside the current bounds, it becomes the new
-   range setter. Its H/L define the new range, subject to gap logic.
-4. **Gap logic**: if the new range setter's open is already outside the previous range
+3. **New range setter**: if a candle *closes* outside the current bounds, it becomes a
+   *candidate* range setter. With `--breakout-confirm N`, the next N closes must also stay
+   outside before the candidate is committed. If price returns inside first, the candidate
+   bar is absorbed as a wick extension and the range continues unchanged.
+4. **Gap logic**: if the committed range setter's open is already outside the previous range
    (gap open), the inside bound is anchored to the previous range's near boundary rather
    than the candle's own wick.
 5. **Established vs transient**: episodes with `bar_count < min_range_bars` are drawn dashed
