@@ -99,6 +99,11 @@ HTML files and CSVs are gitignored — generated locally on demand.
    than the candle's own wick.
 5. **Established vs transient**: episodes with `bar_count < min_range_bars` are drawn dashed
    (transient); longer episodes are drawn solid (established).
+6. **Directional bias**: established episodes are colour-coded by direction. Green = up-biased
+   (setter broke upward; `range_low` = key support, drawn with a thicker line). Red =
+   down-biased (`range_high` = key resistance). Blue = initial episode (no prior range).
+   Grey dashed = transient regardless of direction. The bottom annotation includes the bias
+   label and key level price.
 
 ## ADX Detection Logic
 
