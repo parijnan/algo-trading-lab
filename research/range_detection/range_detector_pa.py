@@ -40,18 +40,36 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Colours
 # ---------------------------------------------------------------------------
-_ESTABLISHED_FILL = 'rgba(30, 120, 255, 0.12)'
-_ESTABLISHED_LINE = 'rgba(30, 120, 255, 0.70)'
-_ESTABLISHED_MID  = 'rgba(30, 120, 255, 0.45)'
-_TRENDING_FILL    = 'rgba(255, 140, 0, 0.10)'
-_TRENDING_LINE    = 'rgba(255, 140, 0, 0.55)'
-_TRENDING_MID     = 'rgba(255, 140, 0, 0.30)'
-_TRANSIENT_FILL   = 'rgba(160, 160, 160, 0.08)'
-_TRANSIENT_LINE   = 'rgba(160, 160, 160, 0.40)'
-_TRANSIENT_MID    = 'rgba(160, 160, 160, 0.30)'
-_SETTER_UP_COLOR  = '#00e676'
-_SETTER_DN_COLOR  = '#ff5252'
-_SETTER_IN_COLOR  = '#ffeb3b'
+# Established — up-biased (range setter broke upward; range_low = key support)
+_UP_FILL = 'rgba(0, 200, 80, 0.12)'
+_UP_LINE = 'rgba(0, 200, 80, 0.70)'
+_UP_MID  = 'rgba(0, 200, 80, 0.35)'
+_UP_KEY  = 'rgba(0, 220, 90, 0.95)'   # key support line
+
+# Established — down-biased (range setter broke downward; range_high = key resistance)
+_DN_FILL = 'rgba(255, 70, 70, 0.12)'
+_DN_LINE = 'rgba(255, 70, 70, 0.70)'
+_DN_MID  = 'rgba(255, 70, 70, 0.35)'
+_DN_KEY  = 'rgba(255, 80, 80, 0.95)'  # key resistance line
+
+# Established — initial/neutral (very first episode, no prior range to break)
+_NEUTRAL_FILL = 'rgba(30, 120, 255, 0.12)'
+_NEUTRAL_LINE = 'rgba(30, 120, 255, 0.70)'
+_NEUTRAL_MID  = 'rgba(30, 120, 255, 0.45)'
+
+# ADX-trending (hybrid mode only)
+_TRENDING_FILL = 'rgba(255, 140, 0, 0.10)'
+_TRENDING_LINE = 'rgba(255, 140, 0, 0.55)'
+_TRENDING_MID  = 'rgba(255, 140, 0, 0.30)'
+
+# Transient — all grey regardless of direction
+_TRANSIENT_FILL = 'rgba(160, 160, 160, 0.08)'
+_TRANSIENT_LINE = 'rgba(160, 160, 160, 0.40)'
+_TRANSIENT_MID  = 'rgba(160, 160, 160, 0.30)'
+
+_SETTER_UP_COLOR = '#00e676'
+_SETTER_DN_COLOR = '#ff5252'
+_SETTER_IN_COLOR = '#ffeb3b'
 
 # ---------------------------------------------------------------------------
 # ADX (Wilder)
@@ -443,19 +461,33 @@ def plot(result: pd.DataFrame, episodes: list, timeframe,
         y0, y1  = ep['range_low'], ep['range_high']
         mid     = ep['range_mid']
         state   = _episode_state(ep, hybrid_mode, min_range_bars)
+        d       = ep['direction']
 
-        if state == 'established':
-            fill  = _ESTABLISHED_FILL
-            line  = dict(color=_ESTABLISHED_LINE, width=1)
-            mline = dict(color=_ESTABLISHED_MID,  width=1, dash='dot')
+        if state == 'established' and d == 'up':
+            fill  = _UP_FILL
+            line  = dict(color=_UP_LINE, width=1)
+            mline = dict(color=_UP_MID,  width=1, dash='dot')
+            key_y, key_color = y0, _UP_KEY   # range_low = key support
+        elif state == 'established' and d == 'down':
+            fill  = _DN_FILL
+            line  = dict(color=_DN_LINE, width=1)
+            mline = dict(color=_DN_MID,  width=1, dash='dot')
+            key_y, key_color = y1, _DN_KEY   # range_high = key resistance
+        elif state == 'established':              # 'initial' direction
+            fill  = _NEUTRAL_FILL
+            line  = dict(color=_NEUTRAL_LINE, width=1)
+            mline = dict(color=_NEUTRAL_MID,  width=1, dash='dot')
+            key_y, key_color = None, None
         elif state == 'trending':
             fill  = _TRENDING_FILL
             line  = dict(color=_TRENDING_LINE, width=1, dash='dash')
             mline = dict(color=_TRENDING_MID,  width=1, dash='dot')
-        else:
+            key_y, key_color = None, None
+        else:                                     # transient
             fill  = _TRANSIENT_FILL
             line  = dict(color=_TRANSIENT_LINE, width=1, dash='dash')
             mline = dict(color=_TRANSIENT_MID,  width=1, dash='dot')
+            key_y, key_color = None, None
 
         fig.add_shape(type='rect', xref='x', yref='y',
                       x0=x0, x1=x1, y0=y0, y1=y1,
@@ -463,6 +495,11 @@ def plot(result: pd.DataFrame, episodes: list, timeframe,
         fig.add_shape(type='line', xref='x', yref='y',
                       x0=x0, x1=x1, y0=mid, y1=mid,
                       line=mline, layer='below')
+        if key_color:
+            fig.add_shape(type='line', xref='x', yref='y',
+                          x0=x0, x1=x1, y0=key_y, y1=key_y,
+                          line=dict(color=key_color, width=2),
+                          layer='below')
 
     # Range setter markers
     up_x, up_y, up_txt = [], [], []
@@ -538,10 +575,15 @@ def plot(result: pd.DataFrame, episodes: list, timeframe,
     adx_str    = (f' | ADX {last_ep["avg_adx"]:.1f}'
                   if 'avg_adx' in last_ep and not np.isnan(last_ep['avg_adx'])
                   else '')
+    bias_map   = {'up': ' ↑ UP BIAS  key support', 'down': ' ↓ DOWN BIAS  key resistance'}
+    key_level  = (f' @ {last_ep["range_low"]:.0f}' if last_ep['direction'] == 'up'
+                  else f' @ {last_ep["range_high"]:.0f}' if last_ep['direction'] == 'down'
+                  else '')
+    bias_str   = bias_map.get(last_ep['direction'], '')
     ann = (f'Last range: {last_ep["range_low"]:.0f}–{last_ep["range_high"]:.0f}'
            f' | mid {last_ep["range_mid"]:.0f}'
            f' | close {last_close:.0f} ({pct:.1f}% in range)'
-           f' | {last_ep["bar_count"]} bars{adx_str} [{state}]')
+           f' | {last_ep["bar_count"]} bars{adx_str} [{state}]{bias_str}{key_level}')
     fig.add_annotation(text=ann, xref='paper', yref='paper',
                        x=0.01, y=0.01, showarrow=False,
                        font=dict(size=11, color='#ccc'),
