@@ -473,6 +473,55 @@ more significant than VRP. This is the spot-containment axis, not the vega axis,
 directly validates `plans/range-detection-research.md` as the correct research direction for
 Artemis enhancement.
 
+### 15.5 Athena blow-up analysis — price-only turning-point signal (2026-05-26)
+
+**Motivation:** Athena blow-ups have two modes: (a) spot rallies away from centre ("parachute"),
+(b) VIX cools dramatically (vega bleed). The earlier Athena-trade analysis confirmed vega
+exposure: VIX change vs Athena P&L ρ=+0.339, p=0.0001; "VIX cools >2pt" cohort: 38% win,
+avg -1.8 P&L. Question: can price-only VIX features (proximity to resistance + rolling over)
+forecast VIX cooling ahead of time?
+
+**Signal tested:** `pos_vs_max = VIX / rolling(20).max()` (proximity to 20-day trailing max);
+`roc3 = VIX.pct_change(3)` (3-day slope). Setup fires when pos_vs_max ≥ 0.85 AND roc3 < 0
+("VIX near resistance and rolling over"). All features shifted by 1 day (no lookahead).
+
+Full validation in `research/vix_router/vix_turning_point.py`. n=1,782 daily bars (2019–2026).
+
+**Full-sample Spearman battery:**
+All ρ near zero, all p > 0.25 (not significant). pos_in_range → fwd_chg_h5: ρ=-0.052,
+p=0.028 — marginally significant but not actionable (sign-unstable, effect size trivial).
+
+**Conditional event study (primary threshold: pm_thresh=0.85, roc3<0):**
+- Setup fires 421/1,782 days (23.6%) — fires too frequently to be a selective skip signal.
+- h=3: on_hit=50.4% vs base 52.2% (Δ=-1.8pp). h=5: on_hit=48.7% vs base 52.4% (Δ=-3.7pp).
+  Setup fires → **VIX is slightly LESS likely to fall**, not more. Anti-predictive direction.
+- Big cooling: P(VIX drops >2pt over h=5) when fired = 8.3% vs base 11.2%. Large cooling
+  events are *underrepresented* on fired days — the opposite of the Athena-skip use case.
+
+**Regime-conditioned (VIX>20, the Athena-relevant zone, n=423 days):**
+- h=5: on_hit=61.6% vs base 63.1% (Δ=-1.5pp), MWU p=0.618. Complete null.
+- VIX>22 (n=270): on_hit=68.6% vs base 68.5% (Δ≈0), MWU p=0.334. Complete null.
+- The "maybe it only works in elevated VIX" variant also fails cleanly.
+
+**Threshold sensitivity:** Stricter pos_vs_max thresholds (0.85→0.90→0.95) shrink the hit_delta
+toward zero, not sharpen it. Real signals tighten under selective filtering; noise signals don't.
+
+**Per-year stability:** Hit-rate oscillates with sign flips: 2019–2020 fired → VIX MORE likely
+to fall; 2021–2023 fired → VIX LESS likely to fall. No consistent year-over-year direction.
+
+**Root cause:** "VIX near 20d max + rolling over" identifies **low-volatility compressed regimes**
+(VIX went up slightly, stalled, minor pullback). In such regimes VIX tends to stay compressed —
+the setup predicts regime persistence, not a coming fall. The large cooling events (the blow-up
+risk) happen in elevated/trending VIX regimes where this setup rarely fires.
+
+**Verdict:** Price-only VIX turning-point detection is NOT viable as an Athena blow-up filter.
+The signal does not predict VIX cooling. The hard VIX gate (16–25) remains the primary
+blow-up protection; no supplementary price-level signal is warranted based on VIX's own history.
+Further research on exogenous data (options skew, term structure) would require new data
+plumbing and is out of scope unless a clear hypothesis emerges.
+
+---
+
 ### 15.4 Verdict
 
 **The symmetric VIX-direction router is not supported.** Two independent failure modes:
