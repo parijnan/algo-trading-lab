@@ -1,6 +1,9 @@
 # Plan: Athena Entry Filter — VIX Signal Research
 
 **Status: Research in progress. No filter condition confirmed yet.**
+**Routing scope moved → see `plans/vix-router-research.md` (Athena⇄Artemis VIX-direction
+router). This file remains the reference for the annotation infrastructure and the corrected
+VIX-signal findings, which the router work builds on.**
 
 ---
 

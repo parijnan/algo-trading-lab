@@ -1,0 +1,326 @@
+# Plan: VIX-Direction Router — Athena ⇄ Artemis
+
+**Status: Research / design. No forecast or routing logic validated yet.**
+**Supersedes the routing scope of `plans/athena-entry-filter.md` (which remains valid for the
+annotation infrastructure and the corrected VIX-signal findings).**
+
+---
+
+## 1. Objective
+
+Replace the **hard VIX-level gate** that currently decides between Athena and Artemis with a
+**forward-VIX-direction forecast**. The two strategies are opposite-vega bets on the same
+variable:
+
+- **Athena** (Nifty double calendar) is **net long vega** — profits when VIX *rises*.
+- **Artemis** (Sensex iron condor, post-Sep-2025) is **net short vega** — profits when VIX
+  *falls / stays crushed*.
+
+If we can forecast the sign of the VIX move over the trade's vega-exposure window with
+better-than-coinflip, mechanism-grounded accuracy:
+
+- VIX expected to **fall** → deploy **Artemis**
+- VIX expected to **rise** → deploy **Athena**
+- Ambiguous → fall back to the current hard gate, or skip
+
+**Optimise as far as the data honestly supports, without overfitting.** The guardrails in
+§10 are not optional.
+
+---
+
+## 2. Background: strategies, lifecycles, and the Sep-2025 regime split
+
+There is a hard regime break at **Sep 2025** driven by the Nifty expiry-day change
+(Thursday → Tuesday) and the Sensex expiry settling on Thursday.
+
+| | Pre-Sep-2025 | Post-Sep-2025 |
+|---|---|---|
+| **Athena** underlying | Nifty | Nifty |
+| Athena entry | Wednesday ~10:30 | **shared window** (Mon-ish) ~10:30 |
+| Athena hold | ~5 trading sessions (Wed→Wed) | confirm from trade summary |
+| **Artemis** underlying | **Nifty** | **Sensex** (switched; Sensex expiry = Thursday) |
+| Artemis entry | own Nifty schedule | **same window as Athena** ~10:30 |
+| Artemis hold | weekly | ~Mon→Wed/Thu; confirm from trade summary |
+
+**Key consequence:** **post-Sep-2025 Athena and Artemis enter at the same window**, so the
+router becomes a genuine **binary either/or decision at a single point in time** — exactly the
+clean routing problem we want. Pre-Sep-2025 they ran on separate schedules, so for that era
+the forecast is applied to each strategy's own entry independently.
+
+**Current hard gate (to be replaced):**
+- VIX < 16 → Artemis (`VIX_THRESHOLD = 16.0` in `artemis_backtest/configs.py`)
+- VIX 16–25 → Athena (`VIX_FILTER_LOW/HIGH` in `athena_backtest/configs.py`)
+- VIX > 25 → neither
+
+**Why the level gate is crude:** a VIX *level* is a weak proxy for VIX *direction*. The whole
+point of this project is that the same VIX level can precede very different forward paths.
+
+---
+
+## 3. Prerequisite cleanup (do first, separately)
+
+- **Entry-time bug**: Artemis logs entry at `10:31` (e.g. `2025-09-01 10:31:00`). The
+  intended entry is **10:30** — use the **open of the 10:31 one-minute candle**, matching
+  Athena's convention (`get_1min_value(..., 'open')` at the entry timestamp). Fix in
+  `artemis_backtest/backtest.py` and re-baseline before any routing comparison, so both
+  engines read VIX/spot at the identical instant. Keep this as its own commit — it is not part
+  of the router research.
+
+---
+
+## 4. Core idea: one forecast, consumed by both strategies
+
+Build a **single strategy-agnostic VIX-direction forecast** keyed by (date, horizon). Both
+strategies read the same forecast at their entry; the routing rule (§9) interprets it through
+each strategy's vega sign. Do **not** build two separately-tuned signals — that doubles the
+overfitting surface for no reason.
+
+---
+
+## 5. The anti-overfitting backbone: decouple forecast from trade P&L
+
+**This is the most important methodological decision in the plan.**
+
+We have ~121 Athena trades but **~1,800 daily VIX observations (2019→2026)**. Tuning a signal
+against trade P&L fits to 121 noisy outcomes contaminated by strikes, spot path, and the
+parachute → guaranteed overfit.
+
+Instead, **validate the forecast on the full daily VIX series, independent of any strategy:**
+
+1. For every day *t*, compute candidate signals (§6).
+2. Compute the realised forward VIX change over each horizon *h* (§5.1).
+3. Score predictive power with **rank statistics** (§7) — near-zero free parameters.
+4. Only signals stable across the **full sample AND sub-periods** graduate to routing (§9).
+5. The trade backtest (§8, last phase) is a **confirmation step, not the fitting step.**
+
+This gives ~15× the sample, strips strategy noise, and decouples signal validation from the
+thing being optimised.
+
+### 5.1 Forecast target
+
+```
+fwd_vix_chg_h(t) = VIX_close(t + h) − VIX_close(t)
+```
+- Primary label: `sign(fwd_vix_chg_h)` and the magnitude.
+- Secondary (vega-path nuance): `fwd_max_up = max(VIX[t..t+h]) − VIX[t]` and
+  `fwd_max_dn = VIX[t] − min(VIX[t..t+h])`. Calendars/condors carry vega for much of the
+  hold, so the *path* matters, not just the endpoint — but start with the endpoint sign; it
+  is the cleanest, most robust target.
+
+### 5.2 Horizons
+
+Match the **vega-exposure window** of each strategy. Derive the exact modal hold from the
+trade summaries (`entry_time → exit_time` deltas in trading sessions) rather than assuming:
+
+- `h_athena` ≈ 5 sessions pre-Sep (confirm post-Sep value from the summary).
+- `h_artemis` ≈ 2–3 sessions (confirm from `trade_summary_sensex.csv`).
+
+If post-Sep holds are similar, a single ~weekly horizon can serve both; if not, validate at
+each horizon separately.
+
+---
+
+## 6. Candidate signals — ranked by *mechanism*, not by fit
+
+State the economic rationale **before** testing each. Two well-grounded signals beat ten
+fitted ones.
+
+### 6.1 Variance Risk Premium (VRP) — **top priority**
+Realised Nifty vol vs implied (VIX). When VIX ≫ realised, the premium is rich and tends to
+compress (VIX falls → Artemis); when realised catches up to / exceeds VIX, VIX tends to rise
+(→ Athena). Strongest theoretical basis; fully computable from data on hand.
+
+```
+r_t      = ln(close_t / close_{t-1})                      # daily Nifty log returns
+RV_n(t)  = std(r over trailing n sessions) * sqrt(252) * 100   # annualised %, comparable to VIX
+VRP(t)   = VIX_close(t) − RV_n(t)                         # vol points  (also try ratio VIX/RV)
+```
+- Try `n ∈ {10, 20}` (cap the parameter search — two values, not a sweep).
+- Optional refinement: Parkinson / Garman-Klass realised vol from OHLC (more efficient than
+  close-to-close) — only if close-to-close shows promise.
+
+### 6.2 VIX Bollinger %B / relative position — **active lead**
+Already computed in `annotate_athena.py` (`vix_bb_pct`, `vix_bb_zone`). The corrected
+finding that **`lower_zone` is consistently weak for Athena** is the first concrete
+hypothesis: it may mark a calm/decaying regime where VIX grinds lower — i.e. an **Artemis**
+signal. Test directly (§8 step 2).
+
+### 6.3 VIX z-score vs longer MA
+`z(t) = (VIX(t) − SMA_m(VIX)) / STD_m(VIX)`, `m ∈ {20, 50}`. A second mean-reversion framing
+independent of band width. Use only if it adds orthogonal signal to VRP/%B.
+
+### 6.4 VIX term structure (futures contango/backwardation) — **data check first**
+The gold standard for forward VIX. Contango → spot VIX tends to rise toward futures /
+backwardation → VIX expected to fall. **Action: check whether India VIX futures data exists
+anywhere in the pipeline.** Liquidity is likely thin — if unavailable, drop this route.
+
+### 6.5 Supertrend / ROC momentum — **demoted to minor feature**
+We already proved ST at entry does not predict VIX over the hold (winners +1.28, losers −0.94,
+both flagged `both_up`). ST is lagging and trend-following; VIX is mean-reverting. Keep ST as
+at most a small auxiliary feature; it must not anchor the forecast.
+
+### 6.6 The asymmetry that shapes everything
+VIX **spikes up violently, grinds down slowly**. The grind-down is far more forecastable than
+spikes (which need unforecastable catalysts). Therefore:
+- The "VIX will fall → Artemis" side is the **easier, more reliable** bet.
+- The "VIX will rise → Athena" side is **harder**.
+This is a *design constraint*, not a fitted parameter — see §9.
+
+---
+
+## 7. Validation methodology
+
+**Tools:** `pandas`, `numpy`, `scipy.stats` (`spearmanr`, optionally `pointbiserialr`),
+optional `matplotlib`/`plotly` for decile charts. Reuse `research/range_detection/resample.py`
+(`resample_daily`, `resample_intraday`) and `apollo_backtest/technical_indicators.py`
+(`SupertrendIndicator`).
+
+For each candidate signal × horizon, on the **full daily VIX series**:
+
+1. **Rank correlation** — `spearmanr(signal(t), fwd_vix_chg_h(t))`. Report ρ and p-value.
+2. **Decile monotonicity** — `pd.qcut(signal, 10)`; per decile report mean `fwd_vix_chg`,
+   median, and **sign hit-rate**. A usable signal shows a near-monotone gradient across
+   deciles, not just a significant ρ.
+3. **Directional hit-rate** — fraction of days where `sign(signal-implied direction)` matches
+   `sign(fwd_vix_chg)`. Compare against the base rate (VIX falls slightly more often than it
+   rises — establish the base rate first).
+4. **Walk-forward / sub-period stability** — compute ρ per calendar year (2019…2026). The
+   sign of ρ must be **stable**; a signal that flips sign across years is overfit noise.
+5. **Regime conditioning** — repeat within the gate-relevant bands (VIX < 16 for
+   Artemis-relevant days, 16–25 for Athena-relevant days), since the live decision only
+   happens inside those bands.
+
+**Kill criterion:** if `|ρ| < ~0.10` on the full sample **and** the per-year sign is unstable,
+drop the signal. Do not rescue it by adding parameters.
+
+---
+
+## 8. Phased research routes (ordered; each cheap and falsifiable)
+
+Each phase is a self-contained script under `research/` (suggest a new
+`research/vix_router/` directory). Do not touch production strategy code until the final
+phase.
+
+**Phase 0 — Horizons & base rates.**
+Derive modal holds for both strategies (pre/post Sep) from the trade summaries. Establish the
+unconditional base rate: P(VIX falls over h) for each horizon. *Output:* the horizons to use
+and the coinflip benchmark every signal must beat.
+
+**Phase 1 — VRP forecast validation (full VIX history).**
+Build VRP (§6.1), run the full §7 battery at `h_athena` and `h_artemis`.
+*Success:* stable ρ with monotone deciles and hit-rate clearly above base rate.
+*Kill:* fails §7 kill criterion → VRP is not the signal; proceed to Phase 2 leads only.
+
+**Phase 2 — `lower_zone` / BB %B hypothesis.**
+Test directly whether `vix_bb_zone == 'lower_zone'` (and the continuous `vix_bb_pct`) precedes
+flat-to-falling VIX over both horizons, full history. *Success:* confirms BB position as an
+Artemis signal and explains the Athena `lower_zone` weakness mechanistically.
+
+**Phase 3 — Combine (only if ≥2 signals survive).**
+If VRP and BB %B both survive and are **orthogonal** (low mutual correlation), combine by
+**rank-average** (not a fitted regression — keeps parameter budget near zero). Re-run §7 on
+the blend. Reject the blend if it does not beat the best single signal out-of-the-box.
+
+**Phase 4 — Term-structure route (conditional on §6.4 data check).**
+Only if India VIX futures data is found. Test contango/backwardation as a forward-VIX signal.
+
+**Phase 5 — Routing logic + backtest (last).**
+Translate the surviving forecast into the router (§9). Backtest routing vs the current hard
+gate. **Post-Sep-2025 is the clean shared-window regime** but a short sample (~8 months) —
+report it separately from the reconstructed pre-Sep per-strategy application. Compare on
+P&L, win-rate, R:R, and max consecutive losses, per strategy and combined.
+
+---
+
+## 9. Routing logic design
+
+**Translate forecast → decision through each strategy's vega sign, with built-in asymmetry.**
+
+Let `p_fall` be the forecast probability/score that VIX falls over the horizon.
+
+- **Post-Sep-2025 (shared entry window — binary choice):**
+  - `p_fall` high (≥ a *moderate* threshold) → **Artemis** (the easier, more reliable side).
+  - `p_fall` low, i.e. confident VIX rises (≤ a *stricter* threshold) → **Athena**.
+  - In between → fall back to the current hard VIX-level gate, or skip.
+  - **Confidence asymmetry is deliberate:** Artemis clears a lower bar because VIX falls are
+    more forecastable; Athena (betting on the harder "rise") must clear a higher bar. This is
+    grounded in §6.6, not tuned to P&L.
+  - **Open design question for the user:** do you want *strict mutual exclusivity* (exactly
+    one strategy per window) or is "neither" / "both on different underlyings" acceptable?
+    This decides whether the two thresholds must partition the line or can leave a gap.
+
+- **Pre-Sep-2025 (separate schedules):** apply the same forecast at each strategy's own entry
+  and horizon, replacing only that strategy's VIX-level gate. No binary contention.
+
+Thresholds are calibrated on the **forecast distribution** (e.g. score quantiles), **not**
+searched against trade P&L.
+
+---
+
+## 10. Overfitting guardrails (hard rules)
+
+- Forecaster validated on **VIX history**, never tuned on trade P&L.
+- Every signal needs a **stated economic mechanism before** testing.
+- **Walk-forward / per-year sign stability** required — not just full-sample significance.
+- **Parameter budget ≤ 2–3** across the entire forecaster. No grid sweeps of lookbacks/zones.
+- **Confidence-asymmetric routing by design**, not by search.
+- Combine signals by **rank-average**, not fitted weights, unless a regression is justified by
+  a much larger validated sample.
+- Report the **post-Sep routing backtest separately** and treat its short sample with
+  appropriate skepticism.
+
+---
+
+## 11. Data & infrastructure reference
+
+**Data files (`data_pipeline/data/indices/`):**
+- `nifty.csv` — 1-min Nifty (2019-01-28→), tz-aware (+05:30).
+- `india_vix.csv` — 1-min VIX, tz-aware (+05:30).
+- `nifty_daily.csv`, `india_vix_daily.csv`, `sensex.csv`, `sensex_daily.csv` — daily series.
+
+**Trade summaries:**
+- `athena_backtest/data/trade_summary.csv`
+- `artemis_backtest/data/trade_summary_sensex.csv` (post-Sep Sensex era)
+
+**Reusable code:**
+- `research/range_detection/resample.py` — `resample_daily`, `resample_intraday` (day-anchored).
+- `research/range_detection/annotate_athena.py` — reference for VIX signal computation and the
+  no-lookahead lookup pattern; already emits `vix_bb_pct`/`vix_bb_zone`/`vix_st_*`.
+- `apollo_backtest/technical_indicators.py` — `SupertrendIndicator(period, multiplier)`
+  (expects `High/Low/Close` capitalised; returns `Supertrend` column).
+
+**Critical gotchas (learned the hard way):**
+- **VIX timezone:** load 1-min VIX with `pd.to_datetime(...).dt.tz_localize(None)` — **NOT**
+  `tz_convert(None)`. The CSV timestamps are IST (+05:30); `tz_convert(None)` shifts them to
+  UTC (09:15 IST → 03:45), which silently corrupts any intraday resample. This bug previously
+  turned the 75-min VIX Supertrend into a second daily ST.
+- **75-min bar alignment:** the day-anchored 09:15 bar spans 09:15→10:29 and is complete
+  *before* the 10:30 entry — correct to use at entry. Verify the bar timestamp, don't assume.
+- **No lookahead:** daily signals must use the **previous** completed daily bar at a 10:30
+  entry (the entry-day daily bar closes at 15:30, unavailable at entry). Intraday signals use
+  bars that complete at/before entry. This is non-negotiable for an honest backtest.
+
+---
+
+## 12. Tools to employ — summary
+
+| Task | Tool |
+|---|---|
+| Data load / resample | `pandas`, `research/range_detection/resample.py` |
+| Realised vol, VRP, z-scores | `numpy` |
+| Rank correlation, hit-rate | `scipy.stats.spearmanr`, `pointbiserialr` |
+| Decile analysis | `pandas.qcut` |
+| Supertrend (aux feature only) | `apollo_backtest/technical_indicators.py` |
+| Decile / path charts (optional) | `matplotlib` or `plotly` |
+| Final routing backtest | `athena_backtest/backtest.py`, `artemis_backtest/backtest.py` |
+
+---
+
+## 13. Where to resume / when to call back
+
+- Start at **Phase 0** (horizons + base rates) → **Phase 1** (VRP). These two either validate
+  the whole direction or kill it cheaply.
+- Come back to discuss if: VRP and BB %B both fail §7 (forecast direction is dead), the
+  combine step doesn't beat single signals, or the post-Sep routing backtest can't beat the
+  hard gate despite a validated forecast (implies the edge is in forecast *confidence* sizing,
+  not binary routing — a different design).
