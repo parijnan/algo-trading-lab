@@ -1,10 +1,10 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: RESEARCH PHASE ACTIVE — validation gate is the immediate next step.**
+**Status: §7 VALIDATION GATE PASSED (2026-05-26) — proceed to §8 use cases.**
 VIX router research is complete (see `plans/vix-router-research.md` §15 — verdict: symmetric
 router not supported; containment is the dominant Artemis P&L driver, ρ=0.32 p=0.0001).
-Range detection is **unblocked and re-prioritised** as the primary research direction.
-Next gate: key-level hold rate + duration distribution (§7).
+Next: Apollo chop-filter annotation + Artemis annotation (§10 step 2), then Artemis
+range-anchored-strike variant backtest (§10 step 3).
 
 ---
 
@@ -153,18 +153,47 @@ confirm a new episode or you eat the whole breakout loss).
 
 ---
 
-## 7. Validation Gate (do FIRST — kills or greenlights everything downstream)
+## 7. Validation Gate — PASSED (2026-05-26)
 
-Every containment use case depends on ranges actually containing price. Answer these two from
-the episodes CSV before building anything:
+Script: `research/range_detection/validate_gate.py`
+Data: 1,808 trading days (2019-01-28 → 2026-05-25); 183 episodes, 107 established.
 
-1. **Key-level hold rate** — across established ranges (2019–2026), what fraction stay inside
-   the key level (range_low for up / range_high for down) for ≥5 bars after commitment? If
-   ranges don't hold, stop — there is no containment edge.
-2. **Duration distribution** — bar_count P25/P50/P75 for established episodes. Sets the
-   realistic theta window and how much range remains after the 2–3 bar confirmation lag.
+Pre-declared kill thresholds vs results:
 
-Both are cheap (pure pandas on `range_episodes_pa_daily.csv`) and decisive.
+| Criterion | Kill if | Actual | Verdict |
+|---|---|---|---|
+| P50 bar_count | < 7 | **11** | PASS |
+| Artemis hold rate (h=3, bar_count≥6) | < 50% | **88.8%** | PASS |
+| Athena hold rate (h=5, bar_count≥8) | < 30% | **73.8%** | PASS |
+| Wick breach rate (first 5 bars) | > 70% | **44.9%** | PASS |
+
+**Duration distribution (107 established episodes):**
+
+|  | n | P10 | P25 | P50 | P75 | P90 | mean |
+|---|---|---|---|---|---|---|---|
+| All | 107 | 5 | 7 | 11 | 19 | 30 | 15.2 |
+| Up-biased | 69 | 5 | 7 | 9 | 16 | 24 | 13.0 |
+| Down-biased | 38 | 5 | 10 | 15 | 24 | 32 | 19.1 |
+
+**Close-hold rate by horizon:**
+
+| Horizon | All | Up | Down |
+|---|---|---|---|
+| h=3 (Artemis) | 88.8% | 89.9% | 86.8% |
+| h=5 (Athena) | 73.8% | 68.1% | 84.2% |
+| h=7 | 60.7% | 49.3% | 81.6% |
+| h=10 | 42.1% | 31.9% | 60.5% |
+
+**Notable:** Down-biased ranges are both longer-lived (P50=15 vs 9) and hold better at all
+horizons — consistent with the up-drift structural effect. Up-biased ranges are shorter and
+fail sooner (particularly at h≥7). Wick breach rate 44.9%: intraday touches occur but close
+containment is strong.
+
+**Survival function (fraction still active at bar h after commitment):**
+- Up-biased: h=3→90%, h=5→68%, h=7→49%, h=10→32%
+- Down-biased: h=3→87%, h=5→84%, h=7→82%, h=10→61%
+
+**GATE PASSED — all containment use cases unblocked (§8).**
 
 ---
 
