@@ -2,18 +2,26 @@
 resample.py — shared data loading and resampling for range detection scripts.
 
 Supports:
-  - 'daily'          : reads nifty_daily.csv directly (2023-05-23+)
-  - 'daily_extended' : resamples 1-min nifty.csv to daily (2019-01-28+, full history)
-  - integer N        : resamples 1-min nifty.csv to N-minute bars (day-anchored)
+  - 'daily'          : reads <instrument>_daily.csv directly
+  - 'daily_extended' : resamples 1-min <instrument>.csv to daily (full history)
+  - integer N        : resamples 1-min <instrument>.csv to N-minute bars (day-anchored)
+
+instrument: 'nifty' (default) or 'sensex'
+  nifty  daily: 2023-05-23+   1-min: 2019-01-28+
+  sensex daily: 2023-05-23+   1-min: 2024-07-19+
 """
 
 import os
 import pandas as pd
 
-BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT       = os.path.dirname(os.path.dirname(BASE_DIR))
-NIFTY_1MIN_FILE = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'indices', 'nifty.csv')
-NIFTY_DAILY_FILE = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'indices', 'nifty_daily.csv')
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(BASE_DIR))
+_DATA_DIR = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'indices')
+
+_INDICES = {
+    'nifty':  {'1min': 'nifty.csv',        'daily': 'nifty_daily.csv'},
+    'sensex': {'1min': 'sensex.csv',        'daily': 'sensex_daily.csv'},
+}
 
 MARKET_OPEN  = '09:15'
 MARKET_CLOSE = '15:30'
@@ -25,16 +33,22 @@ def timeframe_label(timeframe) -> str:
     return f'{timeframe}min'
 
 
-def load_daily() -> pd.DataFrame:
-    df = pd.read_csv(NIFTY_DAILY_FILE)
+def _resolve(instrument: str, key: str) -> str:
+    if instrument not in _INDICES:
+        raise ValueError(f"Unknown instrument '{instrument}'. Valid: {list(_INDICES)}")
+    return os.path.join(_DATA_DIR, _INDICES[instrument][key])
+
+
+def load_daily(instrument: str = 'nifty') -> pd.DataFrame:
+    df = pd.read_csv(_resolve(instrument, 'daily'))
     df['time_stamp'] = pd.to_datetime(df['time_stamp'])
     df = df.set_index('time_stamp').sort_index()
     df = df[df['close'].notna() & (df['close'] > 0)].copy()
     return df
 
 
-def _load_1min() -> pd.DataFrame:
-    df = pd.read_csv(NIFTY_1MIN_FILE)
+def _load_1min(instrument: str = 'nifty') -> pd.DataFrame:
+    df = pd.read_csv(_resolve(instrument, '1min'))
     df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False).dt.tz_localize(None)
     return df.sort_values('time_stamp').reset_index(drop=True)
 
@@ -107,21 +121,22 @@ def resample_daily(df: pd.DataFrame) -> pd.DataFrame:
     return result.set_index('time_stamp').sort_index()
 
 
-def load_daily_extended() -> pd.DataFrame:
-    """Daily OHLC resampled from 1-min data — full history from 2019-01-28."""
-    raw = _load_1min()
+def load_daily_extended(instrument: str = 'nifty') -> pd.DataFrame:
+    """Daily OHLC resampled from 1-min data — full intraday history."""
+    raw = _load_1min(instrument)
     return resample_daily(raw)
 
 
-def load_data(timeframe) -> pd.DataFrame:
+def load_data(timeframe, instrument: str = 'nifty') -> pd.DataFrame:
     """
-    Load and return OHLC data for the given timeframe.
-    timeframe: 'daily' | 'daily_extended' | int (minutes)
+    Load and return OHLC data for the given timeframe and instrument.
+    timeframe:  'daily' | 'daily_extended' | int (minutes)
+    instrument: 'nifty' (default) | 'sensex'
     Returns DataFrame indexed by timestamp.
     """
     if timeframe == 'daily':
-        return load_daily()
+        return load_daily(instrument)
     if timeframe == 'daily_extended':
-        return load_daily_extended()
-    raw = _load_1min()
+        return load_daily_extended(instrument)
+    raw = _load_1min(instrument)
     return resample_intraday(raw, int(timeframe))
