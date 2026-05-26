@@ -324,3 +324,77 @@ searched against trade P&L.
   combine step doesn't beat single signals, or the post-Sep routing backtest can't beat the
   hard gate despite a validated forecast (implies the edge is in forecast *confidence* sizing,
   not binary routing — a different design).
+
+---
+
+## 14. Implementation Architecture (addendum)
+
+The research phases are exploratory — don't over-engineer throwaway analysis scripts. But
+**one interface is durable**: the VIX forecast is consumed twice (Phase 1 validation *and* the
+Phase 5 routing backtest, later Hestia). Pin it down now so Phase 1 doesn't produce code that
+Phase 5 rebuilds. This section specifies only the durable parts: directory layout, the forecast
+interface, and per-phase output contracts. Everything else is implementer's discretion.
+
+### 14.1 Directory layout — `research/vix_router/`
+
+```
+research/vix_router/
+  data_layer.py     # load + resample VIX/Nifty; tz_localize(None); daily + intraday bars
+  signals.py        # pure signal functions: vrp(), bb_pct(), zscore() — each date-indexed
+  forecast.py       # THE durable interface (§14.2): build_forecast() + forecast_at()
+  validate.py       # Phases 0–2: rank-stat battery vs forward-VIX target; emits reports
+  outputs/          # generated CSVs/JSON (gitignored, like research/range_detection/outputs)
+```
+Reuse `research/range_detection/resample.py` (`resample_daily`, `resample_intraday`) and
+`apollo_backtest/technical_indicators.py` (`SupertrendIndicator`) rather than reimplementing.
+
+### 14.2 The forecast interface (durable — design once)
+
+**Discipline:** all no-lookahead logic lives *inside* `build_forecast`, so consumers cannot
+cheat. Each output row is labelled by the entry date and uses only the previous completed
+daily bar + intraday bars complete by the entry time.
+
+```python
+# forecast.py
+def build_forecast(vix_1m: pd.DataFrame, nifty_1m: pd.DataFrame,
+                   horizon_days: int, config: dict) -> pd.DataFrame:
+    """
+    One row per trading day, indexed by entry date. Columns:
+      vrp, bb_pct, zscore, ...   # raw signals (prev-day bar; no lookahead)
+      score                      # combined rank-percentile in [0,1] (rank-average of signals)
+      p_fall                     # optional calibrated P(VIX falls over horizon); else = score
+      direction                  # 'fall' | 'rise' | 'neutral' (from score vs §9 thresholds)
+    """
+
+def forecast_at(forecast_df: pd.DataFrame, entry_date) -> dict | None:
+    """Point lookup for the backtest — returns the row for entry_date, or None if absent."""
+```
+
+The **forward-VIX target is separate and validation-only** — it uses *future* bars and must
+never feed back into `build_forecast`:
+
+```python
+# validate.py
+def forward_vix_change(vix_daily: pd.DataFrame, horizon_days: int) -> pd.Series:
+    """fwd(t) = VIX_close(t + h) - VIX_close(t), date-indexed. Future bars — validation only."""
+```
+
+Keep `config` tiny (≤2–3 params total, per the §10 guardrails): signal lookbacks and the two
+asymmetric direction thresholds. No grid sweeps.
+
+### 14.3 Per-phase output contracts (so phases compose)
+
+| Phase | Emits | Consumed by |
+|---|---|---|
+| 0 | `outputs/horizons.json` — modal holds per strategy/era + base-rate P(VIX falls) | all phases (sets `horizon_days`, the coinflip benchmark) |
+| 1–2 | `outputs/signal_validation_h{N}.csv` — per signal: Spearman ρ, p, per-year ρ, decile table, hit-rate | the go/kill decision (§7) |
+| build | `outputs/vix_forecast_h{N}.csv` — the date→forecast table from §14.2 (**the durable artifact**) | Phase 5 backtest, later Hestia |
+| 5 | routing backtest reads `vix_forecast_h{N}.csv` (point lookup via `forecast_at`) | comparison vs hard gate |
+
+### 14.4 Consumption boundary
+
+Per the no-production-import constraint (§11 of `range-detection-research.md`): the **backtest**
+phase may import `research/vix_router/forecast.py` directly (it's a backtest, like
+`annotate_athena.py`). **Production wiring** (Leto router) is a later, separate concern — it
+will either read a precomputed `vix_forecast` table or re-implement `build_forecast` against
+the live feed; do not wire research code into production.
