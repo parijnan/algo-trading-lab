@@ -93,7 +93,7 @@ def _load_vix_supertrends():
     """
     vix_1min = pd.read_csv(VIX_1MIN_FILE)
     vix_1min['time_stamp'] = (pd.to_datetime(vix_1min['time_stamp'], utc=False)
-                               .dt.tz_convert(None))
+                               .dt.tz_localize(None))
     vix_1min = vix_1min.sort_values('time_stamp').reset_index(drop=True)
 
     def _cap_cols(df):

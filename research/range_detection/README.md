@@ -1,22 +1,24 @@
 # Range Detection
 
-Two complementary approaches to identifying Nifty consolidation ranges. Visual comparison
-on daily data shows PA method produces better bounds; ADX method better filters trending
-stretches. A hybrid combining both is in development.
+Two complementary approaches to identifying Nifty consolidation ranges. PA method is
+validated and active; ADX method is retained for reference. Athena trade annotation is
+complete; VIX signal analysis has identified a structural entry filter candidate.
 
 See [`plans/range-detection-research.md`](../../plans/range-detection-research.md) for
-the full research plan, findings, and next steps.
+the full research plan and [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md)
+for the VIX entry filter findings.
 
 ---
 
 ## Scripts
 
-| Script | Method | Timeframe | Data Source |
-|---|---|---|---|
-| `range_detector.py` | ADX-gated + Williams Fractal | Daily | `nifty_daily.csv` |
-| `range_detector_75min.py` | ADX-gated + Williams Fractal | 75-min | `nifty.csv` resampled |
-| `range_detector_pa.py` | Price-action range setters | Daily / any N-min | `nifty_daily.csv` or `nifty.csv` resampled |
-| `resample.py` | — | — | Shared day-anchored resampler (used by `range_detector_pa.py`) |
+| Script | Purpose | Data Source |
+|---|---|---|
+| `range_detector.py` | ADX-gated daily ranges (set aside; PA superior) | `nifty_daily.csv` |
+| `range_detector_75min.py` | ADX-gated 75-min ranges (set aside) | `nifty.csv` resampled |
+| `range_detector_pa.py` | PA range detection — daily or any N-min | `nifty_daily.csv` or `nifty.csv` resampled |
+| `resample.py` | Day-anchored N-minute resampler shared by all scripts | `nifty.csv` / `india_vix.csv` |
+| `annotate_athena.py` | Tags historical Athena trades with range + VIX signals | `trade_summary.csv` + `nifty.csv` + `india_vix.csv` |
 
 ---
 
@@ -57,6 +59,57 @@ python range_detector_pa.py --timeframe 75 --start-date "2024-01-02 09:15" [--mo
 | `--months N` | all from start | Months to display in single-chart mode |
 | `--all` | off | Full history, one chart per year |
 | `--no-browser` | off | Save HTML without opening |
+
+---
+
+## Annotation: `annotate_athena.py`
+
+Tags each historical Athena trade with its PA range state and VIX signal state at entry.
+Run from the `research/range_detection/` directory:
+
+```bash
+python annotate_athena.py
+```
+
+Output: `outputs/athena_annotated.csv` (gitignored — regenerate locally).
+
+### Annotation columns
+
+| Column | Description |
+|---|---|
+| `ep_direction` | `'up'` \| `'down'` \| `'initial'` — range bias at entry |
+| `ep_bars_into` | Bars elapsed in the current range episode at entry |
+| `ep_committed` | True if episode confirmed (bars_into > 2) |
+| `ep_established` | True if committed AND bars_into ≥ 3 |
+| `ep_entry_spot_pct` | Spot position in range: 0 = at low, 100 = at high |
+| `ep_range_high/low/mid` | Range bounds and midpoint at entry |
+| `ep_width_pct` | Range width as % of midpoint |
+| `key_dist_pct` | Distance from the directional key level: down → (high−spot)/width×100; up → (spot−low)/width×100 |
+| `vix_st_daily` | Daily VIX Supertrend direction at entry (`'up'`/`'down'`); p=7, m=3.0; prev day's bar |
+| `vix_st_75m` | 75-min VIX Supertrend at entry (`'up'`/`'down'`); p=10, m=3.0; 09:15→10:29 bar on entry day |
+| `vix_st_signal` | `'both_up'` \| `'mixed'` \| `'both_down'` |
+| `vix_bb_pct` | VIX %B — position in 20-day Bollinger Bands (p=20, std=2); prev day's bar |
+| `vix_bb_zone` | `'above_upper'` (>1.0) \| `'upper_zone'` (0.7–1.0) \| `'mid_zone'` (0.3–0.7) \| `'lower_zone'` (0–0.3) \| `'below_lower'` (<0) |
+
+### Key findings (as of 2026-05-26)
+
+**Down-biased + both_up VIX** is the structural edge: 40 trades across above_upper and
+upper_zone show ~70–75% win rate and strong positive avg. Falling market + rising VIX on
+both timeframes = long-vega calendars working from both directions simultaneously.
+
+**`lower_zone` BB** is the consistently weakest column regardless of ST signal or bias:
+31 trades, 52% win, +3.6 avg — nearly flat. All other BB zones average +15 to +25.
+
+**No single clean skip condition** has been confirmed yet. The full 3-way classification
+table (bias × VIX ST × BB zone) is at `outputs/vix_signal_grid.csv`.
+
+Note: an earlier version of this analysis used `.dt.tz_convert(None)` when loading 1-min
+VIX, which converted IST timestamps to UTC (09:15 IST → 03:45). This caused the 75-min
+resampler to use the wrong market-hours window, effectively producing a second daily ST
+rather than a genuine intraday bar. The bug is fixed (`tz_localize(None)` keeps local time).
+All numbers above reflect the corrected data.
+
+See `plans/athena-entry-filter.md` for the current research state and next steps.
 
 ---
 

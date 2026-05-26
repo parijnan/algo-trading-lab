@@ -48,34 +48,25 @@ Results are saved to `athena_backtest/data/trade_summary.csv`.
 
 ## Future Research
 
-### Phase 2.2 — Entry Filter: VIX Signal (research complete, backtest pending)
+### Phase 2.2 — Entry Filter: VIX Signal (research in progress)
 
-Analysis of 121 historical trades tagged with PA range state and VIX indicators found a
-structural weak spot: **up-biased range + VIX both-timeframe uptrend + VIX mid Bollinger-Band
-position** produces 22% win rate and −194 pts combined across 9 trades.
+121 historical trades tagged with PA range state and VIX indicators
+(`research/range_detection/annotate_athena.py`). Signals computed at entry with no lookahead:
 
-**Signal definition (all computed from data available at 10:30 entry, no lookahead):**
-- Dual-TF VIX Supertrend: daily (p=7, m=3.0, previous day's bar) + 75-min (p=10, m=3.0,
-  09:15→10:29 bar on entry day). Combined signal: `both_up` | `mixed` | `both_down`.
-- VIX Bollinger Bands %B: 20-day, 2σ, previous day's daily close.
-  Zones: `above_upper` (>1.0) | `upper_zone` (0.7–1.0) | `mid_zone` (0.3–0.7) | `lower_zone` | `below_lower`.
+- **Dual-TF VIX Supertrend** (`vix_st_signal`): daily (p=7, m=3.0, prev day's bar) +
+  75-min (p=10, m=3.0, 09:15→10:29 bar on entry day). States: `both_up` | `mixed` | `both_down`.
+- **VIX Bollinger Bands %B** (`vix_bb_zone`): 20-day, 2σ, prev day's bar.
+  Zones: `above_upper` (>1.0) | `upper_zone` (0.7–1.0) | `mid_zone` (0.3–0.7) | `lower_zone` (0–0.3).
 
-**Proposed skip condition:**
-```
-ep_direction == 'up' AND vix_st_signal == 'both_up' AND vix_bb_zone == 'mid_zone'
-```
+**Findings so far:**
+- Down-biased + `both_up` VIX (upper_zone/above_upper): ~70–75% win, strongest cluster —
+  falling market + rising VIX = long vega working both directions simultaneously.
+- `lower_zone` BB is the weakest column across all combinations: 31 trades, 52% win, +3.6 avg.
+- No single clean skip condition confirmed yet. Full 3-way grid at
+  `research/range_detection/outputs/vix_signal_grid.csv`.
 
-**Estimated impact:** 112 trades, ~+2,336 pts vs baseline 121 trades, +2,142 pts.
-
-**Critical asymmetry:** Down-biased + both_up VIX is a strongly positive signal (77% win,
-+819 pts for 26 trades) — rising VIX with a falling market benefits the long-vega calendars.
-The filter is up-biased only.
-
-**Next step:** Implement as `ENABLE_VIX_ENTRY_FILTER` flag in `backtest.py` and run full
-backtest to verify. See `plans/athena-entry-filter.md` for the full research and next steps.
-
-**Research artefact:** `research/range_detection/annotate_athena.py` — regenerates
-`outputs/athena_annotated.csv` with all range + VIX annotation columns.
+**Next step:** Identify a defensible filter condition from the corrected data, then implement
+as `ENABLE_VIX_ENTRY_FILTER` flag in `backtest.py`. See `plans/athena-entry-filter.md`.
 
 ### Phase 2.1 — Tactical Adjustments
 - **PE Wing Salvage (`backtest_wing_salvage.py`):** Automatically exiting the redundant PE wing when the CE Parachute triggers. 
