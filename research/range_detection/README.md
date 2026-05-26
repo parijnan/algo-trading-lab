@@ -3,19 +3,23 @@
 Two approaches to identifying Nifty consolidation ranges. PA method is validated and active;
 ADX method is retained for reference. Athena trade annotation is complete.
 
-**Reframe (2026-05-26):** range state and VIX direction are *orthogonal* axes of a premium
-trade. Range detection owns the **spot-containment** axis (where spot stays relative to the
-strikes); the VIX router owns the **vega** axis. They are complementary, not competing —
-corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased ranges earn 2.5× the P&L via
-spot containment (the market's up-drift), independent of vega.
+**Range state and VIX direction are *orthogonal* axes of a premium trade.** Range detection
+owns the **spot-containment** axis; the VIX router owned the *vega* axis (research now
+complete — symmetric router not supported; containment confirmed as dominant). They are
+complementary, not competing — corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased
+ranges earn 2.5× the P&L via spot containment (the market's up-drift), independent of vega.
+
+**VIX router research complete (2026-05-26):** spot-to-strike distance (containment proxy)
+predicts Artemis P&L at ρ=0.32, p=0.0001 on 150 historical trades. This is the empirical
+foundation for range-based Artemis enhancement. Validation gate (§7) is the immediate next step.
 
 Plans:
 - [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
-  validation gate, and re-ranked use cases (Artemis strongest, Apollo cleanest, Athena complementary).
-- [`plans/vix-router-research.md`](../../plans/vix-router-research.md) — the vega axis: VIX-direction
-  router between Athena and Artemis.
+  validation gate (**next**), and re-ranked use cases (Artemis strongest, Apollo cleanest, Athena complementary).
+- [`plans/vix-router-research.md`](../../plans/vix-router-research.md) — **[COMPLETE]** VIX router
+  research. Verdict: hard gate unchanged; containment is dominant Artemis driver.
 - [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Hestia*: proposed
-  range-anchored, vega-adaptive strategy unifying both axes.
+  range-anchored strategy (downstream of range validation gate + router; router verdict changes scope).
 - [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md) — annotation infra + VIX-signal findings.
 
 ---

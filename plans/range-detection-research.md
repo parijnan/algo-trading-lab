@@ -1,10 +1,10 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: RESEARCH PHASE ACTIVE** — PA detector validated. Athena annotation complete.
-Key reframe (2026-05-26): range state and VIX direction are **orthogonal axes** of a premium
-trade — range detection owns the *spot-containment* axis, the VIX router
-(`plans/vix-router-research.md`) owns the *vega* axis. They are complementary, not competing.
-Next gate: key-level hold rate + duration distribution.
+**Status: RESEARCH PHASE ACTIVE — validation gate is the immediate next step.**
+VIX router research is complete (see `plans/vix-router-research.md` §15 — verdict: symmetric
+router not supported; containment is the dominant Artemis P&L driver, ρ=0.32 p=0.0001).
+Range detection is **unblocked and re-prioritised** as the primary research direction.
+Next gate: key-level hold rate + duration distribution (§7).
 
 ---
 
@@ -54,6 +54,17 @@ After the VIX router work, we tested whether range state is just a VIX-direction
 (Cross-check that also matters for the router: corr(VIX-ST, ΔVIX) = **+0.01** — entry-time
 Supertrend has no power to forecast the forward VIX move. The router must use VRP /
 mean-reversion validated on full VIX history, not trend signals. Recorded in the router plan.)
+
+**Additional empirical validation (2026-05-26, from VIX router trade-level confirmation):**
+The containment axis was directly measured on 150 Artemis-Nifty trades (2019–2025).
+Spot-to-nearest-strike distance (min_dist_pct) at entry predicts Artemis P&L at
+**ρ=0.32, p=0.0001** — the strongest single signal found in the entire router research.
+VRP (the vega axis) showed ρ=-0.084, p=0.31. This empirically confirms that containment
+is the dominant Artemis driver and validates the orthogonal-axes framing with hard numbers.
+Note: min_dist_pct is *endogenous* (the strategy's delta-based strikes determine it), so
+the range-detection research must show that an *exogenous* PA range signal adds incremental
+predictive power over the strike geometry already in use — that is the testable hypothesis
+for the Artemis variant backtest (§10 step 3).
 
 ---
 
@@ -171,8 +182,15 @@ The detected range bounds map almost 1:1 to strike placement:
 - **Directional skew** from the up-drift: in a down-biased range the up-drift fights the
   downtrend so resistance tends to hold short-term (room on CE); in an up-biased range support
   is up-drift-defended (safer PE).
-- Pure price — no VIX entanglement (Artemis is already VIX-gated). **To do:** extend
-  `resample.py` for Sensex (trivial path change) and annotate Artemis trades.
+- Pure price — no VIX entanglement (Artemis is already VIX-gated).
+
+**Empirical support (2026-05-26):** spot-to-nearest-strike distance (a containment proxy) predicts
+Artemis P&L at ρ=0.32, p=0.0001 on 150 historical trades. This is the strongest quantitative
+support for range-based Artemis enhancement. The research question is whether PA range state
+at entry (exogenous to strike placement) can improve that containment margin beyond what the
+current delta-based selection already achieves.
+
+**To do:** extend `resample.py` for Sensex (trivial path change) and annotate Artemis trades.
 
 ### Rank 2 — Apollo (Nifty ITM debit spread): cleanest, fully independent
 Inverse use — range detection as a **chop filter** on Apollo's dual-Supertrend signal:
@@ -209,13 +227,19 @@ verdict that drove the move:
 
 ## 10. Recommended Sequence
 
+VIX router research is complete (§15 of `plans/vix-router-research.md`) — no blocker remains.
+
 1. **Validation gate** (§7): key-level hold rate + duration distribution. Decisive, cheap.
 2. If pass → **Apollo chop-filter annotation** (most independent, fastest win) **and Artemis
    annotation** (extend `resample.py` for Sensex).
-3. **Artemis range-anchored-strike variant** backtest vs delta-based baseline.
+3. **Artemis range-anchored-strike variant** backtest vs delta-based baseline. This is the
+   highest-priority use case — containment is empirically the dominant Artemis P&L driver
+   (ρ=0.32), and an exogenous range signal could improve it further.
 4. **Athena**: range-break exit + range-anchored strike placement as isolated experiments.
-5. Standalone vega-adaptive strategy (*Hestia*) only if step 3 + the VIX router both validate —
-   see `plans/range-vega-strategy.md`.
+5. Standalone vega-adaptive strategy (*Hestia*) only if step 3 shows incremental P&L gain AND
+   is uncorrelated with the existing book — see `plans/range-vega-strategy.md`. Note: the
+   symmetric VIX router that Hestia depended on is not supported; Hestia's vega-adaptive
+   mechanism would need a different foundation if pursued.
 
 ---
 

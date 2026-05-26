@@ -1,8 +1,9 @@
 # Plan: VIX-Direction Router — Athena ⇄ Artemis
 
-**Status: Research / design. No forecast or routing logic validated yet.**
-**Supersedes the routing scope of `plans/athena-entry-filter.md` (which remains valid for the
-annotation infrastructure and the corrected VIX-signal findings).**
+**Status: RESEARCH COMPLETE — VERDICT: symmetric VIX-direction router is not supported.**
+See §15 for the full findings chain. The hard VIX-level gate remains in production unchanged.
+Supersedes the routing scope of `plans/athena-entry-filter.md` (which remains valid for the
+annotation infrastructure and the corrected VIX-signal findings).
 
 ---
 
@@ -318,12 +319,12 @@ searched against trade P&L.
 
 ## 13. Where to resume / when to call back
 
-- Start at **Phase 0** (horizons + base rates) → **Phase 1** (VRP). These two either validate
-  the whole direction or kill it cheaply.
-- Come back to discuss if: VRP and BB %B both fail §7 (forecast direction is dead), the
-  combine step doesn't beat single signals, or the post-Sep routing backtest can't beat the
-  hard gate despite a validated forecast (implies the edge is in forecast *confidence* sizing,
-  not binary routing — a different design).
+Research is complete. No further phases needed.
+See §15 for the full findings chain and verdict.
+
+The natural successor is `plans/range-detection-research.md` §7 (validation gate), which is
+now the unblocked next research priority. Artemis containment has been empirically confirmed
+as the dominant P&L driver (§15.4); range state is the exogenous signal to test.
 
 ---
 
@@ -398,3 +399,96 @@ phase may import `research/vix_router/forecast.py` directly (it's a backtest, li
 `annotate_athena.py`). **Production wiring** (Leto router) is a later, separate concern — it
 will either read a precomputed `vix_forecast` table or re-implement `build_forecast` against
 the live feed; do not wire research code into production.
+
+---
+
+## 15. Research Findings and Verdict (2026-05-26)
+
+All phases were executed in `research/vix_router/validate.py`. Regenerate outputs with
+`python research/vix_router/validate.py` (outputs gitignored, rebuilds from 1-min data).
+
+### 15.1 Phase 0 — Horizons and base rates
+
+- **h_athena = 5 trading sessions** (modal, pre- and post-Sep consistent; n=121 trades).
+- **h_artemis = 3 trading sessions** (modal, Mon→Thu expiry; n=26 Sensex trades).
+- Base rate P(VIX falls) over h=3: **52.2%**; over h=5: **52.3%**. Near-coinflip — every
+  signal must beat this meaningfully.
+
+### 15.2 Phase 1 — VRP signal validation (full VIX history, 2019–2026, n≈1,800 days)
+
+**Full-sample results** (Spearman ρ, VRP vs forward VIX change):
+
+| Signal | h=3 ρ (p) | h=5 ρ (p) | Sign-stable full-sample? |
+|---|---|---|---|
+| VRP n=10 | -0.009 (0.71) | -0.020 (0.39) | No |
+| VRP n=20 | -0.021 (0.38) | -0.056 (0.018) | No |
+| BB %B | -0.009 (0.69) | -0.040 (0.093) | No |
+| z-score 50 | -0.044 (0.062) | **-0.073 (0.002)** | Mostly |
+
+All signals fail or are marginal on the full-sample kill criterion (§7). The full-sample
+failure is caused by **regime dilution**: VRP's sign *flips* mechanistically across regimes
+(negative <16, ~0 in 16–25, **positive** +0.29 to +0.36 in >25 — coherent mean-reversion in
+calm, momentum in stress). Pooling all three cancels to near zero.
+
+**Regime-conditioned results** (within VIX<16, Artemis-relevant band):
+
+| Signal | h=5 ρ (p) | Per-year sign stable? |
+|---|---|---|
+| VRP n=10 | -0.168 (p≈0) | Mostly (2020 flips, n=31) |
+| VRP n=20 | **-0.213 (p≈0)** | **Yes — all 8 years negative** |
+
+VRP n=20 within VIX<16 passes the §7 walk-forward sign-stability test (2019–2026 all
+negative), with ρ≈-0.21 at h=5. **Athena zone (16–25): no signal** (ρ≈0 for all signals,
+well-powered null at n≈700 days). Symmetrically, no Athena-side routing edge exists.
+
+**Band-crossing analysis** (h=3, Artemis's actual hold):
+- Base rate P(VIX crosses 16 in next 3 sessions): **9.3%**.
+- Low VRP (Q1): 14.1% cross. High VRP (Q5): **4.7%** cross. Ratio ≈ 3×.
+- Even at the most bearish quintile, 86% of the time VIX stays <16. This rate is far too
+  low to justify routing capital to Athena on a VIX-direction signal. The signal is a
+  **skip/caution filter at most**, not a router.
+
+### 15.3 Phase 1 — Trade-level confirmation (Artemis Nifty history, n=150 trades, 2019–2025)
+
+VRP computed at entry (VRP n=20, prev-day close, no lookahead) attached to all 150 traded
+Artemis-Nifty weeks.
+
+**Key results:**
+- Spearman VRP vs total_pl_points: **ρ=-0.084, p=0.31** — not statistically significant.
+- Quintile win rates: Q1 76.7%, Q2 73.3%, Q3 70.0%, Q4 56.7%, Q5 66.7% — **non-monotone**.
+  The expected monotone decreasing relationship (high VRP = high confidence Artemis) does not
+  materialise. Q4 is the outlier trough; Q5 partially recovers.
+- Low VRP (Q1+Q2) 75.0% win, avg P&L +15.4. High VRP (Q4+Q5) 61.7% win, avg P&L +6.6.
+  Direction opposite to hypothesis, but effect is **not statistically significant**.
+
+**Confounder identified (key methodological finding):**
+Low VRP = high recent realised vol (Q1 rv20 median = 15.0 vs Q5 = 8.0). High realised vol
+→ delta-based strike placement lands **wider** (Q1: 2.12% width, 0.76% min-breach distance;
+Q5: 1.78% width, 0.58% min-breach distance). The apparent "low-VRP-wins" pattern is partly
+an artifact of strike geometry, not an independent VRP signal.
+
+**The dominant Artemis P&L driver:**
+Spot-to-nearest-strike distance (min_dist_pct): **ρ=0.32, p=0.0001** — an order of magnitude
+more significant than VRP. This is the spot-containment axis, not the vega axis, and it
+directly validates `plans/range-detection-research.md` as the correct research direction for
+Artemis enhancement.
+
+### 15.4 Verdict
+
+**The symmetric VIX-direction router is not supported.** Two independent failure modes:
+
+1. **Athena side (VIX 16–25):** no VIX-direction forecasting edge exists (solid null, n≈700
+   days). Hard level gate is as good as any forecast here.
+2. **Artemis side (VIX <16):** VRP predicts VIX *direction* within the band (ρ≈-0.21,
+   sign-stable 2019–2026), but VIX direction at this magnitude does not translate to condor
+   P&L. The dominant P&L driver is spot containment (min_dist ρ=0.32, p=0.0001), not VIX
+   ticks. A 3-day condor over a ±0.3 VIX drift is driven almost entirely by whether Nifty
+   stays inside the short strikes.
+
+**The hard VIX-level gate remains in production unchanged.** No modification is warranted.
+
+**The research unblocked a higher-value finding:** containment is empirically the dominant
+Artemis axis. The correct next research direction is `plans/range-detection-research.md` §7
+(validation gate), followed by an Artemis range-anchored-strike variant backtest (§8 Rank 1,
+§10 step 3). Range state is an *exogenous* containment signal that could improve strike
+placement beyond what delta-based selection already encodes — that is the testable hypothesis.

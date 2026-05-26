@@ -287,13 +287,14 @@ all findings go through a dedicated backtest before any strategy wiring.
 | Module | Description | Status |
 |---|---|---|
 | [`research/range_detection/`](./research/range_detection/) | Price-action range detector (validated) + ADX method (reference). Athena trades annotated with range and VIX signals. | Active research |
-| [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast: VRP, BB %B, and z-score signals validated on full 2019–2026 VIX history. Phase 0 (horizons + base rates) and Phase 1 (signal battery) complete. | Active research |
+| [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
 
 Active research plans (forward-looking — not yet wired to production):
 - [`plans/range-detection-research.md`](./plans/range-detection-research.md) — range detection as the
-  **spot-containment** axis (orthogonal to VIX); validation gate next; use cases re-ranked (Artemis, Apollo, Athena).
-- [`plans/vix-router-research.md`](./plans/vix-router-research.md) — replace the hard VIX-regime gate
-  (see [VIX Regime](#vix-regime)) with a **VIX-direction forecast** routing between Athena (long vega) and Artemis (short vega).
+  **spot-containment** axis (orthogonal to VIX); **unblocked and re-prioritised** — validation gate (key-level hold rate + duration) is next; Artemis use case empirically supported (containment ρ=0.32).
+- [`plans/vix-router-research.md`](./plans/vix-router-research.md) — **[COMPLETE]** VIX-direction
+  router research. Verdict: symmetric router not supported; hard VIX-level gate unchanged.
+  Dominant Artemis P&L driver is containment (ρ=0.32), not VIX direction. See §15 for findings.
 - [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Hestia*: proposed range-anchored,
   vega-adaptive strategy unifying both axes.
 - [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
