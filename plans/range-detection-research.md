@@ -1,12 +1,14 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: RESEARCH PHASE ACTIVE** — PA method validated. Athena annotation complete.
-VIX signal research spun out to `plans/athena-entry-filter.md`. Remaining range-specific
-work: key level hold rate, range duration distribution, Artemis annotation.
+**Status: RESEARCH PHASE ACTIVE** — PA detector validated. Athena annotation complete.
+Key reframe (2026-05-26): range state and VIX direction are **orthogonal axes** of a premium
+trade — range detection owns the *spot-containment* axis, the VIX router
+(`plans/vix-router-research.md`) owns the *vega* axis. They are complementary, not competing.
+Next gate: key-level hold rate + duration distribution.
 
 ---
 
-## Context
+## 1. Context
 
 The daily Nifty chart regularly shows clear consolidation ranges that are visually obvious but
 hard to define algorithmically because their duration is variable (2 days to 2+ weeks). Two
@@ -18,249 +20,208 @@ methods were built and compared:
   define bounds; wick extension allowed; gap openings anchor the inside bound to the previous
   range's near boundary. **Clearly superior on daily data.**
 
-Hybrid ADX+PA combinations (Options A, B, C) were explored. All failed — ADX as a gate
-suppresses good ranges. Pure PA with a breakout confirmation filter is the active approach.
+Hybrid ADX+PA combinations were explored and failed — ADX as a gate suppresses good ranges.
+Pure PA with a breakout-confirmation filter is the active approach.
 
 ---
 
-## What Was Built
+## 2. The Orthogonal-Axes Finding (central reframe)
 
-### `research/range_detection/range_detector.py` — Daily timeframe (ADX method)
+After the VIX router work, we tested whether range state is just a VIX-direction proxy. It is
+**not**. Measured on the 121 annotated Athena trades:
 
+- **Range direction does not predict the VIX move during the hold.** corr(range=down, ΔVIX)
+  = **+0.03** — essentially zero. Up- and down-biased ranges both see VIX roughly flat over
+  the ~week hold.
+- **Yet down-biased ranges earn 2.5× the P&L** (+25.3 vs +10.2 pts avg), and this holds
+  *within* every VIX-ST bucket (both_up: +23 vs +2; mixed: +30 vs +20) with the *same*
+  near-zero ΔVIX.
+- Therefore the down-bias edge is a **spot-containment / profit-tent effect**, not a vega
+  effect — almost certainly the Indian market's structural up-drift: up-biased ranges grind
+  spot up and away from the calendar center (CE side tested, parachute deploys); down-biased
+  ranges mean-revert toward the strikes.
+- corr(range direction, VIX-ST signal) = **+0.46** — they are *correlated at entry* (down
+  market ↔ elevated VIX state) but carry independent information about outcome.
+
+**Implication for this plan:**
+- Range detection's value is the **spot/containment axis** (where spot goes relative to the
+  strikes), which is **independent of vega**. This validates the whole research line.
+- Emphasis shifts from range *direction* (entangled with VIX state) to range **bounds &
+  containment probability** (pure price, independent).
+- Do **not** re-encode range direction as a vega/VIX signal — that double-counts what the
+  router already handles.
+
+(Cross-check that also matters for the router: corr(VIX-ST, ΔVIX) = **+0.01** — entry-time
+Supertrend has no power to forecast the forward VIX move. The router must use VRP /
+mean-reversion validated on full VIX history, not trend signals. Recorded in the router plan.)
+
+---
+
+## 3. What Was Built
+
+### `research/range_detection/range_detector.py` — Daily (ADX method)
 Reads official daily Nifty OHLC from `nifty_daily.csv`. Validated, set aside in favour of PA.
 
-### `research/range_detection/range_detector_75min.py` — 75-min timeframe (ADX method)
+### `research/range_detection/range_detector_75min.py` — 75-min (ADX method)
+1-min data resampled to 75-min. Too noisy on its own — set aside.
 
-1-min data resampled to 75-min. 75-min timeframe too noisy on its own — set aside.
-
-### `research/range_detection/resample.py` — Shared resampler module
-
+### `research/range_detection/resample.py` — Shared resampler
 Day-anchored N-minute resampler. Supports any integer timeframe (3, 5, 15, 75 min) plus
-`'daily'`. Used by `range_detector_pa.py`.
+`'daily'`. Used by `range_detector_pa.py` and `annotate_athena.py`.
 
 ### `research/range_detection/range_detector_pa.py` — All timeframes (PA method)
-
 Price-action range detection. Core rules:
 1. Close outside current range → new range setter (its H/L define new bounds)
 2. New H or L without close outside → wick extension (range expands, no split)
 3. Gap open outside previous range → inside bound anchored to previous range's near boundary
 4. `--breakout-confirm N`: require N additional consecutive closes outside before committing.
-   If price returns inside within N bars, the potential range setter is absorbed as a wick
-   extension and the range continues unchanged.
+   If price returns inside within N bars, the candidate is absorbed as a wick extension.
 
 Established ranges are colour-coded by direction:
-- **Green** (up-biased): range setter broke upward; range_low = key support (thick line)
-- **Red** (down-biased): range setter broke downward; range_high = key resistance (thick line)
-- **Blue** (initial/neutral): very first episode, no prior range to break
+- **Green** (up-biased): setter broke upward; range_low = key support (thick line)
+- **Red** (down-biased): setter broke downward; range_high = key resistance (thick line)
+- **Blue** (initial/neutral): first episode, no prior range
 - **Grey dashed** (transient): bar_count < min_range_bars
+
+### `research/range_detection/annotate_athena.py` — trade annotation
+Tags all 121 Athena trades with PA range state (`ep_direction`, `ep_committed`,
+`ep_established`, `ep_entry_spot_pct`, `key_dist_pct`, range bounds/width) and VIX indicators
+(`vix_st_*`, `vix_bb_*`). Output `outputs/athena_annotated.csv`; classification grid
+`outputs/vix_signal_grid.csv`.
 
 ---
 
-## PA Method — Full Parameter Reference
+## 4. PA Method — Parameter Reference
 
 | CLI flag | Default | Effect |
 |---|---|---|
-| `--timeframe` | `daily` | `daily` or integer minutes (e.g. `75`, `15`, `5`, `3`) |
+| `--timeframe` | `daily` | `daily` or integer minutes (`75`, `15`, `5`, `3`) |
 | `--start-date` | (required) | Initial range setter: `YYYY-MM-DD` or `"YYYY-MM-DD HH:MM"` |
 | `--min-range-bars` | 5 | Min bars for established range (drawn solid) |
-| `--breakout-confirm` | 1 | Extra closes required outside range before committing a new range setter (0 = immediate) |
-| `--hybrid` | `none` | Hybrid ADX mode: `none` = pure PA, `a` = ADX hard gate (deprecated — didn't work) |
-| `--adx-threshold` | 20 | ADX threshold (only used if `--hybrid a`) |
-| `--adx-period` | 14 | Wilder ADX period (only used if `--hybrid a`) |
-| `--months` | (all from start) | Months to display in single-chart mode |
-| `--all` | off | Full history, one chart per year |
-| `--years` | (all) | Restrict `--all` to specific years |
-| `--tag` | (none) | Suffix for output filenames |
-| `--no-browser` | off | Save HTML without opening |
+| `--breakout-confirm` | 1 | Extra closes outside before committing a new setter (0 = immediate) |
+| `--hybrid` | `none` | `none` = pure PA, `a` = ADX hard gate (deprecated — didn't work) |
+| `--adx-threshold` / `--adx-period` | 20 / 14 | Only used if `--hybrid a` |
+| `--months` / `--all` / `--years` | — | Display scope controls |
+| `--tag` / `--no-browser` | — | Output filename suffix / headless save |
 
 ---
 
-## Breakout Confirmation — Concluded
+## 5. Breakout Confirmation — Concluded
 
-Three variants compared on 2023–2026 daily data (`--min-range-bars 3`):
+Three variants on 2023–2026 daily data (`--min-range-bars 3`):
 
 | Tag | `--breakout-confirm` | Episodes | Established |
 |---|---|---|---|
-| `conf0` | 0 (no filter) | 301 | 84 |
+| `conf0` | 0 | 301 | 84 |
 | `conf1` | 1 | 172 | 78 |
 | `conf2` | 2 | 74 | 57 |
 
-**Winner: N=2.** Conf2 produces clean, durable ranges. False breakouts absorbed correctly.
-Comparison charts archived to `outputs/archive/`. Current outputs use N=2.
+**Winner: N=2.** Clean, durable ranges; false breakouts absorbed. Current outputs use N=2.
 
 ---
 
-## Lag Analysis
+## 6. Lag Analysis
 
-With `--breakout-confirm 2`, two types of lag exist:
+With `--breakout-confirm 2`:
 
-**1. Confirmation lag (2 bars, by design):** The range setter bar (day 1) plus 2 confirming
-closes = you don't know the new range direction until day 3. During the pending period, the
-chart shows the breakout bars as wick extensions of the old range — no visible signal that
-a new range is forming.
-
-**2. Bounds instability:** Even after commitment, range_high/range_low keep expanding via wick
-extension throughout the episode. The bounds at commitment are provisional.
+1. **Confirmation lag (2 bars, by design):** setter bar + 2 confirming closes → direction
+   not known until day 3.
+2. **Bounds instability:** range_high/low keep expanding via wick extension through the
+   episode; bounds at commitment are provisional.
 
 **What survives the lag:**
-- **Direction** is reliable from day 3 — 3 consecutive closes in one direction is a strong read.
-- **Key level** (range_low for up-biased, range_high for down-biased) is anchored to the
-  *previous* range's near boundary when there's a gap open. That level was known before the
-  breakout bar opened, so it doesn't move much after commitment.
-- **Historical annotation** has no lag issue at all.
+- **Direction** reliable from day 3 (3 consecutive closes one way).
+- **Key level** (range_low up / range_high down) anchored to the *previous* range's boundary
+  on gap opens — known before the breakout bar, so stable post-commitment.
+- **Historical annotation** has no lag issue.
 
-**Practical implication:** Don't trade the range setter bar or the confirmation bars. By day 3
-the direction and key level are known, and most ranges have 5–25+ bars remaining — enough to
-work with.
-
----
-
-## Hybrid ADX Exploration — Concluded
-
-Options A, B, C were explored. All approaches that use ADX as a gate suppress genuine ranges
-(ADX lags and can stay elevated well into an established consolidation). Pure PA is superior.
-The `--hybrid` flag remains in the script for reference but is not the active direction.
+**Refinement adopted for any strategy use (see new-strategy plan): slow-in / fast-out.**
+Use the N=2 confirmation for *entry* (be selective), but a *raw* key-level break for *exit*
+(the price level is already known — react on the close beyond it; don't wait 2–3 bars to
+confirm a new episode or you eat the whole breakout loss).
 
 ---
 
-## Use Cases in Existing Strategies
+## 7. Validation Gate (do FIRST — kills or greenlights everything downstream)
 
-### Athena (Nifty double calendar) — strongest fit
+Every containment use case depends on ranges actually containing price. Answer these two from
+the episodes CSV before building anything:
 
-Double calendars profit from the underlying staying in a range — the strategy and the signal
-are structurally aligned.
+1. **Key-level hold rate** — across established ranges (2019–2026), what fraction stay inside
+   the key level (range_low for up / range_high for down) for ≥5 bars after commitment? If
+   ranges don't hold, stop — there is no containment edge.
+2. **Duration distribution** — bar_count P25/P50/P75 for established episodes. Sets the
+   realistic theta window and how much range remains after the 2–3 bar confirmation lag.
 
-- **Entry filter**: only enter when an established range (≥3 bars, confirmed direction) is
-  active. Skip transient episodes and freshly committed episodes (bounds not yet stable).
-- **Strike placement**: centre the two calendars around range_mid rather than ATM. In an
-  up-biased range shift slightly above mid; in a down-biased range slightly below mid.
-- **Exit trigger**: committed range break (new episode transition) as a hard exit — the
-  condition that justified the trade no longer holds.
-- **Width calibration**: use `width_pct` from the episode CSV to size strikes relative to
-  range width.
-
-### Apollo (Nifty ITM debit spread) — directional filter
-
-Apollo already has a directional signal (dual Supertrend). Range detection adds context.
-
-- **False signal filter**: a Supertrend signal with close_pct_in_range between 30–70% is more
-  likely noise. The cleanest Apollo setups are breakouts from a range, not chop mid-range.
-- **Conviction amplifier**: new up-biased range committed + Supertrend bullish = double
-  confirmation. Candidate for sizing up.
-- **Range-based SL**: in an up-biased range, range_low is key support. A close below it
-  invalidates the bias — cleaner SL than a fixed offset.
-
-### Artemis (Sensex iron condor)
-
-`sensex_daily.csv` is already in the data pipeline — the range detector can run on Sensex
-directly. No proxy needed.
-
-- **Directional skew**: in a down-biased Sensex range, give more room on the CE side
-  (resistance respected), tighter on the PE side. Reverse for up-biased.
-- **Skip condition**: if a new Sensex range was committed within the last 2 days (bounds
-  unstable), skip that week's Artemis entry.
-- **Key level as reference**: range_high (down-biased) or range_low (up-biased) as an
-  additional anchor for short strike placement beyond delta alone.
-- **To do**: extend `resample.py` to support Sensex as a data source (trivial — same file
-  format, just a different path constant).
+Both are cheap (pure pandas on `range_episodes_pa_daily.csv`) and decisive.
 
 ---
 
-## New Strategy Concept: Range Anchor
+## 8. Use Cases — Re-Ranked by Fit
 
-**Thesis:** After a range is committed, one boundary (range_low for up-biased, range_high for
-down-biased) acts as the key level the market has demonstrated it respects. Sell time value
-anchored to that level while the range holds; exit when the range breaks.
+Ranked after the orthogonal-axes finding. Range detection owns the **containment/spot** axis;
+pair it with the VIX router for the vega axis where relevant.
 
-**Entry conditions:**
-- New range episode committed (day 3+, N=2 confirmation)
-- Direction confirmed (up or down — skip initial/neutral)
-- Episode has sufficient bars remaining (target ≥5 bars left)
+### Rank 1 — Artemis (Sensex iron condor): strongest, most direct
+An iron condor **is** a containment bet with explicit short strikes defining a profit zone.
+The detected range bounds map almost 1:1 to strike placement:
+- Sell CE above `range_high` (demonstrated resistance), PE below `range_low` (demonstrated
+  support). The condor's profit zone = the detected range.
+- **Skip** when no established range (trending/initial) or freshly committed (bounds unstable).
+- **Directional skew** from the up-drift: in a down-biased range the up-drift fights the
+  downtrend so resistance tends to hold short-term (room on CE); in an up-biased range support
+  is up-drift-defended (safer PE).
+- Pure price — no VIX entanglement (Artemis is already VIX-gated). **To do:** extend
+  `resample.py` for Sensex (trivial path change) and annotate Artemis trades.
 
-**Core structure — diagonal calendar at the key level:**
+### Rank 2 — Apollo (Nifty ITM debit spread): cleanest, fully independent
+Inverse use — range detection as a **chop filter** on Apollo's dual-Supertrend signal:
+- Signal fires mid-range → likely false (chop) → skip or shrink size.
+- Signal coincides with a confirmed **range break** → genuine breakout → take / size up.
+- The broken boundary becomes a natural SL (failed breakout = close back inside).
+- No VIX overlap, no containment dependency — quickest standalone win. Annotate Apollo trades
+  with `ep_entry_spot_pct` and range-break coincidence.
 
-*Up-biased range (key support = range_low):*
-- Sell near-term (weekly) PE at or slightly below range_low
-- Buy further-dated (monthly) PE 100–150 pts below range_low as protection
-- Net: put calendar/diagonal that collects theta while support holds
-
-*Down-biased range (key resistance = range_high):*
-- Sell near-term CE at or slightly above range_high
-- Buy further-dated CE 100–150 pts above range_high as protection
-- Net: call calendar/diagonal that collects theta while resistance holds
-
-**Optional income overlay:**
-- Sell a credit spread on the far side of the range (PE spread below range_low for up-biased,
-  or CE spread above range_high for down-biased). Generates additional premium without
-  conflicting with the directional bias.
-
-**Exit rules:**
-- **Primary:** new range episode committed (breakout confirmed, N=2) — structural basis gone
-- **Secondary:** price closes beyond the far side of the range (theta on near-term leg has
-  collapsed or gone ITM, close early)
-- **Time:** close near-term leg 1 day before expiry; don't carry into expiry day
-- **Theta target on credit overlay:** close at 50–60% of max premium
-
-**Why the lag is acceptable here:**
-- Not trying to catch the range setter bar — entering after establishment
-- Key level is derived from the previous range boundary, which was known before the breakout
-- A 5–25+ bar range has plenty of theta to collect even after a 2-day lag at entry
+### Rank 3 — Athena (Nifty double calendar): complementary, spot side only
+Bounds improve the *spot* axis; direction is redundant with the router (corr 0.46):
+- **Strike placement:** center calendars on `range_mid` / lean toward the key level, not blind
+  ATM.
+- **Up-drift adjustment:** give the CE side more room in up-biased ranges (or skip up-biased
+  entries near the upper bound — the down-bias P&L edge is structural).
+- **Range-break exit:** spot breaking the range = containment thesis dead = exit, independent
+  of the router's vega call.
+- Do **not** use range *direction* as an Athena entry/VIX signal.
 
 ---
 
-## Validation Required Before Any Live Use
+## 9. New Strategy: moved to its own plan
 
-These questions need quantitative answers from the episode CSV + backtests:
-
-1. **Key level hold rate**: across all established ranges 2023–2026, what fraction of the time
-   did price not close beyond the key level (range_low for up / range_high for down) for at
-   least 5 bars after commitment?
-2. **Range duration distribution**: what does the bar_count distribution look like for
-   established episodes? P25/P50/P75 durations set realistic expectations for theta decay.
-3. **Strike buffer**: is the key level itself the right anchor or does it need a buffer of N
-   points? (key level is derived from previous range boundary + wick, not always a round number)
-4. **Income overlay risk**: does the far-OTM credit spread add Sharpe or just add tail risk?
-5. **Existing strategy annotation**: run Athena and Apollo backtests, tag each trade with
-   `range_pct`, `direction`, `episode_start` at entry. Purely observational — see whether
-   range state at entry correlates with P&L outcome.
+The "Range Anchor" concept from the prior version of this plan is **superseded** by a fuller,
+vega-adaptive design in **`plans/range-vega-strategy.md`** (codename *Hestia*). Summary of the
+verdict that drove the move:
+- A fixed short-premium-at-range-bounds strategy is ~80% Artemis. Don't build that standalone.
+- The genuinely differentiated idea unifies **both research axes**: anchor to a confirmed
+  range (containment) *and* pick the structure's vega sign from the VIX router (vega).
+- First test the cheaper hypothesis — **range-anchored strikes as an Artemis variant** — before
+  committing to a standalone engine. Full design, dependencies, and validation in the new plan.
 
 ---
 
-## Completed
+## 10. Recommended Sequence
 
-- **PA range detector validated** against visual inspection (2019–2026 daily data)
-- **Breakout confirmation N=2 selected** — clean durable ranges, false breakouts absorbed
-- **Athena trade annotation** — `research/range_detection/annotate_athena.py` tags all 121
-  historical trades with PA range state (`ep_direction`, `ep_committed`, `ep_established`,
-  `ep_entry_spot_pct`, `key_dist_pct`) and VIX indicators (`vix_st_daily`, `vix_st_75m`,
-  `vix_st_signal`, `vix_bb_pct`, `vix_bb_zone`).
-- **VIX signal analysis** — investigated up-biased underperformance; found that
-  `up + both_up ST + mid BB zone` is the structural weakness. Spun out to its own plan.
-  See `plans/athena-entry-filter.md`.
-
-## Next Steps
-
-1. **Quantify key level hold rate** ← *resume here*
-   - From the episodes CSV, for each established episode: did price ever close beyond the
-     key level (range_low for up / range_high for down) during the episode?
-   - Answers whether Range Anchor has structural edge before touching options pricing.
-
-2. **Range duration distribution**
-   - From the episodes CSV: bar_count distribution for established episodes (P25/P50/P75)
-   - Informs realistic theta collection window for Range Anchor.
-
-3. **Artemis trade annotation**
-   - Extend `resample.py` to support Sensex as a data source (trivial path constant change)
-   - Run the same PA range annotation on Artemis historical trades
-
-4. **Decide additional range-based use cases**
-   - After key level hold rate and duration distribution are quantified, decide whether to
-     build an entry filter, strike placement aid, or range-break exit for any strategy.
+1. **Validation gate** (§7): key-level hold rate + duration distribution. Decisive, cheap.
+2. If pass → **Apollo chop-filter annotation** (most independent, fastest win) **and Artemis
+   annotation** (extend `resample.py` for Sensex).
+3. **Artemis range-anchored-strike variant** backtest vs delta-based baseline.
+4. **Athena**: range-break exit + range-anchored strike placement as isolated experiments.
+5. Standalone vega-adaptive strategy (*Hestia*) only if step 3 + the VIX router both validate —
+   see `plans/range-vega-strategy.md`.
 
 ---
 
-## Constraints
+## 11. Constraints
 
 - No changes to production strategy files at this stage.
 - Any implementation must have a dedicated backtest showing improvement before going live.
-- `research/range_detection/` is a research module only — not imported by any production code.
+- `research/range_detection/` is a research module only — not imported by production code.
+- Validation gate (§7) must pass before any containment-based build.

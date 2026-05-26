@@ -286,9 +286,16 @@ all findings go through a dedicated backtest before any strategy wiring.
 
 | Module | Description | Status |
 |---|---|---|
-| [`research/range_detection/`](./research/range_detection/) | Two range detection methods for Nifty: ADX-gated (daily + 75-min) and price-action range setter (daily, any N-min). Visual comparison complete — hybrid combination in progress. | Active research |
+| [`research/range_detection/`](./research/range_detection/) | Price-action range detector (validated) + ADX method (reference). Athena trades annotated with range and VIX signals. | Active research |
 
-See [`plans/range-detection-research.md`](./plans/range-detection-research.md) for the active research plan.
+Active research plans (forward-looking — not yet wired to production):
+- [`plans/range-detection-research.md`](./plans/range-detection-research.md) — range detection as the
+  **spot-containment** axis (orthogonal to VIX); validation gate next; use cases re-ranked (Artemis, Apollo, Athena).
+- [`plans/vix-router-research.md`](./plans/vix-router-research.md) — replace the hard VIX-regime gate
+  (see [VIX Regime](#vix-regime)) with a **VIX-direction forecast** routing between Athena (long vega) and Artemis (short vega).
+- [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Hestia*: proposed range-anchored,
+  vega-adaptive strategy unifying both axes.
+- [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
 
 ---
 

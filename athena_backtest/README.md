@@ -68,6 +68,13 @@ Results are saved to `athena_backtest/data/trade_summary.csv`.
 **Next step:** Identify a defensible filter condition from the corrected data, then implement
 as `ENABLE_VIX_ENTRY_FILTER` flag in `backtest.py`. See `plans/athena-entry-filter.md`.
 
+**Broader direction:** the VIX work has evolved from a standalone Athena filter into a
+**VIX-direction router** between Athena (long vega) and Artemis (short vega) — see
+`plans/vix-router-research.md`. Separately, range state is an *orthogonal* spot-containment
+signal (not a VIX proxy): useful for Athena strike placement and range-break exits, but range
+*direction* should not be re-encoded as a VIX signal (corr 0.46 with VIX state). See
+`plans/range-detection-research.md`.
+
 ### Phase 2.1 — Tactical Adjustments
 - **PE Wing Salvage (`backtest_wing_salvage.py`):** Automatically exiting the redundant PE wing when the CE Parachute triggers. 
 - **Results:** Improved win rate (64.2%) and R:R (1.37), though absolute profit was slightly lower due to exit slippage.

@@ -1,12 +1,22 @@
 # Range Detection
 
-Two complementary approaches to identifying Nifty consolidation ranges. PA method is
-validated and active; ADX method is retained for reference. Athena trade annotation is
-complete; VIX signal analysis has identified a structural entry filter candidate.
+Two approaches to identifying Nifty consolidation ranges. PA method is validated and active;
+ADX method is retained for reference. Athena trade annotation is complete.
 
-See [`plans/range-detection-research.md`](../../plans/range-detection-research.md) for
-the full research plan and [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md)
-for the VIX entry filter findings.
+**Reframe (2026-05-26):** range state and VIX direction are *orthogonal* axes of a premium
+trade. Range detection owns the **spot-containment** axis (where spot stays relative to the
+strikes); the VIX router owns the **vega** axis. They are complementary, not competing —
+corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased ranges earn 2.5× the P&L via
+spot containment (the market's up-drift), independent of vega.
+
+Plans:
+- [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
+  validation gate, and re-ranked use cases (Artemis strongest, Apollo cleanest, Athena complementary).
+- [`plans/vix-router-research.md`](../../plans/vix-router-research.md) — the vega axis: VIX-direction
+  router between Athena and Artemis.
+- [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Hestia*: proposed
+  range-anchored, vega-adaptive strategy unifying both axes.
+- [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md) — annotation infra + VIX-signal findings.
 
 ---
 
@@ -93,23 +103,23 @@ Output: `outputs/athena_annotated.csv` (gitignored — regenerate locally).
 
 ### Key findings (as of 2026-05-26)
 
-**Down-biased + both_up VIX** is the structural edge: 40 trades across above_upper and
-upper_zone show ~70–75% win rate and strong positive avg. Falling market + rising VIX on
-both timeframes = long-vega calendars working from both directions simultaneously.
+**Range state is the spot-containment axis, independent of vega.** corr(range direction,
+ΔVIX over hold) ≈ +0.03, yet down-biased ranges earn 2.5× the P&L (+25.3 vs +10.2 avg) with
+the *same* near-zero VIX move — a spot-containment effect (up-drift), not a vega effect.
+This validates range detection as complementary to the VIX router. Emphasis is therefore on
+range **bounds & containment** (pure price), not range *direction* (corr 0.46 with VIX state —
+the router's job).
 
-**`lower_zone` BB** is the consistently weakest column regardless of ST signal or bias:
-31 trades, 52% win, +3.6 avg — nearly flat. All other BB zones average +15 to +25.
+**VIX-signal findings (vega axis, see router plan):** down-biased + both_up VIX is the
+strongest cluster; `lower_zone` BB is the consistently weakest column. No single clean VIX
+skip condition confirmed yet. Full 3-way grid at `outputs/vix_signal_grid.csv`.
 
-**No single clean skip condition** has been confirmed yet. The full 3-way classification
-table (bias × VIX ST × BB zone) is at `outputs/vix_signal_grid.csv`.
+Note: an earlier version used `.dt.tz_convert(None)` when loading 1-min VIX, converting IST to
+UTC (09:15 → 03:45) and corrupting the 75-min resample. Fixed (`tz_localize(None)`); all
+numbers reflect corrected data.
 
-Note: an earlier version of this analysis used `.dt.tz_convert(None)` when loading 1-min
-VIX, which converted IST timestamps to UTC (09:15 IST → 03:45). This caused the 75-min
-resampler to use the wrong market-hours window, effectively producing a second daily ST
-rather than a genuine intraday bar. The bug is fixed (`tz_localize(None)` keeps local time).
-All numbers above reflect the corrected data.
-
-See `plans/athena-entry-filter.md` for the current research state and next steps.
+**Next gate:** key-level hold rate + range duration distribution — see
+`plans/range-detection-research.md` §7. These greenlight or kill all containment use cases.
 
 ---
 
