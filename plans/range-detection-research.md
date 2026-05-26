@@ -215,7 +215,7 @@ Bounds improve the *spot* axis; direction is redundant with the router (corr 0.4
 ## 9. New Strategy: moved to its own plan
 
 The "Range Anchor" concept from the prior version of this plan is **superseded** by a fuller,
-vega-adaptive design in **`plans/range-vega-strategy.md`** (codename *Hestia*). Summary of the
+vega-adaptive design in **`plans/range-vega-strategy.md`** (codename *Ares*). Summary of the
 verdict that drove the move:
 - A fixed short-premium-at-range-bounds strategy is ~80% Artemis. Don't build that standalone.
 - The genuinely differentiated idea unifies **both research axes**: anchor to a confirmed
@@ -236,9 +236,9 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
    highest-priority use case — containment is empirically the dominant Artemis P&L driver
    (ρ=0.32), and an exogenous range signal could improve it further.
 4. **Athena**: range-break exit + range-anchored strike placement as isolated experiments.
-5. Standalone vega-adaptive strategy (*Hestia*) only if step 3 shows incremental P&L gain AND
+5. Standalone vega-adaptive strategy (*Ares*) only if step 3 shows incremental P&L gain AND
    is uncorrelated with the existing book — see `plans/range-vega-strategy.md`. Note: the
-   symmetric VIX router that Hestia depended on is not supported; Hestia's vega-adaptive
+   symmetric VIX router that Ares depended on is not supported; Ares's vega-adaptive
    mechanism would need a different foundation if pursued.
 
 ---

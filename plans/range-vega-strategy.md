@@ -1,7 +1,6 @@
-# Plan: Hestia — Range-Anchored, Vega-Adaptive Premium Strategy
+# Plan: Ares — Range-Anchored, Vega-Adaptive Premium Strategy
 
-**Codename: Hestia** (placeholder — rename freely; chosen to fit the Greek-deity family:
-Athena / Artemis / Apollo. Hestia = hearth/center, fitting a containment strategy.)
+**Codename: Ares**
 
 **Status: Concept / design. Downstream of two upstream research threads — does not start until
 both validate.**
@@ -28,24 +27,24 @@ The existing book uses these only partially and rigidly:
 | Artemis | implicit (condor zone) | **fixed short** | delta-based |
 | Apollo | inverse (wants breakout) | n/a (directional) | — |
 
-**Hestia's thesis:** anchor short/long premium to a *confirmed* range's key level
+**Ares's thesis:** anchor short/long premium to a *confirmed* range's key level
 (containment edge), and **choose the structure's vega sign from the VIX router** (vega edge).
 That makes it differentiated:
-- **vs Artemis** — Artemis is permanently short vega. Hestia flips to long vega when the
+- **vs Artemis** — Artemis is permanently short vega. Ares flips to long vega when the
   router forecasts rising VIX.
-- **vs Athena** — Athena is permanently long vega and delta/ATM-anchored. Hestia only deploys
+- **vs Athena** — Athena is permanently long vega and delta/ATM-anchored. Ares only deploys
   when a range is confirmed and anchors strikes to the proven key level.
-- **vs Apollo** — Apollo bets on the range breaking; Hestia bets on it holding (opposite
+- **vs Apollo** — Apollo bets on the range breaking; Ares bets on it holding (opposite
   regime — they are natural complements, never both firing on the same read).
 
-In short: Hestia is the **synthesis** of the two research threads, not a fourth flavour of the
+In short: Ares is the **synthesis** of the two research threads, not a fourth flavour of the
 same bet.
 
 ---
 
 ## 2. Hard dependencies (do NOT start before these pass)
 
-Hestia is downstream of both threads. Building it before they validate is wasted effort.
+Ares is downstream of both threads. Building it before they validate is wasted effort.
 
 1. **Range-detection validation gate** (`plans/range-detection-research.md` §7):
    - Key-level hold rate must be high enough that anchoring strikes to the key level has a real
@@ -54,14 +53,14 @@ Hestia is downstream of both threads. Building it before they validate is wasted
 2. **VIX router Phase 1** (`plans/vix-router-research.md`):
    - A forward-VIX-direction forecast (VRP / mean-reversion) must validate on full VIX history
      with stable, better-than-base-rate skill — otherwise the vega-adaptation has no signal and
-     Hestia collapses back into "Artemis with range strikes."
+     Ares collapses back into "Artemis with range strikes."
 3. **Artemis range-anchored-strike variant** (`plans/range-detection-research.md` §10 step 3):
-   - This is the *cheaper* test of half of Hestia (containment-anchored short premium). If
+   - This is the *cheaper* test of half of Ares (containment-anchored short premium). If
      range-anchored strikes don't beat delta-based strikes for Artemis, the containment-strike
-     premise is weak and Hestia's structure needs rethinking before any standalone build.
+     premise is weak and Ares's structure needs rethinking before any standalone build.
 
 **Gate rule:** all three must show signal. If only containment validates (router fails),
-build the Artemis variant and stop — do not build Hestia. If only the router validates
+build the Artemis variant and stop — do not build Ares. If only the router validates
 (containment weak), the edge belongs in the router/strategy routing, not a new strategy.
 
 ---
@@ -119,8 +118,8 @@ Encode as **asymmetric strike distances** from the key level, not symmetric offs
    variants on the same range-anchored entries/strikes:
    - (a) always short vega (≈ Artemis-at-range-bounds)
    - (b) always long vega (≈ Athena-at-range-bounds)
-   - (c) **router-selected** vega sign (Hestia)
-   If (c) does not beat both (a) and (b) out-of-sample, the vega-adaptation — Hestia's whole
+   - (c) **router-selected** vega sign (Ares)
+   If (c) does not beat both (a) and (b) out-of-sample, the vega-adaptation — Ares's whole
    reason to exist — is not real. Kill it and keep the better of (a)/(b) as an enhancement to
    the existing strategy.
 2. **Does range-anchoring beat delta-anchoring?** Compare range-anchored strikes vs the
@@ -128,7 +127,7 @@ Encode as **asymmetric strike distances** from the key level, not symmetric offs
 3. **Does the up-drift skew help?** Asymmetric vs symmetric strike distances.
 4. **Fast-exit value:** raw key-level-break exit vs holding to time stop — quantify the
    breakout losses avoided vs whipsaw costs incurred.
-5. **Capital efficiency vs the book:** does Hestia earn enough incremental, *uncorrelated*
+5. **Capital efficiency vs the book:** does Ares earn enough incremental, *uncorrelated*
    P&L to justify a separate engine, or is it better folded into Artemis/Athena as a mode?
 
 ---
@@ -194,7 +193,7 @@ Encode as **asymmetric strike distances** from the key level, not symmetric offs
 
 ## 9. When to call back
 
-- If variants (a)/(b)/(c) show (c) does **not** beat both fixed-vega variants → Hestia is
+- If variants (a)/(b)/(c) show (c) does **not** beat both fixed-vega variants → Ares is
   dead; fold the better fixed variant into the existing strategy.
 - If incremental P&L is **correlated** with the existing book → don't build standalone; make
   it a mode.

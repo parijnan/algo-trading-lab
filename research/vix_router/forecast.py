@@ -1,7 +1,7 @@
 """
 forecast.py — durable VIX-direction forecast interface.
 
-This is the stable API consumed by Phase 5 routing backtest and later Hestia.
+This is the stable API consumed by Phase 5 routing backtest and later Ares.
 All no-lookahead logic lives here — consumers cannot accidentally cheat.
 
 Durable interface (§14.2):

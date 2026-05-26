@@ -332,7 +332,7 @@ as the dominant P&L driver (§15.4); range state is the exogenous signal to test
 
 The research phases are exploratory — don't over-engineer throwaway analysis scripts. But
 **one interface is durable**: the VIX forecast is consumed twice (Phase 1 validation *and* the
-Phase 5 routing backtest, later Hestia). Pin it down now so Phase 1 doesn't produce code that
+Phase 5 routing backtest, later Ares). Pin it down now so Phase 1 doesn't produce code that
 Phase 5 rebuilds. This section specifies only the durable parts: directory layout, the forecast
 interface, and per-phase output contracts. Everything else is implementer's discretion.
 
@@ -389,7 +389,7 @@ asymmetric direction thresholds. No grid sweeps.
 |---|---|---|
 | 0 | `outputs/horizons.json` — modal holds per strategy/era + base-rate P(VIX falls) | all phases (sets `horizon_days`, the coinflip benchmark) |
 | 1–2 | `outputs/signal_validation_h{N}.csv` — per signal: Spearman ρ, p, per-year ρ, decile table, hit-rate | the go/kill decision (§7) |
-| build | `outputs/vix_forecast_h{N}.csv` — the date→forecast table from §14.2 (**the durable artifact**) | Phase 5 backtest, later Hestia |
+| build | `outputs/vix_forecast_h{N}.csv` — the date→forecast table from §14.2 (**the durable artifact**) | Phase 5 backtest, later Ares |
 | 5 | routing backtest reads `vix_forecast_h{N}.csv` (point lookup via `forecast_at`) | comparison vs hard gate |
 
 ### 14.4 Consumption boundary

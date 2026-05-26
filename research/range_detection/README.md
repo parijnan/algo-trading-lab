@@ -18,7 +18,7 @@ Plans:
   validation gate (**next**), and re-ranked use cases (Artemis strongest, Apollo cleanest, Athena complementary).
 - [`plans/vix-router-research.md`](../../plans/vix-router-research.md) — **[COMPLETE]** VIX router
   research. Verdict: hard gate unchanged; containment is dominant Artemis driver.
-- [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Hestia*: proposed
+- [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Ares*: proposed
   range-anchored strategy (downstream of range validation gate + router; router verdict changes scope).
 - [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md) — annotation infra + VIX-signal findings.
 

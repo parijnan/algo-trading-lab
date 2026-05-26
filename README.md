@@ -295,7 +295,7 @@ Active research plans (forward-looking — not yet wired to production):
 - [`plans/vix-router-research.md`](./plans/vix-router-research.md) — **[COMPLETE]** VIX-direction
   router research. Verdict: symmetric router not supported; hard VIX-level gate unchanged.
   Dominant Artemis P&L driver is containment (ρ=0.32), not VIX direction. See §15 for findings.
-- [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Hestia*: proposed range-anchored,
+- [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Ares*: proposed range-anchored,
   vega-adaptive strategy unifying both axes.
 - [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
 
