@@ -286,12 +286,13 @@ all findings go through a dedicated backtest before any strategy wiring.
 
 | Module | Description | Status |
 |---|---|---|
-| [`research/range_detection/`](./research/range_detection/) | Price-action range detector (validated) + ADX method (reference). Athena trades annotated with range and VIX signals. | Active research |
+| [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
 
 Active research plans (forward-looking — not yet wired to production):
-- [`plans/range-detection-research.md`](./plans/range-detection-research.md) — range detection as the
-  **spot-containment** axis (orthogonal to VIX); **unblocked and re-prioritised** — validation gate (key-level hold rate + duration) is next; Artemis use case empirically supported (containment ρ=0.32).
+- [`plans/range-detection-research.md`](./plans/range-detection-research.md) — §7 gate **passed**;
+  Artemis annotation complete. Active: (1) lot-sizing by direction on annotated data; (2) range-anchored
+  strike variant backtest. No trade filtering — trades taken every week, optimise the trade itself.
 - [`plans/vix-router-research.md`](./plans/vix-router-research.md) — **[COMPLETE]** VIX-direction
   router research. Verdict: symmetric router not supported; hard VIX-level gate unchanged.
   Dominant Artemis P&L driver is containment (ρ=0.32), not VIX direction. See §15 for findings.
@@ -488,12 +489,14 @@ algo-trading-lab/
 │       ├── trade_summary.csv
 │       └── trade_logs/
 ├── research/                       # Exploratory research modules (not used by production code)
-│   ├── range_detection/            # Nifty range detection research (ADX + PA methods)
+│   ├── range_detection/            # Nifty/Sensex range detection research (ADX + PA methods)
 │   │   ├── range_detector.py       # ADX-gated — daily OHLC
 │   │   ├── range_detector_75min.py # ADX-gated — 75-min (resampled from 1-min)
 │   │   ├── range_detector_pa.py    # Price-action range setters — daily / any N-min
-│   │   ├── resample.py             # Shared day-anchored N-min resampler
+│   │   ├── resample.py             # Day-anchored N-min resampler; nifty + sensex
+│   │   ├── validate_gate.py        # §7 validation gate — hold rate + duration (PASSED)
 │   │   ├── annotate_athena.py      # Tag Athena trades with range state + VIX signals
+│   │   ├── annotate_artemis.py     # Tag Artemis trades with range state + containment proxies
 │   │   └── outputs/                # Generated charts and exports (gitignored)
 │   └── vix_router/                 # VIX-direction forecast research
 │       ├── data_layer.py           # Load VIX/Nifty 1-min → daily (tz_localize safe)

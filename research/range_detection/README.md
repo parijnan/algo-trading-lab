@@ -1,7 +1,7 @@
 # Range Detection
 
-Two approaches to identifying Nifty consolidation ranges. PA method is validated and active;
-ADX method is retained for reference. Athena trade annotation is complete.
+Two approaches to identifying Nifty/Sensex consolidation ranges. PA method is validated and
+active; ADX method is retained for reference. Athena and Artemis trade annotation complete.
 
 **Range state and VIX direction are *orthogonal* axes of a premium trade.** Range detection
 owns the **spot-containment** axis; the VIX router owned the *vega* axis (research now
@@ -9,17 +9,17 @@ complete — symmetric router not supported; containment confirmed as dominant).
 complementary, not competing — corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased
 ranges earn 2.5× the P&L via spot containment (the market's up-drift), independent of vega.
 
-**VIX router research complete (2026-05-26):** spot-to-strike distance (containment proxy)
-predicts Artemis P&L at ρ=0.32, p=0.0001 on 150 historical trades. This is the empirical
-foundation for range-based Artemis enhancement. Validation gate (§7) is the immediate next step.
+**Status (2026-05-26):** §7 validation gate passed. Artemis annotation complete.
+Immediate next: lot-sizing by direction (post-hoc on annotated data), then range-anchored
+strike variant backtest (§10 steps 3–4 in the plan).
 
 Plans:
 - [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
-  validation gate (**next**), and re-ranked use cases (Artemis strongest, Apollo cleanest, Athena complementary).
+  §7 gate results (**PASSED**), and ranked use cases (Artemis steps 3–4 active).
 - [`plans/vix-router-research.md`](../../plans/vix-router-research.md) — **[COMPLETE]** VIX router
-  research. Verdict: hard gate unchanged; containment is dominant Artemis driver.
+  research. Verdict: hard gate unchanged; containment is dominant Artemis driver (ρ=0.32).
 - [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Ares*: proposed
-  range-anchored strategy (downstream of range validation gate + router; router verdict changes scope).
+  range-anchored strategy (downstream of steps 3–4; router verdict changes scope).
 - [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md) — annotation infra + VIX-signal findings.
 
 ---
@@ -31,8 +31,10 @@ Plans:
 | `range_detector.py` | ADX-gated daily ranges (set aside; PA superior) | `nifty_daily.csv` |
 | `range_detector_75min.py` | ADX-gated 75-min ranges (set aside) | `nifty.csv` resampled |
 | `range_detector_pa.py` | PA range detection — daily or any N-min | `nifty_daily.csv` or `nifty.csv` resampled |
-| `resample.py` | Day-anchored N-minute resampler shared by all scripts | `nifty.csv` / `india_vix.csv` |
-| `annotate_athena.py` | Tags historical Athena trades with range + VIX signals | `trade_summary.csv` + `nifty.csv` + `india_vix.csv` |
+| `resample.py` | Day-anchored N-minute resampler; supports `nifty` and `sensex` | `nifty.csv` / `sensex.csv` / daily CSVs |
+| `validate_gate.py` | §7 validation gate — hold rate + duration on full 2019–2026 history | `nifty.csv` (1-min) |
+| `annotate_athena.py` | Tags Athena trades with range state + VIX signals | `trade_summary.csv` + `nifty.csv` + `india_vix.csv` |
+| `annotate_artemis.py` | Tags Artemis trades with range state + endogenous containment proxies | `trade_summary_{nifty,sensex}_rerun.csv` + index CSVs |
 
 ---
 
@@ -79,15 +81,14 @@ python range_detector_pa.py --timeframe 75 --start-date "2024-01-02 09:15" [--mo
 ## Annotation: `annotate_athena.py`
 
 Tags each historical Athena trade with its PA range state and VIX signal state at entry.
-Run from the `research/range_detection/` directory:
 
 ```bash
 python annotate_athena.py
 ```
 
-Output: `outputs/athena_annotated.csv` (gitignored — regenerate locally).
+Output: `outputs/athena_annotated.csv` (gitignored).
 
-### Annotation columns
+### Annotation columns (Athena)
 
 | Column | Description |
 |---|---|
@@ -105,25 +106,52 @@ Output: `outputs/athena_annotated.csv` (gitignored — regenerate locally).
 | `vix_bb_pct` | VIX %B — position in 20-day Bollinger Bands (p=20, std=2); prev day's bar |
 | `vix_bb_zone` | `'above_upper'` (>1.0) \| `'upper_zone'` (0.7–1.0) \| `'mid_zone'` (0.3–0.7) \| `'lower_zone'` (0–0.3) \| `'below_lower'` (<0) |
 
-### Key findings (as of 2026-05-26)
+### Key findings — Athena (as of 2026-05-26)
 
-**Range state is the spot-containment axis, independent of vega.** corr(range direction,
-ΔVIX over hold) ≈ +0.03, yet down-biased ranges earn 2.5× the P&L (+25.3 vs +10.2 avg) with
-the *same* near-zero VIX move — a spot-containment effect (up-drift), not a vega effect.
-This validates range detection as complementary to the VIX router. Emphasis is therefore on
-range **bounds & containment** (pure price), not range *direction* (corr 0.46 with VIX state —
-the router's job).
+Range state is the spot-containment axis, independent of vega. Down-biased ranges earn 2.5×
+the P&L (+25.3 vs +10.2 avg) with the same near-zero ΔVIX — a structural up-drift effect.
 
-**VIX-signal findings (vega axis, see router plan):** down-biased + both_up VIX is the
-strongest cluster; `lower_zone` BB is the consistently weakest column. No single clean VIX
-skip condition confirmed yet. Full 3-way grid at `outputs/vix_signal_grid.csv`.
+---
 
-Note: an earlier version used `.dt.tz_convert(None)` when loading 1-min VIX, converting IST to
-UTC (09:15 → 03:45) and corrupting the 75-min resample. Fixed (`tz_localize(None)`); all
-numbers reflect corrected data.
+## Annotation: `annotate_artemis.py`
 
-**Next gate:** key-level hold rate + range duration distribution — see
-`plans/range-detection-research.md` §7. These greenlight or kill all containment use cases.
+Tags each historical Artemis trade with PA range state and endogenous containment proxies.
+Covers both Nifty and Sensex instruments.
+
+```bash
+python annotate_artemis.py              # both instruments
+python annotate_artemis.py nifty        # single instrument
+python annotate_artemis.py sensex
+```
+
+Outputs: `outputs/artemis_annotated_{nifty,sensex}.csv` (gitignored).
+
+### Annotation columns (Artemis)
+
+Same `ep_*` and `key_dist_pct` columns as Athena, plus:
+
+| Column | Description |
+|---|---|
+| `pe_dist_pct` | `(spot − pe_sell_strike) / spot × 100` — PE side clearance |
+| `ce_dist_pct` | `(ce_sell_strike − spot) / spot × 100` — CE side clearance |
+| `min_dist_pct` | `min(pe_dist_pct, ce_dist_pct)` — endogenous containment proxy |
+
+### Key findings — Artemis Nifty (2026-05-26, n=296 trades 2019–2025)
+
+| Signal | ρ | p | n |
+|---|---|---|---|
+| `min_dist_pct` (endogenous) | +0.32 | 0.0001*** | 150 |
+| `key_dist_pct` (exogenous range) | −0.17 | 0.043* | 150 |
+
+Closer to key level (lower `key_dist_pct`) predicts better P&L — the range bound acts as
+demonstrated support/resistance, not a breakout threat. Within min_dist quartiles, key_dist
+shows the same directional sign (ρ≈−0.25 to −0.29) but doesn't reach per-quartile significance.
+
+**Direction dominates:** down-biased ranges avg +17.81 pts vs up-biased +5.22 pts (2.5× gap),
+consistent with the up-drift structural effect (down ranges mean-revert against the drift).
+
+**Design constraint:** trades are taken every eligible week — no filtering. Optimisation path
+is trade-level: (1) lot-sizing by range direction, (2) range-anchored strike placement.
 
 ---
 

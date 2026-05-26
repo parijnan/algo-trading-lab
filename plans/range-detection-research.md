@@ -258,14 +258,34 @@ verdict that drove the move:
 
 VIX router research is complete (§15 of `plans/vix-router-research.md`) — no blocker remains.
 
-1. **Validation gate** (§7): key-level hold rate + duration distribution. Decisive, cheap.
-2. If pass → **Apollo chop-filter annotation** (most independent, fastest win) **and Artemis
-   annotation** (extend `resample.py` for Sensex).
-3. **Artemis range-anchored-strike variant** backtest vs delta-based baseline. This is the
-   highest-priority use case — containment is empirically the dominant Artemis P&L driver
-   (ρ=0.32), and an exogenous range signal could improve it further.
-4. **Athena**: range-break exit + range-anchored strike placement as isolated experiments.
-5. Standalone vega-adaptive strategy (*Ares*) only if step 3 shows incremental P&L gain AND
+1. ~~**Validation gate** (§7): key-level hold rate + duration distribution. Decisive, cheap.~~
+   **DONE (2026-05-26)** — gate passed. See §7 for full results.
+
+2. ~~**Apollo chop-filter annotation** + **Artemis annotation**~~ (extend `resample.py` for Sensex).
+   **DONE (2026-05-26)** — `resample.py` extended for Sensex; `annotate_artemis.py` written and
+   run on both Nifty (296 trades) and Sensex (134 trades).
+   Key findings: `min_dist_pct` ρ=+0.32 p=0.0001 confirmed; `key_dist_pct` ρ=-0.17 p=0.043
+   (closer to key level → better P&L); down-biased ranges earn 2.5× avg P&L (17.81 vs 5.22 pts).
+   Design constraint: no trade filtering — trades are taken every eligible week; optimise the
+   trade itself, not the entry decision.
+
+3. **Lot-sizing by direction** (fast, post-hoc analysis on existing annotated data):
+   Scale lots in proportion to range state (e.g. 1.5× in down-biased established ranges,
+   1× otherwise). Apply as a post-hoc weight to `artemis_annotated_nifty.csv` results to
+   estimate the P&L uplift before touching the backtest engine.
+
+4. **Artemis range-anchored-strike variant** backtest vs delta-based baseline.
+   Use range bounds (`range_high`/`range_low`) to anchor short strikes instead of pure delta.
+   Requires modifying the backtest engine's strike selection and re-running on full history.
+   Test hypothesis: does anchoring to demonstrated support/resistance improve containment
+   (higher min_dist_pct equivalent) beyond what the current delta-based selection achieves?
+
+5. **Apollo chop-filter annotation** — most independent, fastest standalone win; not yet done.
+   Annotate Apollo trades with `ep_entry_spot_pct` and range-break coincidence.
+
+6. **Athena**: range-break exit + range-anchored strike placement as isolated experiments.
+
+7. Standalone vega-adaptive strategy (*Ares*) only if step 4 shows incremental P&L gain AND
    is uncorrelated with the existing book — see `plans/range-vega-strategy.md`. Note: the
    symmetric VIX router that Ares depended on is not supported; Ares's vega-adaptive
    mechanism would need a different foundation if pursued.
