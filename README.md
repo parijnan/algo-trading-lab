@@ -287,6 +287,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 | Module | Description | Status |
 |---|---|---|
 | [`research/range_detection/`](./research/range_detection/) | Price-action range detector (validated) + ADX method (reference). Athena trades annotated with range and VIX signals. | Active research |
+| [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast: VRP, BB %B, and z-score signals validated on full 2019–2026 VIX history. Phase 0 (horizons + base rates) and Phase 1 (signal battery) complete. | Active research |
 
 Active research plans (forward-looking — not yet wired to production):
 - [`plans/range-detection-research.md`](./plans/range-detection-research.md) — range detection as the
@@ -486,12 +487,19 @@ algo-trading-lab/
 │       ├── trade_summary.csv
 │       └── trade_logs/
 ├── research/                       # Exploratory research modules (not used by production code)
-│   └── range_detection/            # Nifty range detection research (ADX + PA methods)
-│       ├── range_detector.py       # ADX-gated — daily OHLC
-│       ├── range_detector_75min.py # ADX-gated — 75-min (resampled from 1-min)
-│       ├── range_detector_pa.py    # Price-action range setters — daily / any N-min
-│       ├── resample.py             # Shared day-anchored N-min resampler
-│       └── outputs/                # Generated charts and exports (gitignored)
+│   ├── range_detection/            # Nifty range detection research (ADX + PA methods)
+│   │   ├── range_detector.py       # ADX-gated — daily OHLC
+│   │   ├── range_detector_75min.py # ADX-gated — 75-min (resampled from 1-min)
+│   │   ├── range_detector_pa.py    # Price-action range setters — daily / any N-min
+│   │   ├── resample.py             # Shared day-anchored N-min resampler
+│   │   ├── annotate_athena.py      # Tag Athena trades with range state + VIX signals
+│   │   └── outputs/                # Generated charts and exports (gitignored)
+│   └── vix_router/                 # VIX-direction forecast research
+│       ├── data_layer.py           # Load VIX/Nifty 1-min → daily (tz_localize safe)
+│       ├── signals.py              # vrp(), bb_pct(), zscore() — pure date-indexed signals
+│       ├── forecast.py             # Durable interface: build_forecast() / forecast_at()
+│       ├── validate.py             # Phase 0–1 validation battery; run to regenerate outputs
+│       └── outputs/                # horizons.json, signal_validation_h*.csv (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
     ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
