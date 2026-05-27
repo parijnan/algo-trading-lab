@@ -9,9 +9,11 @@ complete — symmetric router not supported; containment confirmed as dominant).
 complementary, not competing — corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased
 ranges earn 2.5× the P&L via spot containment (the market's up-drift), independent of vega.
 
-**Status (2026-05-26):** §7 validation gate passed. Artemis annotation complete.
-Immediate next: lot-sizing by direction (post-hoc on annotated data), then range-anchored
-strike variant backtest (§10 steps 3–4 in the plan).
+**Status (2026-05-27):** §7 gate passed. Artemis annotation complete. Lot-sizing sweep and
+asymmetric leg sizing analysis complete (§10 step 3 done). Leading candidate: E-adj
+(CE×1.33/PE×0.67 on down_near; PE×1.33/CE×0.67 on up_near; both×0.5 on rest) →
+Sharpe 2.857, MaxDD -90.9 (-43% vs baseline). Open questions remain before moving to
+range-anchored strike variant backtest (§10 step 4).
 
 Plans:
 - [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
@@ -35,6 +37,9 @@ Plans:
 | `validate_gate.py` | §7 validation gate — hold rate + duration on full 2019–2026 history | `nifty.csv` (1-min) |
 | `annotate_athena.py` | Tags Athena trades with range state + VIX signals | `trade_summary.csv` + `nifty.csv` + `india_vix.csv` |
 | `annotate_artemis.py` | Tags Artemis trades with range state + endogenous containment proxies | `trade_summary_{nifty,sensex}_rerun.csv` + index CSVs |
+| `lot_sizing_sweep.py` | Symmetric lot-sizing sweep across range-state conditions + two-sided sweep | `artemis_annotated_{nifty,sensex}.csv` |
+| `analyze_sizing_rule.py` | Deep analysis of the ×2.0/×0.75 symmetric rule — bucket profiles, SL breakdown, year-by-year | `artemis_annotated_nifty.csv` |
+| `analyze_asymmetric_sizing.py` | Asymmetric leg sizing sweep — scale protected leg per bucket; capital-adjusted for 1.5× margin | `artemis_annotated_nifty.csv` |
 
 ---
 
@@ -152,6 +157,45 @@ consistent with the up-drift structural effect (down ranges mean-revert against 
 
 **Design constraint:** trades are taken every eligible week — no filtering. Optimisation path
 is trade-level: (1) lot-sizing by range direction, (2) range-anchored strike placement.
+
+---
+
+## Lot-Sizing Analysis (2026-05-27)
+
+Scripts: `lot_sizing_sweep.py` → `analyze_sizing_rule.py` → `analyze_asymmetric_sizing.py`
+
+### Four structural buckets (150 traded Nifty trades)
+
+| Bucket | n | CE avg | CE win% | PE avg | PE win% |
+|---|---|---|---|---|---|
+| down_near (down, key_dist<50%) | 37 | +29.31 | 73% | -2.07 | 43% |
+| down_far  (down, key_dist≥50%) | 28 | +3.05 | 54% | +2.29 | 57% |
+| up_near   (up, key_dist<50%)   | 31 | -6.29 | 29% | +10.88 | 61% |
+| up_far    (up, key_dist≥50%)   | 54 | +2.66 | 54% | +2.93 | 52% |
+
+CE wins 73% in `down_near` (resistance overhead protects it). CE wins only 29% in `up_near`
+(spot grinding up tests CE; PE protected by support and up-drift).
+
+### Capital adjustment
+
+2× skewed iron condor (CE×2/PE×1) costs **1.5× the margin** of a balanced 1× condor
+(Sensibull-verified). Under max-capital constraint: effective protected-leg factor = 2/1.5 =
+**1.333**, unprotected-leg factor = 1/1.5 = **0.667**.
+
+### Leading candidate: E-adj rest=0.5×
+
+| Config | Total | Sharpe | MaxDD | Win% |
+|---|---|---|---|---|
+| Baseline (all 60+60) | +1601.4 | 2.263 | -158.6 | 68.7% |
+| **E-adj (asym + rest×0.5)** | **+1940.1** | **2.857** | **-90.9** | **70.7%** |
+
+**Concrete lot structure:**
+- `down_near`: CE 80 lots, PE 40 lots
+- `up_near`: CE 40 lots, PE 80 lots
+- `rest` (down_far + up_far): CE 30 lots, PE 30 lots
+
+43% reduction in peak drawdown with +21% total P&L and +0.594 Sharpe vs baseline.
+Open questions on the sizing model remain before proceeding to strike anchoring.
 
 ---
 

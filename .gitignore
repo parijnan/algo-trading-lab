@@ -292,6 +292,9 @@ athena_production/logs/
 # Claude Context
 CLAUDE.md
 
+# Claude Code local state (memory, plans, hooks — machine-specific)
+.claude/
+
 # Artemis Phase 4 Research
 artemis_backtest/phase4/data/
 
