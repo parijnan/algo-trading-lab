@@ -269,11 +269,12 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
    Design constraint: no trade filtering — trades are taken every eligible week; optimise the
    trade itself, not the entry decision.
 
-3. ~~**Lot-sizing by direction**~~ **DONE (2026-05-27)** — full sweep complete; capital-adjusted
-   asymmetric leg sizing validated. See §12 for full findings. Leading candidate: **E-adj**
-   (CE×1.33/PE×0.67 on down_near; PE×1.33/CE×0.67 on up_near; both×0.5 on rest).
-   Concrete lot structure: down_near (CE 80, PE 40), up_near (CE 40, PE 80), rest (CE 30, PE 30).
-   Open questions remain on the sizing model before moving to strike anchoring.
+3. ~~**Lot-sizing by direction**~~ **DONE (2026-05-28)** — full sweep complete; look-ahead bug
+   found and fixed (`side='right'` → `side='left'` in annotation). See §12 for corrected
+   findings. Prior E-adj (+1940.1, Sharpe 2.857) **invalidated** — was largely look-ahead.
+   **Surviving signal:** down_near CE-only scaling (CE avg +19.9, win% 66%; simple A config
+   +39.8% P&L, Sharpe 2.452). up_near PE signal gone — was entirely look-ahead artifact.
+   Sizing model needs rethinking before §10 step 4 can proceed.
 
 4. **Artemis range-anchored-strike variant** backtest vs delta-based baseline.
    Use range bounds (`range_high`/`range_low`) to anchor short strikes instead of pure delta.
@@ -293,69 +294,60 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
 
 ---
 
-## 12. Lot-Sizing Findings (2026-05-27)
+## 12. Lot-Sizing Findings (2026-05-28, corrected)
 
 Scripts: `lot_sizing_sweep.py`, `analyze_sizing_rule.py`, `analyze_asymmetric_sizing.py`
 Data: 150 traded Artemis-Nifty trades (2019–2025), `artemis_annotated_nifty.csv`.
 
-### Four structural buckets
+### Look-ahead bug found and fixed (2026-05-28)
 
-| Bucket | n | % | CE avg | CE win% | PE avg | PE win% |
-|---|---|---|---|---|---|---|
-| down_near (down-biased, key_dist<50%) | 37 | 25% | +29.31 | 73% | -2.07 | 43% |
-| down_far (down-biased, key_dist≥50%) | 28 | 19% | +3.05 | 54% | +2.29 | 57% |
-| up_near (up-biased, key_dist<50%)    | 31 | 21% | -6.29 | 29% | +10.88 | 61% |
-| up_far  (up-biased, key_dist≥50%)    | 54 | 36% | +2.66 | 54% | +2.93 | 52% |
+`annotate_artemis.py` was using `side='right'` in `price_idx.searchsorted(entry_date)`.
+For daily bars indexed at midnight, this returned **Monday's bar** for a Monday 10:31am entry
+— a bar whose close (which determines breakout direction) isn't known at entry time.
+Fixed to `side='left'`, returning **Friday's bar** (last complete daily bar before entry).
 
-`down_near`: CE is structurally protected by demonstrated resistance — scale CE.
-`up_near`: CE has only 29% win rate; PE is protected by support + up-drift — scale PE.
+Impact: 23 Nifty trades had their direction determined by the same-day close. After fix,
+those 23 resolve to their prior established range. All prior §12 numbers are invalidated.
 
-### Symmetric sweep (lot_sizing_sweep.py)
+### Four structural buckets (corrected)
 
-Best symmetric result: `down+kd<50% ×2.0 / up(any) ×0.75` →
-Sharpe 2.754 (+0.491), MaxDD -127.8, total +2498 (+56% vs baseline).
+| Bucket | n | CE avg | CE win% | PE avg | PE win% |
+|---|---|---|---|---|---|
+| down_near (down-biased, key_dist<50%) | 32 | +19.92 | 66% | +4.95 | 56% |
+| down_far (down-biased, key_dist≥50%)  | 31 | +10.57 | 58% | -1.08 | 52% |
+| up_near (up-biased, key_dist<50%)     | 24 | +7.20  | 46% | -0.59 | 42% |
+| up_far  (up-biased, key_dist≥50%)     | 63 | -0.31  | 48% | +5.91 | 56% |
 
-However, this result is **over-capitalised**: it assumes doubling lots on down_near trades,
-which the broker (Sensibull-verified) prices at **1.5× the margin** of a standard balanced
-iron condor. Cannot double lots if already at max capital.
+**down_near CE signal survives** — resistance overhead is real (CE avg +19.9, win% 66%).
+**up_near PE signal gone** — was entirely look-ahead artifact; CE and PE now roughly equal.
 
-### Asymmetric leg sizing (analyze_asymmetric_sizing.py)
+### Capital adjustment
 
-Formula: `trade_pl = ce_factor × ce_comp + pe_factor × pe_comp`
-where `ce_comp = ce_pl + ce_add_pl/lots`, `pe_comp = pe_pl + pe_add_pl/lots`.
+2× skewed iron condor (CE×2/PE×1) costs **1.5× the margin** of a balanced 1× condor
+(Sensibull-verified). Under max-capital constraint: effective protected-leg factor = 2/1.5 =
+**1.333**, unprotected-leg factor = 1/1.5 = **0.667**.
 
-**Capital adjustment:** 2× skewed trade (CE×2/PE×1) costs 1.5× capital of a balanced trade.
-Under max-capital constraint: effective multipliers = 2/1.5 = **1.333** (protected leg) and
-1/1.5 = **0.667** (unprotected leg).
+### Corrected sizing results vs baseline (+1601.4 pts, Sharpe 2.263, MaxDD -158.6)
 
-### Capital-adjusted results vs baseline (+1601.4 pts, Sharpe 2.263, MaxDD -158.6)
-
-| Config | Lot structure | Total | Sharpe | MaxDD |
+| Config | Total | Sharpe | MaxDD | Win% |
 |---|---|---|---|---|
-| Baseline | all CE 60 + PE 60 | +1601.4 | 2.263 | -158.6 |
-| sym-renorm (dn=1, rest=0.5) | dn 60+60, rest 30+30 | +1304.7 | 2.715 | -73.9 |
-| C-adj (asym legs, rest=1×) | dn CE80/PE40, un CE40/PE80, rest 60+60 | +2165.7 | 2.699 | -155.8 |
-| **E-adj (asym legs, rest=0.5×)** | **dn CE80/PE40, un CE40/PE80, rest 30+30** | **+1940.1** | **2.857** | **-90.9** |
-| E-adj-0.75 (asym legs, rest=0.75×) | dn CE80/PE40, un CE40/PE80, rest 45+45 | +2052.9 | 2.804 | -120.2 |
+| Baseline | +1601.4 | 2.263 | -158.6 | 68.7% |
+| A: dn_near CE×2.0 | +2238.9 | 2.452 | -157.3 | 69.3% |
+| SYM-REF: dn_near×2.0 + up_any×0.75 | +2269.4 | 2.610 | -137.4 | 68.7% |
+| E-adj (M=1.333, rest×0.5) | +1375.4 | 2.269 | -135.3 | 68.7% |
+| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | -221.1 | 68.0% |
 
-**Leading candidate: E-adj rest=0.5×**
-- Sharpe **2.857** (+0.594 vs baseline)
-- MaxDD **-90.9** (43% reduction from baseline -158.6)
-- Total +21% vs baseline
-- Win rate 70.7% (vs 68.7%)
-- Concrete lots: down_near (CE 80, PE 40), up_near (CE 40, PE 80), rest (CE 30, PE 30)
+**Prior E-adj (+1940.1, Sharpe 2.857) is invalidated** — was largely look-ahead.
+After correction E-adj underperforms baseline in total P&L.
 
-Key property: the MaxDD improvement is large (+68 pts better than baseline) while still
-adding total P&L — unusual combination. Driven by: the 0.5× rest reduction absorbs the
-big loss events (down_far/up_far choppy weeks), while the asymmetric leg routing on
-favoured trades adds P&L without adding drawdown (capital goes to the structurally
-protected leg, not gross exposure).
+**Current best signal:** simple CE scaling on down_near (config A: Sharpe +0.189 vs baseline,
++39.8% total P&L). Sizing model needs rethinking before step 4 can proceed.
 
 ### Caveat
 
-down_near = 37 trades, up_near = 31 trades across 6 years. Structural logic is sound and
-CE/PE win rates are clean, but these are small-ish samples for the buckets where the
-asymmetric edge is concentrated. Open questions remain before treating E-adj as final.
+down_near = 32 trades across 6 years. Structural logic is sound (resistance overhead in
+down ranges, up-drift structural effect) but sample is limited. Only the CE-directional
+signal has survived look-ahead-clean testing; PE-side asymmetric sizing is unvalidated.
 
 ---
 

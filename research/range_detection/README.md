@@ -9,11 +9,13 @@ complete — symmetric router not supported; containment confirmed as dominant).
 complementary, not competing — corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased
 ranges earn 2.5× the P&L via spot containment (the market's up-drift), independent of vega.
 
-**Status (2026-05-27):** §7 gate passed. Artemis annotation complete. Lot-sizing sweep and
-asymmetric leg sizing analysis complete (§10 step 3 done). Leading candidate: E-adj
-(CE×1.33/PE×0.67 on down_near; PE×1.33/CE×0.67 on up_near; both×0.5 on rest) →
-Sharpe 2.857, MaxDD -90.9 (-43% vs baseline). Open questions remain before moving to
-range-anchored strike variant backtest (§10 step 4).
+**Status (2026-05-28):** §7 gate passed. Artemis annotation complete. Lot-sizing sweep and
+asymmetric leg sizing analysis complete; look-ahead bug found and fixed (§10 step 3 revised).
+Annotation was using `side='right'` (same-day bar for Monday entries) — 23 Nifty trades had
+direction determined by Monday's close, unknown at 10:31am entry. Fixed to `side='left'`
+(Friday's bar). After correction: **down_near CE signal survives** (CE win% 66%, +19.9 avg);
+**up_near PE signal was entirely look-ahead** (CE now +7.2, PE -0.6 in up_near). The prior
+E-adj leading candidate is invalidated. Sizing model needs rethinking before §10 step 4.
 
 Plans:
 - [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
@@ -160,21 +162,33 @@ is trade-level: (1) lot-sizing by range direction, (2) range-anchored strike pla
 
 ---
 
-## Lot-Sizing Analysis (2026-05-27)
+## Lot-Sizing Analysis (2026-05-28, corrected)
 
 Scripts: `lot_sizing_sweep.py` → `analyze_sizing_rule.py` → `analyze_asymmetric_sizing.py`
 
-### Four structural buckets (150 traded Nifty trades)
+### Look-ahead bug found and fixed (2026-05-28)
+
+`annotate_artemis.py` was using `side='right'` in `price_idx.searchsorted(entry_date)`.
+For daily bars indexed at midnight, this returned **Monday's bar** for a Monday 10:31am entry
+— a bar whose close (which determines breakout direction) isn't known at entry time.
+Fixed to `side='left'`, returning **Friday's bar** (last complete daily bar before entry).
+
+Impact: 23 Nifty trades had their direction determined by the same-day close (look-ahead).
+After fix: those 23 resolve to their prior established range. All prior E-adj numbers are
+invalidated.
+
+### Corrected structural buckets (150 traded Nifty trades)
 
 | Bucket | n | CE avg | CE win% | PE avg | PE win% |
 |---|---|---|---|---|---|
-| down_near (down, key_dist<50%) | 37 | +29.31 | 73% | -2.07 | 43% |
-| down_far  (down, key_dist≥50%) | 28 | +3.05 | 54% | +2.29 | 57% |
-| up_near   (up, key_dist<50%)   | 31 | -6.29 | 29% | +10.88 | 61% |
-| up_far    (up, key_dist≥50%)   | 54 | +2.66 | 54% | +2.93 | 52% |
+| down_near (down, key_dist<50%) | 32 | +19.92 | 66% | +4.95 | 56% |
+| down_far  (down, key_dist≥50%) | 31 | +10.57 | 58% | -1.08 | 52% |
+| up_near   (up, key_dist<50%)   | 24 | +7.20  | 46% | -0.59 | 42% |
+| up_far    (up, key_dist≥50%)   | 63 | -0.31  | 48% | +5.91 | 56% |
 
-CE wins 73% in `down_near` (resistance overhead protects it). CE wins only 29% in `up_near`
-(spot grinding up tests CE; PE protected by support and up-drift).
+**down_near CE signal survives** (CE avg +19.9, win% 66%) — resistance overhead is real.
+**up_near PE signal is gone** — it was a look-ahead artifact. CE and PE are now roughly
+equal in up_near, with a slight CE edge.
 
 ### Capital adjustment
 
@@ -182,20 +196,21 @@ CE wins 73% in `down_near` (resistance overhead protects it). CE wins only 29% i
 (Sensibull-verified). Under max-capital constraint: effective protected-leg factor = 2/1.5 =
 **1.333**, unprotected-leg factor = 1/1.5 = **0.667**.
 
-### Leading candidate: E-adj rest=0.5×
+### Corrected sizing results (Nifty 150 trades)
 
 | Config | Total | Sharpe | MaxDD | Win% |
 |---|---|---|---|---|
-| Baseline (all 60+60) | +1601.4 | 2.263 | -158.6 | 68.7% |
-| **E-adj (asym + rest×0.5)** | **+1940.1** | **2.857** | **-90.9** | **70.7%** |
+| Baseline | +1601.4 | 2.263 | -158.6 | 68.7% |
+| A: dn_near CE×2.0 | +2238.9 | 2.452 | -157.3 | 69.3% |
+| SYM-REF: dn_near×2.0 + up_any×0.75 | +2269.4 | 2.610 | -137.4 | 68.7% |
+| E-adj (M=1.333, rest×0.5) | +1375.4 | 2.269 | -135.3 | 68.7% |
+| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | -221.1 | 68.0% |
 
-**Concrete lot structure:**
-- `down_near`: CE 80 lots, PE 40 lots
-- `up_near`: CE 40 lots, PE 80 lots
-- `rest` (down_far + up_far): CE 30 lots, PE 30 lots
+The previously announced E-adj (+1940.1, Sharpe 2.857) is **invalidated** — entirely
+dependent on the look-ahead bug. After correction, E-adj underperforms baseline in total P&L.
 
-43% reduction in peak drawdown with +21% total P&L and +0.594 Sharpe vs baseline.
-Open questions on the sizing model remain before proceeding to strike anchoring.
+**Current best signal:** simple CE scaling on down_near. Sizing model needs rethinking
+before the up_near leg can be treated as structurally actionable.
 
 ---
 
