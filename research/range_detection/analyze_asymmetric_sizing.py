@@ -56,6 +56,12 @@ LOT_RUPEES = {'nifty': 65, 'sensex': 20}  # rupees per index point per lot
 E_ADJ_LABEL    = 'E-adj (M=1.333, rest×0.5)'
 E_ADJ_BK_LABEL = 'E-adj-bk (uncommitted→near)'
 
+# Committed-only config: asymmetric sizing for all committed directional trades,
+# baseline (1×) for uncommitted + initial. No size reduction on the "rest" bucket,
+# unlike E-adj's rest×0.5 — the two differ in how they handle uncommitted/initial trades.
+COMMITTED_LABEL  = 'committed: dir 80CE/40PE or 40CE/80PE + rest 60/60'
+COMM_FACTORS     = (M_ADJ, M_UNPROT, 1.0, 1.0, M_UNPROT, M_ADJ, 1.0, 1.0)
+
 # Symmetric reference from prior lot_sizing_sweep
 SYM_REF = {'label': 'sym-ref: dn_near×2.0 + up_any×0.75',
             'total': 2498.3, 'sharpe': 2.754, 'max_dd': -127.8}
@@ -78,16 +84,36 @@ KEY_CONFIGS_LABELS = [
 # ---------------------------------------------------------------------------
 
 def assign_buckets(df):
-    """Standard bucket assignment using key_dist_pct for near/far split."""
-    down_near = ((df['ep_direction'] == 'down') & (df['key_dist_pct'] < 50)).fillna(False)
-    down_far  = ((df['ep_direction'] == 'down') & (df['key_dist_pct'] >= 50)).fillna(False)
-    up_near   = ((df['ep_direction'] == 'up')   & (df['key_dist_pct'] < 50)).fillna(False)
-    up_far    = ((df['ep_direction'] == 'up')   & (df['key_dist_pct'] >= 50)).fillna(False)
+    """Standard bucket assignment using key_dist_pct for near/far split.
+
+    Requires ep_committed=True (bars_into > BREAKOUT_CONFIRM = bars_into >= 3).
+    Uncommitted entries and initial/null ranges fall through to 'other'.
+    """
+    committed = df['ep_committed'].fillna(False).astype(bool)
+    down_near = (committed & (df['ep_direction'] == 'down') & (df['key_dist_pct'] < 50)).fillna(False)
+    down_far  = (committed & (df['ep_direction'] == 'down') & (df['key_dist_pct'] >= 50)).fillna(False)
+    up_near   = (committed & (df['ep_direction'] == 'up')   & (df['key_dist_pct'] < 50)).fillna(False)
+    up_far    = (committed & (df['ep_direction'] == 'up')   & (df['key_dist_pct'] >= 50)).fillna(False)
     bucket = pd.Series('other', index=df.index)
     bucket[down_near] = 'down_near'
     bucket[down_far]  = 'down_far'
     bucket[up_near]   = 'up_near'
     bucket[up_far]    = 'up_far'
+    return bucket
+
+
+def assign_buckets_committed(df):
+    """Committed-only bucket: reuses down_near/up_near slots for committed directional trades.
+
+    Uncommitted directional entries and initial/null ranges → 'other' (baseline 1×).
+    This is the primary axis: confirmation (3+ bars) rather than proximity to key level.
+    """
+    committed = df['ep_committed'].fillna(False).astype(bool)
+    down = (df['ep_direction'] == 'down')
+    up   = (df['ep_direction'] == 'up')
+    bucket = pd.Series('other', index=df.index)
+    bucket[committed & down] = 'down_near'
+    bucket[committed & up]   = 'up_near'
     return bucket
 
 
@@ -217,8 +243,9 @@ def load_instrument(instrument):
     df = df.sort_values('entry_time').reset_index(drop=True)
     df['ce_comp'] = df['ce_pl_points'] + df['ce_add_pl_points'] / df['lots']
     df['pe_comp'] = df['pe_pl_points'] + df['pe_add_pl_points'] / df['lots']
-    df['bucket']    = assign_buckets(df)
-    df['bucket_bk'] = assign_buckets_bk(df)
+    df['bucket']           = assign_buckets(df)
+    df['bucket_bk']        = assign_buckets_bk(df)
+    df['bucket_committed'] = assign_buckets_committed(df)
     df['year']      = df['entry_time'].dt.year
     df['sl_pe']     = df['pe_exit_reason'].isin(SL_REASONS)
     df['sl_ce']     = df['ce_exit_reason'].isin(SL_REASONS)
@@ -264,6 +291,38 @@ def main():
         tot    = sub['total_pl_points'].mean()
         sl_r   = sub['any_sl'].mean() * 100
         print(f'  {bk:<12}  {len(sub):>4}  {ce_avg:>+8.2f}  {ce_wr:>7.1f}%  '
+              f'{pe_avg:>+8.2f}  {pe_wr:>7.1f}%  {tot:>+10.2f}  {sl_r:>5.1f}%')
+
+    # ── Committed bucket CE/PE profiles ──────────────────────────────────
+    print_section('COMMITTED-BUCKET CE/PE PROFILES  (committed directional vs rest)')
+    counts_comm = df['bucket_committed'].value_counts().to_dict()
+    print(f'Committed down: {counts_comm.get("down_near", 0)}  '
+          f'Committed up: {counts_comm.get("up_near", 0)}  '
+          f'Other (uncommitted + initial): {counts_comm.get("other", 0)}')
+    print()
+    print(f'  Note: "other" here is the uncommitted + initial pool that gets 60/60 (baseline).')
+    print(f'  Compare with E-adj where the same pool gets 30/30 (0.5× haircut).')
+    print()
+    hdr2 = (f"  {'Bucket':<30}  {'n':>4}  {'ce_avg':>8}  {'ce_win%':>8}  "
+            f"{'pe_avg':>8}  {'pe_win%':>8}  {'total_avg':>10}  {'SL%':>6}")
+    print(hdr2)
+    print('  ' + '-' * 84)
+    comm_labels = [
+        ('committed_down', df['bucket_committed'] == 'down_near'),
+        ('committed_up',   df['bucket_committed'] == 'up_near'),
+        ('other (uncommitted+initial)', df['bucket_committed'] == 'other'),
+    ]
+    for label, mask in comm_labels:
+        sub = df[mask]
+        if sub.empty:
+            continue
+        ce_avg = sub['ce_comp'].mean()
+        pe_avg = sub['pe_comp'].mean()
+        ce_wr  = (sub['ce_comp'] > 0).mean() * 100
+        pe_wr  = (sub['pe_comp'] > 0).mean() * 100
+        tot    = sub['total_pl_points'].mean()
+        sl_r   = sub['any_sl'].mean() * 100
+        print(f'  {label:<30}  {len(sub):>4}  {ce_avg:>+8.2f}  {ce_wr:>7.1f}%  '
               f'{pe_avg:>+8.2f}  {pe_wr:>7.1f}%  {tot:>+10.2f}  {sl_r:>5.1f}%')
 
     # ── Reclassification analysis ──────────────────────────────────────────
@@ -327,6 +386,18 @@ def main():
     m_bk['sharpe_delta'] = round(m_bk['sharpe'] - base_sharpe, 3)
     rows.append(m_bk)
 
+    # Committed-only config: all committed directional → 80/40 by direction, rest → 1×
+    pl_comm = compute_pl(df, *COMM_FACTORS, bucket_col='bucket_committed')
+    m_comm  = metrics(pl_comm, COMMITTED_LABEL)
+    m_comm['dn_near_ce'] = COMM_FACTORS[0]; m_comm['dn_near_pe'] = COMM_FACTORS[1]
+    m_comm['dn_far_ce']  = COMM_FACTORS[2]; m_comm['dn_far_pe']  = COMM_FACTORS[3]
+    m_comm['up_near_ce'] = COMM_FACTORS[4]; m_comm['up_near_pe'] = COMM_FACTORS[5]
+    m_comm['up_far_ce']  = COMM_FACTORS[6]; m_comm['up_far_pe']  = COMM_FACTORS[7]
+    m_comm['uplift_pts']   = round(m_comm['total_pts'] - base_total, 1)
+    m_comm['uplift_pct']   = round((m_comm['total_pts'] / base_total - 1) * 100, 1)
+    m_comm['sharpe_delta'] = round(m_comm['sharpe'] - base_sharpe, 3)
+    rows.append(m_comm)
+
     result = pd.DataFrame(rows)
 
     # ── Summary table ─────────────────────────────────────────────────────
@@ -364,9 +435,9 @@ def main():
         print(f'  total {best_t["total_pts"]:+.1f} ({best_t["uplift_pts"]:+.1f}, {best_t["uplift_pct"]:+.1f}%)  '
               f'Sharpe {best_t["sharpe"]:.3f} ({sd_t})  MaxDD {best_t["max_dd"]:+.1f}')
 
-    # ── E-adj vs E-adj-bk focused comparison ─────────────────────────────
-    print_section('E-ADJ vs E-ADJ-BK FOCUSED COMPARISON')
-    focus_labels = ['baseline', E_ADJ_LABEL, E_ADJ_BK_LABEL]
+    # ── E-adj vs E-adj-bk vs Committed focused comparison ──────────────────
+    print_section('FOCUSED COMPARISON: baseline / E-adj / E-adj-bk / committed')
+    focus_labels = ['baseline', E_ADJ_LABEL, E_ADJ_BK_LABEL, COMMITTED_LABEL]
     print(f'  {"Config":<50}  {"Total":>8}  {"Sharpe":>7}  {"MaxDD":>8}  {"Win%":>6}  {"MaxCL":>6}')
     print('  ' + '-' * 90)
     for lbl in focus_labels:
@@ -457,7 +528,7 @@ def main():
     print(f'\nSaved sweep: {SWEEP_CSV}')
 
     # ── Save per-trade CSV for key configs ─────────────────────────────────
-    trade_cols = ['entry_time', 'year', 'bucket', 'bucket_bk',
+    trade_cols = ['entry_time', 'year', 'bucket', 'bucket_bk', 'bucket_committed',
                   'ep_committed', 'ep_bars_into',
                   'ep_direction', 'key_dist_pct',
                   'entry_vix', 'ce_comp', 'pe_comp', 'total_pl_points',
@@ -502,10 +573,11 @@ def run_combined():
 
     # Per-instrument P&L (points), then convert to rupees
     for inst, d in dfs.items():
-        d['pl_base']    = compute_pl(d, 1,1,1,1,1,1,1,1) * d['rupee_factor']
-        d['pl_eadj']    = compute_pl(d, *factors)           * d['rupee_factor']
-        d['pl_eadj_bk'] = compute_pl(d, *factors,
-                                      bucket_col='bucket_bk') * d['rupee_factor']
+        d['pl_base']      = compute_pl(d, 1,1,1,1,1,1,1,1)               * d['rupee_factor']
+        d['pl_eadj']      = compute_pl(d, *factors)                       * d['rupee_factor']
+        d['pl_eadj_bk']   = compute_pl(d, *factors, bucket_col='bucket_bk') * d['rupee_factor']
+        d['pl_committed'] = compute_pl(d, *COMM_FACTORS,
+                                       bucket_col='bucket_committed')     * d['rupee_factor']
 
     combined = pd.concat([dfs['nifty'], dfs['sensex']], ignore_index=True)
     combined = combined.sort_values('entry_time').reset_index(drop=True)
@@ -518,6 +590,7 @@ def run_combined():
         ('Baseline',                        'pl_base'),
         (E_ADJ_LABEL,                       'pl_eadj'),
         (E_ADJ_BK_LABEL,                    'pl_eadj_bk'),
+        (COMMITTED_LABEL,                   'pl_committed'),
     ]
 
     print(f'\n  {"Config":<50}  {"Total(₹)":>10}  {"Sharpe":>7}  {"MaxDD(₹)":>10}  '
@@ -545,24 +618,25 @@ def run_combined():
         print()
 
     # Per-trade listing (all 177, sorted by date)
-    print_section('ALL 177 TRADES — E-adj vs E-adj-bk (rupees)')
-    print(f'  {"Date":<12}  {"Inst":<7}  {"Bkt(std)":<12}  {"Bkt(bk)":<12}  '
+    print_section('ALL 177 TRADES — baseline vs E-adj vs committed (rupees)')
+    print(f'  {"Date":<12}  {"Inst":<7}  {"Bkt(std)":<12}  {"BktComm":<14}  '
           f'{"Dir":<5}  {"Bars":>4}  {"KD%":>6}  '
-          f'{"Base(₹)":>9}  {"E-adj(₹)":>9}  {"E-adj-bk(₹)":>11}  {"Δ(bk-adj)":>10}')
-    print('  ' + '-' * 115)
+          f'{"Base(₹)":>9}  {"E-adj(₹)":>9}  {"Comm(₹)":>9}  {"Δ(comm-base)":>13}')
+    print('  ' + '-' * 120)
     for _, r in combined.iterrows():
-        delta = r['pl_eadj_bk'] - r['pl_eadj']
+        delta = r['pl_committed'] - r['pl_base']
         marker = ' ◄' if abs(delta) > 0.01 else ''
         kd = f"{r['key_dist_pct']:.1f}" if pd.notna(r['key_dist_pct']) else '  —'
         bars = int(r['ep_bars_into']) if pd.notna(r['ep_bars_into']) else '—'
+        comm_bkt = r['bucket_committed'] if pd.notna(r['bucket_committed']) else 'other'
         print(f"  {str(r['entry_time'].date()):<12}  "
               f"{r['instrument'].upper():<7}  "
-              f"{r['bucket']:<12}  {r['bucket_bk']:<12}  "
+              f"{r['bucket']:<12}  {comm_bkt:<14}  "
               f"{str(r['ep_direction']):<5}  {str(bars):>4}  {kd:>6}  "
               f"{r['pl_base']:>+9.0f}  {r['pl_eadj']:>+9.0f}  "
-              f"{r['pl_eadj_bk']:>+11.0f}  {delta:>+10.0f}{marker}")
+              f"{r['pl_committed']:>+9.0f}  {delta:>+13.0f}{marker}")
 
-    print(f'\n  (₹ values; ◄ = trade changed bucket under bk rule)')
+    print(f'\n  (₹ values; ◄ = trade differs from baseline under committed rule)')
 
 
 # ---------------------------------------------------------------------------
