@@ -1,5 +1,5 @@
 """
-analyze_asymmetric_sizing.py — Asymmetric leg sizing sweep for Artemis Nifty.
+analyze_asymmetric_sizing.py — Asymmetric leg sizing sweep for Artemis.
 
 Hypothesis: scale the *protected* leg in structurally-favoured setups.
   down+near (down-biased range, spot close to resistance, key_dist<50%):
@@ -7,21 +7,27 @@ Hypothesis: scale the *protected* leg in structurally-favoured setups.
   up+near   (up-biased range, spot close to support,    key_dist<50%):
       PE is protected by support     →  scale PE up, keep CE at base
 
+Breakout variant (E-adj-bk):
+  Uncommitted directional entries (bars_into ≤ 2) treated as _near regardless
+  of key_dist_pct, because the key level is already known and spot is by
+  definition near it at the moment of breakout.
+
 Formula:
   ce_comp  = ce_pl_points + ce_add_pl_points / lots   (total CE contribution)
   pe_comp  = pe_pl_points + pe_add_pl_points / lots   (total PE contribution)
   trade_pl = ce_factor × ce_comp + pe_factor × pe_comp
 
-Symmetric reference from lot_sizing_sweep.py two-sided best:
-  down+kd<50% ×2.0  /  up(any) ×0.75  →  Sharpe 2.754, MaxDD -127.8, total +2498.3
+Capital adjustment (M_ADJ = 2/1.5 = 1.333):
+  A 2× skewed iron condor costs 1.5× the margin of a balanced 1× condor.
+  Protected leg: ×M_ADJ (1.333).  Unprotected leg: ×(1/M_ADJ) (0.667).
 
 Usage:
     python analyze_asymmetric_sizing.py
-    python analyze_asymmetric_sizing.py --instrument sensex   (if data available)
+    python analyze_asymmetric_sizing.py --instrument sensex
 
-Outputs:
-    outputs/asymmetric_sizing_sweep.csv    — config-level metrics
-    outputs/asymmetric_sizing_trades.csv   — per-trade P&L for key configs
+Outputs (per instrument):
+    outputs/asymmetric_sizing_sweep_{inst}.csv    — config-level metrics
+    outputs/asymmetric_sizing_trades_{inst}.csv   — per-trade P&L for key configs
 """
 
 import os
@@ -43,6 +49,13 @@ TRADES_CSV  = os.path.join(OUT_DIR, f'asymmetric_sizing_trades_{INSTRUMENT}.csv'
 
 SL_REASONS  = {'index_sl', 'option_sl'}
 
+M_ADJ      = 2.0 / 1.5          # 1.333... capital-adjusted protected-leg multiplier
+M_UNPROT   = 1.0 / 1.5          # 0.667  capital-adjusted unprotected-leg multiplier
+LOT_RUPEES = {'nifty': 65, 'sensex': 20}  # rupees per index point per lot
+
+E_ADJ_LABEL    = 'E-adj (M=1.333, rest×0.5)'
+E_ADJ_BK_LABEL = 'E-adj-bk (uncommitted→near)'
+
 # Symmetric reference from prior lot_sizing_sweep
 SYM_REF = {'label': 'sym-ref: dn_near×2.0 + up_any×0.75',
             'total': 2498.3, 'sharpe': 2.754, 'max_dd': -127.8}
@@ -55,6 +68,7 @@ KEY_CONFIGS_LABELS = [
     'baseline',
     'C: dn_near CE×2.0 + up_near PE×2.0',
     'E: dn_near CE×2.0 + up_near PE×2.0 + rest×0.75',
+    E_ADJ_LABEL,
     'SYM-REF: dn_near×2.0 + up_any×0.75',
 ]
 
@@ -64,6 +78,7 @@ KEY_CONFIGS_LABELS = [
 # ---------------------------------------------------------------------------
 
 def assign_buckets(df):
+    """Standard bucket assignment using key_dist_pct for near/far split."""
     down_near = ((df['ep_direction'] == 'down') & (df['key_dist_pct'] < 50)).fillna(False)
     down_far  = ((df['ep_direction'] == 'down') & (df['key_dist_pct'] >= 50)).fillna(False)
     up_near   = ((df['ep_direction'] == 'up')   & (df['key_dist_pct'] < 50)).fillna(False)
@@ -76,9 +91,33 @@ def assign_buckets(df):
     return bucket
 
 
-def compute_pl(df, dn_nc, dn_np, dn_fc, dn_fp, up_nc, up_np, up_fc, up_fp):
+def assign_buckets_bk(df):
+    """Breakout variant: uncommitted directional entries → _near.
+
+    At bars_into=1-2 the key level is already known and spot is by definition
+    near it (it just crossed). The range_high/low for the far bound is still
+    narrow, so key_dist_pct is unreliable. Treat all uncommitted directional
+    entries as _near and apply full asymmetric sizing immediately.
+    """
+    uncommitted = (~df['ep_committed'].fillna(True))
+    down = (df['ep_direction'] == 'down')
+    up   = (df['ep_direction'] == 'up')
+    down_near = (down & (uncommitted | (df['key_dist_pct'] < 50))).fillna(False)
+    down_far  = (down & ~uncommitted & (df['key_dist_pct'] >= 50)).fillna(False)
+    up_near   = (up   & (uncommitted | (df['key_dist_pct'] < 50))).fillna(False)
+    up_far    = (up   & ~uncommitted & (df['key_dist_pct'] >= 50)).fillna(False)
+    bucket = pd.Series('other', index=df.index)
+    bucket[down_near] = 'down_near'
+    bucket[down_far]  = 'down_far'
+    bucket[up_near]   = 'up_near'
+    bucket[up_far]    = 'up_far'
+    return bucket
+
+
+def compute_pl(df, dn_nc, dn_np, dn_fc, dn_fp, up_nc, up_np, up_fc, up_fp,
+               bucket_col='bucket'):
     """Vectorised asymmetric leg P&L."""
-    bk = df['bucket']
+    bk = df[bucket_col]
     ce_f = np.select(
         [bk == 'down_near', bk == 'down_far', bk == 'up_near', bk == 'up_far'],
         [dn_nc, dn_fc, up_nc, up_fc], default=1.0)
@@ -153,8 +192,12 @@ def build_configs():
             configs.append((f'E: dn_near CE×{M} + up_near PE×{M} + rest×{S}',
                              M, 1,  S, S,  1, M,  S, S))
 
+    # Capital-adjusted E-adj: protected leg ×1.333, unprotected ×0.667, rest ×0.5
+    # M_ADJ=2/1.5=1.333 (protected), M_UNPROT=1/1.5=0.667 (unprotected)
+    configs.append((E_ADJ_LABEL,
+                    M_ADJ, M_UNPROT,  0.5, 0.5,  M_UNPROT, M_ADJ,  0.5, 0.5))
+
     # Symmetric reference (from lot_sizing_sweep two-sided best) for direct comparison
-    # down_near ×2.0 both, down_far neutral, up_near ×0.75 both, up_far ×0.75 both
     configs.append(('SYM-REF: dn_near×2.0 + up_any×0.75',
                      2.0, 2.0,  1.0, 1.0,  0.75, 0.75,  0.75, 0.75))
 
@@ -162,36 +205,47 @@ def build_configs():
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Per-instrument analysis
 # ---------------------------------------------------------------------------
+
+def load_instrument(instrument):
+    csv_path = os.path.join(OUT_DIR, f'artemis_annotated_{instrument}.csv')
+    if not os.path.exists(csv_path):
+        return None
+    df = pd.read_csv(csv_path, parse_dates=['entry_time'])
+    df = df[df['week_outcome'] == 'traded'].copy().reset_index(drop=True)
+    df = df.sort_values('entry_time').reset_index(drop=True)
+    df['ce_comp'] = df['ce_pl_points'] + df['ce_add_pl_points'] / df['lots']
+    df['pe_comp'] = df['pe_pl_points'] + df['pe_add_pl_points'] / df['lots']
+    df['bucket']    = assign_buckets(df)
+    df['bucket_bk'] = assign_buckets_bk(df)
+    df['year']      = df['entry_time'].dt.year
+    df['sl_pe']     = df['pe_exit_reason'].isin(SL_REASONS)
+    df['sl_ce']     = df['ce_exit_reason'].isin(SL_REASONS)
+    df['any_sl']    = df['sl_pe'] | df['sl_ce']
+    df['instrument'] = instrument
+    return df
+
 
 def main():
     if not os.path.exists(INPUT_CSV):
         print(f'ERROR: {INPUT_CSV} not found. Run annotate_artemis.py first.')
         sys.exit(1)
 
-    df = pd.read_csv(INPUT_CSV, parse_dates=['entry_time'])
-    df = df[df['week_outcome'] == 'traded'].copy().reset_index(drop=True)
-    df = df.sort_values('entry_time').reset_index(drop=True)
+    df = load_instrument(INSTRUMENT)
     n  = len(df)
     print(f'\nLoaded {n} traded {INSTRUMENT.upper()} Artemis trades  '
           f'{df["entry_time"].min().date()} → {df["entry_time"].max().date()}')
 
-    # CE/PE decomposition
-    df['ce_comp'] = df['ce_pl_points'] + df['ce_add_pl_points'] / df['lots']
-    df['pe_comp'] = df['pe_pl_points'] + df['pe_add_pl_points'] / df['lots']
     recon_err = (df['ce_comp'] + df['pe_comp'] - df['total_pl_points']).abs().max()
     print(f'CE+PE reconciliation max abs error = {recon_err:.4f}  (should be ~0)')
 
-    df['bucket'] = assign_buckets(df)
-    df['year']   = df['entry_time'].dt.year
-    df['sl_pe']  = df['pe_exit_reason'].isin(SL_REASONS)
-    df['sl_ce']  = df['ce_exit_reason'].isin(SL_REASONS)
-    df['any_sl'] = df['sl_pe'] | df['sl_ce']
-
     counts = df['bucket'].value_counts().to_dict()
-    print(f'Bucket counts: ' +
+    print(f'Bucket counts (standard):   ' +
           '  '.join(f"{k}={counts.get(k,0)}" for k in ['down_near','down_far','up_near','up_far','other']))
+    counts_bk = df['bucket_bk'].value_counts().to_dict()
+    print(f'Bucket counts (bk variant): ' +
+          '  '.join(f"{k}={counts_bk.get(k,0)}" for k in ['down_near','down_far','up_near','up_far','other']))
 
     # ── Unweighted bucket CE/PE profiles ─────────────────────────────────
     print_section('BUCKET CE/PE PROFILES  (unweighted, per trade)')
@@ -211,6 +265,28 @@ def main():
         sl_r   = sub['any_sl'].mean() * 100
         print(f'  {bk:<12}  {len(sub):>4}  {ce_avg:>+8.2f}  {ce_wr:>7.1f}%  '
               f'{pe_avg:>+8.2f}  {pe_wr:>7.1f}%  {tot:>+10.2f}  {sl_r:>5.1f}%')
+
+    # ── Reclassification analysis ──────────────────────────────────────────
+    print_section('BREAKOUT RECLASSIFICATION  (uncommitted entries → _near in bk variant)')
+    unc = df[~df['ep_committed'].fillna(True)].copy()
+    total_unc = len(unc)
+    reclassified = unc[unc['bucket'] != unc['bucket_bk']].copy()
+    stayed = unc[unc['bucket'] == unc['bucket_bk']]
+
+    print(f'  Uncommitted entries total:       {total_unc}')
+    print(f'  Already _near (no change):       {len(stayed)}')
+    print(f'  Reclassified _far → _near:       {len(reclassified)}')
+
+    if not reclassified.empty:
+        print(f'\n  Reclassified trades:')
+        print(f"  {'Date':<12}  {'Dir':<6}  {'bars_into':>9}  {'key_dist':>9}  "
+              f"{'old_bucket':<12}  {'new_bucket':<12}  {'total_pl':>9}")
+        print('  ' + '-' * 80)
+        for _, r in reclassified.iterrows():
+            print(f"  {str(r['entry_time'].date()):<12}  {r['ep_direction']:<6}  "
+                  f"{int(r['ep_bars_into']):>9}  {r['key_dist_pct']:>8.1f}%  "
+                  f"{r['bucket']:<12}  {r['bucket_bk']:<12}  "
+                  f"{r['total_pl_points']:>+9.1f}")
 
     # ── Compute all configs ───────────────────────────────────────────────
     configs   = build_configs()
@@ -237,6 +313,19 @@ def main():
         m['uplift_pct']   = round((m['total_pts'] / base_total - 1) * 100, 1)
         m['sharpe_delta'] = round(m['sharpe'] - base_sharpe, 3) if not np.isnan(m['sharpe']) else np.nan
         rows.append(m)
+
+    # E-adj-bk: same factors as E-adj, but use bucket_bk
+    eadj_cfg = next(c for c in configs if c[0] == E_ADJ_LABEL)
+    pl_bk  = compute_pl(df, *eadj_cfg[1:], bucket_col='bucket_bk')
+    m_bk   = metrics(pl_bk, E_ADJ_BK_LABEL)
+    m_bk['dn_near_ce'] = eadj_cfg[1]; m_bk['dn_near_pe'] = eadj_cfg[2]
+    m_bk['dn_far_ce']  = eadj_cfg[3]; m_bk['dn_far_pe']  = eadj_cfg[4]
+    m_bk['up_near_ce'] = eadj_cfg[5]; m_bk['up_near_pe'] = eadj_cfg[6]
+    m_bk['up_far_ce']  = eadj_cfg[7]; m_bk['up_far_pe']  = eadj_cfg[8]
+    m_bk['uplift_pts']   = round(m_bk['total_pts'] - base_total, 1)
+    m_bk['uplift_pct']   = round((m_bk['total_pts'] / base_total - 1) * 100, 1)
+    m_bk['sharpe_delta'] = round(m_bk['sharpe'] - base_sharpe, 3)
+    rows.append(m_bk)
 
     result = pd.DataFrame(rows)
 
@@ -275,30 +364,45 @@ def main():
         print(f'  total {best_t["total_pts"]:+.1f} ({best_t["uplift_pts"]:+.1f}, {best_t["uplift_pct"]:+.1f}%)  '
               f'Sharpe {best_t["sharpe"]:.3f} ({sd_t})  MaxDD {best_t["max_dd"]:+.1f}')
 
+    # ── E-adj vs E-adj-bk focused comparison ─────────────────────────────
+    print_section('E-ADJ vs E-ADJ-BK FOCUSED COMPARISON')
+    focus_labels = ['baseline', E_ADJ_LABEL, E_ADJ_BK_LABEL]
+    print(f'  {"Config":<50}  {"Total":>8}  {"Sharpe":>7}  {"MaxDD":>8}  {"Win%":>6}  {"MaxCL":>6}')
+    print('  ' + '-' * 90)
+    for lbl in focus_labels:
+        r = result[result['label'] == lbl].iloc[0]
+        print(f"  {r['label']:<50}  {r['total_pts']:>+8.1f}  "
+              f"{r['sharpe']:>7.3f}  {r['max_dd']:>+8.1f}  "
+              f"{r['win_pct']:>5.1f}%  {int(r['max_consec_l']):>6}")
+
     # ── Year-by-year for key configs ──────────────────────────────────────
     key_cfgs = [c for c in configs if any(lbl in c[0] for lbl in KEY_CONFIGS_LABELS)]
-    # Pre-compute P&L columns
     for cfg in key_cfgs:
         colname = f'pl_{cfg[0]}'
         df[colname] = compute_pl(df, *cfg[1:])
+    # Add E-adj-bk
+    df[f'pl_{E_ADJ_BK_LABEL}'] = pl_bk
 
     print_section('YEAR-BY-YEAR  (key configurations)')
     print(f'  {"Config":<50}  {"Yr":>4}  {"n":>4}  {"Total":>8}  '
           f'{"Sharpe":>7}  {"MaxDD":>8}  {"Win%":>6}')
     print('  ' + '-' * 100)
-    for cfg in key_cfgs:
-        colname = f'pl_{cfg[0]}'
+    all_key = key_cfgs + [(E_ADJ_BK_LABEL,)]  # sentinel for bk config
+    for cfg in all_key:
+        lbl = cfg[0]
+        colname = f'pl_{lbl}'
+        if colname not in df.columns:
+            continue
         for yr, grp in df.groupby('year'):
-            m = metrics(grp[colname], cfg[0])
-            print(f'  {cfg[0]:<50}  {yr:>4}  {m["n"]:>4}  {m["total_pts"]:>+8.1f}  '
+            m = metrics(grp[colname], lbl)
+            print(f'  {lbl:<50}  {yr:>4}  {m["n"]:>4}  {m["total_pts"]:>+8.1f}  '
                   f'{m["sharpe"]:>7.3f}  {m["max_dd"]:>+8.1f}  {m["win_pct"]:>5.1f}%')
         print()
 
     # ── SL analysis for top configs ────────────────────────────────────────
-    # Pick best Sharpe config and C×2.0 for detailed SL comparison
     top_labels = [best_s['label'], 'C: dn_near CE×2.0 + up_near PE×2.0',
                   'SYM-REF: dn_near×2.0 + up_any×0.75', 'baseline']
-    top_labels = list(dict.fromkeys(top_labels))  # deduplicate, preserve order
+    top_labels = list(dict.fromkeys(top_labels))
 
     print_section('SL ANALYSIS FOR KEY CONFIGS  (by bucket within each config)')
     print(f'  {"Config":<50}  {"Bucket":<12}  {"n":>4}  {"any_SL%":>8}  '
@@ -324,8 +428,13 @@ def main():
         print()
 
     # ── Worst trades for best-Sharpe config ───────────────────────────────
-    best_cfg_tuple = next(c for c in configs if c[0] == best_s['label'])
-    df['_pl_best'] = compute_pl(df, *best_cfg_tuple[1:])
+    # E-adj-bk uses same factors as E-adj but with bucket_bk
+    if best_s['label'] == E_ADJ_BK_LABEL:
+        best_cfg_tuple = eadj_cfg
+        df['_pl_best'] = compute_pl(df, *best_cfg_tuple[1:], bucket_col='bucket_bk')
+    else:
+        best_cfg_tuple = next(c for c in configs if c[0] == best_s['label'])
+        df['_pl_best'] = compute_pl(df, *best_cfg_tuple[1:])
     df['_cum']     = df['_pl_best'].cumsum()
     df['_dd']      = df['_cum'] - df['_cum'].cummax()
 
@@ -348,17 +457,118 @@ def main():
     print(f'\nSaved sweep: {SWEEP_CSV}')
 
     # ── Save per-trade CSV for key configs ─────────────────────────────────
-    trade_cols = ['entry_time', 'year', 'bucket', 'ep_direction', 'key_dist_pct',
+    trade_cols = ['entry_time', 'year', 'bucket', 'bucket_bk',
+                  'ep_committed', 'ep_bars_into',
+                  'ep_direction', 'key_dist_pct',
                   'entry_vix', 'ce_comp', 'pe_comp', 'total_pl_points',
                   'sl_pe', 'sl_ce', 'any_sl', 'pe_exit_reason', 'ce_exit_reason']
     trade_df = df[trade_cols].copy()
     for cfg in key_cfgs:
         colname = f'pl_{cfg[0]}'
         trade_df[colname] = df[colname]
+    trade_df[f'pl_{E_ADJ_BK_LABEL}'] = pl_bk
     trade_df.to_csv(TRADES_CSV, index=False)
     print(f'Saved trades: {TRADES_CSV}')
-    print()
 
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Combined Nifty + Sensex analysis (rupee P&L)
+# ---------------------------------------------------------------------------
+
+def run_combined():
+    print_section('COMBINED NIFTY + SENSEX  (177 trades, rupee P&L)')
+
+    dfs = {}
+    for inst in ('nifty', 'sensex'):
+        d = load_instrument(inst)
+        if d is None:
+            print(f'  WARNING: {inst} annotated CSV not found — skipping')
+            continue
+        rupee = LOT_RUPEES[inst]
+        d['rupee_factor'] = rupee
+        dfs[inst] = d
+        print(f'  {inst.upper():8s}: {len(d):3d} trades × ₹{rupee}/pt  '
+              f'({d["entry_time"].min().date()} → {d["entry_time"].max().date()})')
+
+    if len(dfs) < 2:
+        print('  Cannot run combined analysis — need both instruments.')
+        return
+
+    # E-adj config factors
+    eadj_cfg = next(c for c in build_configs() if c[0] == E_ADJ_LABEL)
+    factors  = eadj_cfg[1:]
+
+    # Per-instrument P&L (points), then convert to rupees
+    for inst, d in dfs.items():
+        d['pl_base']    = compute_pl(d, 1,1,1,1,1,1,1,1) * d['rupee_factor']
+        d['pl_eadj']    = compute_pl(d, *factors)           * d['rupee_factor']
+        d['pl_eadj_bk'] = compute_pl(d, *factors,
+                                      bucket_col='bucket_bk') * d['rupee_factor']
+
+    combined = pd.concat([dfs['nifty'], dfs['sensex']], ignore_index=True)
+    combined = combined.sort_values('entry_time').reset_index(drop=True)
+    print(f'\n  Combined: {len(combined)} trades')
+
+    def fmt_lakh(v):
+        return f'{v/1e5:>+8.2f}L'
+
+    configs_combined = [
+        ('Baseline',                        'pl_base'),
+        (E_ADJ_LABEL,                       'pl_eadj'),
+        (E_ADJ_BK_LABEL,                    'pl_eadj_bk'),
+    ]
+
+    print(f'\n  {"Config":<50}  {"Total(₹)":>10}  {"Sharpe":>7}  {"MaxDD(₹)":>10}  '
+          f'{"Win%":>6}  {"MaxCL":>6}')
+    print('  ' + '-' * 100)
+    for lbl, col in configs_combined:
+        pl = combined[col]
+        m  = metrics(pl, lbl)
+        print(f'  {lbl:<50}  {fmt_lakh(m["total_pts"]):>10}  '
+              f'{m["sharpe"]:>7.3f}  {fmt_lakh(m["max_dd"]):>10}  '
+              f'{m["win_pct"]:>5.1f}%  {int(m["max_consec_l"]):>6}')
+
+    # Year-by-year combined
+    print(f'\n  Year-by-year (combined, rupees):')
+    print(f'  {"Config":<50}  {"Yr":>4}  {"n":>4}  {"Total(₹)":>10}  '
+          f'{"Sharpe":>7}  {"MaxDD(₹)":>10}  {"Win%":>6}')
+    print('  ' + '-' * 100)
+    combined['year'] = combined['entry_time'].dt.year
+    for lbl, col in configs_combined:
+        for yr, grp in combined.groupby('year'):
+            m = metrics(grp[col], lbl)
+            print(f'  {lbl:<50}  {yr:>4}  {m["n"]:>4}  '
+                  f'{fmt_lakh(m["total_pts"]):>10}  {m["sharpe"]:>7.3f}  '
+                  f'{fmt_lakh(m["max_dd"]):>10}  {m["win_pct"]:>5.1f}%')
+        print()
+
+    # Per-trade listing (all 177, sorted by date)
+    print_section('ALL 177 TRADES — E-adj vs E-adj-bk (rupees)')
+    print(f'  {"Date":<12}  {"Inst":<7}  {"Bkt(std)":<12}  {"Bkt(bk)":<12}  '
+          f'{"Dir":<5}  {"Bars":>4}  {"KD%":>6}  '
+          f'{"Base(₹)":>9}  {"E-adj(₹)":>9}  {"E-adj-bk(₹)":>11}  {"Δ(bk-adj)":>10}')
+    print('  ' + '-' * 115)
+    for _, r in combined.iterrows():
+        delta = r['pl_eadj_bk'] - r['pl_eadj']
+        marker = ' ◄' if abs(delta) > 0.01 else ''
+        kd = f"{r['key_dist_pct']:.1f}" if pd.notna(r['key_dist_pct']) else '  —'
+        bars = int(r['ep_bars_into']) if pd.notna(r['ep_bars_into']) else '—'
+        print(f"  {str(r['entry_time'].date()):<12}  "
+              f"{r['instrument'].upper():<7}  "
+              f"{r['bucket']:<12}  {r['bucket_bk']:<12}  "
+              f"{str(r['ep_direction']):<5}  {str(bars):>4}  {kd:>6}  "
+              f"{r['pl_base']:>+9.0f}  {r['pl_eadj']:>+9.0f}  "
+              f"{r['pl_eadj_bk']:>+11.0f}  {delta:>+10.0f}{marker}")
+
+    print(f'\n  (₹ values; ◄ = trade changed bucket under bk rule)')
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
     main()
+    run_combined()
