@@ -428,7 +428,8 @@ _MODE_LABEL = {
 def plot(result: pd.DataFrame, episodes: list, timeframe,
          from_date, to_date=None, min_range_bars: int = 5,
          hybrid_mode: str = 'none', adx_threshold: float = 20.0,
-         label: str = '', no_browser: bool = False):
+         label: str = '', no_browser: bool = False,
+         instrument: str = 'nifty'):
 
     view = result.loc[from_date:to_date] if to_date else result.loc[from_date:]
     if view.empty:
@@ -446,7 +447,7 @@ def plot(result: pd.DataFrame, episodes: list, timeframe,
         x=view.index,
         open=view['open'], high=view['high'],
         low=view['low'],   close=view['close'],
-        name='Nifty',
+        name=instrument.upper(),
         increasing_line_color='#26a69a',
         decreasing_line_color='#ef5350',
         whiskerwidth=0.3,
@@ -550,7 +551,7 @@ def plot(result: pd.DataFrame, episodes: list, timeframe,
 
     tf_label   = timeframe_label(timeframe)
     mode_label = _MODE_LABEL.get(hybrid_mode, hybrid_mode)
-    title = (f'Nifty PA Range Detection ({tf_label}) [{mode_label}]'
+    title = (f'{instrument.upper()} PA Range Detection ({tf_label}) [{mode_label}]'
              f'{" — " + label if label else ""}')
     fig.update_layout(
         title=title,
@@ -657,6 +658,8 @@ def main():
                         help='Generate one chart per calendar year + episodes CSV')
     parser.add_argument('--years',          type=int, nargs='+',
                         help='Restrict --all to specific years')
+    parser.add_argument('--instrument',     default='nifty', choices=['nifty', 'sensex'],
+                        help='Index to use (default: nifty)')
     parser.add_argument('--tag',            default='',
                         help='Suffix added to output filenames')
     parser.add_argument('--no-browser',     action='store_true',
@@ -671,12 +674,13 @@ def main():
             print(f'Invalid --timeframe "{tf}". Use "daily" or an integer (e.g. 75).')
             sys.exit(1)
 
-    tf_label = timeframe_label(tf)
-    tag      = f'_{args.tag}' if args.tag else ''
-    hybrid   = args.hybrid
+    tf_label   = timeframe_label(tf)
+    inst_tag   = f'_{args.instrument}' if args.instrument != 'nifty' else ''
+    tag        = f'_{args.tag}' if args.tag else ''
+    hybrid     = args.hybrid
 
-    print(f'Loading {tf_label} data…')
-    df = load_data(tf)
+    print(f'Loading {tf_label} {args.instrument.upper()} data…')
+    df = load_data(tf, args.instrument)
     print(f'  {len(df)} bars  {df.index[0].date()} → {df.index[-1].date()}')
 
     start_idx = _find_start_idx(df, args.start_date, tf)
@@ -697,12 +701,13 @@ def main():
                          if not e['is_transient'] and not e.get('is_adx_ranging', True))
         print(f'  {n_trending} established PA episodes downgraded to trending by ADX')
 
-    csv_path = os.path.join(OUTPUT_DIR, f'range_episodes_pa_{tf_label}{tag}.csv')
+    csv_path = os.path.join(OUTPUT_DIR, f'range_episodes_pa_{tf_label}{inst_tag}{tag}.csv')
     export_episodes_csv(episodes, csv_path)
 
     plot_kwargs = dict(min_range_bars=args.min_range_bars,
                        hybrid_mode=hybrid,
-                       adx_threshold=args.adx_threshold)
+                       adx_threshold=args.adx_threshold,
+                       instrument=args.instrument)
 
     if args.all:
         years = args.years or sorted({df.index[i].year
@@ -714,7 +719,7 @@ def main():
                        label=str(year), no_browser=True, **plot_kwargs)
             if fig is None:
                 continue
-            fname = f'range_chart_pa_{tf_label}_{year}{tag}.html'
+            fname = f'range_chart_pa_{tf_label}{inst_tag}_{year}{tag}.html'
             _save_and_show(fig, os.path.join(OUTPUT_DIR, fname), args.no_browser)
     else:
         from_date = (df.index[-1] - pd.DateOffset(months=args.months)
@@ -722,7 +727,7 @@ def main():
         fig = plot(result, episodes, tf, from_date, None,
                    no_browser=args.no_browser, **plot_kwargs)
         if fig:
-            fname = f'range_chart_pa_{tf_label}{tag}.html'
+            fname = f'range_chart_pa_{tf_label}{inst_tag}{tag}.html'
             _save_and_show(fig, os.path.join(OUTPUT_DIR, fname), args.no_browser)
 
 
