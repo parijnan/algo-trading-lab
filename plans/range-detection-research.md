@@ -269,18 +269,31 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
    Design constraint: no trade filtering — trades are taken every eligible week; optimise the
    trade itself, not the entry decision.
 
-3. ~~**Lot-sizing by direction**~~ **DONE (2026-05-28)** — full sweep complete; look-ahead bug
-   found and fixed (`side='right'` → `side='left'` in annotation). See §12 for corrected
-   findings. Prior E-adj (+1940.1, Sharpe 2.857) **invalidated** — was largely look-ahead.
-   **Surviving signal:** down_near CE-only scaling (CE avg +19.9, win% 66%; simple A config
-   +39.8% P&L, Sharpe 2.452). up_near PE signal gone — was entirely look-ahead artifact.
-   Sizing model needs rethinking before §10 step 4 can proceed.
+3. ~~**Lot-sizing by direction**~~ **DONE (2026-05-28, finalised same session)** — full sweep
+   complete with three correctness fixes applied in sequence:
+   - Look-ahead bug: `side='right'` → `side='left'` in annotation (23 trades affected).
+   - `ep_committed` filter in `assign_buckets()`: uncommitted ranges (bars_into < 3) no longer
+     leak into near/far buckets.
+   - `key_dist >= 0` guard: spot already above `range_high` (key_dist < 0) falls through to
+     'other' — was incorrectly classified as down_near under the `< 50` threshold alone.
+   See §12 for corrected findings. Capital constraint analysis (80/40 or 60/60 only):
+   **lot sizing produces no meaningful gain within a fixed capital budget** — CE uplift is
+   nearly cancelled by proportional PE reduction regardless of split ratio (80/40, 85/30,
+   90/20 all give ~+₹4k over 7 years). Lot sizing is not the lever.
 
-4. **Artemis range-anchored-strike variant** backtest vs delta-based baseline.
-   Use range bounds (`range_high`/`range_low`) to anchor short strikes instead of pure delta.
-   Requires modifying the backtest engine's strike selection and re-running on full history.
-   Test hypothesis: does anchoring to demonstrated support/resistance improve containment
-   (higher min_dist_pct equivalent) beyond what the current delta-based selection achieves?
+4. **Artemis range-anchored-strike placement** — active next step.
+   Artemis uses a fixed expected premium target (VIX-adaptive: wider strikes when VIX is
+   high, tighter when VIX is low). In down_near, the hypothesis is that resistance overhead
+   justifies selling the CE at or just above `range_high` rather than at the standard premium
+   distance. Initial analysis on 31 down_near trades:
+   - 15/31 already have CE strike above `range_high` (fixed-premium rule naturally lands there
+     in high-VIX weeks); 16/31 have CE below resistance.
+   - CE SL losses in the "CE below resistance" group are predominantly `index_sl` (combined
+     position stop), not CE-specific stops — strike placement alone cannot address these.
+   - Entry premium data (`ce_sell_entry`, `ce_buy_entry`) is available in the annotated CSV,
+     making a counterfactual backtest tractable.
+   Direction: model the P&L if CE strike is always anchored at `range_high + buffer` for
+   down_near trades, using the available premium data to estimate the entry credit change.
 
 5. **Apollo chop-filter annotation** — most independent, fastest standalone win; not yet done.
    Annotate Apollo trades with `ep_entry_spot_pct` and range-break coincidence.
@@ -294,60 +307,72 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
 
 ---
 
-## 12. Lot-Sizing Findings (2026-05-28, corrected)
+## 12. Lot-Sizing Findings (2026-05-28, finalised)
 
 Scripts: `lot_sizing_sweep.py`, `analyze_sizing_rule.py`, `analyze_asymmetric_sizing.py`
-Data: 150 traded Artemis-Nifty trades (2019–2025), `artemis_annotated_nifty.csv`.
+Data: 150 traded Artemis-Nifty trades (2019–2026), `artemis_annotated_nifty.csv`.
 
-### Look-ahead bug found and fixed (2026-05-28)
+### Three correctness fixes applied in sequence
 
-`annotate_artemis.py` was using `side='right'` in `price_idx.searchsorted(entry_date)`.
-For daily bars indexed at midnight, this returned **Monday's bar** for a Monday 10:31am entry
-— a bar whose close (which determines breakout direction) isn't known at entry time.
-Fixed to `side='left'`, returning **Friday's bar** (last complete daily bar before entry).
+1. **Look-ahead bug** (`side='right'` → `side='left'` in `annotate_artemis.py`): 23 Nifty
+   trades had direction determined by same-day close. Fixed to Friday's bar. All prior E-adj
+   numbers invalidated.
 
-Impact: 23 Nifty trades had their direction determined by the same-day close. After fix,
-those 23 resolve to their prior established range. All prior §12 numbers are invalidated.
+2. **`ep_committed` filter** in `assign_buckets()`: uncommitted entries (bars_into < 3) now
+   fall through to 'other' instead of leaking into near/far buckets. Impact: down_near 32→31.
 
-### Four structural buckets (corrected)
+3. **`key_dist >= 0` guard** in `assign_buckets()`: negative key_dist means spot has already
+   broken through the key level (above `range_high` for down, below `range_low` for up).
+   Previously classified as down_near via `key_dist < 50`; now falls to 'other'.
+   Impact: 2 Nifty trades removed (2021-12-13, key_dist=−8.8%; 2022-10-31, key_dist=−10.2%).
+   down_near 31→29. The 2022-10-31 trade was a −55 pt CE under ×2.0 that is now correctly
+   excluded. Root cause confirmed via 1-min Sensex data for a 2026-05-25 scenario: the PA
+   episode's `range_high` is set by the episode setter candle, not the prior transient episode.
+
+### Final structural buckets (Nifty 150 trades, all fixes applied)
 
 | Bucket | n | CE avg | CE win% | PE avg | PE win% |
 |---|---|---|---|---|---|
-| down_near (down-biased, key_dist<50%) | 32 | +19.92 | 66% | +4.95 | 56% |
-| down_far (down-biased, key_dist≥50%)  | 31 | +10.57 | 58% | -1.08 | 52% |
-| up_near (up-biased, key_dist<50%)     | 24 | +7.20  | 46% | -0.59 | 42% |
-| up_far  (up-biased, key_dist≥50%)     | 63 | -0.31  | 48% | +5.91 | 56% |
+| down_near (down, key_dist 0–50%)  | 29 | +18.34 | 65.5% | +5.38 | 58.6% |
+| down_far  (down, key_dist ≥50%)   | 23 | +14.38 | 56.5% | -2.95 | 43.5% |
+| up_near   (up, key_dist 0–50%)    | 19 | +6.65  | 42.1% | -1.77 | 42.1% |
+| up_far    (up, key_dist ≥50%)     | 39 | -2.07  | 38.5% | +1.05 | 46.2% |
 
-**down_near CE signal survives** — resistance overhead is real (CE avg +19.9, win% 66%).
-**up_near PE signal gone** — was entirely look-ahead artifact; CE and PE now roughly equal.
+**down_near CE signal survives** — resistance overhead is real (CE avg +18.3, win% 65.5%).
+**up_near PE signal gone** — was entirely look-ahead; CE and PE now roughly equal in up_near.
 
-### Capital adjustment
-
-2× skewed iron condor (CE×2/PE×1) costs **1.5× the margin** of a balanced 1× condor
-(Sensibull-verified). Under max-capital constraint: effective protected-leg factor = 2/1.5 =
-**1.333**, unprotected-leg factor = 1/1.5 = **0.667**.
-
-### Corrected sizing results vs baseline (+1601.4 pts, Sharpe 2.263, MaxDD -158.6)
+### Final sizing results (Nifty 150 trades)
 
 | Config | Total | Sharpe | MaxDD | Win% |
 |---|---|---|---|---|
-| Baseline | +1601.4 | 2.263 | -158.6 | 68.7% |
-| A: dn_near CE×2.0 | +2238.9 | 2.452 | -157.3 | 69.3% |
-| SYM-REF: dn_near×2.0 + up_any×0.75 | +2269.4 | 2.610 | -137.4 | 68.7% |
-| E-adj (M=1.333, rest×0.5) | +1375.4 | 2.269 | -135.3 | 68.7% |
-| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | -221.1 | 68.0% |
+| Baseline | +1601.4 | 2.263 | −158.6 | 68.7% |
+| A: dn_near CE×2.0 | +2133.2 | 2.557 | −157.3 | 69.3% |
+| E-adj (M=1.333, rest×0.5) | +1561.9 | 2.494 | −201.9 | 68.7% |
+| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | −221.1 | 68.0% |
 
-**Prior E-adj (+1940.1, Sharpe 2.857) is invalidated** — was largely look-ahead.
-After correction E-adj underperforms baseline in total P&L.
+Combined Nifty+Sensex (177 trades): Baseline +1.46L, A: dn_near CE×2.0 +1.76L (Sharpe 2.656).
 
-**Current best signal:** simple CE scaling on down_near (config A: Sharpe +0.189 vs baseline,
-+39.8% total P&L). Sizing model needs rethinking before step 4 can proceed.
+### Capital constraint finding
 
-### Caveat
+Artemis is capital-constrained to 80/40 lots (CE/PE) max vs 60/60 baseline. A 2:1 skewed
+condor (120/60) costs 1.5× margin; 80/40 = (2/3)×120/60 = capital-neutral. Within a fixed
+budget, **any split ratio (80/40, 85/30, 90/20) produces the same ~+₹4k uplift** over 7
+years — CE gain is nearly cancelled by proportional PE reduction. Lot sizing is not the lever.
 
-down_near = 32 trades across 6 years. Structural logic is sound (resistance overhead in
-down ranges, up-drift structural effect) but sample is limited. Only the CE-directional
-signal has survived look-ahead-clean testing; PE-side asymmetric sizing is unvalidated.
+### Conclusion and step 4 direction
+
+The down_near CE structural edge is real but cannot be captured through lot sizing under
+a capital constraint. The signal's value lies in strike placement:
+
+- Artemis uses a **fixed expected premium target** (VIX-adaptive: wider strikes at high VIX,
+  tighter at low VIX).
+- In 31 down_near trades, 15 already have CE strike above `range_high` (high VIX naturally
+  places them there); 16 have CE below resistance.
+- CE losses in the "CE below resistance" group are predominantly `index_sl` (combined
+  position stop, not CE-specific) — moving the CE strike would not have saved them.
+- **Step 4 direction:** model P&L if CE is always anchored at `range_high + buffer` for
+  down_near, using `ce_sell_entry` / `ce_buy_entry` premiums from the annotated CSV to
+  estimate entry credit at the counterfactual strike.
 
 ---
 

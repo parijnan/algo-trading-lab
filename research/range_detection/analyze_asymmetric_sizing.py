@@ -87,13 +87,16 @@ def assign_buckets(df):
     """Standard bucket assignment using key_dist_pct for near/far split.
 
     Requires ep_committed=True (bars_into > BREAKOUT_CONFIRM = bars_into >= 3).
-    Uncommitted entries and initial/null ranges fall through to 'other'.
+    Requires key_dist_pct >= 0: negative means spot has already broken through the
+    key level (above range_high for down, below range_low for up) — no asymmetric sizing.
+    Uncommitted, out-of-range, and initial/null entries fall through to 'other'.
     """
     committed = df['ep_committed'].fillna(False).astype(bool)
-    down_near = (committed & (df['ep_direction'] == 'down') & (df['key_dist_pct'] < 50)).fillna(False)
-    down_far  = (committed & (df['ep_direction'] == 'down') & (df['key_dist_pct'] >= 50)).fillna(False)
-    up_near   = (committed & (df['ep_direction'] == 'up')   & (df['key_dist_pct'] < 50)).fillna(False)
-    up_far    = (committed & (df['ep_direction'] == 'up')   & (df['key_dist_pct'] >= 50)).fillna(False)
+    kd = df['key_dist_pct'].fillna(-1)
+    down_near = (committed & (df['ep_direction'] == 'down') & (kd >= 0) & (kd < 50)).fillna(False)
+    down_far  = (committed & (df['ep_direction'] == 'down') & (kd >= 50)).fillna(False)
+    up_near   = (committed & (df['ep_direction'] == 'up')   & (kd >= 0) & (kd < 50)).fillna(False)
+    up_far    = (committed & (df['ep_direction'] == 'up')   & (kd >= 50)).fillna(False)
     bucket = pd.Series('other', index=df.index)
     bucket[down_near] = 'down_near'
     bucket[down_far]  = 'down_far'

@@ -177,40 +177,41 @@ Impact: 23 Nifty trades had their direction determined by the same-day close (lo
 After fix: those 23 resolve to their prior established range. All prior E-adj numbers are
 invalidated.
 
-### Corrected structural buckets (150 traded Nifty trades)
+### Three correctness fixes applied (2026-05-28)
+
+1. **Look-ahead bug** (`side='right'` → `side='left'`): 23 Nifty trades had direction set by
+   same-day close. Invalidated all prior E-adj numbers.
+2. **`ep_committed` filter** in `assign_buckets()`: uncommitted entries no longer leak into
+   near/far buckets. down_near 32→31.
+3. **`key_dist >= 0` guard**: spot already past the key level (negative key_dist) falls to
+   'other'. Two Nifty trades removed. down_near 31→29.
+
+### Final structural buckets (Nifty 150 trades, all fixes applied)
 
 | Bucket | n | CE avg | CE win% | PE avg | PE win% |
 |---|---|---|---|---|---|
-| down_near (down, key_dist<50%) | 32 | +19.92 | 66% | +4.95 | 56% |
-| down_far  (down, key_dist≥50%) | 31 | +10.57 | 58% | -1.08 | 52% |
-| up_near   (up, key_dist<50%)   | 24 | +7.20  | 46% | -0.59 | 42% |
-| up_far    (up, key_dist≥50%)   | 63 | -0.31  | 48% | +5.91 | 56% |
+| down_near (down, key_dist 0–50%)  | 29 | +18.34 | 65.5% | +5.38 | 58.6% |
+| down_far  (down, key_dist ≥50%)   | 23 | +14.38 | 56.5% | −2.95 | 43.5% |
+| up_near   (up, key_dist 0–50%)    | 19 | +6.65  | 42.1% | −1.77 | 42.1% |
+| up_far    (up, key_dist ≥50%)     | 39 | −2.07  | 38.5% | +1.05 | 46.2% |
 
-**down_near CE signal survives** (CE avg +19.9, win% 66%) — resistance overhead is real.
-**up_near PE signal is gone** — it was a look-ahead artifact. CE and PE are now roughly
-equal in up_near, with a slight CE edge.
+**down_near CE signal survives** — resistance overhead is real (CE avg +18.3, win% 65.5%).
+**up_near PE signal gone** — was entirely look-ahead; CE and PE now roughly equal.
 
-### Capital adjustment
-
-2× skewed iron condor (CE×2/PE×1) costs **1.5× the margin** of a balanced 1× condor
-(Sensibull-verified). Under max-capital constraint: effective protected-leg factor = 2/1.5 =
-**1.333**, unprotected-leg factor = 1/1.5 = **0.667**.
-
-### Corrected sizing results (Nifty 150 trades)
+### Final sizing results (Nifty 150 trades)
 
 | Config | Total | Sharpe | MaxDD | Win% |
 |---|---|---|---|---|
-| Baseline | +1601.4 | 2.263 | -158.6 | 68.7% |
-| A: dn_near CE×2.0 | +2238.9 | 2.452 | -157.3 | 69.3% |
-| SYM-REF: dn_near×2.0 + up_any×0.75 | +2269.4 | 2.610 | -137.4 | 68.7% |
-| E-adj (M=1.333, rest×0.5) | +1375.4 | 2.269 | -135.3 | 68.7% |
-| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | -221.1 | 68.0% |
+| Baseline | +1601.4 | 2.263 | −158.6 | 68.7% |
+| A: dn_near CE×2.0 | +2133.2 | 2.557 | −157.3 | 69.3% |
+| E-adj (M=1.333, rest×0.5) | +1561.9 | 2.494 | −201.9 | 68.7% |
+| E-adj-bk (uncommitted→near) | +1664.9 | 2.455 | −221.1 | 68.0% |
 
-The previously announced E-adj (+1940.1, Sharpe 2.857) is **invalidated** — entirely
-dependent on the look-ahead bug. After correction, E-adj underperforms baseline in total P&L.
+Combined Nifty+Sensex (177 trades): Baseline +1.46L, A: dn_near CE×2.0 +1.76L.
 
-**Current best signal:** simple CE scaling on down_near. Sizing model needs rethinking
-before the up_near leg can be treated as structurally actionable.
+**Capital constraint:** Artemis is limited to 80/40 lots max. Within a fixed budget any
+split (80/40, 85/30, 90/20) gives the same ~+₹4k uplift over 7 years — CE gain cancelled
+by PE reduction. Lot sizing is not the lever; **step 4 moves to strike placement**.
 
 ---
 
