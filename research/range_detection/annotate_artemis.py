@@ -135,8 +135,11 @@ def run_instrument(instrument: str):
         pe_dist = (spot - pe_strike) / spot * 100
         ce_dist = (ce_strike - spot) / spot * 100
 
-        # Bar at or before entry_date
-        pos = price_idx.searchsorted(entry_date, side='right') - 1
+        # Last COMPLETE bar before entry_date.
+        # side='left' gives pos-1 = Friday's bar for a Monday entry —
+        # correct because the trade enters at 10:31am and Monday's close
+        # (which determines same-day breakout direction) isn't known yet.
+        pos = price_idx.searchsorted(entry_date, side='left') - 1
         if pos < 0:
             row = _null_ann()
             row['pe_dist_pct']  = round(pe_dist, 4)

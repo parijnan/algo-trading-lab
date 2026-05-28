@@ -225,8 +225,8 @@ def main():
         else:
             vix_signal = None
 
-        # Find the bar on or before entry_date
-        pos = price_idx.searchsorted(entry_date, side='right') - 1
+        # Last COMPLETE bar before entry_date (side='left' → Friday for Monday entries).
+        pos = price_idx.searchsorted(entry_date, side='left') - 1
 
         if pos < 0:
             ann_rows.append(_null_ann(vix_daily, vix_75m, vix_signal, _bb_pct_v, _bb_zone_v))
