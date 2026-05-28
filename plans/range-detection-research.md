@@ -281,19 +281,9 @@ VIX router research is complete (§15 of `plans/vix-router-research.md`) — no 
    nearly cancelled by proportional PE reduction regardless of split ratio (80/40, 85/30,
    90/20 all give ~+₹4k over 7 years). Lot sizing is not the lever.
 
-4. **Artemis range-anchored-strike placement** — active next step.
-   Artemis uses a fixed expected premium target (VIX-adaptive: wider strikes when VIX is
-   high, tighter when VIX is low). In down_near, the hypothesis is that resistance overhead
-   justifies selling the CE at or just above `range_high` rather than at the standard premium
-   distance. Initial analysis on 31 down_near trades:
-   - 15/31 already have CE strike above `range_high` (fixed-premium rule naturally lands there
-     in high-VIX weeks); 16/31 have CE below resistance.
-   - CE SL losses in the "CE below resistance" group are predominantly `index_sl` (combined
-     position stop), not CE-specific stops — strike placement alone cannot address these.
-   - Entry premium data (`ce_sell_entry`, `ce_buy_entry`) is available in the annotated CSV,
-     making a counterfactual backtest tractable.
-   Direction: model the P&L if CE strike is always anchored at `range_high + buffer` for
-   down_near trades, using the available premium data to estimate the entry credit change.
+4. ~~**Artemis range-anchored-strike placement**~~ **DONE (2026-05-28, finalised same session).**
+   Script: `research/range_detection/step4_strike_counterfactual.py`.
+   See §13 for full findings. **Verdict: not a meaningful lever.**
 
 5. **Apollo chop-filter annotation** — most independent, fastest standalone win; not yet done.
    Annotate Apollo trades with `ep_entry_spot_pct` and range-break coincidence.
@@ -373,6 +363,69 @@ a capital constraint. The signal's value lies in strike placement:
 - **Step 4 direction:** model P&L if CE is always anchored at `range_high + buffer` for
   down_near, using `ce_sell_entry` / `ce_buy_entry` premiums from the annotated CSV to
   estimate entry credit at the counterfactual strike.
+
+---
+
+## 13. Strike Placement Findings (2026-05-28, finalised)
+
+Script: `research/range_detection/step4_strike_counterfactual.py`
+Output: `research/range_detection/outputs/step4_counterfactual_nifty.csv`
+
+**Counterfactual rule:** CE sell always placed at the first 100-pt strike strictly above
+`range_high` (resistance-anchored), CE buy at +300. Actual options data used for entry/exit
+premiums; scaling applied for 10 of 29 trades where the current options files differ from
+the data used in the original backtest (verified by matching actual entry prices).
+
+### Breach analysis prerequisite
+
+Weekly high from 1-min Nifty data (entry → expiry):
+- **Held (16/29, 55%):** resistance did not break → CE expires worthless regardless of strike.
+- **Breached (13/29, 45%):** resistance broke. Median overshoot = 126 pts above `range_high`.
+  CF strike gap to resistance = 1–100 pts. **12/13 breach trades: CF CE also gets hit.**
+  Strike placement cannot protect against a breach; overshoot is almost always large enough
+  to clear the resistance-anchored strike as well.
+
+### Results
+
+| Group | n | Δ entry credit/trade | Δ CE P&L/trade | Δ total (7yr) |
+|---|---|---|---|---|
+| CE below RH (16 trades) | 16 | −16.75 | +1.15 | +18 pts |
+| CE above RH (13 trades) | 13 | +18.22 | +10.11 | +131 pts |
+| All down_near | 29 | −1.08 | +5.17 | **+150 pts = ₹3,746** |
+
+**CE below RH:** Moving CE from near-ATM (targeting fixed premium) up to just-above-resistance
+loses significant entry credit (−16.75/trade avg). Gains some protection, but since 8/8 breach
+trades in this group have overshoot > CF gap, the CE is still hit on breach. Net near-neutral.
+
+**CE above RH:** When VIX is high, Artemis goes very far OTM (e.g. 350+ pts above resistance
+in Feb 2024) to keep the sell premium at target. Moving down to just-above-resistance captures
+substantially more premium (+18.22/trade avg). For held trades, this becomes realised profit.
+For breached trades, the closer-to-money CF CE is now hit worse (e.g. 2024-04-22: −30.85 delta).
+
+### VIX split
+
+| Group | n | Breach% | CE win% | CE avg | CF delta |
+|---|---|---|---|---|---|
+| High VIX (≥14.8) | 10 | 40% | 90% | +21.7 | +11.2/trade |
+| Mid/Low VIX (<14.8) | 19 | 47% | 53% | +9.0 | +2.0/trade |
+
+### Verdict
+
+**₹3,746 incremental over 7 years from 29 trades.** Not a meaningful lever.
+
+The fundamental conclusion: the down_near CE structural edge (+18 pts/trade, 65.5% win rate)
+comes from **resistance holding more often than not in down-biased ranges** — a structural
+property of the PA episode definition. Strike placement does not change whether resistance
+holds; it only changes how much premium is collected or lost when it does.
+
+Every lever explored in steps 3–4 (lot sizing under capital constraint, resistance-anchored
+strike placement) produced improvements of at most ~₹4k over 7 years against a ~₹1.46L
+baseline. The rigid base rule — "trade Artemis on down_near weeks" — delivers the edge;
+parameter optimisation cannot meaningfully extend it within the existing trade structure.
+
+**VIX observation (not actioned):** High VIX down_near (n=10) has 90% CE win rate.
+Filtering to high VIX only would skip 19 profitable trades (avg +22.3 pts each, ₹10.6k total
+foregone). VIX gate sharpens per-trade quality but degrades total P&L.
 
 ---
 

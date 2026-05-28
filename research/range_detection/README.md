@@ -211,7 +211,29 @@ Combined Nifty+Sensex (177 trades): Baseline +1.46L, A: dn_near CE×2.0 +1.76L.
 
 **Capital constraint:** Artemis is limited to 80/40 lots max. Within a fixed budget any
 split (80/40, 85/30, 90/20) gives the same ~+₹4k uplift over 7 years — CE gain cancelled
-by PE reduction. Lot sizing is not the lever; **step 4 moves to strike placement**.
+by PE reduction. Lot sizing is not the lever.
+
+### Step 4: Resistance-anchored CE strike placement (2026-05-28, finalised)
+
+Script: `step4_strike_counterfactual.py`. Counterfactual: CE sell always at first 100-pt
+strike above `range_high`; actual options data used (with scaling for 10 data-mismatched
+trades). **Result: +150 pts = ₹3,746 over 7 years. Not a meaningful lever.**
+
+Key findings:
+- **Breach gates the outcome, not strike placement.** Resistance held 16/29 (55%) weeks;
+  CE wins 94% when held, 31% when breached. Median overshoot when breached = 126 pts, so
+  12/13 breach trades would hit the CF strike too — anchoring to resistance doesn't protect.
+- **CE below RH (16 trades): Δ = +18 pts total.** Moving CE up to resistance loses premium;
+  breach protection is illusory since overshoot clears the CF strike in almost all cases.
+- **CE above RH (13 trades): Δ = +131 pts total.** High VIX pushes Artemis far OTM (350+
+  pts above resistance in Feb 2024); moving down to just-above-resistance captures more credit.
+- **VIX remains the sharpest predictor:** high VIX (≥14.8) → 90% CE win, 40% breach.
+  Filtering to high VIX only would skip 19 profitable trades (avg +22.3 pts, ₹10.6k foregone).
+
+**Overall conclusion (steps 3–4):** Every parameter lever explored adds at most ~₹4k over
+7 years against a ₹1.46L baseline. The down_near CE edge is a structural property of
+resistance holding in down-biased ranges. Rigid rules deliver it; optimisation cannot
+meaningfully extend it within the existing 4-day weekly trade structure.
 
 ---
 
