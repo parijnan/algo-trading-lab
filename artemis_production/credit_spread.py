@@ -73,7 +73,85 @@ class CreditSpread:
                 handle_exception(e)
             sleep(1)
             reset_counters()
-        
+
+    def _find_sell_strike_linear(self, start_strike, direction):
+        """Linear strike scan fallback — fetches all strikes, returns closest to target premium."""
+        option_list_dict = {'strike': [], 'symbol': [], 'token': [], 'ltp': []}
+        for i in range(start_strike,
+                       start_strike + direction * strike_values_iterator,
+                       direction * strike_iteration_interval):
+            option_list_dict['strike'].append(i)
+            temp_symbol, temp_token = self._fetch_symbol_and_token(i)
+            option_list_dict['symbol'].append(temp_symbol)
+            option_list_dict['token'].append(temp_token)
+            option_list_dict['ltp'].append(
+                self._fetch_ltp(fo_exchange_segment, option_list_dict['symbol'][-1], option_list_dict['token'][-1])
+            )
+        closest = min(range(len(option_list_dict['ltp'])),
+                      key=lambda i: abs(option_list_dict['ltp'][i] - expected_option_premium))
+        return (option_list_dict['strike'][closest],
+                option_list_dict['symbol'][closest],
+                option_list_dict['token'][closest])
+
+    def _find_sell_strike(self, start_strike, direction):
+        """
+        Binary search for the sell strike closest to expected_option_premium.
+        direction: +1 for CE (strikes increase OTM), -1 for PE (strikes decrease OTM).
+        Doubles the search window up to 3× if the target lies beyond the initial
+        strike_values_iterator range (high-VIX scenario, up to 8× initial range).
+        Falls back to _find_sell_strike_linear on any exception.
+        """
+        try:
+            dist_lo = 0
+            dist_hi = strike_values_iterator
+
+            lo_sym, lo_tok = self._fetch_symbol_and_token(start_strike)
+            lo_ltp = self._fetch_ltp(fo_exchange_segment, lo_sym, lo_tok)
+
+            hi_strike = start_strike + direction * dist_hi
+            hi_sym, hi_tok = self._fetch_symbol_and_token(hi_strike)
+            hi_ltp = self._fetch_ltp(fo_exchange_segment, hi_sym, hi_tok)
+
+            # Edge: ATM premium at or below target — ATM strike is the closest candidate
+            if lo_ltp <= expected_option_premium:
+                return start_strike, lo_sym, lo_tok
+
+            # Extend bracket if target is beyond the initial range (high VIX)
+            doublings = 0
+            while hi_ltp > expected_option_premium and hi_ltp > 0 and doublings < 3:
+                dist_hi *= 2
+                hi_strike = start_strike + direction * dist_hi
+                hi_sym, hi_tok = self._fetch_symbol_and_token(hi_strike)
+                hi_ltp = self._fetch_ltp(fo_exchange_segment, hi_sym, hi_tok)
+                doublings += 1
+
+            # Edge: target still beyond max range — use the boundary strike
+            if hi_ltp >= expected_option_premium:
+                return hi_strike, hi_sym, hi_tok
+
+            # Binary search within [dist_lo, dist_hi]
+            lo_sym_curr, lo_tok_curr = lo_sym, lo_tok
+            while dist_hi - dist_lo > strike_iteration_interval:
+                dist_mid = ((dist_lo + dist_hi) // (2 * strike_iteration_interval)) * strike_iteration_interval
+                mid_strike = start_strike + direction * dist_mid
+                mid_sym, mid_tok = self._fetch_symbol_and_token(mid_strike)
+                mid_ltp = self._fetch_ltp(fo_exchange_segment, mid_sym, mid_tok)
+                if mid_ltp > expected_option_premium:
+                    dist_lo, lo_ltp = dist_mid, mid_ltp
+                    lo_sym_curr, lo_tok_curr = mid_sym, mid_tok
+                else:
+                    dist_hi, hi_ltp = dist_mid, mid_ltp
+                    hi_strike, hi_sym, hi_tok = mid_strike, mid_sym, mid_tok
+
+            lo_strike_final = start_strike + direction * dist_lo
+            if abs(lo_ltp - expected_option_premium) <= abs(hi_ltp - expected_option_premium):
+                return lo_strike_final, lo_sym_curr, lo_tok_curr
+            return hi_strike, hi_sym, hi_tok
+
+        except Exception as e:
+            logger.warning(f"Binary strike search failed ({e}); falling back to linear scan.")
+            return self._find_sell_strike_linear(start_strike, direction)
+
     # Private method to place order, and return total orders and orderid list
     def _place_order(self, transaction_type, symbol, token, lots):
         # Initialise orderID_list
@@ -452,42 +530,12 @@ class CreditSpread:
                 self.index_entry = self._fetch_ltp(exchange_segment, instrument, underlying_token)
                 if self.spread_type == 'pe':
                     index_rounded_value = floor(self.index_entry / strike_iteration_interval) * strike_iteration_interval
-                    option_list_dict = {'strike':[],
-                                        'symbol':[],
-                                        'token':[],
-                                        'ltp':[]}
-                    for i in range(index_rounded_value, index_rounded_value - strike_values_iterator, -strike_iteration_interval):
-                        option_list_dict['strike'].append(i)
-                        temp_symbol, temp_token = self._fetch_symbol_and_token(i)
-                        option_list_dict['symbol'].append(temp_symbol)
-                        option_list_dict['token'].append(temp_token)
-                        option_list_dict['ltp'].append(self._fetch_ltp(fo_exchange_segment, option_list_dict['symbol'][-1], option_list_dict['token'][-1]))
-                    # Find the 'strike' with the 'value' closest to expected_option_premium
-                    closest_value_index = min(range(len(option_list_dict['ltp'])), key=lambda i: abs(option_list_dict['ltp'][i] - expected_option_premium))
-                    # Get the corresponding 'strike'
-                    self.sell_strike = option_list_dict['strike'][closest_value_index]
-                    self.sell_symbol = option_list_dict['symbol'][closest_value_index]
-                    self.sell_token = option_list_dict['token'][closest_value_index]
+                    self.sell_strike, self.sell_symbol, self.sell_token = self._find_sell_strike(index_rounded_value, -1)
                     self.buy_strike = self.sell_strike - hedge_points
                     self.buy_symbol, self.buy_token = self._fetch_symbol_and_token(self.buy_strike)
                 if self.spread_type == 'ce':
                     index_rounded_value = ceil(self.index_entry / strike_iteration_interval) * strike_iteration_interval
-                    option_list_dict = {'strike':[],
-                                        'symbol':[],
-                                        'token':[],
-                                        'ltp':[]}
-                    for i in range(index_rounded_value, index_rounded_value + strike_values_iterator, strike_iteration_interval):
-                        option_list_dict['strike'].append(i)
-                        temp_symbol, temp_token = self._fetch_symbol_and_token(i)
-                        option_list_dict['symbol'].append(temp_symbol)
-                        option_list_dict['token'].append(temp_token)
-                        option_list_dict['ltp'].append(self._fetch_ltp(fo_exchange_segment, option_list_dict['symbol'][-1], option_list_dict['token'][-1]))
-                    # Find the 'strike' with the 'value' closest to expected option premium
-                    closest_value_index = min(range(len(option_list_dict['ltp'])), key=lambda i: abs(option_list_dict['ltp'][i] - expected_option_premium))
-                    # Get the corresponding 'strike'
-                    self.sell_strike = option_list_dict['strike'][closest_value_index]
-                    self.sell_symbol = option_list_dict['symbol'][closest_value_index]
-                    self.sell_token = option_list_dict['token'][closest_value_index]
+                    self.sell_strike, self.sell_symbol, self.sell_token = self._find_sell_strike(index_rounded_value, +1)
                     self.buy_strike = self.sell_strike + hedge_points
                     self.buy_symbol, self.buy_token = self._fetch_symbol_and_token(self.buy_strike)
                 self.additional_flag = False

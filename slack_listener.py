@@ -20,6 +20,7 @@ CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
 APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
 ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
+LETO_CONFIG   = os.path.join(BASE_DIR, "configs_live.py")
 
 # Strategy State File Paths
 ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
@@ -53,6 +54,22 @@ _CH_ERRORS = "#error-alerts"
 # ---------------------------------------------------------------------------
 # Config Editors
 # ---------------------------------------------------------------------------
+
+def write_route_override(mode, strategy):
+    """Update ROUTING_MODE and MANUAL_STRATEGY in configs_live.py."""
+    try:
+        with open(LETO_CONFIG, 'r') as f:
+            content = f.read()
+        content = re.sub(r"(ROUTING_MODE\s*=\s*)'[^']*'",    f"\\g<1>'{mode}'",     content)
+        content = re.sub(r"(MANUAL_STRATEGY\s*=\s*)'[^']*'", f"\\g<1>'{strategy}'", content)
+        with open(LETO_CONFIG, 'w') as f:
+            f.write(content)
+        logger.info(f"Route override set: ROUTING_MODE={mode!r}, MANUAL_STRATEGY={strategy!r}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update configs_live.py: {e}")
+        return False
+
 
 def update_python_config(file_path, lot_calc, lot_count):
     """Surgically update LOT_CALC and LOT_COUNT in a python config file."""
@@ -168,6 +185,34 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "⬇️ Git Pull"},
                 "action_id": "btn_git_pull"
+            }
+        ]
+    },
+    {
+        "type": "divider"
+    },
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Routing Override:*\nForce strategy selection for next Mon–Thu entry. Apollo always runs if VIX > 25."}
+    },
+    {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⚡ Auto (VIX)"},
+                "style": "primary",
+                "action_id": "btn_route_auto"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🔵 Force Artemis"},
+                "action_id": "btn_route_artemis"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🟢 Force Athena"},
+                "action_id": "btn_route_athena"
             }
         ]
     }
@@ -394,6 +439,47 @@ def handle_git_pull(ack, body, say):
     except Exception as e:
         say(channel=_CH, text=f"❌ Git pull error: {e}")
         logger.error(f"Git pull error: {e}")
+
+@app.action("btn_route_auto")
+def handle_route_auto(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_route_override("auto", "artemis"):
+        say(channel=_CH, text=(
+            f"⚡ *Routing Override Cleared* by <@{user_id}>\n"
+            f"*Mode:* Auto (VIX-based)\n"
+            f"_Next entry follows standard VIX routing._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to clear routing override. Check daemon logs on VPS.")
+
+@app.action("btn_route_artemis")
+def handle_route_artemis(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_route_override("manual", "artemis"):
+        say(channel=_CH, text=(
+            f"🔵 *Routing Override Set* by <@{user_id}>\n"
+            f"*Mode:* Manual\n"
+            f"*Strategy:* Artemis (Sensex IC)\n"
+            f"_Apollo routing is unaffected — VIX > 25 always routes to Apollo._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
+
+@app.action("btn_route_athena")
+def handle_route_athena(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_route_override("manual", "athena"):
+        say(channel=_CH, text=(
+            f"🟢 *Routing Override Set* by <@{user_id}>\n"
+            f"*Mode:* Manual\n"
+            f"*Strategy:* Athena (Nifty Calendar)\n"
+            f"_Apollo routing is unaffected — VIX > 25 always routes to Apollo._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
 
 # ---------------------------------------------------------------------------
 # Position Sizing Modal

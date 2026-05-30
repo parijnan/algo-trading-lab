@@ -69,20 +69,15 @@ qr_code     = _creds['qr_code']
 slack_token = _creds['slack_token']
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — loaded from configs_live.py at repo root
 # ---------------------------------------------------------------------------
-MARKET_OPEN  = time(9, 15)
-MARKET_CLOSE = time(15, 30)
-
-# Angel One scrip master
-_SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-
-# Index tokens for VIX routing check
-_NIFTY_INDEX_TOKEN = "99926000"
-_VIX_TOKEN         = "99926017"
-
-# Slack channel for Leto-level messages
-_SLACK_CHANNEL = "#tradebot-updates"
+from configs_live import (                          # noqa: E402
+    MARKET_OPEN, MARKET_CLOSE,
+    VIX_ARTEMIS_MAX, VIX_ATHENA_MAX,
+    NIFTY_INDEX_TOKEN, VIX_TOKEN,
+    SCRIP_MASTER_URL,
+    SLACK_CHANNEL,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +93,7 @@ def _slack(msg):
                 "Authorization": f"Bearer {slack_token}",
                 "Content-Type":  "application/json",
             },
-            json={"channel": _SLACK_CHANNEL, "text": msg},
+            json={"channel": SLACK_CHANNEL, "text": msg},
             timeout=5,
         )
     except Exception:
@@ -127,6 +122,29 @@ def _check_circuit_breaker():
                 sys.exit(0)
         except Exception as e:
             logger.error(f"Error reading circuit breaker flag: {e}")
+
+
+def _load_route_override():
+    """
+    Re-import configs_live.py and return (ROUTING_MODE, MANUAL_STRATEGY).
+    Called at each routing decision so Slack-listener changes are picked up.
+    Returns ('auto', 'artemis') on any error or missing file.
+    """
+    import importlib
+    try:
+        import configs_live as _cfg
+        importlib.reload(_cfg)
+        mode     = _cfg.ROUTING_MODE
+        strategy = _cfg.MANUAL_STRATEGY
+        if mode not in ('auto', 'manual') or strategy not in ('artemis', 'athena'):
+            raise ValueError(f"unexpected values: mode={mode!r}, strategy={strategy!r}")
+        return mode, strategy
+    except ModuleNotFoundError:
+        return 'auto', 'artemis'
+    except Exception as e:
+        logger.warning(f"configs_live.py unreadable ({e}); defaulting to auto.")
+        return 'auto', 'artemis'
+
 
 # ---------------------------------------------------------------------------
 # Login
@@ -197,7 +215,7 @@ def _check_market(obj):
 def _download_scrip_master():
     """Download Angel One scrip master and return filtered DataFrames."""
     logger.info("Downloading scrip master...")
-    scrip_df = pd.read_json(StringIO(urlopen(_SCRIP_MASTER_URL).read().decode()))
+    scrip_df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
     logger.info(f"Scrip master downloaded: {len(scrip_df):,} rows.")
 
     instrument_df_nifty = scrip_df[
@@ -227,7 +245,7 @@ def _get_vix(obj):
     Returns float, or None on failure.
     """
     try:
-        ltp = obj.ltpData("NSE", "India VIX", _VIX_TOKEN)['data']['ltp']
+        ltp = obj.ltpData("NSE", "India VIX", VIX_TOKEN)['data']['ltp']
         return float(ltp)
     except Exception as e:
         logger.error(f"VIX fetch failed: {e}")
@@ -297,13 +315,6 @@ def _athena_trade_open():
         return False
 
 
-# ---------------------------------------------------------------------------
-# VIX Thresholds for Routing
-# ---------------------------------------------------------------------------
-VIX_ARTEMIS_MAX = 16.0
-VIX_ATHENA_MAX  = 25.0
-
-
 def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
     """
     Decide which strategy to run, then run it.
@@ -367,7 +378,18 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
             _slack(f"*Leto*: Friday. VIX {vix:.2f}. No fresh entries today.")
             return False, None
 
-    # Priority 3: Mon–Thu, no open positions — 3-way route
+    # Priority 3: Mon–Thu, no open positions — manual override or 3-way VIX route
+    mode, strategy = _load_route_override()
+    if mode == 'manual' and vix <= VIX_ATHENA_MAX:
+        logger.info(f"Manual override active. VIX {vix:.2f}. Routing to {strategy.capitalize()}.")
+        _slack(f"*Leto*: ⚙️ Manual override active. Routing to *{strategy.capitalize()}* (VIX {vix:.2f}).")
+        if strategy == 'artemis':
+            handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
+        else:
+            handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+        return handoff, summary
+
+    # Auto routing (also handles manual + VIX > 25 → Apollo)
     if vix <= VIX_ARTEMIS_MAX:
         logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
