@@ -55,11 +55,17 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day.
 2. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
 3. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
-4. If no open position exists:
-   - **VIX ≤ 16.0** → Artemis (Mon-Thu only)
-   - **16.0 < VIX ≤ 25.0** → Athena (Mon-Thu only)
-   - **VIX > 25.0** → Apollo (Any day)
-5. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing.
+4. **Friday, no open position:**
+   - **VIX > 25.0** → Apollo
+   - **VIX ≤ 25.0** → Stand down
+5. **Mon–Thu, no open position — manual override or 3-way VIX route:**
+   - **Manual override active + VIX ≤ 25.0** → route to the selected strategy (Artemis or Athena); VIX > 25 always routes to Apollo regardless of override
+   - **VIX ≤ 16.0** → Artemis
+   - **16.0 < VIX ≤ 25.0** → Athena
+   - **VIX > 25.0** → Apollo
+6. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `configs_live.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
+
+**Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is stored in `configs_live.py` at the repo root (`ROUTING_MODE`, `MANUAL_STRATEGY`). Apollo is never overridden — if VIX > 25, Apollo runs regardless.
 
 ### Orchestration Flow
 
@@ -73,13 +79,18 @@ graph TD
     CheckState -- Athena --> RunAthena[Execute Athena]
     CheckState -- Artemis --> RunArtemis[Execute Artemis]
 
-    CheckState -- None --> VIXCheck{Read VIX at 10:30 AM}
+    CheckState -- None --> FridayCheck{Friday?}
+    FridayCheck -- "Yes, VIX > 25" --> RunApollo
+    FridayCheck -- "Yes, VIX ≤ 25" --> StandDown[Stand Down]
+    FridayCheck -- No --> OverrideCheck{Manual Override?}
+    OverrideCheck -- "mode=manual, VIX ≤ 25" --> RunOverride[Execute Selected Strategy]
+    OverrideCheck -- "mode=auto or VIX > 25" --> VIXCheck{Read VIX at 10:30 AM}
     VIXCheck -- "< 16" --> RunArtemis
     VIXCheck -- "16 - 25" --> RunAthena
     VIXCheck -- "> 25" --> RunApollo
 
-    RunApollo & RunAthena & RunArtemis --> Result{Hand-off?}
-    Result -- Yes --> VIXCheck
+    RunApollo & RunAthena & RunArtemis & RunOverride --> Result{Hand-off?}
+    Result -- Yes --> OverrideCheck
     Result -- No/Market Close --> Logout[Terminate Session]
     Logout --> End([Leto Complete])
 ```
@@ -114,6 +125,14 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 - **`🚀 Start Leto`**: Manually triggers the `leto.py` orchestrator outside of the standard cron schedule.
 - **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Apollo and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
 - **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Eliminates the need to SSH in for routine code updates. Note: if `slack_listener.py` itself is updated, a manual restart of the listener is still required to pick up those changes.
+
+### Routing Override
+Three buttons below the circuit breakers allow surgical control of which strategy runs next session, without touching code:
+- **`⚡ Auto (VIX)`**: Restores standard VIX-based routing (default state).
+- **`🔵 Force Artemis`**: Routes to Artemis on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
+- **`🟢 Force Athena`**: Routes to Athena on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
+
+The current mode is persisted in `configs_live.py` at the repo root (`ROUTING_MODE` / `MANUAL_STRATEGY`). Leto reloads this file on every reroute iteration, so a change applied mid-session takes effect on the next Leto loop without a restart.
 
 ### Remote Position Sizing
 The **`⚙️ Manage Sizing`** button triggers a Slack Modal for surgical configuration updates:
@@ -176,9 +195,11 @@ The `data_pipeline/` infrastructure uses a dual-layer messaging system:
 |---|---|
 | < 16 | Artemis |
 | 16 – 25 | Athena |
-| > 25 | Apollo |
+| > 25 | Apollo (always — overrides manual override) |
 
 Open position detection overrides VIX routing in all cases — an active Apollo, Artemis, or Athena trade is always resumed to completion regardless of current VIX or day of week.
+
+The Slack routing override (Force Artemis / Force Athena) only applies when VIX ≤ 25 on a Mon–Thu no-position day. VIX > 25 always routes to Apollo; the Friday stand-down is never overridden.
 
 ## Regulatory Compliance
 
@@ -373,22 +394,25 @@ algo-trading-lab/
 ├── .gitignore
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
+├── configs_live.py                 # Leto-level runtime config: market hours, VIX thresholds, tokens, routing override
 ├── websocket_feed.py               # Shared WebSocket LTP feed (SharedFeed) — used by all strategies
 ├── plans/                          # Implementation plans
-│   ├── individual-order-details.md # [BLOCKED] individual_order_details() returns AB1007 on this account
-│   ├── orphan-fill-cleanup.md      # [IMPLEMENTED] Detect and square off partial fills on entry legs
-│   ├── phase-4-convergence.md      # [COMPLETED] Unified Nifty ecosystem research — decided against
-│   ├── slack-circuit-breaker.md    # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
-│   ├── slack-position-sizing.md    # [IMPLEMENTED] Dynamic lot sizing via Slack modal
-│   ├── universal-ltp-websocket.md  # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
-│   ├── websocket-ltp-impl.md       # [IMPLEMENTED] Universal WS LTP feed — Apollo, Athena, Artemis; 500ms SL loops; REST fallback
-│   ├── websocket-order-updates.md  # [IMPLEMENTED] Real-time order fill confirmation via WS
-│   └── range-detection-research.md # [EXPLORATORY] ADX-gated index range detection — use cases TBD after backtesting
+│   ├── individual-order-details.md       # [BLOCKED] individual_order_details() returns AB1007 on this account
+│   ├── manual-routing-strike-search.md   # [IMPLEMENTED] Manual routing override + binary search strike selection
+│   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
+│   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
+│   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
+│   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
+│   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
+│   ├── websocket-ltp-impl.md             # [IMPLEMENTED] Universal WS LTP feed — Apollo, Athena, Artemis; 500ms SL loops; REST fallback
+│   ├── websocket-order-updates.md        # [IMPLEMENTED] Real-time order fill confirmation via WS
+│   └── range-detection-research.md       # [EXPLORATORY] ADX-gated index range detection — use cases TBD after backtesting
 ├── tests/                          # Automated tests and diagnostic scripts
 │   ├── test_state_roundtrip.py     # State CSV round-trip — Apollo and Athena (type safety, None/bool/int fidelity)
 │   ├── test_strike_math.py         # Apollo ATM rounding and strike pair selection (banker's rounding, offset/width)
 │   ├── test_artemis_strike_math.py # Artemis DTE-based SL multiplier ladder and index SL offset (CE vs PE)
 │   ├── test_athena_strike_math.py  # Athena delta-based strike selection (OTM direction, wing ordering, accuracy)
+│   ├── test_strike_search.py       # Artemis binary search parity — _find_sell_strike vs _find_sell_strike_linear (12 tests)
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
 │   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype

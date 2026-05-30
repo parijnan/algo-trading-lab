@@ -1,8 +1,8 @@
 # Plan: Manual Routing Override + Binary Search Strike Selection
 
-**Status:** Awaiting approval  
+**Status:** Implemented (`4086386`)  
 **Priority:** High — needed before Monday market open  
-**Files touched:** `leto.py`, `slack_listener.py`, `artemis_production/credit_spread.py` (new: `configs_live.py` at repo root)
+**Files touched:** `leto.py`, `slack_listener.py`, `artemis_production/credit_spread.py`, `configs_live.py` (new at repo root), `tests/test_strike_search.py` (new)
 
 ---
 

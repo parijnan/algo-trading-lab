@@ -12,7 +12,7 @@ If the market trends and a side is tested, the strategy dynamically transforms i
 |---|---|
 | `artemis.py` | Entry point — `run(obj, instrument_df)` called by Leto |
 | `iron_condor.py` | IronCondor class — trade lifecycle, monitoring, adjustment, archival |
-| `credit_spread.py` | CreditSpread class — individual PE/CE spread execution and SL logic |
+| `credit_spread.py` | CreditSpread class — individual PE/CE spread execution and SL logic; binary search strike selection |
 | `configs.py` | All parameters — loaded from `data/` files at import time |
 | `functions.py` | Slack messaging, Telegram fallback, exception handling |
 
@@ -121,3 +121,4 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 - [x] Position reconciliation on restart — sign-only broker position check on every in-trade restart; mismatch alerts to `#error-alerts`
 - [x] Session summary — `run()` returns a summary dict to Leto (outcome, lots, P&L, exit reason) for the end-of-day session report
 - [x] Leto integration — session management moved to Leto
+- [x] Binary search strike selection — `_find_sell_strike()` replaces linear scan; O(log N) LTP calls with doubling extension for high-VIX out-of-range targets (up to 3 doublings = 8× initial range); linear fallback preserved as `_find_sell_strike_linear()`
