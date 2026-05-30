@@ -1,10 +1,10 @@
 # Plan: Index Range Detection — Research & Applications
 
-**Status: §7 VALIDATION GATE PASSED (2026-05-26) — proceed to §8 use cases.**
+**Status: §10 steps 1–4 complete; SL aftermath investigation complete and parked (2026-05-30).**
 VIX router research is complete (see `plans/vix-router-research.md` §15 — verdict: symmetric
 router not supported; containment is the dominant Artemis P&L driver, ρ=0.32 p=0.0001).
-Next: Apollo chop-filter annotation + Artemis annotation (§10 step 2), then Artemis
-range-anchored-strike variant backtest (§10 step 3).
+Steps 3–4 (lot sizing, strike placement) both found to be non-levers (~₹4k over 7 years).
+SL optimisation investigated and closed (§14). Next: Apollo chop-filter annotation (step 5).
 
 ---
 
@@ -426,6 +426,82 @@ parameter optimisation cannot meaningfully extend it within the existing trade s
 **VIX observation (not actioned):** High VIX down_near (n=10) has 90% CE win rate.
 Filtering to high VIX only would skip 19 profitable trades (avg +22.3 pts each, ₹10.6k total
 foregone). VIX gate sharpens per-trade quality but degrades total P&L.
+
+---
+
+## 14. SL Aftermath Analysis (2026-05-30, investigated and parked)
+
+Script: `research/range_detection/analyze_sl_aftermath.py`
+Output: `research/range_detection/outputs/sl_aftermath_analysis.csv`
+
+### What was investigated
+
+For every stopped Artemis trade (Nifty + Sensex), computed the counterfactual P&L if the
+original position had been held to expiry using intrinsic value at expiry spot. Classified
+each trade by range bucket, stop type, and day of first exit. Specifically investigated
+whether Thursday `index_sl` cases where spot had broken the PA range could be treated
+differently — either via conditional SL suppression or re-entry.
+
+### Overall SL verdict
+
+Stops are net beneficial:
+- All stopped trades: ~55% premature by count, but saved P&L exceeds cost of premature exits.
+- `index_sl` and `option_sl` are doing their designed job. Not candidates for removal.
+- **ELM is regulatory capital management (SEBI-mandated), not an optimisation lever.**
+  Only `index_sl` and `option_sl` are candidates for any future SL research.
+
+### Thursday range-broken index_sl cases (the specific angle investigated)
+
+8 trades (across Nifty + Sensex) where `index_sl` fired on Thursday (expiry day) and spot
+was outside the PA range at the time of the SL. All 8 expired profitably if held — 100%
+in-sample win rate. Detailed grid:
+
+```
+#  Date         Inst    Leg  Strike  Entry    Exit    Spot@SL  RangeHi  RangeLo  MaxAdv   SL_time  MaxPremAfterSL
+1  2023-07-03   nifty   CE   19500   25.15   21.30   19450    19201    18886    19512    10:14     25.00
+2  2024-07-15   nifty   CE   24800   22.55   18.05   24754    24635    24331    24838    13:53     61.20
+3  2024-09-16   nifty   CE   25500   41.85   82.20   25543    25433    24753    25612    09:16    136.00
+4  2024-09-23   nifty   CE   26200   30.15   51.90   26168    25956    25427    26251    14:37     62.50
+5  2025-08-04   nifty   PE   24300   34.85   15.55   24347    25010    24535    24344    13:38     15.55
+6  2025-10-20   sensex  CE   85100  118.50  215.95   85036    84172    82727    85290    09:16    279.90
+7  2025-11-03   sensex  PE   83200  113.00   64.15   83439    85290    83906    83238    10:13     76.00
+8  2025-11-17   sensex  CE   85600  114.65   66.45   85402    84919    84029    85802    10:41    209.40
+```
+
+**MaxAdv**: max high (CE) or min low (PE) reached that day — worst intraday spot for the leg.
+**MaxPremAfterSL**: highest the sold option's premium reached after the SL fired (from
+individual option files in `data_pipeline/`).
+
+### Why conditional SL suppression was rejected
+
+- Cases 3, 6, 8: option continued materially higher after exit (136 vs 82 exit; 280 vs 216;
+  209 vs 66). MTM would have gone deeply negative before recovering.
+- 8 trades over 7 years is too thin a sample to conclude mean reversion is reliable.
+- Risk of suppressing a stop on a genuine breakout is unacceptable given the option upside.
+
+### Why immediate re-entry was rejected
+
+- **No surviving leg on expiry day.** In all 8 cases, the other leg was already closed before
+  Thursday's index_sl fired — via ELM (Wednesday 15:16) in 6 cases, via option_sl (Wednesday)
+  in 1 case. Re-entry means opening a brand new single-leg spread from scratch.
+- **Strike placement is premium-based.** Artemis selects strikes to hit an expected premium
+  target, not anchored to PA range bounds. After spot spikes and reverts, the OTM options
+  near the original strike have collapsed to near zero. To hit the premium target, the new
+  sell strike would have to be significantly closer to spot — more ATM, on expiry morning,
+  after a demonstrated volatile spike.
+- **Premium collapse by confirmation time.** A decision tree needs spot to re-enter the range
+  and hold for confirmation bars. By that point, expiry-day theta has crushed the option
+  premium. Re-entering at a fraction of the original premium does not justify the transaction
+  costs and the degraded risk profile.
+- **This is a different trade.** The original CE edge came from selling into a premium-target
+  structure with the full weekly time value. The re-entry CE is a short expiry-day position
+  entered after a volatile morning — structurally and probabilistically different.
+
+### Verdict
+
+**Parked.** The SLs are working. These 8 cases are the cost of having protective stops — a
+cost that is outweighed by the cases where stops correctly prevent larger losses. No viable
+optimisation lever was found in this direction.
 
 ---
 

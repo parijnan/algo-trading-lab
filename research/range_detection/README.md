@@ -9,13 +9,10 @@ complete — symmetric router not supported; containment confirmed as dominant).
 complementary, not competing — corr(range direction, ΔVIX over hold) ≈ 0, yet down-biased
 ranges earn 2.5× the P&L via spot containment (the market's up-drift), independent of vega.
 
-**Status (2026-05-28):** §7 gate passed. Artemis annotation complete. Lot-sizing sweep and
-asymmetric leg sizing analysis complete; look-ahead bug found and fixed (§10 step 3 revised).
-Annotation was using `side='right'` (same-day bar for Monday entries) — 23 Nifty trades had
-direction determined by Monday's close, unknown at 10:31am entry. Fixed to `side='left'`
-(Friday's bar). After correction: **down_near CE signal survives** (CE win% 66%, +19.9 avg);
-**up_near PE signal was entirely look-ahead** (CE now +7.2, PE -0.6 in up_near). The prior
-E-adj leading candidate is invalidated. Sizing model needs rethinking before §10 step 4.
+**Status (2026-05-30):** §7 gate passed. Steps 3–4 (lot sizing, strike placement) both
+finalised as non-levers. SL aftermath investigation complete and parked: SLs are net
+beneficial overall; 8 Thursday range-broken index_sl cases examined — conditional suppression
+and re-entry both rejected (see §14 of plan and SL Aftermath section below).
 
 Plans:
 - [`plans/range-detection-research.md`](../../plans/range-detection-research.md) — research,
@@ -42,6 +39,7 @@ Plans:
 | `lot_sizing_sweep.py` | Symmetric lot-sizing sweep across range-state conditions + two-sided sweep | `artemis_annotated_{nifty,sensex}.csv` |
 | `analyze_sizing_rule.py` | Deep analysis of the ×2.0/×0.75 symmetric rule — bucket profiles, SL breakdown, year-by-year | `artemis_annotated_nifty.csv` |
 | `analyze_asymmetric_sizing.py` | Asymmetric leg sizing sweep — scale protected leg per bucket; capital-adjusted for 1.5× margin | `artemis_annotated_nifty.csv` |
+| `analyze_sl_aftermath.py` | For every stopped trade: intrinsic-at-expiry counterfactual P&L, cost of stop, range bucket, day-of-exit breakdown | `artemis_annotated_{nifty,sensex}.csv` + index CSVs |
 
 ---
 
@@ -234,6 +232,31 @@ Key findings:
 7 years against a ₹1.46L baseline. The down_near CE edge is a structural property of
 resistance holding in down-biased ranges. Rigid rules deliver it; optimisation cannot
 meaningfully extend it within the existing 4-day weekly trade structure.
+
+---
+
+## SL Aftermath Analysis (2026-05-30, parked)
+
+Script: `analyze_sl_aftermath.py`. For every stopped Artemis trade, computes the
+counterfactual P&L if held to expiry (intrinsic at expiry spot), the cost of the stop
+(positive = premature), and cross-references range bucket and day of first exit.
+
+**Overall verdict:** stops are net beneficial — the P&L saved by correct stops outweighs the
+cost of premature ones. `index_sl` and `option_sl` are working as designed.
+
+**Thursday range-broken investigation:** 8 trades where `index_sl` fired on Thursday (expiry
+day) with spot outside the PA range; all 8 expired profitably if held. Two approaches to
+exploit this were evaluated and rejected:
+
+- **Conditional SL suppression:** cases 3, 6, 8 saw the option go 50–90% higher after the SL
+  before reverting. Holding through that MTM drawdown on a sample of 8 is not justified.
+- **Re-entry:** on expiry day the other leg is already closed (ELM/option_sl on Wednesday).
+  Re-entry means a new single-leg spread entered after a volatile morning. Strike placement
+  is premium-based — re-entry premium would be a fraction of the original, and the sell strike
+  would have to be closer to spot to hit the premium target. Decision-tree confirmation time
+  further collapses the available premium. Not viable.
+
+See §14 of `plans/range-detection-research.md` for the full grid and reasoning.
 
 ---
 
