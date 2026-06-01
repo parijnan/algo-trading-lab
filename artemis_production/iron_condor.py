@@ -194,16 +194,23 @@ class IronCondor:
                 self._cleanup_state_files()
                 return
 
-            # Gate 2: VIX check at entry time
-            vix = (self.feed.get_ltp(underlying_token) or
-                   self.pe_spread._fetch_ltp(exchange_segment, instrument, underlying_token))
-            if vix > vix_threshold:
-                msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
-                           f"Standing down for the week.")
-                logger.info(msg_txt)
-                slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
-                self._cleanup_state_files()
-                return
+            # Gate 2: VIX check at entry time — skipped when routing is manually forced
+            routing_mode = 'auto'
+            try:
+                import importlib, leto_config as _lc
+                importlib.reload(_lc)
+                routing_mode = _lc.ROUTING_MODE
+            except Exception:
+                pass
+            if routing_mode == 'auto':
+                vix = self.pe_spread._fetch_ltp("NSE", "India VIX", "99926017")
+                if vix and vix > vix_threshold:
+                    msg_txt = (f"VIX {vix:.2f} above threshold {vix_threshold} at entry time. "
+                               f"Standing down for the week.")
+                    logger.info(msg_txt)
+                    slack_bot_sendtext(msg_txt, SLACK_TRADE_ALERTS)
+                    self._cleanup_state_files()
+                    return
 
         # Both gates passed — execute both spreads
         while self.pe_spread.spread_status == 'open' or self.ce_spread.spread_status == 'open':
