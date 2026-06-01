@@ -71,7 +71,7 @@ slack_token = _creds['slack_token']
 # ---------------------------------------------------------------------------
 # Constants — loaded from configs_live.py at repo root
 # ---------------------------------------------------------------------------
-from configs_live import (                          # noqa: E402
+from leto_config import (                           # noqa: E402
     MARKET_OPEN, MARKET_CLOSE,
     VIX_ARTEMIS_MAX, VIX_ATHENA_MAX,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
@@ -132,7 +132,7 @@ def _load_route_override():
     """
     import importlib
     try:
-        import configs_live as _cfg
+        import leto_config as _cfg
         importlib.reload(_cfg)
         mode     = _cfg.ROUTING_MODE
         strategy = _cfg.MANUAL_STRATEGY

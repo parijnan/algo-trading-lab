@@ -20,7 +20,7 @@ CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
 APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
 ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
-LETO_CONFIG   = os.path.join(BASE_DIR, "configs_live.py")
+LETO_CONFIG   = os.path.join(BASE_DIR, "leto_config.py")
 
 # Strategy State File Paths
 ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
