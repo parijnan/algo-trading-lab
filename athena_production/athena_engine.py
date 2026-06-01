@@ -755,11 +755,11 @@ class Athena:
             self.state.emer_entry = 0.0
             save_state(self.state)
 
-    def _manage_emergency_hedge(self, current_spot):
+    def _manage_emergency_hedge(self, current_spot, force=False):
         if not ENABLE_EMERGENCY_HEDGE: return
         if datetime.now().time() < time(9, 16): return
-        if not self.state.emer_active and self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS:
-            if current_spot >= (self.state.ce_sell_strike + EMERGENCY_TRIGGER_OFFSET):
+        if not self.state.emer_active and (force or self.state.emer_attempts < EMERGENCY_MAX_ATTEMPTS):
+            if force or current_spot >= (self.state.ce_sell_strike + EMERGENCY_TRIGGER_OFFSET):
                 buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date()
                 vix = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
                 stk = self._find_delta_strike(current_spot, vix, buy_exp, EMERGENCY_HEDGE_DELTA, 'ce')
@@ -777,20 +777,20 @@ class Athena:
                             logger.warning(f"Emer hedge zero fill. Attempt {self.state.emer_attempts}/{EMERGENCY_MAX_ATTEMPTS}.")
                             slack_bot_sendtext(f"⚠️ *Athena*: Emer hedge zero fill (attempt {self.state.emer_attempts}/{EMERGENCY_MAX_ATTEMPTS}).", SLACK_ERRORS_CHANNEL)
         elif self.state.emer_active:
-            if current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
+            if force or current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
                 self._close_emer_if_active()
 
     def _check_slack_commands(self):
         """
         Check for persistent Slack command flags during the live trade.
-        Handles EXIT (liquidate) and KILL (halt immediately).
+        Handles EXIT (liquidate), KILL (halt immediately), and ATHENA_PARACHUTE:enter/exit.
         """
         flag_path = os.path.join(REPO_ROOT, 'data', 'SLACK_COMMAND.flag')
         if os.path.exists(flag_path):
             try:
                 with open(flag_path, 'r') as f:
                     command = f.read().strip()
-                
+
                 if command == "EXIT":
                     msg = "⚠️ *Athena*: Slack `Exit Trade` detected. Liquidating..."
                     logger.critical(msg.replace('*', ''))
@@ -798,15 +798,21 @@ class Athena:
                     if self.state.status == 'in_trade':
                         self._execute_exit(reason='slack_exit')
                     raise Exception("Session terminated by Slack !exit command.")
-                
+
                 elif command == "KILL":
                     msg = "🚨 *Athena*: Slack `Kill Switch` detected. Dropping control immediately."
                     logger.critical(msg.replace('*', ''))
                     slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
-                    # Do not reset state — preserve it so the trade can be resumed on next restart.
                     raise Exception("Session terminated by Slack !kill command.")
-                
-                # If command == "DISABLE", we do nothing inside the loop. 
+
+                elif command.startswith("ATHENA_PARACHUTE:"):
+                    action = command.split(":")[1].lower()
+                    if action in ('enter', 'exit'):
+                        self._pending_parachute = action
+                        os.remove(flag_path)
+                        logger.info(f"Manual parachute action queued: {action}.")
+
+                # If command == "DISABLE", we do nothing inside the loop.
                 # Leto will catch it on the next startup.
             except Exception as e:
                 if "Session terminated" in str(e): raise
@@ -896,6 +902,19 @@ class Athena:
                     prices = self._poll_prices(); spot = prices.get('spot')
                     if spot:
                         self._manage_emergency_hedge(spot)
+                        pending = getattr(self, '_pending_parachute', None)
+                        if pending is not None:
+                            self._pending_parachute = None
+                            if pending == 'enter':
+                                if self.state.emer_active:
+                                    slack_bot_sendtext("⚠️ *Athena*: Manual parachute entry ignored — parachute already active.", SLACK_ERRORS_CHANNEL)
+                                else:
+                                    self._manage_emergency_hedge(spot, force=True)
+                            elif pending == 'exit':
+                                if not self.state.emer_active:
+                                    slack_bot_sendtext("⚠️ *Athena*: Manual parachute exit ignored — no active parachute.", SLACK_ERRORS_CHANNEL)
+                                else:
+                                    self._close_emer_if_active()
                         if self._update_elapsed >= TRADE_UPDATE_INTERVAL:
                             self._append_trade_log_row(prices=prices)
                             self._send_trade_update(prices=prices)

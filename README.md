@@ -126,12 +126,13 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 - **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Apollo and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
 - **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Eliminates the need to SSH in for routine code updates. Note: if `slack_listener.py` itself is updated, a manual restart of the listener is still required to pick up those changes.
 
-### Artemis Manual Adjustment
-The **`🔧 Adjust Artemis`** button opens a modal to trigger a mid-session adjustment while Artemis is actively monitoring:
-- Select the side to **exit** (PE or CE)
-- The algo exits that spread and rolls the other side's sell inward using the same `adjust_spread()` logic as an SL-triggered adjustment (roll distance and additional lots determined by `trade_settings.csv`)
-- Executes on the next monitoring cycle (≤ 0.5s)
-- Only effective while Artemis is actively running; if Artemis is not running, the flag remains on disk until it is cleared
+### Manual Adjustment
+Mid-session adjustments for Artemis and Athena, executed via each strategy's own order engine on the next monitoring cycle (≤ 0.5s). If the strategy is not actively running, the flag remains on disk until cleared.
+
+- **`🔧 Adjust Artemis`**: opens a modal to select which side to exit (PE or CE). The algo exits that spread and rolls the other side's sell inward using the same `adjust_spread()` logic as an SL-triggered adjustment (roll distance and additional lots per `trade_settings.csv`).
+- **`🪂 Adjust Athena`**: opens a modal with two options:
+  - *Enter CE Parachute* — buys the OTM CE hedge using the same delta-targeting logic as the auto-trigger, bypassing the spot condition and attempt cap.
+  - *Exit CE Parachute* — closes the active CE hedge, bypassing the spot exit condition.
 
 ### Routing and Sizing Override
 Three routing buttons and the sizing modal live together in one section:
@@ -403,7 +404,8 @@ algo-trading-lab/
 ├── websocket_feed.py               # Shared WebSocket LTP feed (SharedFeed) — used by all strategies
 ├── plans/                          # Implementation plans
 │   ├── individual-order-details.md       # [BLOCKED] individual_order_details() returns AB1007 on this account
-│   ├── artemis-manual-adjustment.md       # [IMPLEMENTED] Slack-triggered mid-session manual adjustment
+│   ├── artemis-manual-adjustment.md       # [IMPLEMENTED] Slack-triggered mid-session manual adjustment for Artemis
+│   ├── athena-manual-adjustment.md        # [IMPLEMENTED] Slack-triggered CE parachute entry/exit for Athena
 │   ├── manual-routing-strike-search.md   # [IMPLEMENTED] Manual routing override + binary search strike selection
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against

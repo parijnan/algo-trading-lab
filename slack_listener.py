@@ -183,7 +183,7 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Artemis Manual Adjustment:*\nTrigger a mid-session adjustment. Exits the selected side and rolls the other according to trade_settings.csv logic. Only effective while Artemis is actively monitoring."}
+        "text": {"type": "mrkdwn", "text": "*Manual Adjustment:*\nTrigger mid-session adjustments for Artemis or Athena. Executed via the algo's own order engine using the same logic as an automatic trigger."}
     },
     {
         "type": "actions",
@@ -192,6 +192,11 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "🔧 Adjust Artemis"},
                 "action_id": "btn_artemis_adjust"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🪂 Adjust Athena"},
+                "action_id": "btn_athena_adjust"
             }
         ]
     },
@@ -556,6 +561,54 @@ def handle_artemis_adjust_submission(ack, body, view, say):
         say(channel=_CH, text=(
             f"🔧 *Artemis Manual Adjustment* triggered by <@{user_id}>\n"
             f"*Side to exit:* {side.upper()}\n"
+            f"_Adjustment will execute on the next monitoring cycle._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to write adjustment flag. Check daemon logs on VPS.")
+
+@app.action("btn_athena_adjust")
+def handle_athena_adjust_btn(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "view_athena_adjust",
+            "title": {"type": "plain_text", "text": "Athena Adjustment"},
+            "submit": {"type": "plain_text", "text": "Trigger Adjustment"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "Select the parachute action. The algo will execute it on the next monitoring cycle using the same order engine as the automatic trigger."}
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_action",
+                    "label": {"type": "plain_text", "text": "Action"},
+                    "element": {
+                        "type": "radio_buttons",
+                        "action_id": "radio_action",
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Enter CE Parachute — buy OTM CE hedge (delta-targeted, bypasses spot trigger condition)"}, "value": "enter"},
+                            {"text": {"type": "plain_text", "text": "Exit CE Parachute — close the active CE hedge position (bypasses spot exit condition)"}, "value": "exit"}
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+@app.view("view_athena_adjust")
+def handle_athena_adjust_submission(ack, body, view, say):
+    action = view["state"]["values"]["block_action"]["radio_action"]["selected_option"]["value"]
+    user_id = body["user"]["id"]
+    ack()
+    if write_flag(f"ATHENA_PARACHUTE:{action}", user_id):
+        action_str = "Enter CE Parachute" if action == "enter" else "Exit CE Parachute"
+        say(channel=_CH, text=(
+            f"🪂 *Athena Manual Adjustment* triggered by <@{user_id}>\n"
+            f"*Action:* {action_str}\n"
             f"_Adjustment will execute on the next monitoring cycle._"
         ))
     else:
