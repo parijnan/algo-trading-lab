@@ -133,19 +133,17 @@ The **`🔧 Adjust Artemis`** button opens a modal to trigger a mid-session adju
 - Executes on the next monitoring cycle (≤ 0.5s)
 - Only effective while Artemis is actively running; if Artemis is not running, the flag remains on disk until it is cleared
 
-### Routing Override
-Three buttons below the circuit breakers allow surgical control of which strategy runs next session, without touching code:
+### Routing and Sizing Override
+Three routing buttons and the sizing modal live together in one section:
 - **`⚡ Auto (VIX)`**: Restores standard VIX-based routing (default state).
 - **`🔵 Force Artemis`**: Routes to Artemis on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
 - **`🟢 Force Athena`**: Routes to Athena on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
+- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Apollo. Updates are written directly to the strategy's `configs_live.py` or `trade_settings.csv` on the VPS.
 
-The current mode is persisted in `configs_live.py` at the repo root (`ROUTING_MODE` / `MANUAL_STRATEGY`). Leto reloads this file on every reroute iteration, so a change applied mid-session takes effect on the next Leto loop without a restart.
+The routing mode is persisted in `leto_config.py` at the repo root (`ROUTING_MODE` / `MANUAL_STRATEGY`). Leto reloads this file on every reroute iteration, so a change applied mid-session takes effect on the next Leto loop without a restart.
 
-### Remote Position Sizing
-The **`⚙️ Manage Sizing`** button triggers a Slack Modal for surgical configuration updates:
-- **Sizing Mode**: Toggle between "Dynamic Auto-Sizing" (capital-based) and "Fixed Lots".
-- **Lot Count**: Update the specific lot count for Artemis, Athena, or Apollo.
-- **Persistence**: Updates are written directly to the strategy's `configs_live.py` or `trade_settings.csv` on the VPS, surviving restarts and reboots.
+### Maintenance
+- **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Note: if `slack_listener.py` itself is updated, a manual service restart is required to pick up the changes.
 
 ## Infrastructure
 

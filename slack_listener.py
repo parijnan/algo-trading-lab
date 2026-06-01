@@ -113,7 +113,7 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Circuit Breakers:*\nManage active trades and automated routing."}
+        "text": {"type": "mrkdwn", "text": "*Circuit Breakers:*\nHalt or liquidate active trades."}
     },
     {
         "type": "actions",
@@ -175,16 +175,6 @@ CONTROL_PANEL_BLOCKS = [
                 "text": {"type": "plain_text", "text": "🚀 Start Leto"},
                 "style": "primary",
                 "action_id": "btn_start_leto"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⚙️ Manage Sizing"},
-                "action_id": "btn_pos_sizing"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⬇️ Git Pull"},
-                "action_id": "btn_git_pull"
             }
         ]
     },
@@ -210,7 +200,7 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Routing Override:*\nForce strategy selection for next Mon–Thu entry. Apollo always runs if VIX > 25."}
+        "text": {"type": "mrkdwn", "text": "*Routing and Sizing Override:*\nForce strategy selection for the next Mon–Thu entry and manage position sizing across strategies. Apollo always runs if VIX > 25."}
     },
     {
         "type": "actions",
@@ -230,6 +220,28 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "🟢 Force Athena"},
                 "action_id": "btn_route_athena"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⚙️ Manage Sizing"},
+                "action_id": "btn_pos_sizing"
+            }
+        ]
+    },
+    {
+        "type": "divider"
+    },
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Maintenance:*\nPull the latest code from GitHub to the VPS. Note: if slack_listener.py itself is updated, a manual service restart is required to pick up the changes."}
+    },
+    {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⬇️ Git Pull"},
+                "action_id": "btn_git_pull"
             }
         ]
     }
