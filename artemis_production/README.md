@@ -47,6 +47,8 @@ graph TD
     SetupIC --> WS[Start WebSocket LTP Feed]
     WS --> Monitor
     
+    Monitor --> SlackAdj{Slack Adjustment?}
+    SlackAdj -- Yes --> Transform
     Monitor --> SLHit{Stop Loss Hit?}
     SLHit -- Yes --> Transform[Transform: Close Tested Side, Roll & Reinforce Winning Side]
     Transform --> Monitor
@@ -122,3 +124,4 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 - [x] Session summary — `run()` returns a summary dict to Leto (outcome, lots, P&L, exit reason) for the end-of-day session report
 - [x] Leto integration — session management moved to Leto
 - [x] Binary search strike selection — `_find_sell_strike()` replaces linear scan; O(log N) LTP calls with doubling extension for high-VIX out-of-range targets (up to 3 doublings = 8× initial range); linear fallback preserved as `_find_sell_strike_linear()`
+- [x] Slack-triggered manual adjustment — `🔧 Adjust Artemis` button in Control Panel opens a modal to select which side to exit (PE/CE); writes `ADJUST:pe` or `ADJUST:ce` to `SLACK_COMMAND.flag`; monitoring loop picks it up within 0.5s and routes through the same `exit_spread` + `adjust_spread` execution path as an algo-triggered SL

@@ -581,14 +581,14 @@ class IronCondor:
     def _check_slack_commands(self):
         """
         Check for persistent Slack command flags during the live trade.
-        Handles EXIT (liquidate) and KILL (halt immediately).
+        Handles EXIT (liquidate), KILL (halt immediately), and ADJUST:pe/ce.
         """
         flag_path = os.path.join(REPO_ROOT, 'data', 'SLACK_COMMAND.flag')
         if exists(flag_path):
             try:
                 with open(flag_path, 'r') as f:
                     command = f.read().strip()
-                
+
                 if command == "EXIT":
                     msg = "⚠️ *Artemis*: Slack `Exit Trade` detected. Liquidating..."
                     logger.warning(msg.replace('*', ''))
@@ -599,15 +599,21 @@ class IronCondor:
                         self._update_trade_book_exit()
                         self._archive_trade()
                     raise Exception("Session terminated by Slack !exit command.")
-                
+
                 elif command == "KILL":
                     msg = "🚨 *Artemis*: Slack `Kill Switch` detected. Dropping control immediately."
                     logger.warning(msg.replace('*', ''))
                     slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
-                    # We don't reset state so it can be resumed manually if needed
                     raise Exception("Session terminated by Slack !kill command.")
-                
-                # If command == "DISABLE", we do nothing inside the loop. 
+
+                elif command.startswith("ADJUST:"):
+                    side = command.split(":")[1].lower()
+                    if side in ('pe', 'ce'):
+                        self._pending_adjustment = side
+                        os.remove(flag_path)
+                        logger.info(f"Manual adjustment queued for {side.upper()} side.")
+
+                # If command == "DISABLE", we do nothing inside the loop.
                 # Leto will catch it on the next startup.
             except Exception as e:
                 if "Session terminated" in str(e): raise
@@ -624,6 +630,21 @@ class IronCondor:
             self.trade_status = False
         self.pe_spread_result = self.pe_spread.monitor_spread()
         self.ce_spread_result = self.ce_spread.monitor_spread()
+        side = getattr(self, '_pending_adjustment', None)
+        if side is not None:
+            self._pending_adjustment = None
+            spread = self.pe_spread if side == 'pe' else self.ce_spread
+            if spread.spread_status not in ('closed', 'open'):
+                if side == 'pe':
+                    self.pe_spread_result = 'manual_sl'
+                else:
+                    self.ce_spread_result = 'manual_sl'
+                logger.info(f"Manual adjustment: overriding {side.upper()} result to manual_sl.")
+            else:
+                slack_bot_sendtext(
+                    f"⚠️ *Artemis*: Manual adjustment ignored — {side.upper()} spread is "
+                    f"already {spread.spread_status}.",
+                    SLACK_ERRORS_CHANNEL)
         return True
 
     # Method to update everything and send update before sleeping for specified time
@@ -639,7 +660,7 @@ class IronCondor:
 
     # Method to handle trade if SL hits for either spread
     def evaluate_handle_sl(self):
-        if self.pe_spread_result in ('index_sl', 'option_sl'):
+        if self.pe_spread_result in ('index_sl', 'option_sl', 'manual_sl'):
             self.pe_spread.exit_spread()
             self._update_trade_book_exit()
             if self.ce_spread.spread_status == 'closed':
@@ -651,7 +672,7 @@ class IronCondor:
             else:
                 self.ce_spread.adjust_spread()
                 self._update_trade_book_adjustment()
-        if self.ce_spread_result in ('index_sl', 'option_sl'):
+        if self.ce_spread_result in ('index_sl', 'option_sl', 'manual_sl'):
             self.ce_spread.exit_spread()
             self._update_trade_book_exit()
             if self.pe_spread.spread_status == 'closed':

@@ -193,6 +193,23 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Artemis Manual Adjustment:*\nTrigger a mid-session adjustment. Exits the selected side and rolls the other according to trade_settings.csv logic. Only effective while Artemis is actively monitoring."}
+    },
+    {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🔧 Adjust Artemis"},
+                "action_id": "btn_artemis_adjust"
+            }
+        ]
+    },
+    {
+        "type": "divider"
+    },
+    {
+        "type": "section",
         "text": {"type": "mrkdwn", "text": "*Routing Override:*\nForce strategy selection for next Mon–Thu entry. Apollo always runs if VIX > 25."}
     },
     {
@@ -480,6 +497,57 @@ def handle_route_athena(ack, body, say):
         ))
     else:
         say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
+
+# ---------------------------------------------------------------------------
+# Artemis Manual Adjustment Modal
+# ---------------------------------------------------------------------------
+
+@app.action("btn_artemis_adjust")
+def handle_artemis_adjust_btn(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "view_artemis_adjust",
+            "title": {"type": "plain_text", "text": "Artemis Adjustment"},
+            "submit": {"type": "plain_text", "text": "Trigger Adjustment"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "Select the side to *exit*. The algo will exit that spread and roll the other side's sell according to trade_settings.csv logic."}
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_side",
+                    "label": {"type": "plain_text", "text": "Side to Exit"},
+                    "element": {
+                        "type": "radio_buttons",
+                        "action_id": "radio_side",
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "PE — exit PE, roll CE sell inward"}, "value": "pe"},
+                            {"text": {"type": "plain_text", "text": "CE — exit CE, roll PE sell inward"}, "value": "ce"}
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+@app.view("view_artemis_adjust")
+def handle_artemis_adjust_submission(ack, body, view, say):
+    side = view["state"]["values"]["block_side"]["radio_side"]["selected_option"]["value"]
+    user_id = body["user"]["id"]
+    ack()
+    if write_flag(f"ADJUST:{side}", user_id):
+        say(channel=_CH, text=(
+            f"🔧 *Artemis Manual Adjustment* triggered by <@{user_id}>\n"
+            f"*Side to exit:* {side.upper()}\n"
+            f"_Adjustment will execute on the next monitoring cycle._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to write adjustment flag. Check daemon logs on VPS.")
 
 # ---------------------------------------------------------------------------
 # Position Sizing Modal
