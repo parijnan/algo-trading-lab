@@ -4,8 +4,9 @@ from datetime import datetime, time
 from SmartApi.smartExceptions import DataException, NetworkException
 from numpy import busday_count
 from math import floor, ceil
+from os.path import exists
 from functions import (
-    slack_bot_sendtext, sleep, exists, handle_exception,
+    slack_bot_sendtext, sleep, handle_exception,
     increment_poll_counter, increment_order_counter,
     increment_order_book_poll, reset_counters,
 )
