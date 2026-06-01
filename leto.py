@@ -76,7 +76,7 @@ from leto_config import (                           # noqa: E402
     VIX_ARTEMIS_MAX, VIX_ATHENA_MAX,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
     SCRIP_MASTER_URL,
-    SLACK_CHANNEL,
+    SLACK_CHANNEL, SLACK_ERRORS_CHANNEL,
 )
 
 
@@ -84,7 +84,7 @@ from leto_config import (                           # noqa: E402
 # Slack helper — Leto-level only, does not depend on strategy functions.py
 # ---------------------------------------------------------------------------
 
-def _slack(msg):
+def _slack(msg, channel=None):
     """Send a Slack message. Fails silently — never crashes Leto."""
     try:
         post(
@@ -93,7 +93,7 @@ def _slack(msg):
                 "Authorization": f"Bearer {slack_token}",
                 "Content-Type":  "application/json",
             },
-            json={"channel": SLACK_CHANNEL, "text": msg},
+            json={"channel": channel or SLACK_CHANNEL, "text": msg},
             timeout=5,
         )
     except Exception:
@@ -574,7 +574,7 @@ if __name__ == '__main__':
             f"{e}\n{format_exc()}"
         )
         logger.error(msg)
-        _slack(f"*Leto* ERROR: {e} — check logs.")
+        _slack(f"*Leto* ERROR: {e} — check logs.", channel=SLACK_ERRORS_CHANNEL)
 
     finally:
         # Always terminate session if obj exists and we didn't already exit

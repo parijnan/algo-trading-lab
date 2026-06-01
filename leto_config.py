@@ -38,7 +38,8 @@ SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files
 # ---------------------------------------------------------------------------
 # Slack channel for Leto-level messages
 # ---------------------------------------------------------------------------
-SLACK_CHANNEL = "#tradebot-updates"
+SLACK_CHANNEL        = "#tradebot-updates"
+SLACK_ERRORS_CHANNEL = "#error-alerts"
 
 # ---------------------------------------------------------------------------
 # Routing override — edited by slack_listener.py
