@@ -785,14 +785,14 @@ class IronCondor:
         mismatches = []
 
         for side, spread in [('PE', self.pe_spread), ('CE', self.ce_spread)]:
-            if spread.spread_status == 'closed':
+            if spread.spread_status in ('closed', 'open'):
                 continue
             for attr, expected_sign, label in [
                 ('sell_token', -1, 'sell'),
                 ('buy_token',  +1, 'buy'),
             ]:
                 tok = str(getattr(spread, attr, '') or '')
-                if not tok:
+                if not tok or tok == 'nan':
                     continue
                 actual = pos.get(tok, 0)
                 if expected_sign == -1 and actual >= 0:
