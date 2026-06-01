@@ -228,9 +228,12 @@ def _download_scrip_master():
         (scrip_df['name'] == 'SENSEX')
     ].copy()
 
+    instrument_df_nifty.to_csv(os.path.join(DATA_DIR, 'nifty_master.csv'), index=False)
+    instrument_df_sensex.to_csv(os.path.join(DATA_DIR, 'sensex_master.csv'), index=False)
     logger.info(
         f"Nifty NFO rows: {len(instrument_df_nifty)}. "
-        f"Sensex BFO rows: {len(instrument_df_sensex)}.")
+        f"Sensex BFO rows: {len(instrument_df_sensex)}. "
+        f"Saved to data/nifty_master.csv and data/sensex_master.csv.")
 
     return instrument_df_nifty, instrument_df_sensex
 
