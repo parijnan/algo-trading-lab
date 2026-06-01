@@ -366,7 +366,7 @@ class IronCondor:
                                                          'status': ['active', 'active'],
                                                          'ltp': [self.ce_spread.additional_buy_ltp, self.ce_spread.sell_ltp],
                                                          'exit_price': [0.0, 0.0],
-                                                         'pl': [(self.ce_spread.additional_pe_buy_entry-self.ce_spread.additional_buy_ltp), (self.ce_spread.sell_entry-self.ce_spread.sell_ltp)]})
+                                                         'pl': [(self.ce_spread.additional_buy_entry-self.ce_spread.additional_buy_ltp), (self.ce_spread.sell_entry-self.ce_spread.sell_ltp)]})
                 self.trade_book_df = pd.concat([self.trade_book_df, new_trade_book_record_df], ignore_index=True)
         self.trade_book_df.to_csv('data/trade_book.csv', index=False)
 
