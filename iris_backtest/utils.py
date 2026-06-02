@@ -7,11 +7,19 @@ _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT / 'apollo_production'))
 from technical_indicators import SupertrendIndicator
 
-from configs import NIFTY_1MIN_FILE, NIFTY_DAILY_FILE, HORIZONS
+from configs import NIFTY_1MIN_FILE, NIFTY_DAILY_FILE, SENSEX_1MIN_FILE, HORIZONS
 
 
 def load_nifty_1min() -> pd.DataFrame:
     df = pd.read_csv(NIFTY_1MIN_FILE, parse_dates=['time_stamp'])
+    df['time_stamp'] = pd.to_datetime(df['time_stamp']).dt.tz_localize(None)
+    df = df.set_index('time_stamp').sort_index()
+    df = df[(df['close'].notna()) & (df['close'] > 0)]
+    return df.between_time('09:15', '15:29')
+
+
+def load_sensex_1min() -> pd.DataFrame:
+    df = pd.read_csv(SENSEX_1MIN_FILE, parse_dates=['time_stamp'])
     df['time_stamp'] = pd.to_datetime(df['time_stamp']).dt.tz_localize(None)
     df = df.set_index('time_stamp').sort_index()
     df = df[(df['close'].notna()) & (df['close'] > 0)]

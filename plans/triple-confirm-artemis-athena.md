@@ -1,0 +1,131 @@
+# Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
+
+## Status: Research / Parked — do not implement until backtested within strategy context
+
+---
+
+## Context
+
+TRIPLE_CONFIRM is a three-layer alignment signal developed in `iris_backtest/`:
+- **Layer 1 (day filter):** ORB_75 has already broken in direction D (market has committed)
+- **Layer 2 (regime):** ST_FAST has flipped in direction D within ±15 min (5-min+15-min trend change)
+- **Layer 3 (entry):** ST_RAPID flips in direction D (3-min+9-min confirmation)
+
+Quality on Nifty 1-min (2019–2026, 134 fires / 18.3 per year):
+- WR 72.9% at 5-min, **83.1% at 15-min**, 71.7% at 30-min
+- RR 3.50 at 5-min, **4.53 at 15-min**, 3.70 at 30-min
+- Median close +6.7 pts at 5-min, **+13.2 pts at 15-min**
+- Move completes within 60 min — WR drops to 50% at 120-min
+
+The signal is too infrequent for a standalone scalping strategy (18/year) but its directional
+quality makes it a candidate for pre-emptive adjustment triggers within Artemis and Athena,
+which are already actively managed strategies with defined adjustment mechanisms.
+
+Validation on Sensex is in `iris_backtest/research/validate_sensex.py`.
+
+---
+
+## Application to Artemis
+
+### Current behaviour
+Artemis adjusts reactively — when `index_sl` is breached, it exits the tested side and rolls
+the other side inward. Adjustment happens after the move has already started; the exit price
+on the tested side is worse than if the exit had been made earlier.
+
+### Proposed use of TRIPLE_CONFIRM
+When TRIPLE_CONFIRM fires **against** an open Artemis leg during a live session:
+- Fire is bullish + CE sell strike is at risk → exit CE spread early, before `index_sl` fires
+- Fire is bearish + PE sell strike is at risk → exit PE spread early, before `index_sl` fires
+
+The signal fires ~18 times/year; Artemis runs ~40 sessions/year. In any given session (Mon
+entry → Thu expiry), TRIPLE_CONFIRM may fire 0-2 times. On days when it fires in a direction
+that threatens an open leg, acting on it should produce a better exit price than waiting for
+the SL to trigger.
+
+### Key backtest question
+Does pre-emptive exit on TRIPLE_CONFIRM produce better average P&L per adjusted trade than
+the current reactive SL-triggered exit? Needs Artemis backtest with TRIPLE_CONFIRM wired as
+an additional exit path alongside the existing SL logic.
+
+### Caveats
+- TRIPLE_CONFIRM is calibrated on **Nifty**. Artemis trades **Sensex**. High correlation
+  but not identical — the signal must be validated on Sensex data before production use.
+  Initial validation in `validate_sensex.py`.
+- 17% false-signal rate at 15-min: roughly 1 in 6 TRIPLE_CONFIRM fires will not produce the
+  expected directional move. An early exit on a false signal = unnecessary adjustment P&L drag.
+- Does not replace `index_sl` — it is a supplementary early-warning trigger only.
+
+---
+
+## Application to Athena
+
+### Current behaviour
+Athena's CE parachute triggers reactively when `spot > ce_sell_strike + PARACHUTE_OFFSET`.
+The parachute is a hedge buy; entering it after the spot has already moved means paying a
+higher premium on the hedge.
+
+### Proposed use of TRIPLE_CONFIRM
+When TRIPLE_CONFIRM fires **bullish** during an active Athena session with no CE parachute:
+- Pre-emptively enter the CE parachute before spot crosses the trigger threshold
+- Entry at lower hedge premium than reactive trigger would produce
+
+When TRIPLE_CONFIRM fires **bearish** during an active Athena session with a live CE parachute:
+- Pre-emptively exit the parachute before spot retreats through the exit threshold
+- Exit at higher hedge premium than reactive exit would produce
+
+### Key backtest question
+Does TRIPLE_CONFIRM-timed parachute entry/exit improve overall Athena P&L vs the current
+spot-triggered mechanism? Needs Athena backtest with TRIPLE_CONFIRM wired alongside the
+existing parachute entry/exit logic.
+
+### Caveats
+- TRIPLE_CONFIRM is calibrated on Nifty; Athena also trades Nifty — direct applicability,
+  no cross-instrument adjustment needed.
+- Athena sessions run ~40/year. TRIPLE_CONFIRM will fire in a meaningful subset of them.
+- The parachute is already optional (manual trigger exists) — TRIPLE_CONFIRM could start as
+  an automated pre-trigger for the existing manual Slack path before full automation.
+
+---
+
+## Pre-conditions Before Implementation (either strategy)
+
+1. **Sensex validation complete** (for Artemis): `validate_sensex.py` must show TRIPLE_CONFIRM
+   on Sensex fires in the same situations as on Nifty and with comparable quality.
+2. **Strategy-level backtest**: run TRIPLE_CONFIRM as an additional trigger through the full
+   Artemis/Athena backtest and compare cumulative P&L vs baseline. Signal quality in isolation
+   ≠ strategy improvement — the adjustment cost and timing must both be favourable.
+3. **Timing analysis**: quantify how early TRIPLE_CONFIRM fires before a typical SL/parachute
+   trigger. If the typical lead time is <5 min, the benefit is marginal.
+4. **False-signal cost**: model the P&L impact of the 17% false-signal rate (unnecessary
+   adjustment triggered by a TRIPLE_CONFIRM that reverses). Must be outweighed by the P&L
+   gain from earlier exits on true signals.
+
+---
+
+## Implementation Sketch (when ready)
+
+**Artemis** (`iron_condor.py`):
+- In the main monitoring loop, after fetching LTPs: call `triple_confirm.detect_live()`
+  (a streaming version that checks if all three conditions are met on current bars)
+- If fire direction threatens an open leg: write `TRIPLE_CONFIRM:ce` or `TRIPLE_CONFIRM:pe`
+  to `SLACK_COMMAND.flag`, same mechanism as manual adjustment
+- The existing `adjust_spread()` path handles execution — no new order logic needed
+
+**Athena** (`athena_engine.py`):
+- In parachute check: add TRIPLE_CONFIRM bullish as an additional entry condition alongside
+  the existing spot > threshold check
+- The existing parachute entry/exit path handles execution
+
+In both cases, a Slack notification should identify the trigger as TRIPLE_CONFIRM so it is
+distinguishable from SL-triggered and manual adjustments in the logs.
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `iris_backtest/signals/triple_confirm.py` | Signal detection (backtest mode) |
+| `iris_backtest/research/validate_sensex.py` | Sensex validation script |
+| `iris_backtest/data/TRIPLE_CONFIRM_excursions.csv` | Nifty backtest results |
+| `iris_backtest/data/TRIPLE_CONFIRM_sensex_excursions.csv` | Sensex backtest results (TBD) |

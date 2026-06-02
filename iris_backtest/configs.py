@@ -3,10 +3,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 IRIS_ROOT = Path(__file__).parent
 
-NIFTY_1MIN_FILE  = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'nifty.csv'
-NIFTY_DAILY_FILE = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'nifty_daily.csv'
-VIX_1MIN_FILE    = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'india_vix.csv'
-OUTPUT_DIR       = IRIS_ROOT / 'data'
+NIFTY_1MIN_FILE   = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'nifty.csv'
+NIFTY_DAILY_FILE  = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'nifty_daily.csv'
+SENSEX_1MIN_FILE  = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'sensex.csv'
+SENSEX_DAILY_FILE = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'sensex_daily.csv'
+VIX_1MIN_FILE     = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'india_vix.csv'
+OUTPUT_DIR        = IRIS_ROOT / 'data'
 
 # Excursion analysis horizons (1-min bars after entry)
 HORIZONS = [5, 10, 15, 30, 60, 120]
