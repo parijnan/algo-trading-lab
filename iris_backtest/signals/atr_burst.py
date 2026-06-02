@@ -30,8 +30,7 @@ def detect(df_1min: pd.DataFrame) -> pd.DataFrame:
     df['atr_slow'] = df['tr'].ewm(alpha=1 / ATR_SLOW_PERIOD, adjust=False).mean()
 
     df['burst']       = df['atr_fast'] > df['atr_slow'] * ATR_EXPANSION_MULT
-    prev_burst        = df['burst'].shift(1).astype(object).fillna(False).astype(bool)
-    df['burst_start'] = df['burst'] & ~prev_burst
+    df['burst_start'] = df['burst'] & ~df['burst'].shift(1, fill_value=False)
 
     starts = df[df['burst_start'] & df['atr_slow'].notna()]
     if starts.empty:
