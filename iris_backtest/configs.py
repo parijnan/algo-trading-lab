@@ -9,6 +9,10 @@ SENSEX_1MIN_FILE  = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'sensex.c
 SENSEX_DAILY_FILE = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'sensex_daily.csv'
 VIX_1MIN_FILE     = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'india_vix.csv'
 OUTPUT_DIR        = IRIS_ROOT / 'data'
+OPTIONS_PATH      = REPO_ROOT / 'data_pipeline' / 'data' / 'nifty' / 'options'
+
+LOT_SIZE   = 65
+STRIKE_STEP = 50   # Nifty strike grid
 
 # Excursion analysis horizons (1-min bars after entry)
 HORIZONS = [5, 10, 15, 30, 60, 120]
