@@ -22,9 +22,9 @@ from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP
 SIM_HORIZONS   = [5, 15, 30]
 MIN_DTE        = 2      # minimum calendar days to expiry at signal time
 MAX_GAP_MIN    = 5      # max minutes to search for a price around target timestamp
-DEPTHS         = [0, 1, 2]     # 0 = ATM; 1 = one step ITM; 2 = two steps ITM
+DEPTHS         = [0, 1, 2, 3, 4]   # 0 = ATM; 1–4 = ITM in 50-pt steps
 # CE ITM = lower strike (ATM − depth×step); PE ITM = higher strike (ATM + depth×step)
-DEPTH_LABELS   = ['ATM', 'ITM_50', 'ITM_100']
+DEPTH_LABELS   = ['ATM', 'ITM_50', 'ITM_100', 'ITM_150', 'ITM_200']
 
 
 # ---------------------------------------------------------------------------
