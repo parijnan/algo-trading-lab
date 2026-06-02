@@ -4,6 +4,18 @@ A personal algorithmic trading laboratory for backtesting, optimising, and autom
 
 ## Strategies
 
+### [Iris](./iris_production/) — Nifty Directional Scalping
+
+A manually-armed directional scalping strategy. Arms/disarms via Slack; auto-enters on ST_FAST (5m+15m dual supertrend) signals. Buys a single ITM-150 Nifty call (bullish) or put (bearish) on the nearest weekly expiry. Exits on profit target, stop loss, trend flip, or time cutoff. Independent of Leto's VIX routing.
+
+| | |
+|---|---|
+| Instrument | Nifty weekly options (long ITM-150 call/put) |
+| Signal | ST_FAST — 5-min ST flip aligned with 15-min regime |
+| Entry | Market order, BAR_PERIOD=5 min after signal |
+| Exits | Profit target · Stop loss · Trend flip · Time cutoff |
+| Status | **Paper mode** (PAPER_MODE=True in configs.py) |
+
 ### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
 A market-neutral credit spread strategy that starts as a weekly Sensex Iron Condor. During trends, it dynamically transforms into a **directional credit spread** by exiting the tested side and reinforcing the winning side with rolled strikes and additional lots (position sizing scales up to 150% of the base).
 

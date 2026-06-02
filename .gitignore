@@ -310,3 +310,10 @@ data/debug_analysis_*.json
 
 # Iris backtest — generated excursion CSVs and comparison output
 iris_backtest/data/*.csv
+
+# Iris production — runtime data and logs
+iris_production/data/iris_state.csv
+iris_production/data/iris_active.flag
+iris_production/data/user_credentials.csv
+iris_production/data/holidays.csv
+iris_production/logs/
