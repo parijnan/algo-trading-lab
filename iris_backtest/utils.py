@@ -58,6 +58,22 @@ def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame
     return result
 
 
+def intraday_kbar_range(df: pd.DataFrame, k: int) -> pd.DataFrame:
+    """
+    For each bar in df (resampled, DatetimeIndex), compute the rolling K-bar
+    range from PREVIOUS bars within the same trading day.
+    Returns df with 'range_high' and 'range_low' columns (NaN for first K bars
+    of each day — no signal possible until enough intraday history exists).
+    """
+    dfs = []
+    for _, day in df.groupby(df.index.date):
+        d = day.copy()
+        d['range_high'] = d['high'].rolling(k, min_periods=k).max().shift(1)
+        d['range_low']  = d['low'].rolling(k, min_periods=k).min().shift(1)
+        dfs.append(d)
+    return pd.concat(dfs) if dfs else df.assign(range_high=np.nan, range_low=np.nan)
+
+
 def compute_excursions(df_1min: pd.DataFrame, signals: pd.DataFrame,
                        bar_period_minutes: int,
                        horizons: list = None) -> pd.DataFrame:
