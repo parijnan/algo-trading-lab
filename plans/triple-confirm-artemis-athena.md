@@ -87,6 +87,26 @@ existing parachute entry/exit logic.
 
 ---
 
+## Known Limitation: Does Not Catch Sudden Midday Moves
+
+TRIPLE_CONFIRM **requires ORB_75 to have fired first** — meaning the market must have
+already broken its 09:15–10:29 opening range in the signal direction before the triple
+alignment can occur. On days where Sensex ranges quietly through the morning and then spikes
+sharply in the afternoon (e.g., 2026-06-02 — sudden CE SL hit at 12:50 after a quiet
+morning), TRIPLE_CONFIRM will not fire. The ORB_75 confirmation either never precedes the
+ST signals, or fires simultaneously with them during the spike itself.
+
+This is structural, not a parameter issue. The signal is designed for **gradual,
+well-telegraphed trending days** where directional commitment builds through the morning
+session. It misses sudden midday reversals and gap-continuation sessions.
+
+**Implication for Artemis:** TRIPLE_CONFIRM is not a substitute for the index_sl. It is an
+early-warning signal on specifically trending days. The sudden-move scenario (June 2 type)
+still requires the existing reactive SL mechanism. TRIPLE_CONFIRM adds value on trending days
+as a pre-emptive trigger; it provides no additional protection on sudden-move days.
+
+---
+
 ## Pre-conditions Before Implementation (either strategy)
 
 1. **Sensex validation complete** (for Artemis): `validate_sensex.py` must show TRIPLE_CONFIRM
