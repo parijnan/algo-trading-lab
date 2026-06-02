@@ -3,6 +3,7 @@ from . import (
     orb, orb_30, orb_45, orb_60, orb_75,
     atr_burst, roc_burst,
     range_3m, range_5m, range_15m, range_75m,
+    dual_fast_orb, dual_rapid_orb, triple_confirm,
 )
 
 ALL_SIGNALS = [
@@ -10,4 +11,5 @@ ALL_SIGNALS = [
     orb, orb_30, orb_45, orb_60, orb_75,
     atr_burst, roc_burst,
     range_3m, range_5m, range_15m, range_75m,
+    dual_fast_orb, dual_rapid_orb, triple_confirm,
 ]

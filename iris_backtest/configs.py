@@ -50,6 +50,10 @@ ATR_EXPANSION_MULT = 1.5   # ATR_fast > ATR_slow × this → burst state
 ROC_PERIOD    = 5          # bars over which ROC is computed
 ROC_THRESHOLD = 0.2        # % move in ROC_PERIOD bars to qualify as a burst
 
+# ── Combined / filtered signals ───────────────────────────────────────────────
+# ST_FAST must have flipped within ±N minutes of the ST_RAPID flip
+TRIPLE_CONFIRM_WINDOW_MINUTES = 15
+
 # ── Intraday K-bar rolling range breakout ────────────────────────────────────
 # Range = high/low of previous K bars on the given TF (per-day reset).
 # Signal fires when close crosses that rolling range boundary.
