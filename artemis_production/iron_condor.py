@@ -590,12 +590,15 @@ class IronCondor:
                     command = f.read().strip()
 
                 if command == "EXIT":
+                    os.remove(flag_path)
                     msg = "⚠️ *Artemis*: Slack `Exit Trade` detected. Liquidating..."
                     logger.warning(msg.replace('*', ''))
                     slack_bot_sendtext(msg, SLACK_TRADE_ALERTS)
                     if self.trade_status:
-                        self.pe_spread.exit_spread()
-                        self.ce_spread.exit_spread()
+                        if self.pe_spread.spread_status not in ('closed', 'open'):
+                            self.pe_spread.exit_spread()
+                        if self.ce_spread.spread_status not in ('closed', 'open'):
+                            self.ce_spread.exit_spread()
                         self._update_trade_book_exit()
                         self._archive_trade()
                     raise Exception("Session terminated by Slack !exit command.")
@@ -709,6 +712,7 @@ class IronCondor:
 
     # Private method to archive all files after trade is closed
     def _archive_trade(self):
+        os.makedirs('data/archived', exist_ok=True)
         if exists('data/pe_trade_params.csv') and exists('data/ce_trade_params.csv') and exists('data/trade_book.csv') and exists('data/trade_log.csv'):
             self.trade_status = False
             self.pe_spread.spread_status = self.ce_spread.spread_status = 'closed'
