@@ -315,8 +315,12 @@ all findings go through a dedicated backtest before any strategy wiring.
 |---|---|---|
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
+| [`iris_backtest/`](./iris_backtest/) | Track A signal research for Iris (scalping strategy). Eight signal detectors benchmarked on Nifty 1-min data (2019–present): ST_FAST, ST_RAPID, EMA_CROSS, BB_SQUEEZE, ORB, ATR_BURST, ROC_BURST, RANGE_BREAK. Output: MFE/MAE excursion distributions at 5/10/15/30/60/120-min horizons — no fixed target/stop. | Active — signal comparison |
 
 Active research plans (forward-looking — not yet wired to production):
+- [`plans/iris-scalping-strategy.md`](./plans/iris-scalping-strategy.md) — Iris scalping strategy:
+  Track A (signal research, current) + Track B (execution harness, post-signal selection).
+  Auto-entry on signal when watchdog armed; arm/disarm via Slack.
 - [`plans/range-detection-research.md`](./plans/range-detection-research.md) — §7 gate **passed**;
   Artemis annotation complete. Active: (1) lot-sizing by direction on annotated data; (2) range-anchored
   strike variant backtest. No trade filtering — trades taken every week, optimise the trade itself.
@@ -520,6 +524,23 @@ algo-trading-lab/
 │   └── data_adaptive_exit/         # Experiment results (gitignored)
 │       ├── trade_summary.csv
 │       └── trade_logs/
+├── iris_backtest/                  # Iris scalping strategy — Track A signal research
+│   ├── configs.py                  # All signal and data path params
+│   ├── utils.py                    # Shared: data loaders, resample_ohlcv, compute_st, compute_excursions
+│   ├── signals/                    # One module per signal detector
+│   │   ├── st_fast.py              # ST_FAST  — dual supertrend 5m+15m
+│   │   ├── st_rapid.py             # ST_RAPID — dual supertrend 3m+9m
+│   │   ├── ema_cross.py            # EMA_CROSS — 9/21 EMA crossover on 3-min
+│   │   ├── bb_squeeze.py           # BB_SQUEEZE — Bollinger Band squeeze → breakout 5-min
+│   │   ├── orb.py                  # ORB — Opening Range Breakout 1-min
+│   │   ├── atr_burst.py            # ATR_BURST — ATR expansion burst on 3-min
+│   │   ├── roc_burst.py            # ROC_BURST — Rate-of-change burst on 1-min
+│   │   └── range_break.py          # RANGE_BREAK — ADX-gated daily range breakout on 1-min
+│   ├── research/
+│   │   ├── run_all.py              # Run all signals, compute MFE/MAE/close excursions → data/
+│   │   └── compare.py              # Load excursion CSVs, print comparison table
+│   └── data/                       # Generated outputs (gitignored except .gitkeep)
+│       └── .gitkeep
 ├── research/                       # Exploratory research modules (not used by production code)
 │   ├── range_detection/            # Nifty/Sensex range detection research (ADX + PA methods)
 │   │   ├── range_detector.py       # ADX-gated — daily OHLC

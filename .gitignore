@@ -307,3 +307,6 @@ GEMINI.md
 data_pipeline/data/nifty/temp/
 data/unified_performance_snapshot.csv
 data/debug_analysis_*.json
+
+# Iris backtest — generated excursion CSVs and comparison output
+iris_backtest/data/*.csv
