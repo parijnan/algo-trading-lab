@@ -92,8 +92,10 @@ def _candles_to_df(raw_candles: list) -> pd.DataFrame:
 
 def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame:
     """Add supertrend, trend (bool/NA), trend_flip to lowercase-ohlcv df."""
-    d = df.rename(columns={'open': 'Open', 'high': 'High',
-                            'low': 'Low', 'close': 'Close'})
+    base_cols = [c for c in ('time_stamp', 'open', 'high', 'low', 'close', 'volume')
+                 if c in df.columns]
+    d = df[base_cols].rename(columns={'open': 'Open', 'high': 'High',
+                                      'low': 'Low', 'close': 'Close'})
     ind = SupertrendIndicator(period=period, multiplier=multiplier)
     r   = ind.calculate(d).rename(columns={
         'Open': 'open', 'High': 'high', 'Low': 'low',
