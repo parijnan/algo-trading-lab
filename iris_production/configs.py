@@ -25,6 +25,7 @@ PAPER_MODE = True   # MUST be manually set to False for live trading
 # Set to '09:25' if paper trading reveals consistent opening noise at 09:20.
 # In paper mode this is safe to leave at '09:15' — LTP reads real-time price.
 MIN_ENTRY_TIME = '09:15'            # no entry before this time (HH:MM)
+MAX_ENTRY_TIME = '15:00'            # no entry after this time — last valid entry at 15:00 open
 
 # ── Signal entry window filter ────────────────────────────────────────────────
 # Skip signals whose entry time falls in these windows (end exclusive).
@@ -60,7 +61,7 @@ SEED_CANDLES      = 150             # historical candles to seed the ST
 PROFIT_TARGET_PCT = 0.10            # exit when option LTP ≥ entry × 1.10
 STOP_LOSS_PCT     = 0.25            # exit when option LTP ≤ entry × 0.75
 MAX_HOLD_MIN      = 30              # per-trade time limit (minutes); hard exit if no other trigger
-EXIT_BY_TIME      = '15:00'         # daily hard cutoff regardless of P&L
+EXIT_BY_TIME      = '15:15'         # daily hard cutoff regardless of P&L
 
 # ── Session ───────────────────────────────────────────────────────────────────
 MARKET_OPEN       = '09:15'

@@ -26,7 +26,8 @@ from configs import (OUTPUT_DIR, OPTIONS_PATH, STRIKE_STEP,
                      LOT_SIZE, ST_FAST_PERIOD, ST_FAST_MULTIPLIER)
 from utils import load_nifty_1min, resample_ohlcv, compute_st
 
-EXIT_TIME_STR  = '15:00'
+EXIT_TIME_STR       = '15:15'   # hard EOD cutoff — all open trades exit at this bar's open
+LAST_ENTRY_TIME_STR = '15:00'   # last valid entry — signals closing at/after 15:00 ignored
 BAR_PERIOD_MIN = 5      # ST_FAST entry lag
 
 # ── Parameter sweep grid ─────────────────────────────────────────────────────
@@ -157,9 +158,9 @@ def simulate_trade(price_series: pd.DataFrame,
         if max_hold_ts is not None and ts >= max_hold_ts:
             return float(bar['close']), 'max_hold', ts
 
-        # Time cutoff: exit at close of last bar before/at 15:00
+        # Time cutoff: exit at OPEN of the cutoff bar (reflects realistic open price)
         if ts >= exit_time_ts:
-            return float(bar['close']), 'time_cutoff', ts
+            return float(bar['open']), 'time_cutoff', ts
 
     # Reached end of data without any exit trigger
     if not price_series.empty:
@@ -190,6 +191,7 @@ def main():
     trades = []
     option_cache = {}
     skipped = 0
+    _last_entry = pd.Timestamp(LAST_ENTRY_TIME_STR + ':00').time()
 
     for i, (_, row) in enumerate(sim.iterrows()):
         if (i + 1) % 100 == 0:
@@ -200,6 +202,11 @@ def main():
         spot       = row['spot']
         expiry_str = str(row['expiry'])
         entry_ts   = signal_ts + pd.Timedelta(minutes=BAR_PERIOD_MIN)
+
+        # Drop signals whose entry would fall after the last valid entry time
+        if entry_ts.time() > _last_entry:
+            skipped += 1
+            continue
 
         right      = 'ce' if direction == 'bullish' else 'pe'
         strike     = _itm150_strike(spot, direction)

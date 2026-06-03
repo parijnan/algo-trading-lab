@@ -23,11 +23,12 @@ from run_strategy_backtest import (
 from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP, SKIP_ENTRY_WINDOWS
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-STOP_PCT       = 0.25
-TARGET_PCT     = 0.10
-MAX_HOLD_MIN   = 30
-EXIT_TIME_STR  = '15:00'
-BAR_PERIOD_MIN = 5
+STOP_PCT            = 0.25
+TARGET_PCT          = 0.10
+MAX_HOLD_MIN        = 30
+EXIT_TIME_STR       = '15:15'   # hard EOD cutoff — all open trades exit at this bar's open
+LAST_ENTRY_TIME_STR = '15:00'   # last valid entry — signals closing at/after 15:00 ignored
+BAR_PERIOD_MIN      = 5
 
 # Trailing stop levels to simulate (% drop from peak LTP).
 # A trail fires only after the trade has gone into profit at all (LTP > entry).
@@ -134,7 +135,7 @@ def simulate_with_logs(series: pd.DataFrame,
         elif max_hold_ts is not None and ts >= max_hold_ts:
             result = {'exit_price': ltp, 'exit_reason': 'max_hold',     'exit_ts': ts}
         elif ts >= eod_ts:
-            result = {'exit_price': ltp, 'exit_reason': 'time_cutoff',  'exit_ts': ts}
+            result = {'exit_price': float(bar['open']), 'exit_reason': 'time_cutoff', 'exit_ts': ts}
 
     if 'exit_price' not in result and bar_log:
         last = bar_log[-1]
@@ -189,6 +190,7 @@ def main():
     option_cache = {}
     skipped      = 0
     trade_num    = 0
+    _last_entry  = pd.Timestamp(LAST_ENTRY_TIME_STR + ':00').time()
 
     for i, (_, row) in enumerate(sim.iterrows()):
         if (i + 1) % 200 == 0:
@@ -213,6 +215,11 @@ def main():
                 option_cache[cache_key] = df_opt
             else:
                 option_cache[cache_key] = None
+
+        # Drop signals whose entry would fall after the last valid entry time
+        if entry_ts.time() > _last_entry:
+            skipped += 1
+            continue
 
         # Skip entry windows
         if _in_skip_window(entry_ts):

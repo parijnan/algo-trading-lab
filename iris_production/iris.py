@@ -29,7 +29,7 @@ from configs import (
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
-    SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME,
+    SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME, MAX_ENTRY_TIME,
 )
 from state import IrisState, save_state, load_state
 from logger_setup import get_logger
@@ -220,6 +220,8 @@ class Iris:
                                 logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
                             elif self._in_skip_window(now):
                                 logger.info(f'Signal {direction} skipped — in skip window')
+                            elif self._after_max_entry_time(next_5m_close):
+                                logger.info(f'Signal {direction} skipped — after MAX_ENTRY_TIME')
                             else:
                                 self._execute_entry(direction, now)
 
@@ -317,6 +319,11 @@ class Iris:
         from datetime import datetime as _dt
         min_t = _dt.strptime(MIN_ENTRY_TIME, '%H:%M').time()
         return ts.time() < min_t
+
+    def _after_max_entry_time(self, ts) -> bool:
+        from datetime import datetime as _dt
+        max_t = _dt.strptime(MAX_ENTRY_TIME, '%H:%M').time()
+        return ts.time() > max_t
 
     def _in_skip_window(self, ts) -> bool:
         from datetime import datetime as _dt

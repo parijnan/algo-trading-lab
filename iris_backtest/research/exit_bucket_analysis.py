@@ -20,11 +20,12 @@ from run_strategy_backtest import (
 from configs import OUTPUT_DIR, OPTIONS_PATH, STRIKE_STEP, LOT_SIZE
 
 # ── Params to analyse ─────────────────────────────────────────────────────────
-STOP_PCT       = 0.25
-TARGET_PCT     = 0.10
-MAX_HOLD_MIN   = 30
-EXIT_TIME_STR  = '15:00'
-BAR_PERIOD_MIN = 5
+STOP_PCT            = 0.25
+TARGET_PCT          = 0.10
+MAX_HOLD_MIN        = 30
+EXIT_TIME_STR       = '15:15'   # hard EOD cutoff — all open trades exit at this bar's open
+LAST_ENTRY_TIME_STR = '15:00'   # last valid entry — signals closing at/after 15:00 ignored
+BAR_PERIOD_MIN      = 5
 
 BUCKET_ORDER  = ['profit_target', 'stop_loss', 'trend_flip', 'max_hold']
 BUCKET_LABELS = {
@@ -51,6 +52,7 @@ def main():
     records = []
     option_cache = {}
     skipped = 0
+    _last_entry = pd.Timestamp(LAST_ENTRY_TIME_STR + ':00').time()
 
     for i, (_, row) in enumerate(sim.iterrows()):
         signal_ts  = row['signal_ts']
@@ -71,6 +73,11 @@ def main():
                 option_cache[cache_key] = df_opt
             else:
                 option_cache[cache_key] = None
+
+        # Drop signals whose entry would fall after the last valid entry time
+        if entry_ts.time() > _last_entry:
+            skipped += 1
+            continue
 
         df_opt = option_cache[cache_key]
         entry_price = _get_price_near(df_opt, entry_ts)
