@@ -36,10 +36,13 @@ VIX_TOKEN         = "99926017"
 SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 # ---------------------------------------------------------------------------
-# Slack channel for Leto-level messages
+# Slack channels — shared by Leto and standalone strategies (Iris)
 # ---------------------------------------------------------------------------
-SLACK_CHANNEL        = "#tradebot-updates"
-SLACK_ERRORS_CHANNEL = "#error-alerts"
+SLACK_CHANNEL          = "#tradebot-updates"   # legacy alias — Leto uses this
+SLACK_TRADEBOT_CHANNEL = "#tradebot-updates"   # session lifecycle: login, logout, WS status
+SLACK_TRADE_ALERTS     = "#trade-alerts"        # entries, exits, SL hits
+SLACK_TRADE_UPDATES    = "#trade-updates"       # periodic in-trade P&L updates
+SLACK_ERRORS_CHANNEL   = "#error-alerts"        # exceptions, feed failures
 
 # ---------------------------------------------------------------------------
 # Routing override — edited by slack_listener.py

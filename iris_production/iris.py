@@ -43,10 +43,13 @@ from functions import (
 sys.path.insert(0, str(REPO_ROOT))
 from websocket_feed import SharedFeed, EXCHANGE_NSE_CM
 try:
-    from leto_config import SLACK_TRADE_ALERTS, SLACK_ERRORS_CHANNEL
+    from leto_config import (SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS,
+                              SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL)
 except ImportError:
-    SLACK_TRADE_ALERTS  = None
-    SLACK_ERRORS_CHANNEL = None
+    SLACK_TRADEBOT_CHANNEL = None
+    SLACK_TRADE_ALERTS     = None
+    SLACK_TRADE_UPDATES    = None
+    SLACK_ERRORS_CHANNEL   = None
 
 logger = get_logger('iris')
 
@@ -110,7 +113,8 @@ class Iris:
     def _setup(self) -> bool:
         logger.info(f'Iris starting  [PAPER_MODE={PAPER_MODE}]')
         _slack(f'{"[PAPER] " if PAPER_MODE else ""}⚡ *Iris* starting — '
-               f'ST_FAST ITM-150, LOT_COUNT={LOT_COUNT}')
+               f'ST_FAST ITM-150, LOT_COUNT={LOT_COUNT}',
+               SLACK_TRADEBOT_CHANNEL)
 
         # Seed signal
         now = datetime.now()
@@ -137,7 +141,8 @@ class Iris:
             client_code    = self._client_code,
             feed_token     = feed_token,
             startup_tokens = [(EXCHANGE_NSE_CM, NIFTY_TOKEN)],
-            alert_callback = lambda m: logger.warning(m),
+            alert_callback = lambda m: (_slack(f'⚠️ *Iris*: {m}', SLACK_ERRORS_CHANNEL),
+                                        logger.warning(m)),
         )
 
         # If restarting mid-trade, restore in-trade state
@@ -164,7 +169,8 @@ class Iris:
         self.state.status = 'idle'
         save_state(self.state)
         logger.info('Iris stopped.')
-        _slack(f'{"[PAPER] " if PAPER_MODE else ""}⏹ *Iris* stopped.')
+        _slack(f'{"[PAPER] " if PAPER_MODE else ""}⏹ *Iris* stopped.',
+               SLACK_TRADEBOT_CHANNEL)
 
     # -----------------------------------------------------------------------
     # Main loop
@@ -460,8 +466,12 @@ class Iris:
         if entry > 0:
             pnl_pct = (ltp - entry) / entry
             pnl_rs  = (ltp - entry) * (self.state.lots or 0) * LOT_SIZE
+            msg = (f'{"[PAPER] " if PAPER_MODE else ""}📊 *Iris* update: '
+                   f'{self.state.symbol}  LTP={ltp:.1f}  '
+                   f'P&L={pnl_pct:+.1%}  ₹{pnl_rs:+,.0f}')
             logger.info(f'Update: {self.state.symbol}  LTP={ltp:.1f}  '
                         f'P&L={pnl_pct:+.1%}  ₹{pnl_rs:+,.0f}')
+            _slack(msg, SLACK_TRADE_UPDATES)
 
 
 # ---------------------------------------------------------------------------
