@@ -79,10 +79,13 @@ def _slack(msg: str, channel=None) -> None:
 # ---------------------------------------------------------------------------
 
 class Iris:
-    def __init__(self, obj, auth_token: str, instrument_df: pd.DataFrame):
-        self.obj           = obj
-        self.auth_token    = auth_token
-        self.instrument_df = instrument_df
+    def __init__(self, obj, auth_token: str, api_key: str,
+                 client_code: str, instrument_df: pd.DataFrame):
+        self.obj            = obj
+        self.auth_token     = auth_token
+        self._api_key       = api_key
+        self._client_code   = client_code
+        self.instrument_df  = instrument_df
         self.state         = load_state()
         self.feed          = None
         self._shutdown     = False
@@ -126,9 +129,13 @@ class Iris:
             logger.warning('15-min ST warmup not complete — regime undefined.')
 
         # WebSocket feed (Nifty index LTP only; option token added on entry)
-        self.feed = SharedFeed(
-            obj          = self.obj,
-            auth_token   = self.auth_token,
+        feed_token = self.obj.getfeedToken()
+        self.feed  = SharedFeed()
+        self.feed.start(
+            auth_token     = self.auth_token,
+            api_key        = self._api_key,
+            client_code    = self._client_code,
+            feed_token     = feed_token,
             startup_tokens = [(EXCHANGE_NSE_CM, NIFTY_TOKEN)],
             alert_callback = lambda m: logger.warning(m),
         )
@@ -150,7 +157,7 @@ class Iris:
 
         if self.feed:
             try:
-                self.feed.close()
+                self.feed.stop()
             except Exception:
                 pass
 
@@ -462,42 +469,39 @@ class Iris:
 # ---------------------------------------------------------------------------
 
 def _login() -> tuple:
-    """Login to Angel One independently. Returns (obj, auth_token)."""
+    """Login to Angel One. Returns (obj, auth_token, api_key, client_code)."""
     import pyotp
     from SmartApi import SmartConnect
 
-    creds = pd.read_csv(CREDS_FILE)
-    row   = creds.iloc[0]
+    creds       = pd.read_csv(CREDS_FILE)
+    row         = creds.iloc[0]
+    api_key     = str(row['api_key'])
+    client_code = str(row['client_id'])
 
-    obj  = SmartConnect(api_key=str(row['api_key']))
+    obj  = SmartConnect(api_key=api_key)
     totp = pyotp.TOTP(str(row['totp_token'])).now()
-    resp = obj.generateSession(str(row['client_id']),
-                                str(row['password']), totp)
+    resp = obj.generateSession(client_code, str(row['password']), totp)
     if not resp.get('status'):
         raise RuntimeError(f'Angel One login failed: {resp}')
 
     auth_token = resp['data']['jwtToken']
-    logger.info(f'Logged in as {row["client_id"]}')
-    return obj, auth_token
+    logger.info(f'Logged in as {client_code}')
+    return obj, auth_token, api_key, client_code
 
 
-def _load_instrument_df(obj) -> pd.DataFrame:
-    """Download Nifty scrip master from Angel One."""
-    import json
+def _load_instrument_df() -> pd.DataFrame:
+    """Download Nifty scrip master from the public Angel One URL."""
+    from urllib.request import urlopen
+    from io import StringIO
+    SCRIP_MASTER_URL = ('https://margincalculator.angelbroking.com/'
+                        'OpenAPI_File/files/OpenAPIScripMaster.json')
     logger.info('Downloading Nifty scrip master...')
-    raw = obj.getScripMaster('NFO')
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    data = raw if isinstance(raw, list) else raw.get('data', [])
-    df   = pd.DataFrame(data)
+    df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
     df.columns = [c.lower() for c in df.columns]
-    # Keep only Nifty weekly options
-    mask = (df.get('name', pd.Series()) == 'NIFTY') & \
-           (df.get('instrumenttype', pd.Series()) == 'OPTIDX')
-    df = df[mask].copy()
-    df['strike'] = pd.to_numeric(df.get('strike', 0), errors='coerce')
-    logger.info(f'Scrip master: {len(df)} Nifty option rows')
-    return df
+    nifty = df[(df['exch_seg'] == 'NFO') & (df['name'] == 'NIFTY')].copy()
+    nifty['strike'] = pd.to_numeric(nifty.get('strike', 0), errors='coerce')
+    logger.info(f'Scrip master: {len(nifty):,} Nifty option rows')
+    return nifty
 
 
 def main():
@@ -514,9 +518,9 @@ def main():
     logger.info('iris_active.flag created.')
 
     try:
-        obj, auth_token = _login()
-        instrument_df   = _load_instrument_df(obj)
-        iris = Iris(obj, auth_token, instrument_df)
+        obj, auth_token, api_key, client_code = _login()
+        instrument_df = _load_instrument_df()
+        iris = Iris(obj, auth_token, api_key, client_code, instrument_df)
         iris.run()
     except KeyboardInterrupt:
         logger.info('KeyboardInterrupt.')

@@ -103,24 +103,23 @@ except Exception as e:
     report('FIFTEEN_MINUTE interval', False, str(e))
 
 
-# ── 4. getScripMaster ─────────────────────────────────────────────────────────
-print('\n[4] getScripMaster (NFO)')
+# ── 4. Scrip master (public URL — same as Leto) ───────────────────────────────
+print('\n[4] Scrip master download')
 try:
-    raw = obj.getScripMaster('NFO')
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    data = raw if isinstance(raw, list) else raw.get('data', [])
-    df   = pd.DataFrame(data)
+    from urllib.request import urlopen
+    from io import StringIO
+    SCRIP_URL = ('https://margincalculator.angelbroking.com/'
+                 'OpenAPI_File/files/OpenAPIScripMaster.json')
+    df    = pd.read_json(StringIO(urlopen(SCRIP_URL).read().decode()))
     df.columns = [c.lower() for c in df.columns]
-    nifty = df[(df.get('name', pd.Series()) == 'NIFTY') &
-               (df.get('instrumenttype', pd.Series()) == 'OPTIDX')]
+    nifty = df[(df['exch_seg'] == 'NFO') & (df['name'] == 'NIFTY')]
     if len(nifty) > 0:
-        report('getScripMaster NFO', True,
-               f'{len(df):,} total rows  {len(nifty):,} Nifty options')
+        report('Scrip master (public URL)', True,
+               f'{len(df):,} total rows  {len(nifty):,} Nifty NFO rows')
     else:
-        report('getScripMaster NFO', False, 'no Nifty options found')
+        report('Scrip master (public URL)', False, 'no Nifty rows found')
 except Exception as e:
-    report('getScripMaster NFO', False, str(e))
+    report('Scrip master (public URL)', False, str(e))
 
 
 # ── 5. WebSocket LTP feed ─────────────────────────────────────────────────────
@@ -128,33 +127,34 @@ print('\n[5] WebSocket LTP feed')
 try:
     from websocket_feed import SharedFeed, EXCHANGE_NSE_CM
 
-    ticks_received = []
-
-    def on_alert(msg):
-        print(f'     feed alert: {msg}')
-
-    feed = SharedFeed(
-        obj            = obj,
+    feed_token = obj.getfeedToken()
+    feed = SharedFeed()
+    feed.start(
         auth_token     = auth_token,
+        api_key        = str(creds.iloc[0]['api_key']),
+        client_code    = client_id,
+        feed_token     = feed_token,
         startup_tokens = [(EXCHANGE_NSE_CM, NIFTY_TOKEN)],
-        alert_callback = on_alert,
+        alert_callback = lambda m: print(f'     feed alert: {m}'),
     )
 
     print('     Waiting for Nifty LTP ticks (10s)...')
+    ticks_received = []
     for _ in range(20):
         ltp = feed.get_ltp(NIFTY_TOKEN)
         if ltp:
             ticks_received.append(ltp)
         time.sleep(0.5)
 
-    feed.close()
+    feed.stop()
 
     if ticks_received:
         report('WebSocket LTP', True,
                f'Nifty LTP={ticks_received[-1]:.2f}  '
                f'({len(ticks_received)} readings in 10s)')
     else:
-        report('WebSocket LTP', False, 'no ticks received in 10s')
+        report('WebSocket LTP', False, 'no ticks received in 10s — '
+               'outside market hours or key has no WS access')
 except Exception as e:
     report('WebSocket LTP', False, str(e))
 
