@@ -20,7 +20,7 @@ Leto's VIX routing.
 | Stop loss | 25% of entry premium |
 | Max hold | 30 min per trade · last entry 15:00 open · daily cutoff 15:15 |
 | Skip window | 10:45–11:30 (dead zone — post-opening settling) |
-| Backtest | 1,236 trades · WR 58.3% · Avg ₹206/lot · Median ₹410/lot (7.4 yr) |
+| Backtest | 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot (7.4 yr) |
 | Status | **Paper mode** — `PAPER_MODE=True` in configs.py |
 
 ### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
@@ -334,7 +334,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 |---|---|---|
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
-| [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,236 trades · WR 58.3% · Avg ₹206/lot · Median ₹410/lot. | Complete |
+| [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot. | Complete |
 
 Active research plans (forward-looking — not yet wired to production):
 - [`plans/iris-scalping-strategy.md`](./plans/iris-scalping-strategy.md) — Iris scalping strategy:
