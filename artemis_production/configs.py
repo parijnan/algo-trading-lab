@@ -48,6 +48,15 @@ lot_size                 = trade_settings_df.iloc[0].loc['lot_size']
 lot_count                = trade_settings_df.iloc[0].loc['lot_count']
 lot_capital              = trade_settings_df.iloc[0].loc['lot_capital']
 lot_calc                 = trade_settings_df.iloc[0].loc['lot_calc']
+
+# Sizing override — written by slack_listener.py to data/sizing_override.json
+import json as _json, pathlib as _pl
+try:
+    _s = _json.loads((_pl.Path(__file__).parent / 'data' / 'sizing_override.json').read_text())
+    lot_calc  = bool(_s['lot_calc'])
+    lot_count = int(_s['lot_count'])
+except (FileNotFoundError, KeyError, ValueError):
+    pass
 expected_option_premium  = trade_settings_df.iloc[0].loc['expected_premium']
 strike_values_iterator   = trade_settings_df.iloc[0].loc['strike_iterator']
 monitor_frequency        = trade_settings_df.iloc[0].loc['monitor_frequency']

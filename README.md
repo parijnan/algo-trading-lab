@@ -158,7 +158,7 @@ Three routing buttons and the sizing modal live together in one section:
 - **`⚡ Auto (VIX)`**: Restores standard VIX-based routing (default state).
 - **`🔵 Force Artemis`**: Routes to Artemis on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
 - **`🟢 Force Athena`**: Routes to Athena on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
-- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Apollo. Updates are written directly to the strategy's `configs_live.py` or `trade_settings.csv` on the VPS.
+- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Apollo. Updates are written to a gitignored `data/sizing_override.json` inside each strategy directory; the strategy reads this at startup and overrides the defaults in `configs_live.py` / `trade_settings.csv`.
 
 The routing mode is persisted in `data/routing_state.json` (gitignored, defaults to `auto/artemis` if absent). `leto_config.py` reads from it on every `importlib.reload()`, so a change applied mid-session takes effect on the next Leto loop without a restart.
 

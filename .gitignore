@@ -262,6 +262,9 @@ logs/
 data/leto_error_log.txt
 data/holidays.csv
 data/routing_state.json
+artemis_production/data/sizing_override.json
+athena_production/data/sizing_override.json
+apollo_production/data/sizing_override.json
 
 # =============================================================================
 # Artemis production — runtime data

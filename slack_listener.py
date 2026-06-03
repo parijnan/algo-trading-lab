@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import subprocess
 import logging
 import re
@@ -16,10 +17,12 @@ LOG_FILE = os.path.join(BASE_DIR, "logs", "slack_listener.log")
 FLAG_FILE = os.path.join(DATA_DIR, "SLACK_COMMAND.flag")
 CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 
-# Strategy Config Paths
-ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
-APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
-ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
+# Sizing override paths (gitignored JSON files, one per strategy)
+SIZING_OVERRIDE_PATHS = {
+    'Artemis': os.path.join(BASE_DIR, 'artemis_production', 'data', 'sizing_override.json'),
+    'Athena':  os.path.join(BASE_DIR, 'athena_production',  'data', 'sizing_override.json'),
+    'Apollo':  os.path.join(BASE_DIR, 'apollo_production',  'data', 'sizing_override.json'),
+}
 ROUTING_STATE_FILE = os.path.join(DATA_DIR, "routing_state.json")
 
 # Strategy State File Paths
@@ -68,36 +71,16 @@ def write_route_override(mode, strategy):
         return False
 
 
-def update_python_config(file_path, lot_calc, lot_count):
-    """Surgically update LOT_CALC and LOT_COUNT in a python config file."""
+def write_sizing_override(strategy, lot_calc, lot_count):
+    """Write lot_calc and lot_count to data/sizing_override.json for the given strategy."""
     try:
-        with open(file_path, 'r') as f:
-            content = f.read()
-        
-        # Replace LOT_CALC - Use \g<1> to avoid octal escape ambiguity
-        calc_val = "True" if lot_calc else "False"
-        content = re.sub(r'(LOT_CALC\s*=\s*)(True|False)', f'\\g<1>{calc_val}', content)
-        
-        # Replace LOT_COUNT - Use \g<1> to avoid octal escape ambiguity
-        content = re.sub(r'(LOT_COUNT\s*=\s*)(\d+)', f'\\g<1>{lot_count}', content)
-        
-        with open(file_path, 'w') as f:
-            f.write(content)
+        path = SIZING_OVERRIDE_PATHS[strategy]
+        with open(path, 'w') as f:
+            json.dump({'lot_calc': lot_calc, 'lot_count': lot_count}, f)
+        logger.info(f"Sizing override set for {strategy}: lot_calc={lot_calc}, lot_count={lot_count}")
         return True
     except Exception as e:
-        logger.error(f"Failed to update Python config {file_path}: {e}")
-        return False
-
-def update_artemis_config(lot_calc, lot_count):
-    """Update trade_settings.csv for Artemis."""
-    try:
-        df = pd.read_csv(ARTEMIS_CONFIG)
-        df.loc[0, 'lot_calc'] = lot_calc
-        df.loc[0, 'lot_count'] = int(lot_count)
-        df.to_csv(ARTEMIS_CONFIG, index=False)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to update Artemis config: {e}")
+        logger.error(f"Failed to write sizing override for {strategy}: {e}")
         return False
 
 # ---------------------------------------------------------------------------
@@ -689,12 +672,7 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     lot_calc = (mode == "dynamic")
     success = False
 
-    if strategy == "Artemis":
-        success = update_artemis_config(lot_calc, lots)
-    elif strategy == "Athena":
-        success = update_python_config(ATHENA_CONFIG, lot_calc, lots)
-    elif strategy == "Apollo":
-        success = update_python_config(APOLLO_CONFIG, lot_calc, lots)
+    success = write_sizing_override(strategy, lot_calc, lots)
 
     if success:
         mode_text = "Dynamic Auto-Sizing" if lot_calc else "Fixed Lots"

@@ -190,3 +190,14 @@ SLACK_ERRORS_CHANNEL    = "#error-alerts"        # Errors and exceptions
 # DEBUG: all variable values, candle closes, filter decisions, LTP polls
 # INFO:  startup, entries, exits, errors only
 LOG_LEVEL               = "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Sizing override — written by slack_listener.py to data/sizing_override.json
+# ---------------------------------------------------------------------------
+import json as _json, pathlib as _pl
+try:
+    _s = _json.loads((_pl.Path(__file__).parent / 'data' / 'sizing_override.json').read_text())
+    LOT_CALC  = bool(_s['lot_calc'])
+    LOT_COUNT = int(_s['lot_count'])
+except (FileNotFoundError, KeyError, ValueError):
+    pass
