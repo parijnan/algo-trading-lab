@@ -261,6 +261,7 @@ apollo_production/data/user_credentials.csv
 logs/
 data/leto_error_log.txt
 data/holidays.csv
+data/routing_state.json
 
 # =============================================================================
 # Artemis production — runtime data

@@ -10,7 +10,9 @@ configs_live.py files inside each strategy directory — Python caches
 modules by name, so a shared name causes cross-imports via sys.modules.
 """
 
+import json
 from datetime import time
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Market hours
@@ -45,7 +47,16 @@ SLACK_TRADE_UPDATES    = "#trade-updates"       # periodic in-trade P&L updates
 SLACK_ERRORS_CHANNEL   = "#error-alerts"        # exceptions, feed failures
 
 # ---------------------------------------------------------------------------
-# Routing override — edited by slack_listener.py
+# Routing override — written by slack_listener.py to data/routing_state.json
+# Loaded fresh on every importlib.reload() so leto.py picks up changes live.
 # ---------------------------------------------------------------------------
-ROUTING_MODE    = 'auto'      # 'auto' | 'manual'
-MANUAL_STRATEGY = 'artemis'   # 'artemis' | 'athena'
+_ROUTING_STATE_FILE = Path(__file__).parent / 'data' / 'routing_state.json'
+
+def _load_routing_state():
+    try:
+        s = json.loads(_ROUTING_STATE_FILE.read_text())
+        return s.get('routing_mode', 'auto'), s.get('manual_strategy', 'artemis')
+    except (FileNotFoundError, json.JSONDecodeError):
+        return 'auto', 'artemis'
+
+ROUTING_MODE, MANUAL_STRATEGY = _load_routing_state()

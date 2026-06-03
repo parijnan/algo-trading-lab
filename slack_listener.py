@@ -20,7 +20,7 @@ CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 ATHENA_CONFIG = os.path.join(BASE_DIR, "athena_production", "configs_live.py")
 APOLLO_CONFIG = os.path.join(BASE_DIR, "apollo_production", "configs_live.py")
 ARTEMIS_CONFIG = os.path.join(BASE_DIR, "artemis_production", "data", "trade_settings.csv")
-LETO_CONFIG   = os.path.join(BASE_DIR, "leto_config.py")
+ROUTING_STATE_FILE = os.path.join(DATA_DIR, "routing_state.json")
 
 # Strategy State File Paths
 ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
@@ -56,18 +56,15 @@ _CH_ERRORS = "#error-alerts"
 # ---------------------------------------------------------------------------
 
 def write_route_override(mode, strategy):
-    """Update ROUTING_MODE and MANUAL_STRATEGY in configs_live.py."""
+    """Write ROUTING_MODE and MANUAL_STRATEGY to data/routing_state.json."""
     try:
-        with open(LETO_CONFIG, 'r') as f:
-            content = f.read()
-        content = re.sub(r"(ROUTING_MODE\s*=\s*)'[^']*'",    f"\\g<1>'{mode}'",     content)
-        content = re.sub(r"(MANUAL_STRATEGY\s*=\s*)'[^']*'", f"\\g<1>'{strategy}'", content)
-        with open(LETO_CONFIG, 'w') as f:
-            f.write(content)
+        import json
+        with open(ROUTING_STATE_FILE, 'w') as f:
+            json.dump({'routing_mode': mode, 'manual_strategy': strategy}, f)
         logger.info(f"Route override set: ROUTING_MODE={mode!r}, MANUAL_STRATEGY={strategy!r}")
         return True
     except Exception as e:
-        logger.error(f"Failed to update configs_live.py: {e}")
+        logger.error(f"Failed to write routing_state.json: {e}")
         return False
 
 
