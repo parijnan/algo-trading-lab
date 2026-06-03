@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from configs import (
-    PAPER_MODE, DATA_DIR, FLAG_PATH, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
+    PAPER_MODE, DATA_DIR, FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
     REPO_ROOT, LOT_COUNT, LOT_SIZE, NIFTY_TOKEN, VIX_TOKEN,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
@@ -546,6 +546,18 @@ def main():
         print('Iris requires an exclusive Angel One session.')
         sys.exit(1)
 
+    # Kill any existing Iris process before starting
+    if PID_FILE.exists():
+        try:
+            old_pid = int(PID_FILE.read_text().strip())
+            os.kill(old_pid, signal.SIGTERM)
+            logger.info(f'Sent SIGTERM to existing Iris process (PID {old_pid}); waiting...')
+            time.sleep(3)
+        except (ProcessLookupError, ValueError):
+            pass
+        PID_FILE.unlink(missing_ok=True)
+
+    PID_FILE.write_text(str(os.getpid()))
     FLAG_PATH.touch()   # arm the watchdog
     logger.info('iris_active.flag created.')
 
@@ -561,6 +573,7 @@ def main():
         _slack(f'🚨 *Iris* crashed: {e}', SLACK_ERRORS_CHANNEL)
     finally:
         FLAG_PATH.unlink(missing_ok=True)
+        PID_FILE.unlink(missing_ok=True)
         try:
             obj.terminateSession(str(pd.read_csv(CREDS_FILE).iloc[0]['client_id']))
         except Exception:

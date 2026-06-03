@@ -12,6 +12,7 @@ IRIS_ROOT    = Path(__file__).parent
 DATA_DIR     = IRIS_ROOT / 'data'
 LOG_DIR      = IRIS_ROOT / 'logs'
 FLAG_PATH    = DATA_DIR / 'iris_active.flag'
+PID_FILE     = DATA_DIR / 'iris.pid'
 STATE_FILE   = DATA_DIR / 'iris_state.csv'
 CREDS_FILE   = DATA_DIR / 'user_credentials.csv'
 HOLIDAYS_FILE = DATA_DIR / 'holidays.csv'
