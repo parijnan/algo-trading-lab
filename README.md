@@ -543,6 +543,15 @@ algo-trading-lab/
 │   └── data_adaptive_exit/         # Experiment results (gitignored)
 │       ├── trade_summary.csv
 │       └── trade_logs/
+├── iris_production/                # Iris live paper/production trading
+│   ├── iris.py                     # Main strategy loop (PAPER_MODE=True by default)
+│   ├── configs.py                  # All tunable parameters — flip PAPER_MODE here
+│   ├── state.py                    # IrisState dataclass + CSV persistence
+│   ├── functions.py                # ST helpers, strike selection, order placement, guardian check
+│   ├── logger_setup.py             # File + console logging
+│   ├── tests/
+│   │   └── test_api.py             # API validation script — run before first paper session
+│   └── data/                       # Runtime data (state CSV, credentials — gitignored)
 ├── iris_backtest/                  # Iris scalping strategy — Track A + B research
 │   ├── README.md
 │   ├── configs.py                  # All signal, data path, and strategy params

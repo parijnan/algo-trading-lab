@@ -58,6 +58,11 @@ except Exception as e:
     sys.exit(1)
 
 
+# Brief pause — Angel One rate limiter needs ~3s after a new session
+# before accepting getCandleData. Production code has natural delay via
+# scrip master download; test skips that so we add an explicit wait.
+time.sleep(3)
+
 # ── 2. getCandleData — FIVE_MINUTE (the critical unverified test) ─────────────
 print('\n[2] getCandleData — FIVE_MINUTE')
 try:
