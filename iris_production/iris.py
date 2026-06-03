@@ -27,7 +27,7 @@ from configs import (
     PAPER_MODE, DATA_DIR, FLAG_PATH, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
     REPO_ROOT, LOT_COUNT, LOT_SIZE, NIFTY_TOKEN, VIX_TOKEN,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
-    PROFIT_TARGET_PCT, STOP_LOSS_PCT, EXIT_BY_TIME,
+    PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
     SKIP_ENTRY_WINDOWS,
 )
@@ -389,6 +389,13 @@ class Iris:
         if pnl_pct <= -STOP_LOSS_PCT:
             self._execute_exit(f'stop_loss ({pnl_pct:+.1%})')
             return
+
+        # Per-trade max hold
+        if self.state.entry_time:
+            entry_dt = datetime.fromisoformat(self.state.entry_time)
+            if (now - entry_dt).total_seconds() >= MAX_HOLD_MIN * 60:
+                self._execute_exit(f'max_hold ({MAX_HOLD_MIN}m)')
+                return
 
         exit_time = datetime.strptime(EXIT_BY_TIME, '%H:%M').time()
         if now.time() >= exit_time:

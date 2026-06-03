@@ -17,7 +17,10 @@ STRIKE_STEP = 50   # Nifty strike grid
 # ── Signal entry filter: skip entries whose entry_ts falls in these windows ──
 # Format: list of (start_HH:MM, end_HH:MM) tuples — end is exclusive.
 # Derived from time-of-day backtest: 10:45–11:15 is the only losing window.
-SKIP_ENTRY_WINDOWS = [('10:45', '11:15')]
+# 10:45–11:30 is a structural dead zone (post-opening-move settling, three
+# consecutive 15-min windows all negative: WR 31–43%, near-zero target rate).
+# 11:30 snaps back sharply (WR 72.7%) so the window ends there.
+SKIP_ENTRY_WINDOWS = [('10:45', '11:30')]
 
 # Excursion analysis horizons (1-min bars after entry)
 HORIZONS = [5, 10, 15, 30, 60, 120]

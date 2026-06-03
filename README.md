@@ -6,15 +6,22 @@ A personal algorithmic trading laboratory for backtesting, optimising, and autom
 
 ### [Iris](./iris_production/) — Nifty Directional Scalping
 
-A manually-armed directional scalping strategy. Arms/disarms via Slack; auto-enters on ST_FAST (5m+15m dual supertrend) signals. Buys a single ITM-150 Nifty call (bullish) or put (bearish) on the nearest weekly expiry. Exits on profit target, stop loss, trend flip, or time cutoff. Independent of Leto's VIX routing.
+A manually-armed directional scalping strategy. Arms/disarms via Slack; auto-enters on
+ST_FAST (5m+15m dual supertrend) signals. Buys a single ITM-150 Nifty weekly call/put.
+Exits on profit target, stop loss, trend flip, or 30-min per-trade timer. Independent of
+Leto's VIX routing.
 
 | | |
 |---|---|
-| Instrument | Nifty weekly options (long ITM-150 call/put) |
-| Signal | ST_FAST — 5-min ST flip aligned with 15-min regime |
-| Entry | Market order, BAR_PERIOD=5 min after signal |
-| Exits | Profit target · Stop loss · Trend flip · Time cutoff |
-| Status | **Paper mode** (PAPER_MODE=True in configs.py) |
+| Instrument | Nifty weekly options — long ITM-150 call/put, nearest expiry |
+| Signal | ST_FAST — 5-min ST flip aligned with 15-min regime (~200/year) |
+| Entry | Market order, 5-min after signal bar close |
+| Profit target | 10% of entry premium |
+| Stop loss | 25% of entry premium |
+| Max hold | 30 min per trade, 15:00 daily cutoff |
+| Skip window | 10:45–11:30 (dead zone — post-opening settling) |
+| Backtest | 1,172 trades · WR 59.8% · Avg ₹229/lot · Median ₹414/lot (7.3 yr) |
+| Status | **Paper mode** — `PAPER_MODE=True` in configs.py |
 
 ### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
 A market-neutral credit spread strategy that starts as a weekly Sensex Iron Condor. During trends, it dynamically transforms into a **directional credit spread** by exiting the tested side and reinforcing the winning side with rolled strikes and additional lots (position sizing scales up to 150% of the base).
@@ -327,7 +334,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 |---|---|---|
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
-| [`iris_backtest/`](./iris_backtest/) | Track A signal research for Iris (scalping strategy). Eight signal detectors benchmarked on Nifty 1-min data (2019–present): ST_FAST, ST_RAPID, EMA_CROSS, BB_SQUEEZE, ORB, ATR_BURST, ROC_BURST, RANGE_BREAK. Output: MFE/MAE excursion distributions at 5/10/15/30/60/120-min horizons — no fixed target/stop. | Active — signal comparison |
+| [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30. | Complete |
 
 Active research plans (forward-looking — not yet wired to production):
 - [`plans/iris-scalping-strategy.md`](./plans/iris-scalping-strategy.md) — Iris scalping strategy:
@@ -536,23 +543,22 @@ algo-trading-lab/
 │   └── data_adaptive_exit/         # Experiment results (gitignored)
 │       ├── trade_summary.csv
 │       └── trade_logs/
-├── iris_backtest/                  # Iris scalping strategy — Track A signal research
-│   ├── configs.py                  # All signal and data path params
-│   ├── utils.py                    # Shared: data loaders, resample_ohlcv, compute_st, compute_excursions
-│   ├── signals/                    # One module per signal detector
-│   │   ├── st_fast.py              # ST_FAST  — dual supertrend 5m+15m
-│   │   ├── st_rapid.py             # ST_RAPID — dual supertrend 3m+9m
-│   │   ├── ema_cross.py            # EMA_CROSS — 9/21 EMA crossover on 3-min
-│   │   ├── bb_squeeze.py           # BB_SQUEEZE — Bollinger Band squeeze → breakout 5-min
-│   │   ├── orb.py                  # ORB — Opening Range Breakout 1-min
-│   │   ├── atr_burst.py            # ATR_BURST — ATR expansion burst on 3-min
-│   │   ├── roc_burst.py            # ROC_BURST — Rate-of-change burst on 1-min
-│   │   └── range_break.py          # RANGE_BREAK — ADX-gated daily range breakout on 1-min
+├── iris_backtest/                  # Iris scalping strategy — Track A + B research
+│   ├── README.md
+│   ├── configs.py                  # All signal, data path, and strategy params
+│   ├── utils.py                    # Shared: loaders, resample_ohlcv, compute_st, compute_excursions
+│   ├── signals/                    # 15 signal detectors (ST_FAST selected)
 │   ├── research/
-│   │   ├── run_all.py              # Run all signals, compute MFE/MAE/close excursions → data/
-│   │   └── compare.py              # Load excursion CSVs, print comparison table
+│   │   ├── run_all.py              # Track A: signal excursion comparison
+│   │   ├── compare.py              # Track A: comparison table
+│   │   ├── run_options_sim.py      # Track B: ITM option fill sim (ATM→ITM-200)
+│   │   ├── run_strategy_backtest.py # Track B: 4-condition exit parameter sweep
+│   │   ├── run_full_backtest.py    # Track B: full backtest with per-trade logs
+│   │   ├── exit_bucket_analysis.py # Track B: P&L by exit bucket
+│   │   └── options_depth_analysis.py # Track B: delta and premium distribution
 │   └── data/                       # Generated outputs (gitignored except .gitkeep)
-│       └── .gitkeep
+│       ├── .gitkeep
+│       └── trade_logs/             # Per-trade minute-by-minute option price logs
 ├── research/                       # Exploratory research modules (not used by production code)
 │   ├── range_detection/            # Nifty/Sensex range detection research (ADX + PA methods)
 │   │   ├── range_detector.py       # ADX-gated — daily OHLC

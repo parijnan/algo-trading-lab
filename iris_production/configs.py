@@ -21,8 +21,9 @@ PAPER_MODE = True   # MUST be manually set to False for live trading
 
 # ── Signal entry filter ───────────────────────────────────────────────────────
 # Skip signals whose entry time falls in these windows (end exclusive).
-# 10:45–11:15 is the only net-negative time window from the full backtest.
-SKIP_ENTRY_WINDOWS = [('10:45', '11:15')]
+# 10:45–11:30: post-opening-move dead zone (three consecutive losing 15-min
+# windows; 11:30 recovers sharply at WR 72.7%).
+SKIP_ENTRY_WINDOWS = [('10:45', '11:30')]
 
 # ── Instrument ────────────────────────────────────────────────────────────────
 LOT_SIZE          = 65
@@ -47,11 +48,12 @@ SEED_CANDLES      = 150             # historical candles to seed the ST
 # NOTE: live signal uses getCandleData("FIVE_MINUTE") — verify this interval
 # is served by Angel One before first paper session.
 
-# ── Exit parameters (paper calibration knobs — not derived from backtest data)
-# Set conservatively for first paper sessions; tighten after observing live P&L.
-PROFIT_TARGET_PCT = 0.25            # exit when option LTP ≥ entry × 1.25
-STOP_LOSS_PCT     = 0.20            # exit when option LTP ≤ entry × 0.80
-EXIT_BY_TIME      = '15:00'         # force-exit at this time regardless of P&L
+# ── Exit parameters — calibrated from full backtest (stop=25%, target=10%, hold=30m)
+# Backtest: 1,172 trades, WR 59.5%, avg ₹220/lot, median ₹380/lot over 7.3 years.
+PROFIT_TARGET_PCT = 0.10            # exit when option LTP ≥ entry × 1.10
+STOP_LOSS_PCT     = 0.25            # exit when option LTP ≤ entry × 0.75
+MAX_HOLD_MIN      = 30              # per-trade time limit (minutes); hard exit if no other trigger
+EXIT_BY_TIME      = '15:00'         # daily hard cutoff regardless of P&L
 
 # ── Session ───────────────────────────────────────────────────────────────────
 MARKET_OPEN       = '09:15'
