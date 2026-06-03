@@ -19,7 +19,14 @@ HOLIDAYS_FILE = DATA_DIR / 'holidays.csv'
 # ── Kill switch ───────────────────────────────────────────────────────────────
 PAPER_MODE = True   # MUST be manually set to False for live trading
 
-# ── Signal entry filter ───────────────────────────────────────────────────────
+# ── Signal entry time constraints ────────────────────────────────────────────
+# 332 of 360 trades in the 09:15 window fire at exactly 09:20 (first 5-min bar).
+# Opening option prices can be stale/wide at 09:20 in live trading.
+# Set to '09:25' if paper trading reveals consistent opening noise at 09:20.
+# In paper mode this is safe to leave at '09:15' — LTP reads real-time price.
+MIN_ENTRY_TIME = '09:15'            # no entry before this time (HH:MM)
+
+# ── Signal entry window filter ────────────────────────────────────────────────
 # Skip signals whose entry time falls in these windows (end exclusive).
 # 10:45–11:30: post-opening-move dead zone (three consecutive losing 15-min
 # windows; 11:30 recovers sharply at WR 72.7%).

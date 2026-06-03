@@ -29,7 +29,7 @@ from configs import (
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
-    SKIP_ENTRY_WINDOWS,
+    SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME,
 )
 from state import IrisState, save_state, load_state
 from logger_setup import get_logger
@@ -194,10 +194,12 @@ class Iris:
 
                     if self.state.status == 'watching' and flip and direction:
                         if self._regime_aligned(direction):
-                        if self._in_skip_window(now):
-                            logger.info(f'Signal {direction} skipped — in skip window')
-                        else:
-                            self._execute_entry(direction, now)
+                            if self._before_min_entry_time(now):
+                                logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
+                            elif self._in_skip_window(now):
+                                logger.info(f'Signal {direction} skipped — in skip window')
+                            else:
+                                self._execute_entry(direction, now)
 
                     elif self.state.status == 'in_trade' and flip:
                         # Trend flip against open trade = exit
@@ -284,6 +286,11 @@ class Iris:
                 logger.info(f'15-min regime flipped → '
                             f'{"bullish" if self._regime_trend else "bearish"}')
 
+    def _before_min_entry_time(self, ts) -> bool:
+        from datetime import datetime as _dt
+        min_t = _dt.strptime(MIN_ENTRY_TIME, '%H:%M').time()
+        return ts.time() < min_t
+
     def _in_skip_window(self, ts) -> bool:
         from datetime import datetime as _dt
         for start_str, end_str in SKIP_ENTRY_WINDOWS:
@@ -338,9 +345,8 @@ class Iris:
         if fill_price is None:
             fill_price = self.feed.get_ltp(token) or 0.0
 
-        # Subscribe to option LTP
-        if not PAPER_MODE:
-            self.feed.subscribe([(FO_EXCHANGE, token)])
+        # Subscribe to option LTP for monitoring (paper and live both need it)
+        self.feed.subscribe([(FO_EXCHANGE, token)])
 
         self.state.status      = 'in_trade'
         self.state.direction   = direction
@@ -415,11 +421,10 @@ class Iris:
         if fill_price is None:
             fill_price = self.feed.get_ltp(token) or entry
 
-        pnl_pts = (fill_price - entry) * lots * LOT_SIZE / LOT_SIZE  # per unit
-        pnl_rs  = (fill_price - entry) * lots * LOT_SIZE
+        pnl_pts = fill_price - entry                    # option points per unit
+        pnl_rs  = pnl_pts * lots * LOT_SIZE            # total rupees
 
-        if not PAPER_MODE and token:
-            self.feed.unsubscribe([(FO_EXCHANGE, token)])
+        self.feed.unsubscribe([(FO_EXCHANGE, token)])
 
         self.state.status = 'watching'
         save_state(self.state)
