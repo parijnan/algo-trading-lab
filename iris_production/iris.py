@@ -284,13 +284,13 @@ class Iris:
         if pd.isna(last['trend']) or not last['trend_flip']:
             if not pd.isna(last['supertrend']):
                 trend_str = 'bullish' if bool(last['trend']) else 'bearish'
-                logger.info(f'Bar {bar_ts} — close={last["close"]:.0f}  '
-                            f'ST={last["supertrend"]:.0f}  trend={trend_str}  no flip')
+                logger.info(f'Bar {bar_ts} — close={last["close"]:.2f}  '
+                            f'ST={last["supertrend"]:.2f}  trend={trend_str}  no flip')
             return False, None
 
         direction = 'bullish' if bool(last['trend']) else 'bearish'
-        logger.info(f'Bar {bar_ts} — close={last["close"]:.0f}  '
-                    f'ST={last["supertrend"]:.0f}  FLIP → {direction}')
+        logger.info(f'Bar {bar_ts} — close={last["close"]:.2f}  '
+                    f'ST={last["supertrend"]:.2f}  FLIP → {direction}')
         return True, direction
 
     def _update_15m_regime(self, close_ts: datetime) -> None:
