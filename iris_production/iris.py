@@ -53,6 +53,15 @@ except ImportError:
 
 logger = get_logger('iris')
 
+def _load_slack_token() -> str:
+    try:
+        creds = pd.read_csv(REPO_ROOT / 'data/user_credentials.csv')
+        return str(creds.iloc[0]['slack_token'])
+    except Exception:
+        return ''
+
+_SLACK_TOKEN = _load_slack_token()
+
 
 # ---------------------------------------------------------------------------
 # Slack helper (fire-and-forget, non-blocking)
@@ -61,14 +70,14 @@ logger = get_logger('iris')
 def _slack(msg: str, channel=None) -> None:
     if channel is None:
         channel = SLACK_TRADE_ALERTS
-    if not channel:
+    if not channel or not _SLACK_TOKEN:
         return
     try:
         from slack_sdk import WebClient
         import threading
         def _send():
             try:
-                WebClient(token=os.environ.get('SLACK_BOT_TOKEN', '')).chat_postMessage(
+                WebClient(token=_SLACK_TOKEN).chat_postMessage(
                     channel=channel, text=msg)
             except Exception:
                 pass
