@@ -29,6 +29,7 @@ from configs import (
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, EXIT_BY_TIME,
     MARKET_OPEN, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
+    SKIP_ENTRY_WINDOWS,
 )
 from state import IrisState, save_state, load_state
 from logger_setup import get_logger
@@ -193,6 +194,9 @@ class Iris:
 
                     if self.state.status == 'watching' and flip and direction:
                         if self._regime_aligned(direction):
+                        if self._in_skip_window(now):
+                            logger.info(f'Signal {direction} skipped — in skip window')
+                        else:
                             self._execute_entry(direction, now)
 
                     elif self.state.status == 'in_trade' and flip:
@@ -279,6 +283,15 @@ class Iris:
             if prev != self._regime_trend:
                 logger.info(f'15-min regime flipped → '
                             f'{"bullish" if self._regime_trend else "bearish"}')
+
+    def _in_skip_window(self, ts) -> bool:
+        from datetime import datetime as _dt
+        for start_str, end_str in SKIP_ENTRY_WINDOWS:
+            start = _dt.strptime(start_str, '%H:%M').time()
+            end   = _dt.strptime(end_str,   '%H:%M').time()
+            if start <= ts.time() < end:
+                return True
+        return False
 
     def _regime_aligned(self, direction: str) -> bool:
         if self._regime_trend is None:

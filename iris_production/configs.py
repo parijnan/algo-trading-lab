@@ -19,6 +19,11 @@ HOLIDAYS_FILE = DATA_DIR / 'holidays.csv'
 # ── Kill switch ───────────────────────────────────────────────────────────────
 PAPER_MODE = True   # MUST be manually set to False for live trading
 
+# ── Signal entry filter ───────────────────────────────────────────────────────
+# Skip signals whose entry time falls in these windows (end exclusive).
+# 10:45–11:15 is the only net-negative time window from the full backtest.
+SKIP_ENTRY_WINDOWS = [('10:45', '11:15')]
+
 # ── Instrument ────────────────────────────────────────────────────────────────
 LOT_SIZE          = 65
 LOT_COUNT         = 1               # position size in lots (start small)

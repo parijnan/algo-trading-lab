@@ -11,8 +11,13 @@ VIX_1MIN_FILE     = REPO_ROOT / 'data_pipeline' / 'data' / 'indices' / 'india_vi
 OUTPUT_DIR        = IRIS_ROOT / 'data'
 OPTIONS_PATH      = REPO_ROOT / 'data_pipeline' / 'data' / 'nifty' / 'options'
 
-LOT_SIZE   = 65
+LOT_SIZE    = 65
 STRIKE_STEP = 50   # Nifty strike grid
+
+# ── Signal entry filter: skip entries whose entry_ts falls in these windows ──
+# Format: list of (start_HH:MM, end_HH:MM) tuples — end is exclusive.
+# Derived from time-of-day backtest: 10:45–11:15 is the only losing window.
+SKIP_ENTRY_WINDOWS = [('10:45', '11:15')]
 
 # Excursion analysis horizons (1-min bars after entry)
 HORIZONS = [5, 10, 15, 30, 60, 120]

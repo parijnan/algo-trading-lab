@@ -20,7 +20,7 @@ import numpy as np
 from run_strategy_backtest import (
     build_flip_index, next_opposing_flip, _itm150_strike, _get_price_near,
 )
-from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP
+from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP, SKIP_ENTRY_WINDOWS
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 STOP_PCT       = 0.25
@@ -34,6 +34,16 @@ BAR_PERIOD_MIN = 5
 TRAIL_LEVELS = [0.15, 0.20, 0.25, 0.30]
 
 LOG_DIR = OUTPUT_DIR / 'trade_logs'
+
+# Pre-parse skip windows once
+_SKIP_WINDOWS = [
+    (pd.Timestamp(s).time(), pd.Timestamp(e).time())
+    for s, e in SKIP_ENTRY_WINDOWS
+]
+
+def _in_skip_window(ts) -> bool:
+    t = ts.time() if hasattr(ts, 'time') else ts
+    return any(start <= t < end for start, end in _SKIP_WINDOWS)
 
 
 # ---------------------------------------------------------------------------
@@ -71,29 +81,33 @@ def simulate_with_logs(series: pd.DataFrame,
     for ts, bar in series.iterrows():
         ltp = float(bar['close'])
 
-        # Update extremes
-        if ltp > peak_ltp:
-            peak_ltp = ltp
-            mfe_pts  = peak_ltp - entry_price
-            mfe_ts   = ts
-        if ltp < trough_ltp:
-            trough_ltp = ltp
-            mae_pts    = entry_price - trough_ltp   # positive = adverse
-            mae_ts     = ts
+        still_open = 'exit_price' not in result
+
+        # ── Track extremes and trails only while trade is open ─────────────
+        if still_open:
+            if ltp > peak_ltp:
+                peak_ltp = ltp
+                mfe_pts  = peak_ltp - entry_price
+                mfe_ts   = ts
+            if ltp < trough_ltp:
+                trough_ltp = ltp
+                mae_pts    = entry_price - trough_ltp
+                mae_ts     = ts
+
+            for lvl in TRAIL_LEVELS:
+                if peak_ltp > entry_price:
+                    trail_stop = peak_ltp * (1 - lvl)
+                    if trail_exits[lvl] is None and ltp <= trail_stop:
+                        trail_exits[lvl] = (ltp, ts, 'trail_stop')
 
         unr_pts = ltp - entry_price
         unr_pct = unr_pts / entry_price
 
-        # Trailing stop levels (only active once trade is in profit)
+        # Trail stop levels for logging (always compute, even post-exit)
         trail_stops = {}
         for lvl in TRAIL_LEVELS:
-            if peak_ltp > entry_price:              # only trail after a profit
-                trail_stop = peak_ltp * (1 - lvl)
-                trail_stops[lvl] = trail_stop
-                if trail_exits[lvl] is None and ltp <= trail_stop:
-                    trail_exits[lvl] = (ltp, ts, 'trail_stop')
-            else:
-                trail_stops[lvl] = None
+            trail_stops[lvl] = (round(peak_ltp * (1 - lvl), 2)
+                                if peak_ltp > entry_price else None)
 
         bar_log.append({
             'ts':          ts,
@@ -103,14 +117,13 @@ def simulate_with_logs(series: pd.DataFrame,
             'unr_rs':      round(unr_pts * LOT_SIZE, 0),
             'mfe_pts':     round(mfe_pts, 2),
             'mfe_pct':     round(mfe_pts / entry_price * 100, 2),
-            **{f'trail_stop_{int(lvl*100)}': round(trail_stops[lvl], 2)
-               if trail_stops[lvl] else None
+            **{f'trail_stop_{int(lvl*100)}': trail_stops[lvl]
                for lvl in TRAIL_LEVELS},
         })
 
-        # ── Primary exit checks ────────────────────────────────────────────
-        if 'exit_price' in result:
-            continue   # already exited, keep logging for reference
+        # ── Primary exit checks (skip if already exited) ───────────────────
+        if not still_open:
+            continue
 
         if bar['low'] <= stop_level:
             result = {'exit_price': stop_level, 'exit_reason': 'stop_loss',    'exit_ts': ts}
@@ -200,6 +213,11 @@ def main():
                 option_cache[cache_key] = df_opt
             else:
                 option_cache[cache_key] = None
+
+        # Skip entry windows
+        if _in_skip_window(entry_ts):
+            skipped += 1
+            continue
 
         df_opt      = option_cache[cache_key]
         entry_price = _get_price_near(df_opt, entry_ts)
