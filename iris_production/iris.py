@@ -279,13 +279,18 @@ class Iris:
         self._df_5m = compute_st(combined, ST_PERIOD, ST_MULTIPLIER)
 
         last = self._df_5m.iloc[-1]
+        bar_ts = candle['time_stamp'].strftime('%H:%M')
+
         if pd.isna(last['trend']) or not last['trend_flip']:
+            if not pd.isna(last['supertrend']):
+                trend_str = 'bullish' if bool(last['trend']) else 'bearish'
+                logger.info(f'Bar {bar_ts} — close={last["close"]:.0f}  '
+                            f'ST={last["supertrend"]:.0f}  trend={trend_str}  no flip')
             return False, None
 
         direction = 'bullish' if bool(last['trend']) else 'bearish'
-        logger.info(f'ST_FAST flip: {direction}  '
-                    f'close={last["close"]:.0f}  '
-                    f'ST={last["supertrend"]:.0f}')
+        logger.info(f'Bar {bar_ts} — close={last["close"]:.0f}  '
+                    f'ST={last["supertrend"]:.0f}  FLIP → {direction}')
         return True, direction
 
     def _update_15m_regime(self, close_ts: datetime) -> None:
@@ -324,11 +329,12 @@ class Iris:
 
     def _regime_aligned(self, direction: str) -> bool:
         if self._regime_trend is None:
-            logger.debug('Regime undefined — skipping signal.')
+            logger.info('Regime undefined — skipping signal.')
             return False
         aligned = (direction == 'bullish') == self._regime_trend
         if not aligned:
-            logger.debug(f'Signal {direction} against regime — skipped.')
+            regime_str = 'bullish' if self._regime_trend else 'bearish'
+            logger.info(f'Signal {direction} against 15-min regime ({regime_str}) — skipped.')
         return aligned
 
     # -----------------------------------------------------------------------
