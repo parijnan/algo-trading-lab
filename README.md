@@ -82,9 +82,9 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
    - **VIX ≤ 16.0** → Artemis
    - **16.0 < VIX ≤ 25.0** → Athena
    - **VIX > 25.0** → Apollo
-6. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `configs_live.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
+6. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
 
-**Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is stored in `configs_live.py` at the repo root (`ROUTING_MODE`, `MANUAL_STRATEGY`). Apollo is never overridden — if VIX > 25, Apollo runs regardless.
+**Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload. Apollo is never overridden — if VIX > 25, Apollo runs regardless.
 
 ### Orchestration Flow
 
@@ -160,7 +160,7 @@ Three routing buttons and the sizing modal live together in one section:
 - **`🟢 Force Athena`**: Routes to Athena on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
 - **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Apollo. Updates are written directly to the strategy's `configs_live.py` or `trade_settings.csv` on the VPS.
 
-The routing mode is persisted in `leto_config.py` at the repo root (`ROUTING_MODE` / `MANUAL_STRATEGY`). Leto reloads this file on every reroute iteration, so a change applied mid-session takes effect on the next Leto loop without a restart.
+The routing mode is persisted in `data/routing_state.json` (gitignored, defaults to `auto/artemis` if absent). `leto_config.py` reads from it on every `importlib.reload()`, so a change applied mid-session takes effect on the next Leto loop without a restart.
 
 ### Maintenance
 - **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Note: if `slack_listener.py` itself is updated, a manual service restart is required to pick up the changes.
@@ -423,7 +423,7 @@ algo-trading-lab/
 ├── .gitignore
 ├── leto.py                         # Session router and strategy entry point
 ├── slack_listener.py               # Slack interactive daemon (Socket Mode)
-├── configs_live.py                 # Leto-level runtime config: market hours, VIX thresholds, tokens, routing override
+├── leto_config.py                  # Leto-level runtime config: market hours, VIX thresholds, tokens, Slack channels
 ├── websocket_feed.py               # Shared WebSocket LTP feed (SharedFeed) — used by all strategies
 ├── plans/                          # Implementation plans
 │   ├── individual-order-details.md       # [BLOCKED] individual_order_details() returns AB1007 on this account

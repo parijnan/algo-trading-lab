@@ -3,7 +3,8 @@ leto_config.py — Leto Session Manager Configuration
 
 Read by leto.py at startup (static constants) and at each routing decision
 (ROUTING_MODE / MANUAL_STRATEGY, via importlib.reload).
-Edited by slack_listener.py for routing override changes.
+Routing override is persisted in data/routing_state.json (gitignored) by
+slack_listener.py — leto_config.py itself is never modified at runtime.
 
 Named leto_config (not configs_live) to avoid colliding with the
 configs_live.py files inside each strategy directory — Python caches
