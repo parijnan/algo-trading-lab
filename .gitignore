@@ -317,3 +317,9 @@ iris_production/data/iris_active.flag
 iris_production/data/user_credentials.csv
 iris_production/data/holidays.csv
 iris_production/logs/
+
+# Iris backtest — per-trade logs and summary (generated outputs)
+iris_backtest/data/trade_logs/
+iris_backtest/data/iris_backtest_summary.csv
+iris_backtest/data/strategy_backtest_trades.csv
+iris_backtest/data/strategy_sweep.csv
