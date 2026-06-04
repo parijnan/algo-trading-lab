@@ -67,7 +67,7 @@ EXIT_BY_TIME      = '15:15'         # daily hard cutoff regardless of P&L
 # ── Session ───────────────────────────────────────────────────────────────────
 MARKET_OPEN       = '09:15'
 MARKET_CLOSE      = '15:30'
-TRADE_UPDATE_SEC  = 30              # Slack update cadence when in-trade (seconds)
+TRADE_UPDATE_SEC  = 10              # Slack update cadence when in-trade (seconds)
 ORDER_TIMEOUT_SEC = 30              # seconds to wait for order fill (WS fast path + REST fallback)
 
 # ── Slack ─────────────────────────────────────────────────────────────────────

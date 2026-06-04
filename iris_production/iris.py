@@ -423,21 +423,18 @@ class Iris:
             self.state.last_ltp = ltp
             save_state(self.state)
 
+        # P&L checks — only when entry price is known
         entry = self.state.entry_price or 0
-        if entry <= 0 or not ltp:
-            return
+        if entry > 0 and ltp:
+            pnl_pct = (ltp - entry) / entry
+            if pnl_pct >= PROFIT_TARGET_PCT:
+                self._execute_exit(f'profit_target ({pnl_pct:+.1%})')
+                return
+            if pnl_pct <= -STOP_LOSS_PCT:
+                self._execute_exit(f'stop_loss ({pnl_pct:+.1%})')
+                return
 
-        pnl_pct = (ltp - entry) / entry
-
-        if pnl_pct >= PROFIT_TARGET_PCT:
-            self._execute_exit(f'profit_target ({pnl_pct:+.1%})')
-            return
-
-        if pnl_pct <= -STOP_LOSS_PCT:
-            self._execute_exit(f'stop_loss ({pnl_pct:+.1%})')
-            return
-
-        # Per-trade max hold
+        # Time-based exits — always fire regardless of entry price
         if self.state.entry_time:
             entry_dt = datetime.fromisoformat(self.state.entry_time)
             if (now - entry_dt).total_seconds() >= MAX_HOLD_MIN * 60:
@@ -490,17 +487,40 @@ class Iris:
     # -----------------------------------------------------------------------
 
     def _send_trade_update(self) -> None:
+        if self.state.status != 'in_trade':
+            return
         ltp   = self.feed.get_ltp(self.state.token or '') or 0
+        spot  = self.feed.get_ltp(NIFTY_TOKEN) or 0
         entry = self.state.entry_price or 0
-        if entry > 0:
-            pnl_pct = (ltp - entry) / entry
-            pnl_rs  = (ltp - entry) * (self.state.lots or 0) * LOT_SIZE
-            msg = (f'{"[PAPER] " if DRY_RUN else ""}📊 *Iris* update: '
-                   f'{self.state.symbol}  LTP={ltp:.1f}  '
-                   f'P&L={pnl_pct:+.1%}  ₹{pnl_rs:+,.0f}')
-            logger.info(f'Update: {self.state.symbol}  LTP={ltp:.1f}  '
-                        f'P&L={pnl_pct:+.1%}  ₹{pnl_rs:+,.0f}')
-            _slack(msg, SLACK_TRADE_UPDATES)
+
+        # P&L — only meaningful when entry price is known
+        if entry > 0 and ltp:
+            pnl_pts = ltp - entry
+            pnl_rs  = pnl_pts * (self.state.lots or 0) * LOT_SIZE
+            pnl_str = f'{pnl_pts:+.1f} pts  ₹{pnl_rs:+,.0f}'
+        else:
+            pnl_str = 'P&L unknown (entry price not captured)'
+
+        # Time remaining to nearest exit
+        time_str = ''
+        if self.state.entry_time:
+            entry_dt   = datetime.fromisoformat(self.state.entry_time)
+            hold_exit  = entry_dt + timedelta(minutes=MAX_HOLD_MIN)
+            ebt_exit   = datetime.now().replace(
+                hour=int(EXIT_BY_TIME.split(':')[0]),
+                minute=int(EXIT_BY_TIME.split(':')[1]),
+                second=0, microsecond=0)
+            next_exit  = min(hold_exit, ebt_exit)
+            mins_left  = max(0, (next_exit - datetime.now()).total_seconds() / 60)
+            time_str   = f'  Exit in {mins_left:.0f}m'
+
+        prefix = '[PAPER] ' if DRY_RUN else ''
+        msg = (f'{prefix}📊 *Iris* update: {self.state.direction.upper()}  '
+               f'{self.state.symbol}  '
+               f'Nifty: {spot:.0f}  LTP: {ltp:.1f}  Entry: {entry:.1f}  '
+               f'{pnl_str}{time_str}')
+        logger.info(msg.replace(prefix, '').replace('\n', '  '))
+        _slack(msg, SLACK_TRADE_UPDATES)
 
 
 # ---------------------------------------------------------------------------
