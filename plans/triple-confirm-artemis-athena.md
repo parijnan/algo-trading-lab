@@ -149,6 +149,18 @@ False signal (10 fires, no SL would have fired): 4 better / 6 worse, net **−61
 | 2025-11-13 | 42.9 hrs (Mon → Wed 09:15) | −84.32 pts |
 | 2025-12-18 | 19.9 hrs (Tue → Wed 10:06) | +166.60 pts |
 
+**Signal funnel — why only ~20 of 110 signals apply to Artemis:**
+
+| Filter | Nifty (98) | Sensex (12) | Combined |
+|--------|-----------|-------------|----------|
+| Outside holding window (Thu/Fri/pre-entry) | 41 (42%) | 8 (67%) | 49 (45%) |
+| VIX-skipped week | 22 (22%) | 0 (0%) | 22 (20%) |
+| Eligible (inside traded week window) | 35 (36%) | 4 (33%) | 39 (35%) |
+| — threatened side already closed by prior SL | 12 | 2 | 14 (36% of eligible) |
+| — **truly actionable** | **23** | **2** | **25 (64% of eligible)** |
+
+The "already closed" cases are weeks where index_sl or option_sl fired on the threatened side earlier the same session — TC's three-layer alignment completes too late for those hard intraday moves, consistent with the known limitation.
+
 **Key finding:** TC lead time is never marginal. It either fires 13–53 min before an intraday SL (meaningful same-session advantage) or fires the prior afternoon before a gap-open SL (overnight protection). The cross-day cluster is where the largest P&L swings occur — both the biggest win (+166.60) and biggest loss (−84.32).
 
 The false-signal drag (−61.34 pts Nifty) is the cost of TC exiting a leg pre-emptively when the market doesn't follow through. This is PC4 territory.
