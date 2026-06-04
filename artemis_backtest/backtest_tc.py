@@ -56,11 +56,12 @@ from data_loader import load_index_data, load_vix_daily, get_index_price
 _DIR            = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT       = os.path.dirname(_DIR)
 TC_DATA_DIR     = os.path.join(_DIR, 'data_tc')
-TC_LOGS_DIR     = os.path.join(TC_DATA_DIR, 'trade_logs_tc')
-TC_SUMMARY      = os.path.join(TC_DATA_DIR, 'trade_summary_tc.csv')
-TC_SIGNALS_CSV  = os.path.join(
-    REPO_ROOT, 'iris_backtest', 'data', 'TRIPLE_CONFIRM_sensex_excursions.csv')
-BASELINE_SUMMARY = os.path.join(_DIR, 'data', 'trade_summary_sensex.csv')
+TC_LOGS_DIR     = os.path.join(TC_DATA_DIR, f'trade_logs_tc_{INSTRUMENT}')
+TC_SUMMARY      = os.path.join(TC_DATA_DIR, f'trade_summary_tc_{INSTRUMENT}.csv')
+_TC_SIGNALS_FNAME = ('TRIPLE_CONFIRM_excursions.csv' if INSTRUMENT == 'nifty'
+                     else 'TRIPLE_CONFIRM_sensex_excursions.csv')
+TC_SIGNALS_CSV  = os.path.join(REPO_ROOT, 'iris_backtest', 'data', _TC_SIGNALS_FNAME)
+BASELINE_SUMMARY = os.path.join(_DIR, 'data', f'trade_summary_{INSTRUMENT}_rerun.csv')
 
 _OPEN_STATUSES = (
     'active', 'adjusted', 'adjusted_additional', 'active_additional',
@@ -91,6 +92,24 @@ def load_tc_signals(path: str) -> dict:
     df = pd.read_csv(path, parse_dates=['signal_ts'])
     df['signal_ts'] = pd.to_datetime(df['signal_ts'])
     return dict(zip(df['signal_ts'], df['direction']))
+
+
+def check_tc(spread: dict, ts: pd.Timestamp, tc_signal_map: dict):
+    """
+    Check if a TRIPLE_CONFIRM signal threatens this spread at ts.
+    Returns 'tc_sl' if TC fires against this spread, None otherwise.
+    Mirrors check_sl() from backtest.py — caller handles exit + adjust.
+      bullish TC threatens the CE spread (spot rising toward sold CE)
+      bearish TC threatens the PE spread (spot falling toward sold PE)
+    """
+    tc_dir = tc_signal_map.get(ts)
+    if tc_dir is None:
+        return None
+    if tc_dir == 'bullish' and spread['type'] == 'ce':
+        return 'tc_sl'
+    if tc_dir == 'bearish' and spread['type'] == 'pe':
+        return 'tc_sl'
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -443,51 +462,49 @@ def run_backtest_tc():
                 elm_done = True
 
             # ---------------------------------------------------------------
-            # TRIPLE_CONFIRM check — pre-emptive exit before SL
-            #
-            # Fires at most once per session (tc_triggered flag).
-            # Skipped after ELM — too late to matter.
-            # Threatened leg confirmed open via status != 'closed'.
-            # Exit + surviving-leg adjustment follow the exact same path as
-            # index_sl and option_sl in the blocks below.
+            # TRIPLE_CONFIRM check — PE spread (mirrors SL check pattern)
+            # Fires at most once per session; skipped after ELM.
             # ---------------------------------------------------------------
-            if not tc_triggered and not elm_done:
-                if ts in tc_signal_map:
-                    tc_dir      = tc_signal_map[ts]
+            if not tc_triggered and not elm_done and pe['status'] != 'closed':
+                pe_tc = check_tc(pe, ts, tc_signal_map)
+                if pe_tc:
                     tc_exec_ts  = ts + pd.Timedelta(minutes=1)
                     current_dte = compute_dte(ts.date(), expiry_ts)
+                    logger.info(
+                        f"  PE {pe_tc.upper()} @ {ts} | "
+                        f"spot {spot:.0f} | bearish")
+                    exit_spread_at(pe, tc_exec_ts, pe_tc, lots, lots // 2)
+                    logger.info(f"  PE EXIT | pl: {pe['pl']:+.2f}")
+                    if ce['status'] in _OPEN_STATUSES:
+                        adjust_spread(ce, spot, tc_exec_ts, expiry_ts,
+                                      current_dte, lots, elm_time,
+                                      cutoff_time, vix_band)
+                    tc_triggered   = True
+                    tc_direction   = 'bearish'
+                    tc_trigger_ts  = ts
+                    tc_side_exited = 'pe'
 
-                    if tc_dir == 'bullish' and ce['status'] != 'closed':
-                        logger.info(
-                            f"  CE TRIPLE_CONFIRM @ {ts} | "
-                            f"spot {spot:.0f} | {tc_dir}")
-                        exit_spread_at(ce, tc_exec_ts, 'triple_confirm',
-                                       lots, lots // 2)
-                        logger.info(f"  CE EXIT (TC) | pl: {ce['pl']:+.2f}")
-                        if pe['status'] in _OPEN_STATUSES:
-                            adjust_spread(pe, spot, tc_exec_ts, expiry_ts,
-                                          current_dte, lots, elm_time,
-                                          cutoff_time, vix_band)
-                        tc_triggered   = True
-                        tc_direction   = tc_dir
-                        tc_trigger_ts  = ts
-                        tc_side_exited = 'ce'
-
-                    elif tc_dir == 'bearish' and pe['status'] != 'closed':
-                        logger.info(
-                            f"  PE TRIPLE_CONFIRM @ {ts} | "
-                            f"spot {spot:.0f} | {tc_dir}")
-                        exit_spread_at(pe, tc_exec_ts, 'triple_confirm',
-                                       lots, lots // 2)
-                        logger.info(f"  PE EXIT (TC) | pl: {pe['pl']:+.2f}")
-                        if ce['status'] in _OPEN_STATUSES:
-                            adjust_spread(ce, spot, tc_exec_ts, expiry_ts,
-                                          current_dte, lots, elm_time,
-                                          cutoff_time, vix_band)
-                        tc_triggered   = True
-                        tc_direction   = tc_dir
-                        tc_trigger_ts  = ts
-                        tc_side_exited = 'pe'
+            # ---------------------------------------------------------------
+            # TRIPLE_CONFIRM check — CE spread (mirrors SL check pattern)
+            # ---------------------------------------------------------------
+            if not tc_triggered and not elm_done and ce['status'] != 'closed':
+                ce_tc = check_tc(ce, ts, tc_signal_map)
+                if ce_tc:
+                    tc_exec_ts  = ts + pd.Timedelta(minutes=1)
+                    current_dte = compute_dte(ts.date(), expiry_ts)
+                    logger.info(
+                        f"  CE {ce_tc.upper()} @ {ts} | "
+                        f"spot {spot:.0f} | bullish")
+                    exit_spread_at(ce, tc_exec_ts, ce_tc, lots, lots // 2)
+                    logger.info(f"  CE EXIT | pl: {ce['pl']:+.2f}")
+                    if pe['status'] in _OPEN_STATUSES:
+                        adjust_spread(pe, spot, tc_exec_ts, expiry_ts,
+                                      current_dte, lots, elm_time,
+                                      cutoff_time, vix_band)
+                    tc_triggered   = True
+                    tc_direction   = 'bullish'
+                    tc_trigger_ts  = ts
+                    tc_side_exited = 'ce'
 
             # ---------------------------------------------------------------
             # SL checks — PE spread (unchanged from backtest.py)

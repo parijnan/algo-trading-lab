@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: Research / Parked — do not implement until backtested within strategy context
+## Status: PC2 Artemis Complete — PC3 (timing) and PC4 (false-signal cost) pending
 
 ---
 
@@ -111,14 +111,32 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
 
 1. **Sensex validation complete** (for Artemis): `validate_sensex.py` must show TRIPLE_CONFIRM
    on Sensex fires in the same situations as on Nifty and with comparable quality.
+   ✅ **DONE** — PC1 cleared. Sensex WR 76.9%, RR 4.26 @ 15min, 13.9 fires/year.
+
 2. **Strategy-level backtest**: run TRIPLE_CONFIRM as an additional trigger through the full
-   Artemis/Athena backtest and compare cumulative P&L vs baseline. Signal quality in isolation
-   ≠ strategy improvement — the adjustment cost and timing must both be favourable.
+   Artemis/Athena backtest and compare cumulative P&L vs baseline.
+   ✅ **DONE** — PC2 Artemis complete. Results below.
+
 3. **Timing analysis**: quantify how early TRIPLE_CONFIRM fires before a typical SL/parachute
    trigger. If the typical lead time is <5 min, the benefit is marginal.
-4. **False-signal cost**: model the P&L impact of the 17% false-signal rate (unnecessary
+   ⏳ **PENDING**
+
+4. **False-signal cost**: model the P&L impact of the ~17–23% false-signal rate (unnecessary
    adjustment triggered by a TRIPLE_CONFIRM that reverses). Must be outweighed by the P&L
    gain from earlier exits on true signals.
+   ⏳ **PENDING**
+
+### PC2 Artemis Results (matched-week comparison, expiry-merged)
+
+| Instrument | Matched weeks | Baseline P&L | TC P&L | Net delta | TC fires | TC better | TC worse |
+|------------|--------------|-------------|--------|-----------|----------|-----------|----------|
+| Nifty      | 150          | 1601.43 pts | 1693.67 pts | **+92.26 pts** | 18 | 11/18 | 7/18 |
+| Sensex     | 27           | 2090.35 pts | 2172.63 pts | **+82.28 pts**  |  2 |  1/2  |  1/2  |
+
+All delta comes from TC-fired weeks (non-fired weeks are identical to baseline by construction).
+Sensex sample is too small (2 fires) to be statistically meaningful.
+Nifty: 11/18 (61%) TC better on fired weeks — directionally positive but PC3/PC4 required
+before concluding the signal is net-beneficial in production.
 
 ---
 
@@ -147,5 +165,10 @@ distinguishable from SL-triggered and manual adjustments in the logs.
 |---|---|
 | `iris_backtest/signals/triple_confirm.py` | Signal detection (backtest mode) |
 | `iris_backtest/research/validate_sensex.py` | Sensex validation script |
-| `iris_backtest/data/TRIPLE_CONFIRM_excursions.csv` | Nifty backtest results |
-| `iris_backtest/data/TRIPLE_CONFIRM_sensex_excursions.csv` | Sensex backtest results (TBD) |
+| `iris_backtest/data/TRIPLE_CONFIRM_excursions.csv` | Nifty TC signals (Feb 2019 – present, 134 fires) |
+| `iris_backtest/data/TRIPLE_CONFIRM_sensex_excursions.csv` | Sensex TC signals (Jul 2024 – present, 26 fires) |
+| `artemis_backtest/backtest_tc.py` | Artemis TC parallel backtest — instrument-aware, never overwrites baseline |
+| `artemis_backtest/data_tc/trade_summary_tc_nifty.csv` | TC backtest output — Nifty (gitignored) |
+| `artemis_backtest/data_tc/trade_summary_tc_sensex.csv` | TC backtest output — Sensex (gitignored) |
+| `artemis_backtest/data_tc/comparison_nifty.csv` | Matched baseline vs TC — Nifty (gitignored) |
+| `artemis_backtest/data_tc/comparison_sensex.csv` | Matched baseline vs TC — Sensex (gitignored) |
