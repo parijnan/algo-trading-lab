@@ -28,7 +28,7 @@ from configs import (
     REPO_ROOT, LOT_COUNT, LOT_SIZE, NIFTY_TOKEN, VIX_TOKEN,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
-    MARKET_OPEN, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
+    MARKET_OPEN, MARKET_CLOSE, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
     SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME, MAX_ENTRY_TIME,
 )
 from state import IrisState, save_state, load_state
@@ -202,8 +202,17 @@ class Iris:
         next_5m_close  = self._next_bar_close(datetime.now(), ENTRY_TF_MIN)
         last_update_ts = time.time()
 
+        market_close = datetime.strptime(MARKET_CLOSE, '%H:%M').time()
+
         while not self._shutdown and FLAG_PATH.exists():
             now = datetime.now()
+
+            # ── Market-close auto-shutdown ──────────────────────────────
+            if now.time() >= market_close:
+                logger.info(f'Market closed ({MARKET_CLOSE}) — shutting down.')
+                _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — market closed. Shutting down.',
+                       SLACK_TRADEBOT_CHANNEL)
+                break
 
             # ── In-trade: tight exit loop ───────────────────────────────
             if self.state.status == 'in_trade':
