@@ -17,7 +17,7 @@ from logger_setup import get_logger
 from configs import (
     REPO_ROOT, LOT_SIZE, QTY_FREEZE, FO_EXCHANGE,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
-    SEED_CANDLES, NIFTY_TOKEN, INDEX_EXCHANGE,
+    SEED_DAYS, NIFTY_TOKEN, INDEX_EXCHANGE, MARKET_OPEN,
     ITM_DEPTH_STEPS, STRIKE_STEP,
 )
 
@@ -100,6 +100,7 @@ def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame
     r   = ind.calculate(d).rename(columns={
         'Open': 'open', 'High': 'high', 'Low': 'low',
         'Close': 'close', 'Supertrend': 'supertrend'})
+    r['supertrend'] = pd.to_numeric(r['supertrend'], errors='coerce')  # None → NaN for warmup bars
     r['trend'] = (r['close'] > r['supertrend']).astype(object)
     r.loc[r['supertrend'].isna(), 'trend'] = pd.NA
     r['trend_flip'] = r['trend'] != r['trend'].shift(1)
@@ -129,23 +130,89 @@ def fetch_candles(obj, token: str, interval: str, from_dt: datetime,
     return []
 
 
+def _resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
+    """
+    Resample 5-min OHLCV DataFrame to 15-min, anchored at MARKET_OPEN (09:15).
+    Iterates day-by-day, same approach as Apollo's 15→75 resample.
+    """
+    market_open_time = pd.Timestamp(MARKET_OPEN).time()
+    candles_15 = []
+
+    for date, day_df in df_5m.groupby(df_5m['time_stamp'].dt.date):
+        anchor = pd.Timestamp(f'{date} {MARKET_OPEN}')
+        while anchor.time() <= pd.Timestamp(f'{date} 15:15').time():
+            window_end = anchor + timedelta(minutes=REGIME_TF_MIN) - timedelta(minutes=ENTRY_TF_MIN)
+            window = day_df[
+                (day_df['time_stamp'] >= anchor) &
+                (day_df['time_stamp'] <= window_end)
+            ]
+            if not window.empty:
+                candles_15.append({
+                    'time_stamp': anchor,
+                    'open':       window['open'].iloc[0],
+                    'high':       window['high'].max(),
+                    'low':        window['low'].min(),
+                    'close':      window['close'].iloc[-1],
+                    'volume':     window['volume'].sum(),
+                })
+            anchor += timedelta(minutes=REGIME_TF_MIN)
+
+    if not candles_15:
+        return pd.DataFrame()
+    return pd.DataFrame(candles_15).reset_index(drop=True)
+
+
 def seed_st(obj, now: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Fetch SEED_CANDLES worth of 5-min and 15-min Nifty candles.
+    Single FIVE_MINUTE fetch over SEED_DAYS calendar days (~975 bars, under API 1000-record limit).
+    Weekends and holidays are naturally absent — no special handling needed.
+    Resamples to 15-min anchored at 09:15 for the regime ST.
     Returns (df_5m_with_st, df_15m_with_st).
     """
-    from_5m  = now - timedelta(minutes=SEED_CANDLES * ENTRY_TF_MIN)
-    from_15m = now - timedelta(minutes=SEED_CANDLES * REGIME_TF_MIN)
+    from_dt = now - timedelta(days=SEED_DAYS)
+    raw     = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE', from_dt, now)
+    if not raw:
+        logger.error('seed_st: no candle data returned — cannot seed ST')
+        return pd.DataFrame(), pd.DataFrame()
 
-    # NOTE: 'FIVE_MINUTE' interval — verify Angel One serves this before
-    # first live/paper session. Fallback: fetch ONE_MINUTE and resample.
-    raw_5m  = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE',  from_5m,  now)
-    raw_15m = fetch_candles(obj, NIFTY_TOKEN, 'FIFTEEN_MINUTE', from_15m, now)
+    df = _candles_to_df(raw)
 
-    df_5m  = compute_st(_candles_to_df(raw_5m),  ST_PERIOD, ST_MULTIPLIER)
-    df_15m = compute_st(_candles_to_df(raw_15m), ST_PERIOD, ST_MULTIPLIER)
+    # Filter to market hours — drops overnight/weekend noise
+    market_open_time = pd.Timestamp(MARKET_OPEN).time()
+    df = df[df['time_stamp'].dt.time >= market_open_time].copy()
 
-    logger.info(f'Seeded: {len(df_5m)} 5-min bars, {len(df_15m)} 15-min bars')
+    # Drop incomplete current bar (still forming)
+    minutes_into_bar = now.minute % ENTRY_TF_MIN
+    current_bar_open = now.replace(minute=now.minute - minutes_into_bar,
+                                   second=0, microsecond=0)
+    df = df[df['time_stamp'] < current_bar_open].copy()
+
+    # Cap at 975 bars (13 × 75) — defensive guard against API returning more
+    if len(df) > 975:
+        df = df.iloc[-975:]
+
+    df = df.sort_values('time_stamp').reset_index(drop=True)
+
+    df_5m  = compute_st(df, ST_PERIOD, ST_MULTIPLIER)
+    df_15m = compute_st(_resample_to_15m(df), ST_PERIOD, ST_MULTIPLIER)
+
+    logger.info(
+        f'Seeded: {len(df_5m)} 5-min bars, {len(df_15m)} 15-min bars  |  '
+        f'5m: trend={df_5m.iloc[-1]["trend"]} ST={df_5m.iloc[-1]["supertrend"]:.2f}  '
+        f'15m: trend={df_15m.iloc[-1]["trend"]} ST={df_15m.iloc[-1]["supertrend"]:.2f}'
+    )
+
+    # Log last flip timestamps so we can verify signal history at startup
+    for label, dff in (('5m', df_5m), ('15m', df_15m)):
+        flips = dff[dff['trend_flip'] == True]
+        if not flips.empty:
+            last = flips.iloc[-1]
+            logger.info(
+                f'  Last {label} flip: {last["time_stamp"]}  '
+                f'→ {"bullish" if last["trend"] == True else "bearish"}  '
+                f'close={last["close"]:.2f}  ST={last["supertrend"]:.2f}'
+            )
+
     return df_5m, df_15m
 
 

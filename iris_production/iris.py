@@ -157,7 +157,7 @@ class Iris:
         # If restarting mid-trade, restore in-trade state
         if self.state.status == 'in_trade' and self.state.token:
             logger.info('Resuming in-trade state.')
-            self.feed.subscribe([(FO_EXCHANGE, self.state.token)])
+            self.feed.subscribe_options([self.state.token])
 
         self.state.status = 'watching'
         save_state(self.state)
@@ -381,7 +381,7 @@ class Iris:
             fill_price = self.feed.get_ltp(token) or 0.0
 
         # Subscribe to option LTP for monitoring (paper and live both need it)
-        self.feed.subscribe([(FO_EXCHANGE, token)])
+        self.feed.subscribe_options([token])
 
         self.state.status      = 'in_trade'
         self.state.direction   = direction
@@ -459,7 +459,7 @@ class Iris:
         pnl_pts = fill_price - entry                    # option points per unit
         pnl_rs  = pnl_pts * lots * LOT_SIZE            # total rupees
 
-        self.feed.unsubscribe([(FO_EXCHANGE, token)])
+        self.feed.unsubscribe_options([token])
 
         self.state.status = 'watching'
         save_state(self.state)

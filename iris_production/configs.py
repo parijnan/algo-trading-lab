@@ -53,9 +53,9 @@ ENTRY_TF_MIN      = 5               # entry timeframe in minutes
 REGIME_TF_MIN     = 15              # regime timeframe in minutes
 ST_PERIOD         = 10
 ST_MULTIPLIER     = 3.0
-SEED_CANDLES      = 150             # historical candles to seed the ST
-# NOTE: live signal uses getCandleData("FIVE_MINUTE") — verify this interval
-# is served by Angel One before first paper session.
+SEED_DAYS         = 13              # calendar days of 5-min history to fetch at seed
+                                    # 13d × 75 bars/day = ~975 bars (<1000 API limit)
+                                    # single FIVE_MINUTE call; resampled to 15m for regime ST
 
 # ── Exit parameters — calibrated from full backtest (stop=25%, target=10%, hold=30m)
 # Backtest: 1,172 trades, WR 59.5%, avg ₹220/lot, median ₹380/lot over 7.3 years.

@@ -258,7 +258,7 @@ apollo_production/data/user_credentials.csv
 # =============================================================================
 # Leto runtime
 # =============================================================================
-logs/
+/logs/
 data/leto_error_log.txt
 data/holidays.csv
 data/routing_state.json
@@ -320,7 +320,8 @@ iris_production/data/iris_state.csv
 iris_production/data/iris_active.flag
 iris_production/data/user_credentials.csv
 iris_production/data/holidays.csv
-iris_production/logs/
+iris_production/logs/*
+!iris_production/logs/.gitkeep
 
 # Iris backtest — per-trade logs and summary (generated outputs)
 iris_backtest/data/trade_logs/
