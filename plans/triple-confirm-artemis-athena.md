@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: PC3 Artemis Complete — PC4 (false-signal cost) pending
+## Status: PC1–PC4 Artemis Complete — decision pending
 
 ---
 
@@ -124,7 +124,7 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
 4. **False-signal cost**: model the P&L impact of the ~17–23% false-signal rate (unnecessary
    adjustment triggered by a TRIPLE_CONFIRM that reverses). Must be outweighed by the P&L
    gain from earlier exits on true signals.
-   ⏳ **PENDING**
+   ✅ **DONE** — PC4 complete. Results below.
 
 ### PC3 Timing Analysis Results
 
@@ -152,6 +152,33 @@ False signal (10 fires, no SL would have fired): 4 better / 6 worse, net **−61
 **Key finding:** TC lead time is never marginal. It either fires 13–53 min before an intraday SL (meaningful same-session advantage) or fires the prior afternoon before a gap-open SL (overnight protection). The cross-day cluster is where the largest P&L swings occur — both the biggest win (+166.60) and biggest loss (−84.32).
 
 The false-signal drag (−61.34 pts Nifty) is the cost of TC exiting a leg pre-emptively when the market doesn't follow through. This is PC4 territory.
+
+### PC4 False-Signal Cost Analysis (Nifty, 18 TC fires)
+
+**Per-fire averages:**
+
+| Category | Fires | Avg delta | Win rate | Net total |
+|----------|-------|-----------|----------|-----------|
+| True signal (SL would have fired) | 8 | **+19.20 pts** | 88% (7/8) | +153.60 pts |
+| False signal — survived to expiry | 7 | +2.04 pts | 3/7 | +14.29 pts |
+| False signal — closed at ELM | 3 | −25.21 pts | 1/3 | −75.63 pts |
+| **All false signals** | **10** | **−6.13 pts** | 4/10 | **−61.34 pts** |
+| **All TC fires** | **18** | **+5.13 pts** | — | **+92.26 pts** |
+
+True/false ratio: **3.13×** — true signal gain per fire is 3x the false signal cost per fire.
+Even at a 50% false rate the strategy is net positive: 0.5 × 19.20 − 0.5 × 6.13 = +6.54 pts/fire.
+
+**Key finding — "closed at ELM" is the costly false signal class:**
+- TC exits a threatened leg early, but the market partially reverses before ELM
+- The leg would have recovered time-decay value by ELM; early exit locks in a worse price
+- Average cost: −25.21 pts/fire vs nearly neutral "survived to expiry" cases (+2.04 pts/fire)
+
+**"Survived to expiry" false signals are nearly neutral (+2.04 avg):** TC exits early and
+adjusts the surviving leg — the adjustment partially or fully compensates for the unnecessary
+early exit, leaving the net delta close to zero.
+
+**Overall verdict:** TC is net positive on Artemis Nifty at +5.13 pts per TC fire, with true
+signal gain dominating false signal drag by 3:1 on a per-fire basis.
 
 ### PC2 Artemis Results (matched-week comparison, expiry-merged)
 
