@@ -249,6 +249,7 @@ apollo_production/data/error_log.txt
 # Artemis Backtest — generated and output files
 artemis_backtest/contracts.csv
 artemis_backtest/data/
+artemis_backtest/data_tc/
 # Apollo Production — debug log file (logs/ folder already excluded above,
 # but explicit here for clarity)
 apollo_production/logs/debug.log
@@ -318,6 +319,7 @@ iris_backtest/data/*.csv
 # Iris production — runtime data and logs
 iris_production/data/iris_state.csv
 iris_production/data/iris_active.flag
+iris_production/data/iris.pid
 iris_production/data/user_credentials.csv
 iris_production/data/holidays.csv
 iris_production/logs/*
