@@ -9,8 +9,8 @@ Lifecycle:
             trend flip, time cutoff
   Stop   → graceful teardown
 
-Paper mode is ON by default (PAPER_MODE=True in configs.py).
-Set PAPER_MODE=False only after paper-trading parity is confirmed.
+DRY_RUN is ON by default (DRY_RUN=True in configs.py).
+Set DRY_RUN=False only after paper-trading parity is confirmed.
 """
 import os
 import sys
@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from configs import (
-    PAPER_MODE, DATA_DIR, FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
+    DRY_RUN, DATA_DIR, FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
     REPO_ROOT, LOT_COUNT, LOT_SIZE, NIFTY_TOKEN, VIX_TOKEN,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
@@ -36,7 +36,7 @@ from logger_setup import get_logger
 from functions import (
     seed_st, compute_st, fetch_candles, _candles_to_df,
     select_expiry, select_strike_and_token,
-    place_order, verify_fill,
+    place_order, get_fill_price, OrderFillWatcher,
     check_no_active_strategies,
 )
 
@@ -97,10 +97,11 @@ class Iris:
         self.auth_token     = auth_token
         self._api_key       = api_key
         self._client_code   = client_code
-        self.instrument_df  = instrument_df
-        self.state         = load_state()
-        self.feed          = None
-        self._shutdown     = False
+        self.instrument_df    = instrument_df
+        self.state            = load_state()
+        self.feed             = None
+        self.order_watcher    = OrderFillWatcher()
+        self._shutdown        = False
 
         # Live ST state — seeded in _setup()
         self._df_5m        = None   # 5-min bar history with supertrend
@@ -120,8 +121,8 @@ class Iris:
     # -----------------------------------------------------------------------
 
     def _setup(self) -> bool:
-        logger.info(f'Iris starting  [PAPER_MODE={PAPER_MODE}]')
-        _slack(f'{"[PAPER] " if PAPER_MODE else ""}⚡ *Iris* starting — '
+        logger.info(f'Iris starting  [DRY_RUN={DRY_RUN}]')
+        _slack(f'{"[PAPER] " if DRY_RUN else ""}⚡ *Iris* starting — '
                f'ST_FAST ITM-150, LOT_COUNT={LOT_COUNT}',
                SLACK_TRADEBOT_CHANNEL)
 
@@ -141,7 +142,7 @@ class Iris:
         else:
             logger.warning('15-min ST warmup not complete — regime undefined.')
 
-        # WebSocket feed (Nifty index LTP only; option token added on entry)
+        # WebSocket price feed (Nifty index LTP only; option token added on entry)
         feed_token = self.obj.getfeedToken()
         self.feed  = SharedFeed()
         self.feed.start(
@@ -153,6 +154,15 @@ class Iris:
             alert_callback = lambda m: (_slack(f'⚠️ *Iris*: {m}', SLACK_ERRORS_CHANNEL),
                                         logger.warning(m)),
         )
+
+        # Order-update WebSocket (live only — dry run skips)
+        if not DRY_RUN:
+            self.order_watcher.start(
+                auth_token   = self.auth_token,
+                api_key      = self._api_key,
+                client_code  = self._client_code,
+                feed_token   = feed_token,
+            )
 
         # If restarting mid-trade, restore in-trade state
         if self.state.status == 'in_trade' and self.state.token:
@@ -178,7 +188,7 @@ class Iris:
         self.state.status = 'idle'
         save_state(self.state)
         logger.info('Iris stopped.')
-        _slack(f'{"[PAPER] " if PAPER_MODE else ""}⏹ *Iris* stopped.',
+        _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* stopped.',
                SLACK_TRADEBOT_CHANNEL)
 
     # -----------------------------------------------------------------------
@@ -365,23 +375,19 @@ class Iris:
         if not symbol:
             return
 
-        order_id = place_order(self.obj, 'BUY', symbol, token,
-                               LOT_COUNT, PAPER_MODE)
+        order_id = place_order(self.obj, 'BUY', symbol, token, LOT_COUNT, DRY_RUN)
         if not order_id:
             logger.error('Entry order failed.')
             return
 
-        fill_price = verify_fill(self.obj, order_id, symbol, LOT_COUNT, PAPER_MODE)
-        if fill_price is None and not PAPER_MODE:
+        # get_fill_price handles feed subscription, WS fast path, and REST fallback
+        fill_price = get_fill_price(self.obj, self.order_watcher, order_id,
+                                    symbol, token, LOT_COUNT, DRY_RUN, self.feed)
+        if fill_price is None and not DRY_RUN:
             logger.error('Fill verification failed — position state unknown.')
             return
 
-        # In paper mode use current LTP as proxy entry price
-        if fill_price is None:
-            fill_price = self.feed.get_ltp(token) or 0.0
-
-        # Subscribe to option LTP for monitoring (paper and live both need it)
-        self.feed.subscribe_options([token])
+        fill_price = fill_price or 0.0
 
         self.state.status      = 'in_trade'
         self.state.direction   = direction
@@ -396,7 +402,7 @@ class Iris:
         self.state.lots        = LOT_COUNT
         save_state(self.state)
 
-        msg = (f'{"[PAPER] " if PAPER_MODE else ""}⚡ *Iris*: Entered {direction.upper()}\n'
+        msg = (f'{"[PAPER] " if DRY_RUN else ""}⚡ *Iris*: Entered {direction.upper()}\n'
                f'Nifty: {spot:.0f} | {strike}{option_type.upper()} {expiry}\n'
                f'Entry premium: {fill_price:.1f} pts | Lots: {LOT_COUNT}\n'
                f'Stop: -{STOP_LOSS_PCT*100:.0f}%  Target: +{PROFIT_TARGET_PCT*100:.0f}%  '
@@ -451,8 +457,9 @@ class Iris:
         lots   = self.state.lots
         entry  = self.state.entry_price or 0
 
-        order_id  = place_order(self.obj, 'SELL', symbol, token, lots, PAPER_MODE)
-        fill_price = verify_fill(self.obj, order_id, symbol, lots, PAPER_MODE)
+        order_id   = place_order(self.obj, 'SELL', symbol, token, lots, DRY_RUN)
+        fill_price = get_fill_price(self.obj, self.order_watcher, order_id,
+                                    symbol, token, lots, DRY_RUN, self.feed)
         if fill_price is None:
             fill_price = self.feed.get_ltp(token) or entry
 
@@ -464,7 +471,7 @@ class Iris:
         self.state.status = 'watching'
         save_state(self.state)
 
-        msg = (f'{"[PAPER] " if PAPER_MODE else ""}✅ *Iris*: Exited — {reason}\n'
+        msg = (f'{"[PAPER] " if DRY_RUN else ""}✅ *Iris*: Exited — {reason}\n'
                f'{self.state.strike}{(self.state.option_type or "").upper()} | '
                f'Entry {entry:.1f} → Exit {fill_price:.1f} | '
                f'P&L: {pnl_pts:+.1f} pts  ₹{pnl_rs:+,.0f}')
@@ -488,7 +495,7 @@ class Iris:
         if entry > 0:
             pnl_pct = (ltp - entry) / entry
             pnl_rs  = (ltp - entry) * (self.state.lots or 0) * LOT_SIZE
-            msg = (f'{"[PAPER] " if PAPER_MODE else ""}📊 *Iris* update: '
+            msg = (f'{"[PAPER] " if DRY_RUN else ""}📊 *Iris* update: '
                    f'{self.state.symbol}  LTP={ltp:.1f}  '
                    f'P&L={pnl_pct:+.1%}  ₹{pnl_rs:+,.0f}')
             logger.info(f'Update: {self.state.symbol}  LTP={ltp:.1f}  '

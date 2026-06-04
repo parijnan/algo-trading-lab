@@ -2,8 +2,8 @@
 Iris production configuration.
 All tuneable parameters live here — nothing hardcoded in iris.py.
 
-PAPER_MODE = True  → log intended orders, place nothing.
-             False → live orders. Only flip after paper parity is confirmed.
+DRY_RUN = True  → log intended orders, place nothing; use feed LTP as entry price.
+          False → live orders. Only flip after paper parity is confirmed.
 """
 from pathlib import Path
 
@@ -18,7 +18,7 @@ CREDS_FILE   = DATA_DIR / 'user_credentials.csv'
 HOLIDAYS_FILE = DATA_DIR / 'holidays.csv'
 
 # ── Kill switch ───────────────────────────────────────────────────────────────
-PAPER_MODE = True   # MUST be manually set to False for live trading
+DRY_RUN = True      # MUST be manually set to False for live trading
 
 # ── Signal entry time constraints ────────────────────────────────────────────
 # 332 of 360 trades in the 09:15 window fire at exactly 09:20 (first 5-min bar).
@@ -68,6 +68,7 @@ EXIT_BY_TIME      = '15:15'         # daily hard cutoff regardless of P&L
 MARKET_OPEN       = '09:15'
 MARKET_CLOSE      = '15:30'
 TRADE_UPDATE_SEC  = 30              # Slack update cadence when in-trade (seconds)
+ORDER_TIMEOUT_SEC = 30              # seconds to wait for order fill (WS fast path + REST fallback)
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
 # Channels imported from leto_config at runtime to avoid hardcoding tokens here.

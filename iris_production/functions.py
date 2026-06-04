@@ -5,9 +5,12 @@ Includes:
   - SupertrendIndicator (copied from apollo_production/technical_indicators.py)
   - Live ST computation helpers
   - Single-leg order placement + fill verification
+  - OrderFillWatcher — Angel One order-update WebSocket (ported from Apollo)
   - Guardian check (refuse to start if another strategy is live)
 """
 import sys
+import json
+import threading
 import time
 import pandas as pd
 import numpy as np
@@ -18,8 +21,14 @@ from configs import (
     REPO_ROOT, LOT_SIZE, QTY_FREEZE, FO_EXCHANGE,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     SEED_DAYS, NIFTY_TOKEN, INDEX_EXCHANGE, MARKET_OPEN,
-    ITM_DEPTH_STEPS, STRIKE_STEP,
+    ITM_DEPTH_STEPS, STRIKE_STEP, ORDER_TIMEOUT_SEC,
 )
+
+try:
+    from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
+    _ORDER_WS_AVAILABLE = True
+except ImportError:
+    _ORDER_WS_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -274,17 +283,104 @@ def select_strike_and_token(instrument_df: pd.DataFrame, spot: float,
 
 
 # ---------------------------------------------------------------------------
+# Order fill WebSocket (ported from Apollo)
+# ---------------------------------------------------------------------------
+
+class OrderFillWatcher(SmartWebSocketOrderUpdate if _ORDER_WS_AVAILABLE else object):
+    """
+    Background daemon for Angel One order-update WebSocket.
+    Captures AB05 (complete), AB02 (cancelled), AB03 (rejected) events
+    into live_orders keyed by orderid. _ws_ready is set on AB00 ack.
+    Strategy polls live_orders for fill price instead of calling orderBook().
+    Falls back gracefully if SmartWebSocketOrderUpdate is unavailable.
+    """
+    _TERMINAL_STATUSES = ('AB05', 'AB02', 'AB03')
+
+    def __init__(self):
+        if _ORDER_WS_AVAILABLE:
+            # Skip parent __init__ — it runs logzero with a relative path
+            self.wsapp                 = None
+            self.last_pong_timestamp   = None
+            self.current_retry_attempt = 0
+            self.auth_token            = None
+            self.api_key               = None
+            self.client_code           = None
+            self.feed_token            = None
+        self._ws_ready   = threading.Event()
+        self.live_orders = {}
+        self._lock       = threading.Lock()
+
+    def start(self, auth_token, api_key, client_code, feed_token):
+        if not _ORDER_WS_AVAILABLE:
+            logger.warning('OrderFillWatcher: SmartWebSocketOrderUpdate not available — REST fallback only.')
+            return
+        self.auth_token  = auth_token
+        self.api_key     = api_key
+        self.client_code = client_code
+        self.feed_token  = feed_token
+        threading.Thread(target=self._run, daemon=True, name='OrderFillWatcher').start()
+
+    def _run(self):
+        try:
+            self.connect()
+        except Exception:
+            pass  # Non-fatal — falls back to REST orderBook
+
+    def on_open(self, wsapp):
+        pass
+
+    def on_message(self, wsapp, message):
+        self._handle(message)
+
+    def on_data(self, wsapp, message, data_type, continue_flag):
+        self._handle(message)  # AB00 ack arrives here
+
+    def on_pong(self, wsapp, data):
+        heartbeat = getattr(self, 'HEARTBEAT_MESSAGE', None)
+        if heartbeat and data == heartbeat:
+            self.last_pong_timestamp = time.time()
+        else:
+            self._handle(data)
+
+    def on_error(self, wsapp, error):
+        pass
+
+    def on_close(self, wsapp, close_status_code, close_msg):
+        self._ws_ready.clear()
+        if _ORDER_WS_AVAILABLE:
+            self.retry_connect()
+
+    def _handle(self, raw):
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+        except Exception:
+            return
+        status = parsed.get('order-status')
+        if status == 'AB00':
+            self._ws_ready.set()
+            logger.info('OrderFillWatcher: WS connected and ready.')
+            return
+        if status in self._TERMINAL_STATUSES:
+            od = parsed.get('orderData')
+            if od:
+                oid = od.get('orderid')
+                if oid:
+                    with self._lock:
+                        self.live_orders[oid] = od
+
+
+# ---------------------------------------------------------------------------
 # Order placement (single leg, market order)
 # ---------------------------------------------------------------------------
 
 def place_order(obj, transaction_type: str, symbol: str, token: str,
-                lots: int, paper_mode: bool) -> str | None:
+                lots: int, dry_run: bool) -> str | None:
     """
     Place a single-leg MARKET order. Returns order_id or None.
-    In paper mode: logs the intent and returns a dummy ID.
+    In dry-run mode: logs the intent and returns a dummy ID.
     """
     qty = lots * LOT_SIZE
-    if paper_mode:
+    if dry_run:
         logger.info(f'[PAPER] {transaction_type} {qty} units of {symbol} '
                     f'(token={token})')
         return 'PAPER_ORDER_ID'
@@ -313,26 +409,70 @@ def place_order(obj, transaction_type: str, symbol: str, token: str,
         return None
 
 
-def verify_fill(obj, order_id: str, symbol: str, lots: int,
-                paper_mode: bool) -> float | None:
+def get_fill_price(obj, order_watcher: OrderFillWatcher, order_id: str,
+                   symbol: str, token: str, lots: int,
+                   dry_run: bool, feed) -> float | None:
     """
-    Poll orderBook for fill price. Returns avg fill price or None.
-    In paper mode: returns None (caller uses LTP as proxy).
-    Timeout: 30 seconds.
+    Obtain fill price after order placement.
+
+    dry_run=True (paper trading):
+        Subscribes to option LTP feed, waits up to 3s for first tick,
+        falls back to REST ltpData.
+
+    dry_run=False (live):
+        Fast path — polls OrderFillWatcher WS live_orders for averageprice.
+        Falls back to REST orderBook polling if WS not ready or times out.
+
+    Returns avg fill price, or None on failure (live only — caller should abort).
     """
-    if paper_mode:
+    # Subscribe to option feed so LTP monitoring is ready regardless of path
+    feed.subscribe_options([token])
+
+    if dry_run:
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            ltp = feed.get_ltp(token)
+            if ltp:
+                return ltp
+            time.sleep(0.1)
+        # REST fallback — ltpData gives current market price
+        try:
+            ltp = float(obj.ltpData(FO_EXCHANGE, symbol, token)['data']['ltp'])
+            logger.info(f'[PAPER] Entry price via REST ltpData: {ltp}')
+            return ltp
+        except Exception as e:
+            logger.warning(f'[PAPER] ltpData fallback failed: {e}')
         return None
 
-    expected_qty = lots * LOT_SIZE
-    deadline     = time.time() + 30
+    # --- Live: WS fast path ---
+    if order_watcher._ws_ready.is_set():
+        deadline = time.time() + ORDER_TIMEOUT_SEC
+        while time.time() < deadline:
+            with order_watcher._lock:
+                od = order_watcher.live_orders.get(str(order_id))
+            if od:
+                avg = float(od.get('averageprice') or 0.0)
+                qty = int(od.get('filledshares') or 0)
+                if qty > 0:
+                    logger.info(f'Fill (WS): {symbol} avg={avg} qty={qty}')
+                    return avg
+            time.sleep(0.05)
+        logger.warning(f'WS fill timeout for {order_id} ({symbol}) — falling back to REST.')
+    else:
+        logger.info('OrderFillWatcher WS not ready — using REST orderBook.')
+
+    # --- Live: REST fallback ---
+    deadline = time.time() + ORDER_TIMEOUT_SEC
     while time.time() < deadline:
         try:
-            book = obj.orderBook()
+            book   = obj.orderBook()
             orders = book.get('data') or []
             for o in orders:
                 if str(o.get('orderid')) == str(order_id):
                     if o.get('status') == 'complete':
-                        return float(o.get('averageprice', 0))
+                        avg = float(o.get('averageprice', 0))
+                        logger.info(f'Fill (REST): {symbol} avg={avg}')
+                        return avg
                     if o.get('status') in ('rejected', 'cancelled'):
                         logger.error(f'Order {order_id} {o.get("status")}')
                         return None
