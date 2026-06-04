@@ -1,6 +1,6 @@
 # Plan: Iris — Auto-Entry Scalping Strategy (Manual Arm/Disarm)
 
-## Status: Track A COMPLETE · Track B Backtest COMPLETE · Paper mode — pending deployment
+## Status: Track A COMPLETE · Track B Backtest COMPLETE · Paper mode — in progress (first session 2026-06-04)
 
 ---
 
@@ -83,11 +83,12 @@ Skip window 10:45–11:30: three consecutive dead-zone windows (WR 31–43%, nea
 target rate) during post-opening-move settling. 11:30 recovers sharply to 72.7% WR.
 
 ### Production harness
-- `iris_production/iris.py` — main loop (standalone login, ST_FAST live signal, 4 exits)
+- `iris_production/iris.py` — main loop (standalone login, ST_FAST live signal, 4 exits + market-close auto-shutdown)
 - `iris_production/configs.py` — all calibrated params
 - `iris_production/state.py` — IrisState (idle/watching/in_trade)
 - `iris_production/functions.py` — SupertrendIndicator, order placement, guardian check
-- **PAPER_MODE=True** — set to False only after paper parity confirmed
+- `iris_production/README.md` — full execution flowchart and module documentation
+- **DRY_RUN=True** — set to False only after paper parity confirmed
 
 ### Guardian check
 Iris refuses to start if Apollo, Athena, or Artemis has an open position.
@@ -95,10 +96,10 @@ Angel One allows only one active session — a new Iris login would invalidate t
 running strategy session.
 
 ### Pending before live deployment
-1. Confirm Angel One serves `FIVE_MINUTE` interval from `getCandleData` (first paper session)
+1. ~~Confirm Angel One serves `FIVE_MINUTE` interval from `getCandleData`~~ ✓ (first paper session 2026-06-04)
 2. Run paper mode for 2–3 weeks and diff live ST_FAST flips against backtest signal list
 3. Calibrate stop/target after observing live P&L distribution
-4. Add "Start Iris" / "Stop Iris" Slack buttons to `slack_listener.py`
+4. Clean start/stop: `python iris_production/iris.py` to start; delete `iris_active.flag` to stop cleanly
 
 ---
 
@@ -110,13 +111,13 @@ running strategy session.
 4. ~~Track B — Full backtest with per-trade logs~~ ✓
 5. ~~Track B — Time-of-day analysis + skip window calibration~~ ✓
 6. ~~Track B — Execution harness skeleton (paper mode)~~ ✓
-7. **Paper trading** (2–3 weeks, verify parity) ← next
+7. **Paper trading** (2–3 weeks, verify parity) ← in progress (started 2026-06-04)
 8. Live deployment (small lot count, monitored)
 
 ---
 
 ## Constraints
 
-- No live orders until paper parity is confirmed (PAPER_MODE guard in configs.py).
+- No live orders until paper parity is confirmed (DRY_RUN guard in configs.py).
 - No changes to Leto, Artemis, Athena, or Apollo during Iris paper/live sessions.
 - Futures trading excluded — no broker-side enabling done; options infrastructure proven.

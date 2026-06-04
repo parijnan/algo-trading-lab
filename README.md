@@ -21,7 +21,7 @@ Leto's VIX routing.
 | Max hold | 30 min per trade · last entry 15:00 open · daily cutoff 15:15 |
 | Skip window | 10:45–11:30 (dead zone — post-opening settling) |
 | Backtest | 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot (7.4 yr) |
-| Status | **Paper mode** — `PAPER_MODE=True` in configs.py |
+| Status | **Paper mode** — `DRY_RUN=True` in configs.py (first session 2026-06-04) |
 
 ### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
 A market-neutral credit spread strategy that starts as a weekly Sensex Iron Condor. During trends, it dynamically transforms into a **directional credit spread** by exiting the tested side and reinforcing the winning side with rolled strikes and additional lots (position sizing scales up to 150% of the base).
@@ -546,8 +546,9 @@ algo-trading-lab/
 │       ├── trade_summary.csv
 │       └── trade_logs/
 ├── iris_production/                # Iris live paper/production trading
-│   ├── iris.py                     # Main strategy loop (PAPER_MODE=True by default)
-│   ├── configs.py                  # All tunable parameters — flip PAPER_MODE here
+│   ├── README.md                   # Execution flowchart, signal/exit tables, module docs
+│   ├── iris.py                     # Main strategy loop (DRY_RUN=True by default)
+│   ├── configs.py                  # All tunable parameters — flip DRY_RUN here
 │   ├── state.py                    # IrisState dataclass + CSV persistence
 │   ├── functions.py                # ST helpers, strike selection, order placement, guardian check
 │   ├── logger_setup.py             # File + console logging
