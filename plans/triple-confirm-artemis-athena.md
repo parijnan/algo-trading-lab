@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: PC2 Artemis Complete — PC3 (timing) and PC4 (false-signal cost) pending
+## Status: PC3 Artemis Complete — PC4 (false-signal cost) pending
 
 ---
 
@@ -119,12 +119,39 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
 
 3. **Timing analysis**: quantify how early TRIPLE_CONFIRM fires before a typical SL/parachute
    trigger. If the typical lead time is <5 min, the benefit is marginal.
-   ⏳ **PENDING**
+   ✅ **DONE** — PC3 complete. Results below.
 
 4. **False-signal cost**: model the P&L impact of the ~17–23% false-signal rate (unnecessary
    adjustment triggered by a TRIPLE_CONFIRM that reverses). Must be outweighed by the P&L
    gain from earlier exits on true signals.
    ⏳ **PENDING**
+
+### PC3 Timing Analysis Results
+
+TC lead time before index_sl/option_sl, categorised across all TC-fired weeks:
+
+**Nifty (18 TC fires, 8 true signals where SL would have fired)**
+
+Lead time distribution is **bimodal** — no middle ground:
+
+| Cluster | Count | Lead time | What it means |
+|---------|-------|-----------|---------------|
+| Same-day | 4 | 13–53 min | TC fires intraday during a trending session, 13–53 min before index_sl triggers |
+| Cross-day | 4 | 19–22 hrs | TC fires Monday/Tuesday afternoon; SL would have fired at next morning's 09:15 gap-open |
+
+True signal P&L delta: **+153.60 pts** across 8 weeks (TC exits early → adjustment captures more)  
+False signal (10 fires, no SL would have fired): 4 better / 6 worse, net **−61.34 pts**
+
+**Sensex (2 TC fires, both true signals, both cross-day)**
+
+| Expiry | Lead time | Delta |
+|--------|-----------|-------|
+| 2025-11-13 | 42.9 hrs (Mon → Wed 09:15) | −84.32 pts |
+| 2025-12-18 | 19.9 hrs (Tue → Wed 10:06) | +166.60 pts |
+
+**Key finding:** TC lead time is never marginal. It either fires 13–53 min before an intraday SL (meaningful same-session advantage) or fires the prior afternoon before a gap-open SL (overnight protection). The cross-day cluster is where the largest P&L swings occur — both the biggest win (+166.60) and biggest loss (−84.32).
+
+The false-signal drag (−61.34 pts Nifty) is the cost of TC exiting a leg pre-emptively when the market doesn't follow through. This is PC4 territory.
 
 ### PC2 Artemis Results (matched-week comparison, expiry-merged)
 
@@ -172,3 +199,5 @@ distinguishable from SL-triggered and manual adjustments in the logs.
 | `artemis_backtest/data_tc/trade_summary_tc_sensex.csv` | TC backtest output — Sensex (gitignored) |
 | `artemis_backtest/data_tc/comparison_nifty.csv` | Matched baseline vs TC — Nifty (gitignored) |
 | `artemis_backtest/data_tc/comparison_sensex.csv` | Matched baseline vs TC — Sensex (gitignored) |
+| `artemis_backtest/data_tc/pc3_timing_nifty.csv` | PC3 timing analysis — Nifty (gitignored) |
+| `artemis_backtest/data_tc/pc3_timing_sensex.csv` | PC3 timing analysis — Sensex (gitignored) |
