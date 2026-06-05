@@ -109,16 +109,6 @@ subsequent bullish TC fires → exit the PE parachute AND buy back the PE safety
 gap-down protection). As an additional safety, exit the PE parachute and rebuy the wing if
 `spot >= pe_sell_strike` (symmetric with the CE parachute's `spot <= ce_sell_strike` exit).
 
----
-
-**Simultaneous TC actions**
-
-On a single TC fire, both CE and PE sides may need action:
-- Bullish TC with no CE parachute + active PE parachute → enter CE parachute AND exit PE
-  parachute + rebuy PE wing (both in the same candle)
-- Bearish TC with active CE parachute + no PE parachute → exit CE parachute AND enter PE
-  parachute + close PE wing (both in the same candle)
-
 ### Key design decisions for the backtest
 
 1. **CE parachute: TC supplements, does not replace the spot trigger.** Whichever fires first
@@ -332,62 +322,54 @@ def _build_tc_signal_map(tc_csv):
     return dict(zip(df['date'], df['direction']))   # date → 'bullish' | 'bearish'
 ```
 
-**`check_tc()` — returns a set of actions for the current candle**:
+**`check_tc_ce()` and `check_tc_pe()` — one function per side**:
 ```python
-def check_tc(ts: pd.Timestamp, tc_signal_map: dict,
-             ce_chute_active: bool, ce_chute_attempts: int,
-             pe_chute_active: bool, pe_chute_attempts: int,
-             max_attempts: int) -> list[str]:
+def check_tc_ce(ts, tc_signal_map, ce_chute_active, ce_chute_attempts, max_attempts):
     tc_dir = tc_signal_map.get(ts.date())
-    if tc_dir is None:
-        return []
-    actions = []
-    if tc_dir == 'bullish':
-        if not ce_chute_active and ce_chute_attempts < max_attempts:
-            actions.append('ce_chute_enter')   # early CE parachute entry
-        if pe_chute_active:
-            actions.append('pe_chute_exit')    # PE parachute exit + wing rebuy
-    if tc_dir == 'bearish':
-        if ce_chute_active:
-            actions.append('ce_chute_exit')    # CE parachute exit
-        if not pe_chute_active and pe_chute_attempts < max_attempts:
-            actions.append('pe_chute_enter')   # PE parachute entry + wing close
-    return actions
+    if tc_dir == 'bullish' and not ce_chute_active and ce_chute_attempts < max_attempts:
+        return 'ce_chute_enter'
+    if tc_dir == 'bearish' and ce_chute_active:
+        return 'ce_chute_exit'
+    return None
+
+def check_tc_pe(ts, tc_signal_map, pe_chute_active, pe_chute_attempts, max_attempts):
+    tc_dir = tc_signal_map.get(ts.date())
+    if tc_dir == 'bearish' and not pe_chute_active and pe_chute_attempts < max_attempts:
+        return 'pe_chute_enter'   # buy PE parachute + close PE wing
+    if tc_dir == 'bullish' and pe_chute_active:
+        return 'pe_chute_exit'    # sell PE parachute + rebuy PE wing
+    return None
 ```
+
+Note: simultaneous CE and PE actions on the same TC fire are theoretically possible but
+occurred at most once in 6 years of data (2021-11-25/26, conditional on an overnight
+parachute staying active). Not worth special-casing — the two functions are independent and
+the main loop handles each result separately in the same candle.
 
 **Main loop modifications** (inside the candle-by-candle iteration):
 ```python
-actions = check_tc(ts, tc_signal_map,
-                   ce_chute_active, ce_chute_attempts,
-                   pe_chute_active, pe_chute_attempts,
-                   EMERGENCY_MAX_ATTEMPTS)
+exec_ts = ts + pd.Timedelta(minutes=1)
 
-for action in actions:
-    exec_ts = ts + pd.Timedelta(minutes=1)
-    if action == 'ce_chute_enter':
-        # buy 0.35-delta monthly CE at exec_ts open
-        ce_chute_active = True; ce_chute_attempts += 1
-    elif action == 'ce_chute_exit':
-        # sell CE parachute at exec_ts open
-        ce_chute_active = False
-    elif action == 'pe_chute_enter':
-        # buy 0.35-delta monthly PE at exec_ts open
-        # sell PE safety wing at exec_ts open
-        pe_chute_active = True; pe_wing_active = False; pe_chute_attempts += 1
-    elif action == 'pe_chute_exit':
-        # sell PE parachute at exec_ts open
-        # buy 0.35-delta monthly PE safety wing at exec_ts open (0.05 delta)
-        pe_chute_active = False; pe_wing_active = True
+ce_action = check_tc_ce(ts, tc_signal_map, ce_chute_active, ce_chute_attempts, EMERGENCY_MAX_ATTEMPTS)
+if ce_action == 'ce_chute_enter':
+    ce_chute_active = True; ce_chute_attempts += 1  # buy CE parachute
+elif ce_action == 'ce_chute_exit':
+    ce_chute_active = False                          # sell CE parachute
+
+pe_action = check_tc_pe(ts, tc_signal_map, pe_chute_active, pe_chute_attempts, EMERGENCY_MAX_ATTEMPTS)
+if pe_action == 'pe_chute_enter':
+    pe_chute_active = True; pe_wing_active = False; pe_chute_attempts += 1  # buy PE parachute + sell wing
+elif pe_action == 'pe_chute_exit':
+    pe_chute_active = False; pe_wing_active = True                          # sell PE parachute + rebuy wing
 
 # Reactive CE spot check still runs if no TC CE action this candle:
 if not ce_chute_active and ce_chute_attempts < EMERGENCY_MAX_ATTEMPTS:
     if spot > ce_sell_strike + EMERGENCY_TRIGGER_OFFSET:   # +150 pts
         # normal CE parachute entry ...
 
-# PE spot-based parachute exit (symmetric with CE reversal exit):
+# PE spot-based parachute exit (if spot reverses past pe_sell_strike):
 if pe_chute_active and spot >= pe_sell_strike:
-    # sell PE parachute, rebuy PE wing
-    pe_chute_active = False; pe_wing_active = True
+    pe_chute_active = False; pe_wing_active = True  # sell PE parachute + rebuy wing
 ```
 
 **Output columns added to `trade_summary_tc.csv`** (on top of baseline schema):
