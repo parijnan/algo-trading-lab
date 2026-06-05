@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena track — in progress
+## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena PC1 done · backtest_tc.py implemented — ready to run
 
 ---
 
@@ -206,7 +206,7 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
 3. **Strategy-level backtest**: run `athena_backtest/backtest_tc.py` with TC as an additional
    parachute trigger; compare total P&L, parachute entry/exit prices, and false-signal cost
    vs baseline `backtest.py`.
-   ⬜ **TODO** — implement backtest_tc.py (see Implementation Sketch below).
+   ✅ **DONE** — `backtest_tc.py` implemented (2026-06-05). Run with: `python athena_backtest/backtest_tc.py`
 
 4. **Timing analysis (PC3-equivalent)**: quantify how early TC fires before spot crosses the
    150-pt trigger threshold. If lead time is typically <5 min, benefit is marginal.
