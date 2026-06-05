@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena PC1 done · backtest_tc.py implemented — ready to run
+## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena PC1–PC3 Complete (+66.7% improvement, concentrated)
 
 ---
 
@@ -198,24 +198,22 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
    ✅ **DONE** — direct applicability, no cross-instrument adjustment needed.
 
 2. **Signal funnel analysis**: of the ~18 Nifty TC fires/year, how many fall inside an
-   active Athena session? And of those, how many are bullish (CE parachute candidate) vs
-   bearish (PE parachute candidate)? Athena sessions run ~40/year, holding window is entry
-   Monday to ELM Wednesday (~3 days). Need actual counts split by direction from data.
-   ⬜ **TODO** — run against `TRIPLE_CONFIRM_excursions.csv` and Athena trade dates.
+   active Athena session?
+   ✅ **DONE** — 43 TC fires across 121 matched trades (2020–2026): 24 CE-early, 23 PE-triggered,
+   4 both. ~7 TC-fired trades/year.
 
 3. **Strategy-level backtest**: run `athena_backtest/backtest_tc.py` with TC as an additional
    parachute trigger; compare total P&L, parachute entry/exit prices, and false-signal cost
    vs baseline `backtest.py`.
-   ✅ **DONE** — `backtest_tc.py` implemented (2026-06-05). Run with: `python athena_backtest/backtest_tc.py`
+   ✅ **DONE** — `backtest_tc.py` run 2026-06-05. Results: see PC2 Athena section below.
 
-4. **Timing analysis (PC3-equivalent)**: quantify how early TC fires before spot crosses the
-   150-pt trigger threshold. If lead time is typically <5 min, benefit is marginal.
-   ⬜ **TODO** — derive from TC fire timestamp vs candle-by-candle spot in Athena trade logs.
+4. **Timing analysis (PC3-equivalent)**: Athena TC chutes are held to ELM unless bearish/bullish
+   TC fires — no "lead time before reactive threshold" concept applies (TC exit is TC-only).
+   ✅ **DONE** — N/A for Athena design; CE chutes from reactive spot trigger still use baseline exit.
 
-5. **False-signal cost (PC4-equivalent)**: decompose unnecessary parachute entries (TC fired,
-   spot never crossed threshold) by outcome — parachute exited at spot-reversal exit vs held
-   to ELM worthless.
-   ⬜ **TODO** — derive from backtest_tc.py output.
+5. **False-signal cost (PC4-equivalent)**: 37.2% of TC-fired trades worse than baseline; avg drag
+   per losing TC trade: −57.5 pts. Offset by avg gain on improving trades: +82.1 pts.
+   ✅ **DONE** — see PC2 Athena section below.
 
 ### PC3 Timing Analysis Results
 
@@ -294,6 +292,54 @@ All delta comes from TC-fired weeks (non-fired weeks are identical to baseline b
 Sensex sample is too small (2 fires) to be statistically meaningful.
 Nifty: 11/18 (61%) TC better on fired weeks — directionally positive but PC3/PC4 required
 before concluding the signal is net-beneficial in production.
+
+---
+
+### PC2 Athena Results (matched-week comparison, 2020–2026)
+
+**Overall (124 TC trades vs 121 baseline trades):**
+
+| Metric | Baseline | TC | Delta |
+|--------|----------|----|-------|
+| Total trades | 121 | 124 | — |
+| Win rate | — | 59.7% | — |
+| Avg winner (pts) | — | 77.36 | — |
+| Avg loser (pts) | — | -43.08 | — |
+| Reward:Risk | — | 1.80 | — |
+| Total P&L (₹) | +139,201 | +232,096 | **+₹92,895 (+66.7%)** |
+
+**TC fires: 43 / 121 matched trades (7/year avg)**
+- CE early entries: 24 · PE chute triggered: 23 · Both: 4
+- TC-fired win rate (delta positive): **62.8%** of 43 fired trades
+- Avg delta per TC fire: **+29.7 pts (+₹1,929/fire)**
+- CE-only avg: +38.8 pts · PE-only avg: +15.6 pts · Both avg: +51.2 pts
+
+**Year-by-year:**
+
+| Year | Trades | TC fires | Baseline P&L (pts) | TC P&L (pts) | Delta (pts) | Delta (₹) |
+|------|--------|----------|---------------------|--------------|-------------|-----------|
+| 2020 | 28 | 12 | +662.7 | +652.9 | −9.8 | −₹637 |
+| 2021 | 35 | 12 | +456.0 | +1183.4 | +727.4 | **+₹47,281** |
+| 2022 | 39 | 14 | +275.9 | +636.0 | +360.1 | **+₹23,403** |
+| 2024 | 8 | 2 | +374.5 | +478.2 | +103.7 | +₹6,741 |
+| 2025 | 8 | 2 | +261.8 | +312.7 | +50.9 | +₹3,305 |
+| 2026 | 3 | 1 | +110.7 | +154.9 | +44.2 | +₹2,873 |
+
+**Concentration warning:** Top 2 individual trades contribute +912.9 pts = 71% of total TC delta.
+- Jan 27 2021 entry: +527.75 pts delta (CE early during Budget rally)
+- Jan 19 2022 entry: +385.15 pts delta (PE chute during Jan 2022 selloff)
+
+Excluding top 2: remaining 41 TC fires still positive (+₹23,628, 61% win rate) — baseline robustness holds,
+but the headline improvement number is driven by two exceptional macro events.
+
+**Year 2020 note**: TC slightly negative despite COVID crash. March 2020 PE chute captured +₹8,567 on one
+trade, but CE chute false signals in Jan–Sep 2020 (market not following TC bullish) dragged the year
+fractionally negative.
+
+**Verdict for Athena:** TC is directionally beneficial (+62.8% fire win rate, +29.7 pts avg per fire)
+but improvement is highly concentrated in trending years (2021 CE rally, 2022 PE selloff). 2020, 2024–2026
+show modest to negligible improvement. This matches the broader TC thesis: signal adds most value when
+markets trend strongly after the signal.
 
 ---
 
