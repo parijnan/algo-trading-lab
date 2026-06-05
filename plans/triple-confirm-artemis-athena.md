@@ -59,64 +59,108 @@ an additional exit path alongside the existing SL logic.
 
 ## Application to Athena
 
-### Current behaviour
-Athena's CE parachute (Emergency Hedge) triggers reactively when
-`spot >= ce_sell_strike - 150 pts` (`EMERGENCY_TRIGGER_OFFSET = -150`).
-The parachute is a 0.35-delta monthly CE buy; entering it after the spot has already moved
-150 pts past the sell strike means paying elevated IV and a higher absolute premium on the
-hedge. The parachute exits reactively when `spot <= ce_sell_strike + 0 pts`
-(`EMERGENCY_EXIT_OFFSET = 0`), and the attempt cap (`EMERGENCY_MAX_ATTEMPTS = 1`) limits it
-to one parachute cycle per trade.
+### Terminology
 
-There is no PE parachute — Athena buys a static 0.05-delta monthly PE safety wing at entry
-and holds it to ELM. The TC track affects only the CE parachute.
+| Term | Definition |
+|---|---|
+| **PE safety wing** | 0.05-delta monthly PE bought at entry; held to ELM. Guards against gap-down events on the PE leg. |
+| **CE parachute** | 0.35-delta monthly CE bought when `spot > ce_sell_strike + 150`. Guards against extreme upward trends. Exits on reversal (`spot <= ce_sell_strike`). Max 1 attempt. |
+| **PE parachute** | 0.35-delta monthly PE. **Does not exist in the baseline.** TC track introduces it as a downside trend hedge, triggered only by bearish TC. Distinct from the PE wing — guards against a sustained downward trending move, not just gap-down events. |
+
+### Current behaviour (baseline)
+
+**CE side:** CE parachute triggers reactively when `spot > ce_sell_strike + 150`. Exits
+reactively when `spot <= ce_sell_strike`. Max 1 attempt. No CE wing.
+
+**PE side:** PE safety wing (0.05-delta monthly PE) bought at entry, held to ELM. No PE
+parachute — backtests showed no benefit to a reactive spot-triggered PE parachute analogous
+to the CE one.
 
 ### Proposed use of TRIPLE_CONFIRM
 
-**Bullish TC fire + no active parachute → pre-emptive parachute entry**  
-Enter the CE parachute before spot crosses the 150-pt trigger threshold. The hedge premium
-will be lower (spot hasn't moved yet); if the TC is a true signal, the position is protected
-from the move. If it's a false signal, the parachute is exited via the normal spot-reversal
-exit (`spot <= ce_sell_strike`) or held to ELM.
+TC introduces two new mechanics — one additive (CE parachute early trigger), one entirely new
+(PE parachute):
 
-**Bearish TC fire + active parachute → pre-emptive parachute exit**  
-Exit the CE parachute before spot retreats through the 0-pt exit threshold. The hedge premium
-will be higher (spot hasn't retreated yet), capturing more of the parachute's gain on
-reversal. If it's a false signal, the parachute was already at risk of a deteriorating
-position (market moving down with a live CE hedge).
+---
+
+**Bullish TC fire — CE parachute early entry**
+
+If no CE parachute is active: enter CE parachute before spot crosses the +150 threshold. Entry
+premium is lower (spot hasn't moved yet). Reactive spot trigger remains as fallback — if spot
+crosses first, enter normally.
+
+*False signal exit:* same mechanisms as the reactive path — exit when `spot <= ce_sell_strike`,
+OR exit pre-emptively when a bearish TC fires while the CE parachute is active (symmetric with
+the entry trigger). In both cases the attempt cap (`EMERGENCY_MAX_ATTEMPTS = 1`) still applies.
+
+---
+
+**Bearish TC fire — PE parachute entry + wing close**
+
+Enter a 0.35-delta monthly PE parachute. This is the **only** trigger for the PE parachute —
+there is no spot-based reactive PE parachute in the TC track.
+
+When the PE parachute is entered, the PE safety wing becomes redundant: the parachute covers
+both the trending-move risk and the gap-down risk simultaneously. Close the PE safety wing at
+current market price (likely at a small gain — spot has moved down, wing premium has increased).
+
+*False signal exit:* if the bearish TC turns out to be wrong and spot reverses upward, a
+subsequent bullish TC fires → exit the PE parachute AND buy back the PE safety wing (restoring
+gap-down protection). As an additional safety, exit the PE parachute and rebuy the wing if
+`spot >= pe_sell_strike` (symmetric with the CE parachute's `spot <= ce_sell_strike` exit).
+
+---
+
+**Simultaneous TC actions**
+
+On a single TC fire, both CE and PE sides may need action:
+- Bullish TC with no CE parachute + active PE parachute → enter CE parachute AND exit PE
+  parachute + rebuy PE wing (both in the same candle)
+- Bearish TC with active CE parachute + no PE parachute → exit CE parachute AND enter PE
+  parachute + close PE wing (both in the same candle)
 
 ### Key design decisions for the backtest
 
-1. **TC as supplementary trigger (not replacement)**: if TC fires before spot crosses
-   the 150-pt trigger, enter early. If spot crosses the trigger before TC fires, enter
-   normally via the existing reactive path. Whichever fires first wins.
-   This is the same pattern as Artemis (TC supplements, doesn't replace the SL).
+1. **CE parachute: TC supplements, does not replace the spot trigger.** Whichever fires first
+   (TC or spot crossing +150) enters the parachute. This mirrors the Artemis pattern.
 
-2. **Attempt cap interaction**: `EMERGENCY_MAX_ATTEMPTS = 1` limits the parachute to one
-   cycle. A TC-triggered early entry consumes that attempt. If TC fires a second time in
-   the same trade (after the first parachute has been exited), no re-entry is attempted —
-   same constraint as reactive path.
+2. **PE parachute: TC only.** No spot-based reactive PE parachute. Bearish TC is the sole
+   entry trigger.
 
-3. **Bearish TC exit only fires if a parachute is active**: if no parachute is live, a
-   bearish TC fire has no effect on Athena (the PE wing is static and is not touched).
+3. **Wing close/rebuy is atomic with PE parachute entry/exit.** When PE parachute enters,
+   wing closes in the same candle. When PE parachute exits (TC or spot reversal), wing is
+   rebought in the same candle.
+
+4. **Attempt cap applies to both parachutes independently.** `EMERGENCY_MAX_ATTEMPTS = 1` per
+   side per trade. A TC-triggered CE parachute entry consumes the CE attempt; a TC-triggered
+   PE parachute entry has its own independent counter.
+
+5. **PE wing rebuy after PE parachute exit uses the same delta target (0.05) as the original
+   entry** — the nearest available monthly PE at 0.05 delta at the time of rebuy.
 
 ### Key backtest question
-Does TC-timed parachute entry/exit improve overall Athena P&L vs the current spot-triggered
-mechanism? Expected benefit: lower hedge cost on entry (true signal case) and higher exit
-capture on reversal. Expected cost: false-signal parachute entries that are either exited at
-a loss or held to ELM at diminished value.
+Does TC-timed parachute management — earlier CE parachute entry on upward trends, and a new
+TC-only PE parachute on downward trends — improve overall Athena P&L vs the baseline?
+
+Expected benefit on CE side: lower entry premium on true bullish TC signals.
+Expected cost on CE side: unnecessary CE parachute entries on false bullish TC signals.
+
+Expected benefit on PE side: on true bearish TC signals, the PE parachute captures trending
+downside gains that the baseline cannot (the PE wing provides only gap protection, not
+trend protection). Wing close at a gain partially offsets the parachute cost.
+Expected cost on PE side: false bearish TC → PE parachute entered and exited at a loss, wing
+closed and rebuyed incurring round-trip slippage.
 
 ### Caveats
-- TRIPLE_CONFIRM is calibrated on Nifty; Athena also trades Nifty — direct applicability,
-  no cross-instrument adjustment needed.
-- The parachute already has a maximum-1-attempt cap, which bounds the false-signal
-  downside to a single unnecessary parachute cost per trade.
-- Unlike Artemis (which permanently alters the position on TC), Athena's parachute is a
-  temporary hedge: false-signal cost is bounded (parachute expires or exits at spot reversal)
-  rather than open-ended.
-- Athena sessions run ~40/year. TC fires ~18/year on Nifty.
-  Signal funnel analysis needed (analogous to Artemis PC3 funnel) to quantify how many
-  of those 18 fires fall inside an active Athena session with the CE side still unhedged.
+- TRIPLE_CONFIRM is calibrated on Nifty; Athena trades Nifty — direct applicability, no
+  cross-instrument adjustment needed.
+- False-signal downside is bounded: each parachute has its own attempt cap, and the PE wing
+  rebuy mechanism restores gap-down protection after any PE parachute exit.
+- The PE parachute + wing interaction adds execution complexity (3 orders in one candle on
+  PE parachute entry: buy PE parachute, sell PE wing; 2 orders on exit: sell PE parachute,
+  buy PE wing). Must be reflected accurately in the backtest execution model.
+- Athena sessions run ~40/year. TC fires ~18/year on Nifty. Signal funnel analysis will
+  quantify how many fires fall inside active sessions.
 
 ---
 
@@ -164,10 +208,9 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
    ✅ **DONE** — direct applicability, no cross-instrument adjustment needed.
 
 2. **Signal funnel analysis**: of the ~18 Nifty TC fires/year, how many fall inside an
-   active Athena session with the CE side unhedged? Athena sessions run ~40/year and the
-   sell leg is typically open from entry Monday until ELM Wednesday — roughly 3 days.
-   TC fires are distributed across all 5 weekdays. Expected ~10–12 TC fires inside
-   Athena holding windows per year, but need actual count from data.
+   active Athena session? And of those, how many are bullish (CE parachute candidate) vs
+   bearish (PE parachute candidate)? Athena sessions run ~40/year, holding window is entry
+   Monday to ELM Wednesday (~3 days). Need actual counts split by direction from data.
    ⬜ **TODO** — run against `TRIPLE_CONFIRM_excursions.csv` and Athena trade dates.
 
 3. **Strategy-level backtest**: run `athena_backtest/backtest_tc.py` with TC as an additional
@@ -289,65 +332,88 @@ def _build_tc_signal_map(tc_csv):
     return dict(zip(df['date'], df['direction']))   # date → 'bullish' | 'bearish'
 ```
 
-**`check_tc_parachute()` — mirrors the emergency hedge check in `backtest.py`**:
+**`check_tc()` — returns a set of actions for the current candle**:
 ```python
-def check_tc_parachute(trade: dict, ts: pd.Timestamp,
-                        tc_signal_map: dict, hedge_active: bool,
-                        hedge_attempts: int, max_attempts: int) -> str | None:
+def check_tc(ts: pd.Timestamp, tc_signal_map: dict,
+             ce_chute_active: bool, ce_chute_attempts: int,
+             pe_chute_active: bool, pe_chute_attempts: int,
+             max_attempts: int) -> list[str]:
     tc_dir = tc_signal_map.get(ts.date())
     if tc_dir is None:
-        return None
-    if tc_dir == 'bullish' and not hedge_active and hedge_attempts < max_attempts:
-        return 'tc_enter'
-    if tc_dir == 'bearish' and hedge_active:
-        return 'tc_exit'
-    return None
+        return []
+    actions = []
+    if tc_dir == 'bullish':
+        if not ce_chute_active and ce_chute_attempts < max_attempts:
+            actions.append('ce_chute_enter')   # early CE parachute entry
+        if pe_chute_active:
+            actions.append('pe_chute_exit')    # PE parachute exit + wing rebuy
+    if tc_dir == 'bearish':
+        if ce_chute_active:
+            actions.append('ce_chute_exit')    # CE parachute exit
+        if not pe_chute_active and pe_chute_attempts < max_attempts:
+            actions.append('pe_chute_enter')   # PE parachute entry + wing close
+    return actions
 ```
 
 **Main loop modifications** (inside the candle-by-candle iteration):
 ```python
-# Before the reactive spot check:
-tc_action = check_tc_parachute(trade, ts, tc_signal_map,
-                                hedge_active, hedge_attempts,
-                                EMERGENCY_MAX_ATTEMPTS)
-if tc_action == 'tc_enter':
-    # enter parachute at next-candle open (same execution model as reactive path)
-    ...
-    hedge_active = True; hedge_attempts += 1; tc_triggered = True
+actions = check_tc(ts, tc_signal_map,
+                   ce_chute_active, ce_chute_attempts,
+                   pe_chute_active, pe_chute_attempts,
+                   EMERGENCY_MAX_ATTEMPTS)
 
-elif tc_action == 'tc_exit' and hedge_active:
-    # exit parachute at next-candle open
-    ...
-    hedge_active = False; tc_triggered = True
+for action in actions:
+    exec_ts = ts + pd.Timedelta(minutes=1)
+    if action == 'ce_chute_enter':
+        # buy 0.35-delta monthly CE at exec_ts open
+        ce_chute_active = True; ce_chute_attempts += 1
+    elif action == 'ce_chute_exit':
+        # sell CE parachute at exec_ts open
+        ce_chute_active = False
+    elif action == 'pe_chute_enter':
+        # buy 0.35-delta monthly PE at exec_ts open
+        # sell PE safety wing at exec_ts open
+        pe_chute_active = True; pe_wing_active = False; pe_chute_attempts += 1
+    elif action == 'pe_chute_exit':
+        # sell PE parachute at exec_ts open
+        # buy 0.35-delta monthly PE safety wing at exec_ts open (0.05 delta)
+        pe_chute_active = False; pe_wing_active = True
 
-# Reactive spot check still runs if TC hasn't fired:
-if not hedge_active and hedge_attempts < EMERGENCY_MAX_ATTEMPTS:
-    if spot >= ce_sell_strike - abs(EMERGENCY_TRIGGER_OFFSET):
-        # normal parachute entry ...
+# Reactive CE spot check still runs if no TC CE action this candle:
+if not ce_chute_active and ce_chute_attempts < EMERGENCY_MAX_ATTEMPTS:
+    if spot > ce_sell_strike + EMERGENCY_TRIGGER_OFFSET:   # +150 pts
+        # normal CE parachute entry ...
+
+# PE spot-based parachute exit (symmetric with CE reversal exit):
+if pe_chute_active and spot >= pe_sell_strike:
+    # sell PE parachute, rebuy PE wing
+    pe_chute_active = False; pe_wing_active = True
 ```
 
 **Output columns added to `trade_summary_tc.csv`** (on top of baseline schema):
-- `tc_parachute_entered` — bool: TC triggered early entry
-- `tc_parachute_exited` — bool: TC triggered early exit
-- `tc_fire_date` — date TC fired (if applicable)
-- `tc_entry_premium` — parachute entry premium under TC path
-- `baseline_entry_premium` — parachute entry premium under reactive path (from baseline)
+- `ce_chute_trigger` — `tc` | `spot` | `none`
+- `pe_chute_trigger` — `tc` | `none`
+- `ce_chute_entry_premium` / `pe_chute_entry_premium` — parachute entry premiums
+- `pe_wing_close_premium` — PE wing sell price when PE parachute entered
+- `pe_wing_rebuy_premium` — PE wing buy price when PE parachute exited (if applicable)
 - `delta_pts` — net P&L difference TC vs baseline for this trade
 
-**Comparison CSV** (`comparison.csv`): inner join on sell_expiry between baseline and TC
-summary; one row per trade; columns: `sell_expiry, baseline_pl, tc_pl, delta_pts,
-tc_triggered, tc_action, baseline_parachute_triggered, tc_parachute_triggered`.
+**Comparison CSV** (`comparison.csv`): inner join on sell_expiry; columns:
+`sell_expiry, baseline_pl, tc_pl, delta_pts, ce_chute_trigger, pe_chute_trigger,
+ baseline_ce_chute_triggered, tc_ce_chute_triggered, tc_pe_chute_triggered`.
 
 ---
 
 ### Production wiring (post-backtest, if validated)
 
 **Athena** (`athena_engine.py`):
-- In the parachute check block: add TRIPLE_CONFIRM bullish as an additional entry condition
-  alongside the existing `spot >= ce_sell_strike - 150` check
-- The existing `_enter_emergency_hedge()` path handles execution — no new order logic
-- A Slack notification should identify the trigger as `TRIPLE_CONFIRM` so it is
-  distinguishable from reactive and manual triggers in the logs
+- CE parachute: add bullish TC as a second entry condition alongside the reactive
+  `spot > ce_sell_strike + 150` check; add bearish TC as a second exit condition
+  alongside `spot <= ce_sell_strike`
+- PE parachute (new): add bearish TC entry → buy 0.35-delta monthly PE + sell PE wing;
+  bullish TC or `spot >= pe_sell_strike` exit → sell PE parachute + rebuy PE wing
+- Slack notifications should identify the trigger as `TRIPLE_CONFIRM` and distinguish
+  CE parachute events from PE parachute/wing events
 
 **Artemis** (`iron_condor.py`):
 - In the main monitoring loop, after fetching LTPs: call `triple_confirm.detect_live()`
