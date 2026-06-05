@@ -168,6 +168,7 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
 
     # CE parachute state (same as baseline emergency hedge)
     emer_active   = False
+    emer_via_tc   = False  # True when TC triggered entry (not reactive spot)
     emer_strike   = None
     emer_entry    = 0.0
     emer_ltp      = 0.0
@@ -233,8 +234,9 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                         emer_ltp      = pr
                         emer_df       = opt_df_cache.get((buy_expiry_end, stk, 'ce'))
                         emer_active   = True
+                        emer_via_tc   = tc_entry and not spot_entry
                         emer_attempts += 1
-                        if tc_entry and not spot_entry:
+                        if emer_via_tc:
                             tc_ce_early = True
                         logger.info(
                             f"  [CE-CHUTE] Entry {'TC-early' if tc_entry and not spot_entry else 'spot-trigger'} "
@@ -245,9 +247,9 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 v = get_option_price(emer_df, ts, 'close')
                 if v is not None: emer_ltp = v
 
-                # Exit: TC bearish early exit OR reactive spot reversal
-                tc_exit   = (tc_dir == 'bearish' and emer_active)
-                spot_exit = (spot <= ce_sell_strike + EMERGENCY_EXIT_OFFSET)
+                # Exit: TC bearish OR reactive spot reversal (spot exit only for spot-triggered entries)
+                tc_exit   = (tc_dir == 'bearish')
+                spot_exit = (not emer_via_tc) and (spot <= ce_sell_strike + EMERGENCY_EXIT_OFFSET)
                 if tc_exit or spot_exit:
                     exit_pr = apply_slippage(emer_ltp, is_buy=False)
                     realised_ce = round(exit_pr - emer_entry, 2)
@@ -255,9 +257,10 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                     logger.info(
                         f"  [CE-CHUTE] Exit {'TC-bearish' if tc_exit and not spot_exit else 'spot-reversal'} "
                         f"{emer_strike} @ {exit_pr:.1f} at {ts} | P&L: {realised_ce:.1f}")
-                    emer_active = False
-                    emer_entry  = 0.0
-                    emer_ltp    = 0.0
+                    emer_active  = False
+                    emer_via_tc  = False
+                    emer_entry   = 0.0
+                    emer_ltp     = 0.0
 
         # -----------------------------------------------------------------
         # PE parachute — TC-only trigger
@@ -300,16 +303,15 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                 v = get_option_price(pe_chute_df, ts, 'close')
                 if v is not None: pe_chute_ltp = v
 
-                # Exit: bullish TC (false alarm) or spot recovered above pe_sell_strike
-                tc_exit_pe   = (tc_dir_pe == 'bullish')
-                spot_exit_pe = (spot >= pe_sell_strike)
-                if tc_exit_pe or spot_exit_pe:
+                # Exit: bullish TC only (PE chute is TC-triggered; no reactive spot exit
+                # since spot is normally above pe_sell_strike before any bearish move)
+                if tc_dir_pe == 'bullish':
                     exit_pr_pe = apply_slippage(pe_chute_ltp, is_buy=False)
                     realised_pe = round(exit_pr_pe - pe_chute_entry, 2)
                     pe_chute_pl_lock += realised_pe
                     window_tc_realised += realised_pe
                     logger.info(
-                        f"  [PE-CHUTE] Exit {'TC-bullish' if tc_exit_pe else 'spot-recovered'} "
+                        f"  [PE-CHUTE] Exit TC-bullish "
                         f"{pe_chute_strike} @ {exit_pr_pe:.1f} at {ts} | P&L: {realised_pe:.1f}")
                     pe_chute_active = False
                     pe_chute_entry  = 0.0
