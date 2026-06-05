@@ -289,6 +289,7 @@ athena_backtest/data/
 athena_backtest/data_realtime/
 athena_backtest/data_adaptive_exit/
 athena_backtest/data_tc/
+athena_backtest/data_tc/trade_logs_tc/
 
 # Athena Production — runtime data
 athena_production/data/athena_state.csv

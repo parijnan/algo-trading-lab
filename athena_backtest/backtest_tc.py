@@ -24,6 +24,7 @@ P&L accounting:
 
 Output (never overwrites committed baseline):
   athena_backtest/data_tc/trade_summary_tc.csv
+  athena_backtest/data_tc/trade_logs_tc/trade_NNNN_YYYY-MM-DD.csv
 
 Usage (from repo root):
   python athena_backtest/backtest_tc.py
@@ -45,7 +46,7 @@ from backtest import (
     get_target_delta, compute_delta, compute_max_theoretical_profit,
     get_prior_expiry, compute_entry_date, select_buy_expiry,
     get_end_date, get_elm_time,
-    _calc_exit_pl, build_trade_record, calc_strategy_pl,
+    _calc_exit_pl, build_trade_record, calc_strategy_pl, build_snapshot,
     check_spread_sl, check_index_sl, check_option_sl,
     check_trail_stop, check_profit_target,
     determine_sl_triggered_side,
@@ -69,6 +70,7 @@ from configs import (
 _DIR             = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT        = os.path.dirname(_DIR)
 TC_DATA_DIR      = os.path.join(_DIR, 'data_tc')
+TC_LOGS_DIR      = os.path.join(TC_DATA_DIR, 'trade_logs_tc')
 TC_SUMMARY       = os.path.join(TC_DATA_DIR, 'trade_summary_tc.csv')
 TC_SIGNALS_CSV   = os.path.join(REPO_ROOT, 'iris_backtest', 'data',
                                  'TRIPLE_CONFIRM_excursions.csv')
@@ -80,6 +82,20 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Trade log save (TC-specific path)
+# ---------------------------------------------------------------------------
+
+def _save_trade_log_tc(trade_counter: int, entry_time: pd.Timestamp, trade_log: list):
+    """Save per-trade 1-min log to data_tc/trade_logs_tc/. Filename mirrors baseline."""
+    if not trade_log:
+        return
+    os.makedirs(TC_LOGS_DIR, exist_ok=True)
+    entry_str = pd.Timestamp(entry_time).strftime('%Y-%m-%d')
+    filepath  = os.path.join(TC_LOGS_DIR, f"trade_{trade_counter:04d}_{entry_str}.csv")
+    pd.DataFrame(trade_log).to_csv(filepath, index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +365,21 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
 
         if cumulative_pl > running_peak_pl:
             running_peak_pl = cumulative_pl
+
+        trade_log.append(build_snapshot(
+            ts, spot, vix,
+            ce_sell_strike, pe_sell_strike,
+            running_ce_sell, running_ce_buy,
+            running_pe_sell, running_pe_buy,
+            ce_sell_entry, ce_buy_entry,
+            pe_sell_entry, pe_buy_entry,
+            total_net_debit, max_theoretical_profit,
+            running_realised_pl=(running_realised_pl + window_tc_realised),
+            ce_wing_ltp=running_ce_wing, ce_wing_entry=ce_wing_entry,
+            pe_wing_ltp=running_pe_wing, pe_wing_entry=pe_wing_entry,
+            ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
+            emer_strike=emer_strike, emer_entry=emer_entry, emer_ltp=emer_ltp,
+        ))
 
         # -----------------------------------------------------------------
         # Exit condition checks
@@ -774,6 +805,7 @@ def run_backtest_tc(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         })
 
         all_trades.append(record)
+        _save_trade_log_tc(trade_counter, entry_ts, trade_log)
 
     logger.info("Skip reason summary:")
     for reason, count in skip_counts.items():
