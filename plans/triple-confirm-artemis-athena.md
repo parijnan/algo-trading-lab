@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: PC1–PC4 Artemis Complete — decision pending
+## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena track — in progress
 
 ---
 
@@ -60,30 +60,63 @@ an additional exit path alongside the existing SL logic.
 ## Application to Athena
 
 ### Current behaviour
-Athena's CE parachute triggers reactively when `spot > ce_sell_strike + PARACHUTE_OFFSET`.
-The parachute is a hedge buy; entering it after the spot has already moved means paying a
-higher premium on the hedge.
+Athena's CE parachute (Emergency Hedge) triggers reactively when
+`spot >= ce_sell_strike - 150 pts` (`EMERGENCY_TRIGGER_OFFSET = -150`).
+The parachute is a 0.35-delta monthly CE buy; entering it after the spot has already moved
+150 pts past the sell strike means paying elevated IV and a higher absolute premium on the
+hedge. The parachute exits reactively when `spot <= ce_sell_strike + 0 pts`
+(`EMERGENCY_EXIT_OFFSET = 0`), and the attempt cap (`EMERGENCY_MAX_ATTEMPTS = 1`) limits it
+to one parachute cycle per trade.
+
+There is no PE parachute — Athena buys a static 0.05-delta monthly PE safety wing at entry
+and holds it to ELM. The TC track affects only the CE parachute.
 
 ### Proposed use of TRIPLE_CONFIRM
-When TRIPLE_CONFIRM fires **bullish** during an active Athena session with no CE parachute:
-- Pre-emptively enter the CE parachute before spot crosses the trigger threshold
-- Entry at lower hedge premium than reactive trigger would produce
 
-When TRIPLE_CONFIRM fires **bearish** during an active Athena session with a live CE parachute:
-- Pre-emptively exit the parachute before spot retreats through the exit threshold
-- Exit at higher hedge premium than reactive exit would produce
+**Bullish TC fire + no active parachute → pre-emptive parachute entry**  
+Enter the CE parachute before spot crosses the 150-pt trigger threshold. The hedge premium
+will be lower (spot hasn't moved yet); if the TC is a true signal, the position is protected
+from the move. If it's a false signal, the parachute is exited via the normal spot-reversal
+exit (`spot <= ce_sell_strike`) or held to ELM.
+
+**Bearish TC fire + active parachute → pre-emptive parachute exit**  
+Exit the CE parachute before spot retreats through the 0-pt exit threshold. The hedge premium
+will be higher (spot hasn't retreated yet), capturing more of the parachute's gain on
+reversal. If it's a false signal, the parachute was already at risk of a deteriorating
+position (market moving down with a live CE hedge).
+
+### Key design decisions for the backtest
+
+1. **TC as supplementary trigger (not replacement)**: if TC fires before spot crosses
+   the 150-pt trigger, enter early. If spot crosses the trigger before TC fires, enter
+   normally via the existing reactive path. Whichever fires first wins.
+   This is the same pattern as Artemis (TC supplements, doesn't replace the SL).
+
+2. **Attempt cap interaction**: `EMERGENCY_MAX_ATTEMPTS = 1` limits the parachute to one
+   cycle. A TC-triggered early entry consumes that attempt. If TC fires a second time in
+   the same trade (after the first parachute has been exited), no re-entry is attempted —
+   same constraint as reactive path.
+
+3. **Bearish TC exit only fires if a parachute is active**: if no parachute is live, a
+   bearish TC fire has no effect on Athena (the PE wing is static and is not touched).
 
 ### Key backtest question
-Does TRIPLE_CONFIRM-timed parachute entry/exit improve overall Athena P&L vs the current
-spot-triggered mechanism? Needs Athena backtest with TRIPLE_CONFIRM wired alongside the
-existing parachute entry/exit logic.
+Does TC-timed parachute entry/exit improve overall Athena P&L vs the current spot-triggered
+mechanism? Expected benefit: lower hedge cost on entry (true signal case) and higher exit
+capture on reversal. Expected cost: false-signal parachute entries that are either exited at
+a loss or held to ELM at diminished value.
 
 ### Caveats
 - TRIPLE_CONFIRM is calibrated on Nifty; Athena also trades Nifty — direct applicability,
   no cross-instrument adjustment needed.
-- Athena sessions run ~40/year. TRIPLE_CONFIRM will fire in a meaningful subset of them.
-- The parachute is already optional (manual trigger exists) — TRIPLE_CONFIRM could start as
-  an automated pre-trigger for the existing manual Slack path before full automation.
+- The parachute already has a maximum-1-attempt cap, which bounds the false-signal
+  downside to a single unnecessary parachute cost per trade.
+- Unlike Artemis (which permanently alters the position on TC), Athena's parachute is a
+  temporary hedge: false-signal cost is bounded (parachute expires or exits at spot reversal)
+  rather than open-ended.
+- Athena sessions run ~40/year. TC fires ~18/year on Nifty.
+  Signal funnel analysis needed (analogous to Artemis PC3 funnel) to quantify how many
+  of those 18 fires fall inside an active Athena session with the CE side still unhedged.
 
 ---
 
@@ -109,22 +142,47 @@ as a pre-emptive trigger; it provides no additional protection on sudden-move da
 
 ## Pre-conditions Before Implementation (either strategy)
 
+### Artemis — All Complete
+
 1. **Sensex validation complete** (for Artemis): `validate_sensex.py` must show TRIPLE_CONFIRM
    on Sensex fires in the same situations as on Nifty and with comparable quality.
    ✅ **DONE** — PC1 cleared. Sensex WR 76.9%, RR 4.26 @ 15min, 13.9 fires/year.
 
 2. **Strategy-level backtest**: run TRIPLE_CONFIRM as an additional trigger through the full
-   Artemis/Athena backtest and compare cumulative P&L vs baseline.
+   Artemis backtest and compare cumulative P&L vs baseline.
    ✅ **DONE** — PC2 Artemis complete. Results below.
 
-3. **Timing analysis**: quantify how early TRIPLE_CONFIRM fires before a typical SL/parachute
-   trigger. If the typical lead time is <5 min, the benefit is marginal.
+3. **Timing analysis**: quantify how early TRIPLE_CONFIRM fires before a typical SL trigger.
    ✅ **DONE** — PC3 complete. Results below.
 
-4. **False-signal cost**: model the P&L impact of the ~17–23% false-signal rate (unnecessary
-   adjustment triggered by a TRIPLE_CONFIRM that reverses). Must be outweighed by the P&L
-   gain from earlier exits on true signals.
+4. **False-signal cost**: model the P&L impact of the ~17–23% false-signal rate.
    ✅ **DONE** — PC4 complete. Results below.
+
+### Athena — In Progress
+
+1. **Instrument validation**: TC is calibrated on Nifty; Athena trades Nifty.
+   ✅ **DONE** — direct applicability, no cross-instrument adjustment needed.
+
+2. **Signal funnel analysis**: of the ~18 Nifty TC fires/year, how many fall inside an
+   active Athena session with the CE side unhedged? Athena sessions run ~40/year and the
+   sell leg is typically open from entry Monday until ELM Wednesday — roughly 3 days.
+   TC fires are distributed across all 5 weekdays. Expected ~10–12 TC fires inside
+   Athena holding windows per year, but need actual count from data.
+   ⬜ **TODO** — run against `TRIPLE_CONFIRM_excursions.csv` and Athena trade dates.
+
+3. **Strategy-level backtest**: run `athena_backtest/backtest_tc.py` with TC as an additional
+   parachute trigger; compare total P&L, parachute entry/exit prices, and false-signal cost
+   vs baseline `backtest.py`.
+   ⬜ **TODO** — implement backtest_tc.py (see Implementation Sketch below).
+
+4. **Timing analysis (PC3-equivalent)**: quantify how early TC fires before spot crosses the
+   150-pt trigger threshold. If lead time is typically <5 min, benefit is marginal.
+   ⬜ **TODO** — derive from TC fire timestamp vs candle-by-candle spot in Athena trade logs.
+
+5. **False-signal cost (PC4-equivalent)**: decompose unnecessary parachute entries (TC fired,
+   spot never crossed threshold) by outcome — parachute exited at spot-reversal exit vs held
+   to ELM worthless.
+   ⬜ **TODO** — derive from backtest_tc.py output.
 
 ### PC3 Timing Analysis Results
 
@@ -206,22 +264,98 @@ before concluding the signal is net-beneficial in production.
 
 ---
 
-## Implementation Sketch (when ready)
+## Implementation Sketch
+
+### Backtest: `athena_backtest/backtest_tc.py`
+
+Isolated parallel track — same constraint as Artemis: never modifies `backtest.py` or
+`configs.py`. Imports all helpers from `backtest.py`. Writes output to `data_tc/` (gitignored).
+
+**TC signal loading** (same pattern as Artemis):
+```python
+from configs import REPO_ROOT
+import os, pandas as pd
+
+TC_SIGNALS_CSV = os.path.join(REPO_ROOT, 'iris_backtest', 'data',
+                               'TRIPLE_CONFIRM_excursions.csv')
+TC_DATA_DIR    = os.path.join(os.path.dirname(__file__), 'data_tc')
+TC_SUMMARY     = os.path.join(TC_DATA_DIR, 'trade_summary_tc.csv')
+BASELINE_SUMMARY = os.path.join(os.path.dirname(__file__), 'data',
+                                 'trade_summary.csv')   # read-only reference
+
+def _build_tc_signal_map(tc_csv):
+    df = pd.read_csv(tc_csv, parse_dates=['time'])
+    df['date'] = df['time'].dt.date
+    return dict(zip(df['date'], df['direction']))   # date → 'bullish' | 'bearish'
+```
+
+**`check_tc_parachute()` — mirrors the emergency hedge check in `backtest.py`**:
+```python
+def check_tc_parachute(trade: dict, ts: pd.Timestamp,
+                        tc_signal_map: dict, hedge_active: bool,
+                        hedge_attempts: int, max_attempts: int) -> str | None:
+    tc_dir = tc_signal_map.get(ts.date())
+    if tc_dir is None:
+        return None
+    if tc_dir == 'bullish' and not hedge_active and hedge_attempts < max_attempts:
+        return 'tc_enter'
+    if tc_dir == 'bearish' and hedge_active:
+        return 'tc_exit'
+    return None
+```
+
+**Main loop modifications** (inside the candle-by-candle iteration):
+```python
+# Before the reactive spot check:
+tc_action = check_tc_parachute(trade, ts, tc_signal_map,
+                                hedge_active, hedge_attempts,
+                                EMERGENCY_MAX_ATTEMPTS)
+if tc_action == 'tc_enter':
+    # enter parachute at next-candle open (same execution model as reactive path)
+    ...
+    hedge_active = True; hedge_attempts += 1; tc_triggered = True
+
+elif tc_action == 'tc_exit' and hedge_active:
+    # exit parachute at next-candle open
+    ...
+    hedge_active = False; tc_triggered = True
+
+# Reactive spot check still runs if TC hasn't fired:
+if not hedge_active and hedge_attempts < EMERGENCY_MAX_ATTEMPTS:
+    if spot >= ce_sell_strike - abs(EMERGENCY_TRIGGER_OFFSET):
+        # normal parachute entry ...
+```
+
+**Output columns added to `trade_summary_tc.csv`** (on top of baseline schema):
+- `tc_parachute_entered` — bool: TC triggered early entry
+- `tc_parachute_exited` — bool: TC triggered early exit
+- `tc_fire_date` — date TC fired (if applicable)
+- `tc_entry_premium` — parachute entry premium under TC path
+- `baseline_entry_premium` — parachute entry premium under reactive path (from baseline)
+- `delta_pts` — net P&L difference TC vs baseline for this trade
+
+**Comparison CSV** (`comparison.csv`): inner join on sell_expiry between baseline and TC
+summary; one row per trade; columns: `sell_expiry, baseline_pl, tc_pl, delta_pts,
+tc_triggered, tc_action, baseline_parachute_triggered, tc_parachute_triggered`.
+
+---
+
+### Production wiring (post-backtest, if validated)
+
+**Athena** (`athena_engine.py`):
+- In the parachute check block: add TRIPLE_CONFIRM bullish as an additional entry condition
+  alongside the existing `spot >= ce_sell_strike - 150` check
+- The existing `_enter_emergency_hedge()` path handles execution — no new order logic
+- A Slack notification should identify the trigger as `TRIPLE_CONFIRM` so it is
+  distinguishable from reactive and manual triggers in the logs
 
 **Artemis** (`iron_condor.py`):
 - In the main monitoring loop, after fetching LTPs: call `triple_confirm.detect_live()`
-  (a streaming version that checks if all three conditions are met on current bars)
 - If fire direction threatens an open leg: write `TRIPLE_CONFIRM:ce` or `TRIPLE_CONFIRM:pe`
   to `SLACK_COMMAND.flag`, same mechanism as manual adjustment
-- The existing `adjust_spread()` path handles execution — no new order logic needed
+- The existing `adjust_spread()` path handles execution
 
-**Athena** (`athena_engine.py`):
-- In parachute check: add TRIPLE_CONFIRM bullish as an additional entry condition alongside
-  the existing spot > threshold check
-- The existing parachute entry/exit path handles execution
-
-In both cases, a Slack notification should identify the trigger as TRIPLE_CONFIRM so it is
-distinguishable from SL-triggered and manual adjustments in the logs.
+In both cases, a Slack notification should identify the trigger as TRIPLE_CONFIRM.
 
 ---
 
@@ -240,3 +374,7 @@ distinguishable from SL-triggered and manual adjustments in the logs.
 | `artemis_backtest/data_tc/comparison_sensex.csv` | Matched baseline vs TC — Sensex (gitignored) |
 | `artemis_backtest/data_tc/pc3_timing_nifty.csv` | PC3 timing analysis — Nifty (gitignored) |
 | `artemis_backtest/data_tc/pc3_timing_sensex.csv` | PC3 timing analysis — Sensex (gitignored) |
+| `athena_backtest/backtest_tc.py` | Athena TC parallel backtest — never overwrites baseline (**to be created**) |
+| `athena_backtest/data_tc/trade_summary_tc.csv` | TC backtest output (gitignored) |
+| `athena_backtest/data_tc/comparison.csv` | Matched baseline vs TC (gitignored) |
+| `athena_backtest/data_tc/pc3_timing.csv` | TC lead time before spot crosses 150-pt trigger (gitignored) |
