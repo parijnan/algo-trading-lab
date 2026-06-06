@@ -110,6 +110,29 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
 
 **VERDICT:** Phase 2 (Static 150-pt trigger) remains the definitive production version for institutional scaling.
 
+## VIX Grey Zone Research (June 2026)
+
+Scripts: `analyze_vix_grey_zone.py`, `analyze_vix_vega.py`
+
+**Problem:** When VIX is near 16 at entry, the routing boundary between Artemis and Athena
+produces ~50% misroutes — VIX at 15–17 is genuinely unforecastable in direction.
+
+**Findings (pure VIX analysis, 360 Wednesday entries, 2019–2026):**
+- VIX 15–17 at entry fires on 18% of Wednesdays (7–10/year post-2020)
+- Base rate: 44% rose / 56% fell the following week — essentially a coin flip
+- No signal (5d momentum, BB zone, MA position) changes this meaningfully
+- 52% of grey-zone entries still have VIX in 15–17 the following week
+
+**Intraday intervention track (closed):** early VIX drop on day 1 does not predict subsequent
+P&L decline (r = −0.016, p = 0.86). VIX and P&L are the same option prices measured twice —
+no predictive lead time exists for intraday management.
+
+**100% of Athena losses are pre_expiry exits** — calm grinding weeks where VIX drifts down.
+Zero SL-triggered losses in the baseline. The loss mechanism is entry-level, not intraday.
+
+**Next step:** See `plans/vix-grey-zone-routing.md` — testing Option C (lower routing
+boundary from 16 to 15, giving Athena the full 15–25 VIX range).
+
 ## TRIPLE_CONFIRM Parallel Research Track
 
 `backtest_tc.py` is an isolated parallel track exploring the effect of adding TC-triggered parachutes to
