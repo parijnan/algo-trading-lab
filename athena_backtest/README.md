@@ -174,5 +174,45 @@ To run a real-time backtest:
 1. Download data: `python data_pipeline/angel_nifty_backtest_data.py`
 2. Execute backtest: `python athena_backtest/backtest_realtime.py`
 
+### Jun 30 Buy-Expiry Cycle Results (May–Jun 2026)
+
+| Entry | Buy Expiry | Actual P&L | Backtest P&L | Notes |
+|-------|------------|-----------|-------------|-------|
+| Apr 20 | May 26 | +₹5,129 | +₹5,129 | ICICI data |
+| Apr 27 | May 26 | +₹722 | +₹722 | ICICI data |
+| May 4 | May 26 | ~+₹2,300 | ~+₹2,300 | ICICI data |
+| May 11 | Jun 30 | −₹9,000 | **SKIPPED** | Angel One missing Jun30 24300ce from May 11 |
+| May 18 | Jun 30 | −₹9,000 | −₹4,186 | Old stale run showed −₹12,750 (deleted temp data) |
+| May 25 | Jun 30 | −₹2,500 | −₹4,937 | Manually managed; backtest assumes mechanical exit |
+| Jun 1 | Jun 30 | +₹234 (Artemis) | +₹4,573 hypothetical | Routed to Artemis; snapshot at Jun 5 close only |
+
+**Structural finding:** May 26 buy-expiry cycle (Apr–May, Nifty ~24k, VIX 17–20) → 3 winners.
+Jun 30 buy-expiry cycle (May–Jun, Nifty ~23k volatile) → 3 mechanical losers.
+Monthly 50+ DTE buy leg moves more than weekly on intraweek Nifty trends → vega trap in trending markets.
+
+### Data Quality Warnings
+
+**Stale temp data shadows ICICI:** `load_option_data` checks `temp/` before `ICICI options/`. If a temp
+directory exists for an expiry that is already fully covered by ICICI (after contract expiry), it will
+silently shadow the correct ICICI data. **Delete temp directories for expired contracts** once ICICI data
+is confirmed present. Stale temp files can produce entirely wrong strike selections and P&L figures.
+
+**Angel One returns garbage on market holidays:** The API returns fabricated candles for non-trading days
+(e.g., all Saturday rows). These show wildly incorrect option prices and will corrupt P&L calculations.
+Strip all rows timestamped on market holidays after each download.
+
+**Corrupt files from concurrent writes:** Running multiple download processes that target the same output
+file produces split/merged rows in the CSV. Symptom: `ValueError: time data "IFTY" doesn't match format`.
+Fix: drop any row where the timestamp field is not a valid `YYYY-MM-DD HH:MM:SS` datetime.
+
+**Missing strikes use proxy files:** When Angel One has no data for a required strike (e.g., 24300ce),
+copy the nearest available strike's CSV and update the `strike_price` column via sed. This only works if
+the proxy strike was active from the same entry date. If not (e.g., 24350ce starts May 13 but entry is
+May 11), the trade cannot be modelled and will be skipped by the backtest.
+
+**May 11 is permanently unmodelable:** Angel One has no historical data for Jun30 24300ce starting May 11
+(token appears from May 13 onwards). The trade was entered in production at −₹9,000 but cannot be
+replicated in the realtime backtest.
+
 ---
 *Note: Phase 1 legacy configurations are preserved in `configs_phase1.py` and `backtest_phase1.py` for reference.*

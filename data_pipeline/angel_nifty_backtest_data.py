@@ -37,9 +37,22 @@ CANDLE_DATE_FMT  = "%Y-%m-%d %H:%M"
 OHLCV_HEADERS   = ["time_stamp", "open", "high", "low", "close", "volume"]
 
 # TARGET EXPIRIES
+# Each entry may include:
+#   "start" : datetime — earliest candle date to fetch (default: 2026-05-11)
+#   "strike_lo" / "strike_hi" : int — strike filter bounds (default: 20000 / 26000)
+#
+# Previously downloaded (already in temp/):
+#   05MAY2026  (sell leg for Apr-27 entry)
+#   26MAY2026  (buy leg for Apr-27 / May-04 entries; sell leg for May-18 entry)
+#
 TARGET_EXPIRIES = [
-    {"str": "05MAY2026", "dir": "2026-05-05", "label": "05-MAY-26"},
-    {"str": "26MAY2026", "dir": "2026-05-26", "label": "26-MAY-26"},
+    # Sell leg for Jun-01 entry (need data from Jun-01 onwards only)
+    {"str": "09JUN2026", "dir": "2026-06-09", "label": "09-JUN-26",
+     "start": datetime(2026, 6, 1, 9, 15)},
+    # Buy leg for May-11, May-18, May-25, Jun-01 entries
+    # PE wing at 0.05 delta lands ~21,600–22,300 — lower bound must reach 20,000
+    {"str": "30JUN2026", "dir": "2026-06-30", "label": "30-JUN-26",
+     "start": datetime(2026, 5, 11, 9, 15)},
 ]
 
 # ---------------------------------------------------------------------------
@@ -55,7 +68,7 @@ def login():
 # ---------------------------------------------------------------------------
 # Fetching
 # ---------------------------------------------------------------------------
-def fetch_candles(obj, token, from_dt, to_dt):
+def fetch_candles(obj, token, from_dt, to_dt, max_retries=5):
     params = {
         "exchange": "NFO",
         "symboltoken": token,
@@ -63,14 +76,24 @@ def fetch_candles(obj, token, from_dt, to_dt):
         "fromdate": from_dt.strftime(CANDLE_DATE_FMT),
         "todate": to_dt.strftime(CANDLE_DATE_FMT)
     }
-    try:
-        response = obj.getCandleData(params)
-        if response.get("status") and response.get("data"):
-            df = pd.DataFrame(response["data"], columns=OHLCV_HEADERS)
-            df['time_stamp'] = pd.to_datetime(df['time_stamp']).dt.tz_localize(None)
-            return df
-    except Exception as e:
-        logger.error(f"Error fetching {token}: {e}")
+    for attempt in range(max_retries):
+        try:
+            response = obj.getCandleData(params)
+            if response.get("status") and response.get("data"):
+                df = pd.DataFrame(response["data"], columns=OHLCV_HEADERS)
+                df['time_stamp'] = pd.to_datetime(df['time_stamp']).dt.tz_localize(None)
+                return df
+            return pd.DataFrame()
+        except Exception as e:
+            err = str(e).lower()
+            if 'rate' in err or 'access denied' in err or 'exceeded' in err:
+                wait = 60 * (attempt + 1)
+                logger.warning(f"Rate limited (token {token}), waiting {wait}s [attempt {attempt+1}/{max_retries}]...")
+                time.sleep(wait)
+            else:
+                logger.error(f"Error fetching {token}: {e}")
+                return pd.DataFrame()
+    logger.error(f"Max retries exceeded for token {token}")
     return pd.DataFrame()
 
 def main():
@@ -91,11 +114,13 @@ def main():
             (scrip_df['expiry'] == target_expiry_str)
         ].copy()
         
-        # Filter strikes: +/- 1500 points from current spot (~24000)
+        # Strike range: wide enough to capture PE wing (0.05 delta monthly ~21,600–22,300)
+        strike_lo = target.get("strike_lo", 20000)
+        strike_hi = target.get("strike_hi", 26000)
         nifty_df['strike_val'] = pd.to_numeric(nifty_df['strike']) / 100
         target_contracts = nifty_df[
-            (nifty_df['strike_val'] >= 22500) & 
-            (nifty_df['strike_val'] <= 25500)
+            (nifty_df['strike_val'] >= strike_lo) &
+            (nifty_df['strike_val'] <= strike_hi)
         ].copy()
         
         logger.info(f"Downloading {len(target_contracts)} contracts for {target_expiry_str}...")
@@ -103,8 +128,7 @@ def main():
         out_dir = os.path.join(NIFTY_TEMP_DIR, target_expiry_dir)
         os.makedirs(out_dir, exist_ok=True)
         
-        # April 20th to Today
-        start_dt = datetime(2026, 4, 20, 9, 15)
+        start_dt = target.get("start", datetime(2026, 5, 11, 9, 15))
         end_dt   = datetime.now()
         
         for _, row in target_contracts.iterrows():
@@ -130,7 +154,7 @@ def main():
                 if not df.empty:
                     all_frames.append(df)
                 curr = chunk_end + timedelta(minutes=1)
-                time.sleep(0.4) # Rate limit safety
+                time.sleep(1.0)  # Rate limit safety
                 
             if all_frames:
                 combined = pd.concat(all_frames).drop_duplicates(subset=['time_stamp'])
