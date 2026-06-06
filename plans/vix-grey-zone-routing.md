@@ -1,6 +1,6 @@
 # Plan: VIX Grey Zone Routing — Lower Boundary to 15
 
-**Status: TESTING — Option C (widen Athena to VIX 15) under backtest evaluation.**
+**Status: CLOSED — Option C tested and rejected. Hard 16 boundary is correct.**
 
 ---
 
@@ -145,6 +145,37 @@ the trade logs of both strategies by tagging entry_vix in the 15–17 range.
 
 ---
 
+---
+
+## 8. Results (2026-06-06)
+
+| | Baseline | VIX-15 | Delta |
+|---|---|---|---|
+| Athena | ₹149,130 | ₹122,324 | −₹26,806 |
+| Artemis Nifty | ₹104,093 | ₹13,779 | −₹90,314 |
+| Artemis Sensex | ₹41,806 | ₹51,040 | +₹9,233 |
+| **Combined** | **₹295,029** | **₹187,143** | **−₹107,886 (−36.6%)** |
+
+**Athena:** 27 new grey-zone trades (VIX 15–16) have 37% win rate and account for
+the entire −₹26,806 decline. Adding long-vega exposure in the 15–16 band is reliably bad.
+
+**Artemis:** Removing the 15–16 band loses 33 Nifty trades that averaged ₹2,737/trade
+(vs ₹694/trade average across the full 150). Those were Artemis's highest-value entries —
+short-vega at VIX 15–16, where the 56% lean toward falling VIX is pure tailwind.
+
+**Verdict:** The current 16 boundary is correct. The 15–16 VIX range has a small but
+consistent lean toward VIX falling. This lean:
+- Benefits Artemis (short vega): large per-trade gains
+- Hurts Athena (long vega): 37% win rate, consistent losses
+
+The boundary problem is real (neither strategy handles the grey zone comfortably when VIX
+is mid-transition), but the *level* of 16 is the right answer. There is no better hard
+threshold. Operator awareness remains the only mitigation: when VIX is rapidly transitioning
+through 15–17, manual caution is warranted — this is structural, not fixable by the router.
+
+---
+
 *Research scripts: `athena_backtest/analyze_vix_grey_zone.py`, `athena_backtest/analyze_vix_vega.py`*
+*Backtests: `athena_backtest/backtest_vix15.py`, `artemis_backtest/backtest_vix15.py`*
 *Supersedes: nothing — complements `plans/vix-router-research.md` (which tested VRP signals;
 this plan tests a simpler boundary shift).*
