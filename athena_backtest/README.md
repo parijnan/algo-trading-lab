@@ -20,14 +20,16 @@ Phase 2 introduces asymmetric risk management to protect against runaway rallies
    - **Exit (Salvage):** If the market reverses and `Spot <= CE Sell Strike`, the hedge is sold to preserve core profit.
    - **Limit:** Maximum 1 attempt per trade to limit whipsaw costs.
 
-### Performance (Lot Size 65 | VIX Filter 16-25)
-- **Total P&L:** +139,201 ₹ (on 1 lot, 5-year backtest)
+### Performance (Lot Size 65 | VIX Filter 16-25 | 2020–2026)
+- **Total P&L:** +₹149,130 (on 1 lot, 124 trades)
 - **Win Rate:** 57.9%
 - **Reward:Risk:** 1.66
 - **Max Drawdown (Consec):** 4 losses
 
 ### Verification Note
-As of May 2026, the backtesting engine has been updated to strictly account for the **PE Safety Wing** cost/gain from entry to exit. Previous results (₹157k) omitted the wing cost from the summary totals. The current ₹139k figure represents the true net performance with all 5/6 legs (Base 4 + PE Wing + CE Parachute) correctly netted.
+As of May 2026, the backtesting engine accounts for the **PE Safety Wing** cost/gain end-to-end. Previous
+results (₹157k) omitted the wing cost. The baseline was re-run in June 2026 after May 2026 option data
+became available, adding 3 trades and revising the total from ₹139,201 to ₹149,130.
 
 ## Usage
 
@@ -91,6 +93,34 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
 - **Verdict:** Underperformed production spec. While Reward:Risk improved, the sharp drop in Win Rate and absolute P&L makes it unsuitable for production.
 
 **VERDICT:** Phase 2 (Static 150-pt trigger) remains the definitive production version for institutional scaling.
+
+## TRIPLE_CONFIRM Parallel Research Track
+
+`backtest_tc.py` is an isolated parallel track exploring the effect of adding TC-triggered parachutes to
+the Athena double calendar. It imports all helpers from `backtest.py` without modifying them and writes
+output to `data_tc/` (gitignored).
+
+**Modifications vs baseline:**
+- **CE parachute:** TC-bullish fires an early entry before spot crosses the +150 threshold. A TC-bearish
+  signal exits a TC-triggered parachute (spot-triggered entries still use the reactive spot exit).
+- **PE parachute (new):** TC-bearish only trigger — buys a 0.35-delta monthly PE and simultaneously
+  closes the PE safety wing. TC-bullish exits the PE parachute and rebuys the PE wing.
+
+**Results (2020–2026, 124 trades, timestamp-keyed signals — no lookahead):**
+- Baseline: ₹149,130 → TC: ₹165,620 — delta **+₹16,490 (+11.1%)**
+- 36 of 124 trades had TC fire; 15 better / 21 worse (41.7% win rate on fired trades)
+- Result is outlier-driven: top 2 trades (Budget rally Feb 2021, Jan 2022 selloff) = +₹51,535;
+  remaining 34 fires combined = −₹35,045
+
+**Note:** An earlier version using a date-keyed signal map produced an inflated +55.6% figure due to
+intraday lookahead (candles could see a signal that fired later the same day). Fixed 2026-06-06.
+
+**Status:** Live integration deferred — edge is not robust. See `plans/tc-live-integration.md`.
+
+To run:
+```bash
+python athena_backtest/backtest_tc.py
+```
 
 ## Real-Time Backtesting
 

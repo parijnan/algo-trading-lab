@@ -1,6 +1,6 @@
 # Plan: TRIPLE_CONFIRM Integration — Artemis and Athena
 
-## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena PC1–PC3 Complete (+66.7% improvement, concentrated)
+## Status: Artemis PC1–PC4 Complete (+5.8% improvement) · Athena PC1–PC3 Complete (+11.1% improvement after lookahead fix, outlier-driven)
 
 ---
 
@@ -297,49 +297,32 @@ before concluding the signal is net-beneficial in production.
 
 ### PC2 Athena Results (matched-week comparison, 2020–2026)
 
-**Overall (124 TC trades vs 121 baseline trades):**
+> **⚠ Lookahead fix applied 2026-06-06**: Original date-keyed signal map allowed candles to see TC
+> signals that hadn't fired yet on that date. Fixed to timestamp-keyed (same day + signal_ts ≤ ts).
+> Results below reflect the corrected backtest.
 
-| Metric | Baseline | TC | Delta |
-|--------|----------|----|-------|
-| Total trades | 121 | 124 | — |
-| Win rate | — | 59.7% | — |
-| Avg winner (pts) | — | 77.36 | — |
-| Avg loser (pts) | — | -43.08 | — |
-| Reward:Risk | — | 1.80 | — |
-| Total P&L (₹) | +139,201 | +232,096 | **+₹92,895 (+66.7%)** |
+**Overall (124 trades, baseline re-run 2026-06-05):**
 
-**TC fires: 43 / 121 matched trades (7/year avg)**
-- CE early entries: 24 · PE chute triggered: 23 · Both: 4
-- TC-fired win rate (delta positive): **62.8%** of 43 fired trades
-- Avg delta per TC fire: **+29.7 pts (+₹1,929/fire)**
-- CE-only avg: +38.8 pts · PE-only avg: +15.6 pts · Both avg: +51.2 pts
+| Metric | Baseline | TC (corrected) | Delta |
+|--------|----------|----------------|-------|
+| Total P&L (₹) | +149,130 | +165,620 | **+₹16,490 (+11.1%)** |
 
-**Year-by-year:**
+*Previous (lookahead-inflated) figure was +₹82,966 (+55.6%) — overstated by ~5×.*
 
-| Year | Trades | TC fires | Baseline P&L (pts) | TC P&L (pts) | Delta (pts) | Delta (₹) |
-|------|--------|----------|---------------------|--------------|-------------|-----------|
-| 2020 | 28 | 12 | +662.7 | +652.9 | −9.8 | −₹637 |
-| 2021 | 35 | 12 | +456.0 | +1183.4 | +727.4 | **+₹47,281** |
-| 2022 | 39 | 14 | +275.9 | +636.0 | +360.1 | **+₹23,403** |
-| 2024 | 8 | 2 | +374.5 | +478.2 | +103.7 | +₹6,741 |
-| 2025 | 8 | 2 | +261.8 | +312.7 | +50.9 | +₹3,305 |
-| 2026 | 3 | 1 | +110.7 | +154.9 | +44.2 | +₹2,873 |
+**TC fires: 36 / 124 trades**
+- CE early entries: 20 · PE chute triggered: 17
+- TC-fired win rate (delta positive): **15/36 = 41.7%** — TC worse on majority of fired trades
 
-**Concentration warning:** Top 2 individual trades contribute +912.9 pts = 71% of total TC delta.
-- Jan 27 2021 entry: +527.75 pts delta (CE early during Budget rally)
-- Jan 19 2022 entry: +385.15 pts delta (PE chute during Jan 2022 selloff)
+**Concentration (corrected):**
+- Jan 27 2021 entry: +₹30,628 delta (CE early, Budget rally — TC fired 2021-02-01 12:48)
+- Jan 19 2022 entry: +₹20,907 delta (PE chute, Jan selloff — TC fired 2022-01-20 13:00)
+- Top 2 subtotal: **+₹51,535** (312% of total delta)
+- All other 34 fires: **−₹35,045** (net-negative)
 
-Excluding top 2: remaining 41 TC fires still positive (+₹23,628, 61% win rate) — baseline robustness holds,
-but the headline improvement number is driven by two exceptional macro events.
-
-**Year 2020 note**: TC slightly negative despite COVID crash. March 2020 PE chute captured +₹8,567 on one
-trade, but CE chute false signals in Jan–Sep 2020 (market not following TC bullish) dragged the year
-fractionally negative.
-
-**Verdict for Athena:** TC is directionally beneficial (+62.8% fire win rate, +29.7 pts avg per fire)
-but improvement is highly concentrated in trending years (2021 CE rally, 2022 PE selloff). 2020, 2024–2026
-show modest to negligible improvement. This matches the broader TC thesis: signal adds most value when
-markets trend strongly after the signal.
+**Verdict for Athena (corrected):** TC is marginal and outlier-driven. The non-outlier fires are net-negative
+(−₹35,045 across 34 trades), meaning the signal is a net drag on most trades it fires on. The two macro-event
+trades (Budget 2021, Jan 2022 selloff) alone generate more than the total improvement. Live edge is not
+established. Further investigation required before any production consideration.
 
 ---
 
