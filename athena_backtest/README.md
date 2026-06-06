@@ -81,6 +81,22 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
 - **PE Wing Salvage (`backtest_wing_salvage.py`):** Automatically exiting the redundant PE wing when the CE Parachute triggers. 
 - **Results:** Improved win rate (64.2%) and R:R (1.37), though absolute profit was slightly lower due to exit slippage.
 
+- **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
+  buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.
+- **Results:** Degraded performance at every offset. No configuration improved on baseline.
+- **Verdict (June 2026):** Structurally broken. Downside spikes in Indian equity markets snap back quickly unlike
+  the sustained momentum seen in upside breakouts (budget rallies, election moves). Buying expensive put premium
+  into elevated IV at the spike low rarely recovers its cost before the market reverses.
+
+- **CE Buy Roll Adjustment (`backtest_ce_adj.py`):** When spot falls CE_ADJ_TRIGGER pts below the PE sell strike,
+  close the monthly CE buy and reopen it CE_ADJ_VALUE pts lower. 4-cell cross sweep: triggers {50, 150} at value
+  100, values {50, 150} at trigger 100. Pre-committed gate: WR ≥ 57.9% AND R:R ≥ 1.66 AND P&L ≥ ₹149,130.
+- **Results:** All four cells fail the gate. WR ticks up (+1–2 pp) on three cells but R:R drops to 1.38–1.54.
+  Rolling down the CE buy shaves the large winning trades (months where market partially recovers from the dip),
+  dragging average winner down without reducing average loss.
+- **Verdict (June 2026):** No winning configuration. WR and R:R move in opposite directions across all parameter
+  combinations — the adjustment trades one for the other but cannot improve both simultaneously.
+
 ### Phase 3 — ML-Adaptive Routing (`backtest_ml_adaptive.py`)
 - **Dynamic Parachute:** Scaling the emergency trigger offset based on ML confidence.
 - **Preemptive Pivot:** Proactively closing the tested side based on stealth trend detection.
