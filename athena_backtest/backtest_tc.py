@@ -14,8 +14,9 @@ Applies TRIPLE_CONFIRM signals to the Athena double-calendar strategy:
     On exit: PE parachute sold, PE safety wing rebuyed.
   - Reactive CE spot triggers remain as fallbacks if no bullish TC fires.
 
-TC signals are date-keyed: any candle on that date sees the signal. If
-multiple TC signals fall on the same date, the last one wins.
+TC signals are timestamp-keyed: a candle only sees a signal if signal_ts <= ts.
+If multiple TC signals fall on the same date, the one with the latest signal_ts
+at or before the current candle wins.
 
 P&L accounting:
   - All mid-trade realised (CE chute, PE chute, PE wing close/rebuy) accumulate
@@ -102,11 +103,12 @@ def _save_trade_log_tc(trade_counter: int, entry_time: pd.Timestamp, trade_log: 
 # TC signal loading
 # ---------------------------------------------------------------------------
 
-def _build_tc_signal_map(path: str) -> dict:
+def _build_tc_signals(path: str) -> list:
     """
     Load pre-computed TRIPLE_CONFIRM signals.
-    Returns {date: direction} — date-keyed so any candle on that date sees
-    the signal. If multiple signals fall on the same date, last one wins.
+    Returns a list of (signal_ts, direction) sorted ascending by signal_ts.
+    A candle at timestamp ts can only see signals where signal_ts <= ts —
+    no intraday lookahead.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -114,9 +116,28 @@ def _build_tc_signal_map(path: str) -> dict:
             f"Run: python iris_backtest/research/run_all.py")
     df = pd.read_csv(path, parse_dates=['signal_ts'])
     df['signal_ts'] = pd.to_datetime(df['signal_ts'])
-    df['date'] = df['signal_ts'].dt.date
-    df = df.drop_duplicates(subset='date', keep='last')
-    return dict(zip(df['date'], df['direction']))
+    df = df.sort_values('signal_ts')
+    return list(zip(df['signal_ts'], df['direction']))
+
+
+def _get_tc_dir(tc_signals: list, ts: pd.Timestamp) -> str | None:
+    """
+    Return the direction of the last TC signal that fired on the same
+    calendar date as ts AND where signal_ts <= ts, or None.
+
+    Signals are scoped to their firing date — a signal from a prior day
+    is not carried forward. Within the same day, only signals already
+    fired (signal_ts <= ts) are visible, eliminating intraday lookahead.
+    """
+    ts_date = ts.date()
+    result  = None
+    for sig_ts, direction in tc_signals:
+        sig_date = sig_ts.date()
+        if sig_date > ts_date:
+            break           # sorted; no earlier signals follow
+        if sig_date == ts_date and sig_ts <= ts:
+            result = direction
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +168,7 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                     last_ce_wing_ltp: float = 0.0, last_pe_wing_ltp: float = 0.0,
                     ce_wing_strike: int = None, pe_wing_strike: int = None,
                     opt_df_cache: dict = None, buy_expiry_end: pd.Timestamp = None,
-                    tc_signal_map: dict = None):
+                    tc_signals: list = None):
     """
     TC-modified window scanner. Returns a 22-item tuple:
       0-3:  running LTPs (ce_sell, ce_buy, pe_sell, pe_buy)
@@ -165,8 +186,8 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
       20:   tc_pe_triggered (True if bearish TC triggered PE chute)
       21:   pe_wing_close_price (price at which wing was sold; 0 if never sold)
     """
-    if tc_signal_map is None:
-        tc_signal_map = {}
+    if tc_signals is None:
+        tc_signals = []
 
     running_ce_sell = last_ce_sell_ltp
     running_ce_buy  = last_ce_buy_ltp
@@ -235,7 +256,7 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         # CE parachute — TC-enhanced emergency hedge
         # -----------------------------------------------------------------
         if ENABLE_EMERGENCY_HEDGE and buy_expiry_end is not None and opt_df_cache is not None:
-            tc_dir = tc_signal_map.get(ts.date())
+            tc_dir = _get_tc_dir(tc_signals, ts)
 
             # Entry: TC early trigger OR reactive spot threshold
             if not emer_active and emer_attempts < EMERGENCY_MAX_ATTEMPTS:
@@ -282,7 +303,7 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         # PE parachute — TC-only trigger
         # -----------------------------------------------------------------
         if buy_expiry_end is not None and opt_df_cache is not None:
-            tc_dir_pe = tc_signal_map.get(ts.date())
+            tc_dir_pe = _get_tc_dir(tc_signals, ts)
 
             # Entry: bearish TC only
             if not pe_chute_active and pe_chute_attempts < EMERGENCY_MAX_ATTEMPTS:
@@ -448,7 +469,7 @@ def _scan_window_tc(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
 def run_backtest_tc(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                     contracts_df: pd.DataFrame,
                     holidays_df: pd.DataFrame,
-                    tc_signal_map: dict) -> list:
+                    tc_signals: list) -> list:
     """
     TC-modified backtest. Mirrors run_backtest() but calls _scan_window_tc
     and records TC-specific columns. Adjustment block omitted (ENABLE_ADJUSTMENT=False).
@@ -650,7 +671,7 @@ def run_backtest_tc(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             last_ce_wing_ltp=ce_wing_entry, last_pe_wing_ltp=pe_wing_entry,
             ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
             opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
-            tc_signal_map=tc_signal_map)
+            tc_signals=tc_signals)
 
         running_realised_pl = window_tc_realised
 
@@ -879,8 +900,8 @@ if __name__ == "__main__":
     logger.info(f"  TC signals : {TC_SIGNALS_CSV}")
     logger.info(f"  Output     : {TC_SUMMARY}")
 
-    tc_signal_map = _build_tc_signal_map(TC_SIGNALS_CSV)
-    logger.info(f"  TC signals loaded: {len(tc_signal_map)} dates")
+    tc_signals = _build_tc_signals(TC_SIGNALS_CSV)
+    logger.info(f"  TC signals loaded: {len(tc_signals)} signals (timestamp-keyed)")
 
     nifty_1m, vix_1m = load_index_data()
 
@@ -894,7 +915,7 @@ if __name__ == "__main__":
     logger.info(f"  VIX filter : {'ON' if ENABLE_VIX_FILTER else 'OFF'}"
                 + (f" ({VIX_FILTER_LOW}–{VIX_FILTER_HIGH})" if ENABLE_VIX_FILTER else ""))
 
-    all_trades = run_backtest_tc(nifty_1m, vix_1m, contracts_df, holidays_df, tc_signal_map)
+    all_trades = run_backtest_tc(nifty_1m, vix_1m, contracts_df, holidays_df, tc_signals)
     save_summary_tc(all_trades)
 
     logger.info("=== Athena TC Backtest complete ===")
