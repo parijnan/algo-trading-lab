@@ -44,10 +44,23 @@ A directional ITM debit spread strategy deployed when India VIX > 25. Uses dual-
 | Instrument | Nifty weekly options |
 | Structure | ITM debit spread (directional, one side only) |
 | Signal | Dual Supertrend — 75-min regime, 15-min entry/exit |
-| Deploy condition | India VIX > 25 |
+| Deploy condition | India VIX < 11 (routing map) |
 | Broker | Angel Broking (SmartConnect) |
 | Production config | D-R-D06g |
 | Status | Live |
+
+### Aphrodite — Intraday Iron Condor (concept)
+An intraday short-premium iron condor on Nifty weekly options, intended to deploy alongside Apollo during VIX < 11 phases using the idle capital. Sell 2σ OTM strikes, hedge at 3σ, close before end of day — no overnight exposure.
+
+| | |
+|---|---|
+| Instrument | Nifty weekly options |
+| Structure | Iron condor — 2σ sell, 3σ hedge |
+| Deploy condition | VIX open < 11, DTE ≥ 4, net credit ≥ 5pts after slippage |
+| Entry | 10:31 open (after Apollo seated) |
+| Exit | Hard square-off at 15:00 |
+| Viable entries | ~5/year (DTE ≥ 4 AND net > 5pts filter) |
+| Status | **Concept** — feasibility complete; see `plans/aphrodite.md` |
 
 ### [Athena](./athena_production/) — Nifty Double Calendar Condor
 A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25). Executes a double calendar spread on Nifty weekly options with far-OTM safety wings to cap extreme gap risk. Long-vega profile benefits from IV expansion.

@@ -101,3 +101,12 @@ Transitioning from fixed thresholds to a pro-active ML-driven engine.
 - **Signal Simulation (`leto_phase2_simulation.py`):** Researching the "Two-Stage Triage" architecture (Trend vs Range, then Direction).
 
 **Early Findings:** Simulation identifies high-confidence "Stealth Trends" occurring at VIX < 16. However, application in Athena revealed a "Complexity Trap": pro-active trigger tightening based on these signals incurred higher friction costs than the static Phase 2 baseline. Phase 3 remains a research laboratory track.
+
+## Companion Strategy: Aphrodite
+
+During VIX < 11 phases Apollo deploys on ₹8L margin against ₹60L total capital, leaving
+₹52L idle. Aphrodite is a concept for an intraday iron condor (sell 2σ OTM, hedge 3σ)
+on the same Nifty weekly options to collect small premium from the idle capital. Feasibility
+analysis (June 2026) found ~5 viable entries/year at DTE ≥ 4 with net credit > 5pts after
+slippage. Architecture decision (fully automated vs semi-manual) is pending. See
+`plans/aphrodite.md`.
