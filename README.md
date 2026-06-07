@@ -70,7 +70,7 @@ A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25).
 ### [Leto](./leto.py) — Strategy Router and Session Manager
 Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Apollo, Athena, or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
 
-**Routing logic:**
+**Routing logic (current live — 3-way gate):**
 1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day.
 2. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
 3. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
@@ -85,6 +85,22 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 6. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
 
 **Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload. Apollo is never overridden — if VIX > 25, Apollo runs regardless.
+
+> **Pending upgrade:** Capital-adjusted routing research (June 2026) shows Apollo has positive expectancy in 6 of 11 VIX bands currently given to Artemis or Athena. The 3-way gate above will be replaced with an 11-band map. See `plans/leto-routing-optimisation.md` for the full routing table, implementation steps, and go/no-go gates.
+>
+> | VIX Band | Current | Planned | Lots |
+> |----------|---------|---------|------|
+> | < 11 | Artemis | **Apollo** | 4 |
+> | 11–12 | Artemis | **Apollo** | 4 |
+> | 12–13 | Artemis | Artemis | 1 |
+> | 13–14 | Artemis | **Apollo** | 4 |
+> | 14–15 | Artemis | **Apollo** | 4 |
+> | 15–16 | Artemis | Artemis | 1 |
+> | 16–18 | Athena | Athena | 1 |
+> | 18–20 | Athena | **Apollo** | 4 |
+> | 20–22 | Athena | **Apollo** | 4 |
+> | 22–25 | Athena | Athena | 1 |
+> | > 25 | Apollo | **Skip** | — |
 
 ### Orchestration Flow
 

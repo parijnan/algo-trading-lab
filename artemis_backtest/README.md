@@ -174,6 +174,24 @@ One row per weekly contract in `data/trade_summary.csv`.
 | `total_pl_rupees` | `total_pl_points × LOT_SIZE × lots` |
 | `week_outcome` | `traded` · `skipped_vix` · `skipped_no_data` · `skipped_no_strikes` · `skipped_entry_failed` |
 
+## VIX Band Routing Analysis (June 2026)
+
+Capital-adjusted routing research (`plans/leto-routing-optimisation.md`) found that Artemis
+Nifty has positive expectancy only in specific VIX bands. Using a 1-lot baseline (Artemis = Athena = 4× Apollo):
+
+| VIX Band | Expectancy | Verdict |
+|----------|-----------|---------|
+| VIX < 11 | −₹892 | Skip — Apollo dominates |
+| VIX 11–12 | +₹681 | Marginal — Apollo (×4) = +₹1,412 |
+| **VIX 12–13** | **+₹658** | **Deploy — Apollo negative (−₹1,337)** |
+| VIX 13–14 | +₹483 | Skip — Apollo (×4) = +₹1,264 |
+| VIX 14–15 | +₹439 | Skip — Apollo (×4) = +₹1,118 |
+| **VIX 15–16** | **+₹1,456** | **Deploy — strongest Artemis band** |
+
+Artemis is recommended in **VIX 12–13 and 15–16 only** under the capital-adjusted routing map.
+VIX 15–16 is Artemis' structural sweet spot (93.3% WR on Nifty, N=15): VIX is near the
+Athena boundary and tends to compress further, directly benefiting the short-vega position.
+
 ## Status
 
 - [x] generate_contracts.py

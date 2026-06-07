@@ -4,12 +4,12 @@ Part of the **Algo Trading Lab** project.
 
 ## Strategy Overview
 
-A dual-timeframe Supertrend trend-following options strategy, originally designed for VIX > 16 (now live for VIX > 25). Apollo takes a directional position — one side only, in the direction of the trend.
+A dual-timeframe Supertrend trend-following options strategy. Apollo takes a directional position — one side only, in the direction of the trend.
 
 | Parameter | Value |
 |---|---|
 | Instrument | Nifty weekly options |
-| Deploy condition | India VIX > 25 (Live) |
+| Deploy condition | See routing map — `plans/leto-routing-optimisation.md` |
 | Higher timeframe | 75-min Supertrend (trend regime) |
 | Lower timeframe | 15-min Supertrend (entry/exit trigger) |
 | Structure | ITM debit spread — buy ITM (−50 from ATM) + sell OTM (300 pts away) |
@@ -62,7 +62,7 @@ Production config frozen as **D-R-D06g**. Logic translated to `apollo_production
 
 Key decisions: ITM buy leg (−50 from ATM) outperforms OTM. Exit stack: profit target (35% bull / 60% bear), time gate (25% bull / 35% bear, Day 1), hard stop (40 pts bull / 67.5 pts bear). Entry filters: Tuesday excluded, Monday bearish excluded, signal candles 10:15 / 14:15 / 14:30 excluded.
 
-### Phase 2 — Triple Timeframe (75-min + 15-min + 5-min) — IN PROGRESS (on hold)
+### Phase 2 — Triple Timeframe (75-min + 15-min + 5-min) — RESEARCH COMPLETE
 
 Introduces a 5-min Supertrend as the entry and exit trigger. The 15-min ST no longer needs to flip — it must be aligned with the 75-min regime. The 5-min ST flipping into alignment with both higher timeframes triggers entry. This generates more signals than Phase 1, particularly re-entries during sustained trends.
 
@@ -70,8 +70,27 @@ Introduces a 5-min Supertrend as the entry and exit trigger. The 15-min ST no lo
 |---|---|
 | D5-R01 raw baseline | ✅ Complete — 351 trades, +₹1,18,260 raw |
 | Hours-based time gate (D5-R02) | ❌ Rejected — all variants worse than baseline |
-| Entry filter analysis (D5-R03) | ⬜ Next step — pending upload of D5-R01 trade logs |
-| Exit stack calibration | ⬜ Pending entry filters |
+| VIX band routing analysis | ✅ Complete — see `plans/leto-routing-optimisation.md` |
+| Capital-adjusted routing map | ✅ Complete — Apollo deploys 4 lots in 6 VIX bands |
+| Drawdown analysis | ✅ Complete — 4 lots recommended over 5 lots |
+
+**Phase 2 baseline (VIX_THRESHOLD=0, 2020–May 2026, 608 trades):**
+
+| Metric | Unfiltered | Routed bands only |
+|--------|-----------|-------------------|
+| Trades | 608 | 343 |
+| Win rate | 40.3% | 44.9% |
+| R:R | 1.75 | 1.92 |
+| Expectancy | +₹154/trade | +₹415/trade |
+| Total P&L | +₹1,00,035 | +₹1,42,396 |
+
+**Recommended VIX bands for Apollo (4 lots):** < 11, 11–12, 13–14, 14–15, 18–20, 20–22.
+Apollo is NOT deployed in VIX 12–13 (Artemis), 15–16 (Artemis), 16–18 (Athena), 22–25 (Athena), > 25 (Skip).
+
+**Output files:**
+- `data/trade_summary_phase2.csv` — baseline (VIX > 16 gate)
+- `data/trade_summary_phase2_vix_all.csv` — full VIX range run
+- `data/trade_summary_phase2_routed.csv` — recommended bands only
 
 ### Phase 3 — ML Regime Adaptation (Solo Quant) — IN PROGRESS
 
