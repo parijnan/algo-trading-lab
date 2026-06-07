@@ -7,15 +7,23 @@
 ## 1. Objective
 
 Replace Leto's current two-boundary VIX gate (Artemis < 16, Athena 16–25, Apollo > 25) with
-an **11-band capital-adjusted routing map** that deploys the highest-expectancy strategy for
-each VIX level, with per-strategy lot sizing normalised to the same capital base.
+a routing map that deploys the highest-expectancy strategy for each VIX level.
 
-The current routing loses significant edge: Apollo is structurally superior in 6 of the 11
-VIX bands, including several bands where Athena currently runs uncontested.
+**Target routing (post-Iris live validation):**
 
-> **Revised (June 2026):** Apollo's VIX < 11 recommendation was subsequently found to be
-> unreliable (see §5 notes). The routing has been simplified to three boundaries, nearly
-> identical to the current live routing, with two adjustments at the extremes.
+| VIX Band | Strategy | Status |
+|----------|----------|--------|
+| VIX < 16 | Artemis | Live — no change |
+| VIX 16–25 | Athena | Live — no change |
+| VIX > 25 | **Iris** | Pending Iris live validation |
+
+The only routing change from current live is VIX > 25: Apollo (net-negative, −₹12/trade)
+is replaced by Iris (+₹443/trade, 64% WR, N=77). Iris must first complete live testing
+and be brought into the Leto sphere of influence before this change is made.
+
+> **Earlier finding withdrawn (June 2026):** Apollo was briefly recommended for VIX < 11
+> on backtest data, then withdrawn — insufficient sample (N=37, negative in 2023–2024).
+> See §5 notes for full detail.
 
 ---
 
@@ -222,10 +230,18 @@ Apollo cannot be manually overridden (existing behaviour preserved).
 
 ## 9. Go/no-go gate for live deployment
 
-- [ ] Update `leto_config.py` VIX boundaries: `VIX_ARTEMIS_MAX = 16.0`, `VIX_ATHENA_MAX = 25.0`, Skip above 25
-- [ ] Confirm VIX > 25 stand-down is wired (currently routes to Apollo — change to Skip)
-- [ ] No Apollo routing changes required; Apollo remains live only for manually-held open positions
-- [ ] Monitor Artemis Sensex VIX < 11 performance — revisit routing if N reaches 30+ trades
+**Phase 1 — immediate (no Iris dependency):**
+- [ ] VIX > 25: change from Apollo to Stand Down in `leto_config.py` (Apollo is net-negative there)
+
+**Phase 2 — after Iris live validation:**
+- [ ] Iris passes paper trading gate (≥ 2 weeks, signals fire at correct timestamps)
+- [ ] Iris integrated into Leto: `leto.py` instantiates and manages Iris session lifecycle
+- [ ] VIX > 25 in `leto_config.py` routes to Iris instead of Stand Down
+- [ ] Iris retains its own independent arm/disarm via Slack (does not conflict with Leto routing)
+- [ ] Apollo retired from routing; remains available only for manually-held open positions
+
+**Ongoing:**
+- [ ] Monitor Artemis Sensex VIX < 11 (currently N=10, 90% WR) — revisit routing if N reaches 30+
 
 ---
 
