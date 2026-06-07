@@ -84,8 +84,8 @@ Introduces a 5-min Supertrend as the entry and exit trigger. The 15-min ST no lo
 | Expectancy | +₹154/trade | +₹415/trade |
 | Total P&L | +₹1,00,035 | +₹1,42,396 |
 
-**Recommended VIX bands for Apollo (4 lots):** < 11, 11–12, 13–14, 14–15, 18–20, 20–22.
-Apollo is NOT deployed in VIX 12–13 (Artemis), 15–16 (Artemis), 16–18 (Athena), 22–25 (Athena), > 25 (Skip).
+**Recommended VIX band for Apollo (1 lot):** VIX < 11 only.
+Apollo is the only strategy with positive expectancy in VIX < 11 (+₹685/trade). Artemis takes VIX 11–16, Athena takes VIX 16–25, VIX > 25 is Skip. The earlier 4-lot recommendation was revised after drawdown analysis — Apollo's max DD at 4 lots (₹73k) against ₹80k position capital is a 91% drawdown on deployed capital.
 
 **Output files:**
 - `data/trade_summary_phase2.csv` — baseline (VIX > 16 gate)

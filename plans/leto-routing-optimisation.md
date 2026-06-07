@@ -51,7 +51,9 @@ Capital ratios relative to Apollo:
 
 ### 3.2 Lot sizing convention
 
-**Artemis 1 lot = Athena 1 lot = Apollo 4 lots** (chosen over 1:5 on drawdown grounds — see §5).
+**Artemis 1 lot = Athena 1 lot = Apollo 1 lot.**
+
+The original analysis used margin as the normalizer (1 Artemis ≈ 5 Apollo lots, same margin blocked), which mechanically favoured Apollo at 4×. This was revised after drawdown analysis: Apollo's max historical drawdown at 4 lots is ₹73k against ₹80k position capital — a 91% drawdown on deployed capital. Short-premium strategies (Artemis, Athena) have bounded max loss; their margin *is* roughly their risk capital. Apollo's risk capital must be sized off drawdown, not margin. On a risk-capital basis (25% DD rule), Apollo at 4 lots requires ₹2.9L — its return on risk capital (~33%) is actually lower than Athena (~52%) and Artemis (~38%). All three strategies therefore run at 1 lot.
 
 ### 3.3 Data sources
 
@@ -81,73 +83,65 @@ All analysis uses:
 
 ---
 
-## 5. Capital-adjusted routing map (final)
+## 5. Routing map (final — all strategies 1 lot)
 
-Position sizing: Artemis×1 = Athena×1 = Apollo×4
-
-| VIX Band | Strategy | Lots | Adj. Expectancy | Next best |
-|----------|----------|------|-----------------|-----------|
-| VIX < 11 | **Apollo** | 4 | +₹2,742 | Artemis×1 = −₹892 |
-| VIX 11–12 | **Apollo** | 4 | +₹1,412 | Artemis×1 = +₹681 |
+| VIX Band | Strategy | Lots | Expectancy | Next best |
+|----------|----------|------|------------|-----------|
+| VIX < 11 | **Apollo** | 1 | +₹685 | Artemis×1 = −₹892 |
+| VIX 11–12 | **Artemis** | 1 | +₹681 | Apollo×1 = +₹353 |
 | VIX 12–13 | **Artemis** | 1 | +₹658 | Athena×1 = +₹468 |
-| VIX 13–14 | **Apollo** | 4 | +₹1,264 | Artemis×1 = +₹483 |
-| VIX 14–15 | **Apollo** | 4 | +₹1,118 | Artemis×1 = +₹439 |
+| VIX 13–14 | **Artemis** | 1 | +₹483 | Apollo×1 = +₹316 |
+| VIX 14–15 | **Artemis** | 1 | +₹439 | Apollo×1 = +₹280 |
 | VIX 15–16 | **Artemis** | 1 | +₹1,456 | Athena×1 = −₹993 |
-| VIX 16–18 | **Athena** | 1 | +₹1,930 | Apollo×4 = −₹147 |
-| VIX 18–20 | **Apollo** | 4 | +₹868 | Athena×1 = +₹599 |
-| VIX 20–22 | **Apollo** | 4 | +₹2,877 | Athena×1 = +₹1,174 |
-| VIX 22–25 | **Athena** | 1 | +₹1,074 | Apollo×4 = +₹584 |
-| VIX > 25 | **Skip** | — | −₹49 | — |
+| VIX 16–18 | **Athena** | 1 | +₹1,930 | Apollo×1 = −₹83 |
+| VIX 18–20 | **Athena** | 1 | +₹599 | Apollo×1 = +₹161 |
+| VIX 20–22 | **Athena** | 1 | +₹1,174 | Apollo×1 = +₹719 |
+| VIX 22–25 | **Athena** | 1 | +₹1,074 | Apollo×1 = +₹146 |
+| VIX > 25 | **Skip** | — | −₹12 | — |
 
 ### Key departures from current routing
 
-- **Apollo now runs at VIX < 22** in 6 of the 11 bands (previously: VIX > 25 only)
-- **Athena reduced** to two bands: 16–18 and 22–25 (previously: entire 16–25 range)
-- **Apollo in 18–22** is the biggest surprise — 4-lot Apollo (+₹868/₹2,877) beats 1-lot Athena (+₹599/₹1,174) on capital-adjusted basis
-- **VIX > 25** is now Skip; Apollo loses edge there (backtest: −₹12/trade)
-- **VIX 12–13** is the only ambiguous band; Artemis chosen over Athena by ₹190/trade (within noise for N=30)
+- **VIX < 11**: Apollo replaces Artemis (Artemis −₹892, Apollo +₹685 — only band where Apollo wins on equal footing)
+- **VIX 11–16**: Artemis retained across all five bands; removing the Apollo 4× multiplier eliminates Apollo's edge here
+- **VIX 16–25**: Athena retained across all four bands; Apollo never beats Athena 1:1 above VIX 16
+- **VIX > 25**: Skip; Apollo is net-negative there (−₹12/trade)
+- **Net change**: Apollo deploys in one band only (VIX < 11) instead of six; the original three-strategy structure is largely preserved with finer band boundaries
 
 ---
 
-## 6. Apollo drawdown analysis (routed bands, 4 lots)
+## 6. Drawdown analysis (routed bands, 1 lot each)
 
-| Metric | Value |
-|--------|-------|
-| Max drawdown | −₹73,411 (2021) |
-| Max consecutive losses | 8 |
-| Worst 8-loss run | −₹43,732 |
-| Calmar ratio | 7.76 |
-| Total P&L (2020–May 2026) | +₹5,69,582 |
+| Strategy | Trades | Win rate | Total P&L | Max drawdown | Max consec | Worst run | Calmar |
+|----------|--------|----------|-----------|--------------|------------|-----------|--------|
+| Athena (16–18, 22–25) | 57 | 54.4% | +₹87,747 | −₹7,014 | 4 | −₹5,541 | 12.51 |
+| Artemis (12–13, 15–16) | 58 | 72.4% | +₹60,507 | −₹8,011 | 3 | −₹7,400 | 7.55 |
+| Apollo (< 11 only) | 37 | — | — | — | — | — | — |
 
-The max drawdown event (May–Aug 2021) was driven by sustained false breakouts in VIX 11–14,
-with three trades firing on a single day (Jul 9) for a combined −₹33k. This was a
-low-volatility grind regime, not a spike event.
+Apollo at 1 lot in VIX < 11 (37 trades, +₹685/trade expectancy): its drawdown profile in
+this narrow band alone has not been separately computed. Total P&L ≈ +₹25k, and given
+N=37 this band contributes modestly to overall system P&L.
 
-### Why 4 lots over 5 lots
+### Why not 4 lots for Apollo
 
-The Calmar ratio is identical at both scales (7.76) — 5 lots gives exactly 25% more P&L
-and exactly 25% more drawdown, no risk-adjusted benefit. The deciding factor:
-
-- At 5 lots: max drawdown **₹91,764** (crosses the ₹1L psychological/practical threshold)
-- At 5 lots: worst single trade in VIX 18–20 hits **−₹41,308**
-- At 4 lots: both stay below ₹75k; per-trade worst case under ₹34k
-
-The strategy is improving over time (2023–2025 annual P&L is 3–5× better than 2020–2021).
-Reassess scaling to 5 lots after 6–12 months of live routed data.
+At 4 lots, Apollo's max historical drawdown across all routed bands is ₹73,411 against
+₹80k position capital — a 91% drawdown on deployed capital. The correct comparator is
+risk capital sized off drawdown (25% DD rule): Apollo at 4 lots requires ₹2.9L, implying
+~33% annual return on risk capital. Athena and Artemis have bounded max-loss (spread width),
+so their margin *is* their risk capital; they achieve ~52% and ~38% respectively. On a
+consistent risk-capital basis Apollo's scaling advantage disappears. All three run at 1 lot.
 
 ---
 
-## 7. Apollo routed performance (vs unfiltered)
+## 7. Apollo routed performance (vs unfiltered, 1 lot)
 
-| | Unfiltered (all VIX) | Routed (recommended bands) |
-|-|---------------------|--------------------------|
-| Trades | 608 | 343 |
-| Win rate | 40.3% | 44.9% |
-| R:R | 1.75 | 1.92 |
-| Expectancy | +₹154/trade | +₹415/trade |
-| Total P&L | +₹1,00,035 | +₹1,42,396 |
+| | Unfiltered (all VIX) | Routed (VIX < 11 only) |
+|-|---------------------|------------------------|
+| Trades | 608 | 37 |
+| Expectancy | +₹154/trade | +₹685/trade |
 
-Filtering to recommended bands adds ₹42,361 — the 265 removed trades were net-negative drag.
+Apollo is deployed in VIX < 11 only under the 1-lot routing map. The 4-lot routed run
+(343 trades across 6 bands, +₹1,42,396) remains in `data/trade_summary_phase2_routed.csv`
+as a reference for if/when lot scaling is revisited.
 
 ---
 
@@ -161,16 +155,9 @@ Replace the two-threshold system with an 11-band lookup:
 # New routing bands (replace VIX_ARTEMIS_MAX / VIX_ATHENA_MAX)
 VIX_ROUTING_MAP = [
     # (vix_low, vix_high, strategy, lots)
-    (0.0,  11.0, 'apollo',  4),
-    (11.0, 12.0, 'apollo',  4),
-    (12.0, 13.0, 'artemis', 1),
-    (13.0, 14.0, 'apollo',  4),
-    (14.0, 15.0, 'apollo',  4),
-    (15.0, 16.0, 'artemis', 1),
-    (16.0, 18.0, 'athena',  1),
-    (18.0, 20.0, 'apollo',  4),
-    (20.0, 22.0, 'apollo',  4),
-    (22.0, 25.0, 'athena',  1),
+    (0.0,  11.0, 'apollo',  1),
+    (11.0, 16.0, 'artemis', 1),
+    (16.0, 25.0, 'athena',  1),
     (25.0, 999., 'skip',    0),
 ]
 ```
@@ -194,9 +181,7 @@ VIX gate that would block entry in the new lower-VIX bands.
 
 ### 8.4 Lot sizing for Apollo live
 
-Apollo production currently runs 1 lot. When this routing is live, Apollo needs to run 4 lots.
-Update `apollo_production/configs_live.py` accordingly — but only after paper-trading the new
-routing for at least 2 weeks.
+Apollo production runs 1 lot. The new routing keeps Apollo at 1 lot — no change required.
 
 ### 8.5 Manual override compatibility
 

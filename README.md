@@ -86,20 +86,13 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 
 **Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload. Apollo is never overridden — if VIX > 25, Apollo runs regardless.
 
-> **Pending upgrade:** Capital-adjusted routing research (June 2026) shows Apollo has positive expectancy in 6 of 11 VIX bands currently given to Artemis or Athena. The 3-way gate above will be replaced with an 11-band map. See `plans/leto-routing-optimisation.md` for the full routing table, implementation steps, and go/no-go gates.
+> **Pending upgrade:** Routing research (June 2026) finds two boundary adjustments improve expectancy without changing lot sizing. See `plans/leto-routing-optimisation.md` for full analysis.
 >
 > | VIX Band | Current | Planned | Lots |
 > |----------|---------|---------|------|
-> | < 11 | Artemis | **Apollo** | 4 |
-> | 11–12 | Artemis | **Apollo** | 4 |
-> | 12–13 | Artemis | Artemis | 1 |
-> | 13–14 | Artemis | **Apollo** | 4 |
-> | 14–15 | Artemis | **Apollo** | 4 |
-> | 15–16 | Artemis | Artemis | 1 |
-> | 16–18 | Athena | Athena | 1 |
-> | 18–20 | Athena | **Apollo** | 4 |
-> | 20–22 | Athena | **Apollo** | 4 |
-> | 22–25 | Athena | Athena | 1 |
+> | < 11 | Artemis | **Apollo** | 1 |
+> | 11–16 | Artemis | Artemis | 1 |
+> | 16–25 | Athena | Athena | 1 |
 > | > 25 | Apollo | **Skip** | — |
 
 ### Orchestration Flow
