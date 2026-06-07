@@ -13,6 +13,10 @@ each VIX level, with per-strategy lot sizing normalised to the same capital base
 The current routing loses significant edge: Apollo is structurally superior in 6 of the 11
 VIX bands, including several bands where Athena currently runs uncontested.
 
+> **Revised (June 2026):** Apollo's VIX < 11 recommendation was subsequently found to be
+> unreliable (see §5 notes). The routing has been simplified to three boundaries, nearly
+> identical to the current live routing, with two adjustments at the extremes.
+
 ---
 
 ## 2. Current routing (to be replaced)
@@ -60,6 +64,7 @@ The original analysis used margin as the normalizer (1 Artemis ≈ 5 Apollo lots
 All analysis uses:
 - `athena_backtest/data/trade_summary_vix_all.csv` — Athena run with VIX_FILTER_LOW=0 (2020–2026, 302 trades)
 - `artemis_backtest/data/trade_summary_nifty_rerun.csv` — Artemis Nifty rerun (2020–2025, 150 valid trades; 146 `skipped_vix` rows excluded)
+- `artemis_backtest/data/trade_summary_sensex_rerun.csv` — Artemis Sensex (Sep 2025–Mar 2026, 27 trades)
 - `apollo_backtest/data/trade_summary_phase2_vix_all.csv` — Apollo Phase 2 run with VIX_THRESHOLD=0 (2020–2026, 608 trades)
 - `apollo_backtest/data/trade_summary_phase2_routed.csv` — Apollo filtered to recommended bands only (343 trades)
 
@@ -69,7 +74,7 @@ All analysis uses:
 
 | Band | Athena | Artemis | Apollo |
 |------|--------|---------|--------|
-| VIX < 11 | −₹1,846 (N=15) | −₹892 (N=3) | **+₹685** (N=37) |
+| VIX < 11 | −₹1,846 (N=15) | −₹892 (N=3) Nifty / **+₹2,587 (N=10) Sensex** | +₹685 (N=37) ⚠️ |
 | VIX 11–12 | −₹127 (N=34) | +₹681 (N=24) | **+₹353** (N=59) |
 | VIX 12–13 | **+₹468** (N=30) | +₹658 (N=30) | −₹334 (N=66) |
 | VIX 13–14 | +₹197 (N=39) | +₹483 (N=32) | **+₹316** (N=73) |
@@ -85,27 +90,50 @@ All analysis uses:
 
 ## 5. Routing map (final — all strategies 1 lot)
 
-| VIX Band | Strategy | Lots | Expectancy | Next best |
-|----------|----------|------|------------|-----------|
-| VIX < 11 | **Apollo** | 1 | +₹685 | Artemis×1 = −₹892 |
-| VIX 11–12 | **Artemis** | 1 | +₹681 | Apollo×1 = +₹353 |
-| VIX 12–13 | **Artemis** | 1 | +₹658 | Athena×1 = +₹468 |
-| VIX 13–14 | **Artemis** | 1 | +₹483 | Apollo×1 = +₹316 |
-| VIX 14–15 | **Artemis** | 1 | +₹439 | Apollo×1 = +₹280 |
-| VIX 15–16 | **Artemis** | 1 | +₹1,456 | Athena×1 = −₹993 |
-| VIX 16–18 | **Athena** | 1 | +₹1,930 | Apollo×1 = −₹83 |
-| VIX 18–20 | **Athena** | 1 | +₹599 | Apollo×1 = +₹161 |
-| VIX 20–22 | **Athena** | 1 | +₹1,174 | Apollo×1 = +₹719 |
-| VIX 22–25 | **Athena** | 1 | +₹1,074 | Apollo×1 = +₹146 |
-| VIX > 25 | **Skip** | — | −₹12 | — |
+| VIX Band | Strategy | Lots | Expectancy | Notes |
+|----------|----------|------|------------|-------|
+| VIX < 11 | **Artemis** | 1 | +₹2,587 (Sensex) | See §5 notes |
+| VIX 11–16 | **Artemis** | 1 | +₹681 – +₹1,456 | Nifty rerun |
+| VIX 16–25 | **Athena** | 1 | +₹599 – +₹1,930 | Nifty rerun |
+| VIX > 25 | **Skip** | — | — | Apollo net-negative |
 
 ### Key departures from current routing
 
-- **VIX < 11**: Apollo replaces Artemis (Artemis −₹892, Apollo +₹685 — only band where Apollo wins on equal footing)
-- **VIX 11–16**: Artemis retained across all five bands; removing the Apollo 4× multiplier eliminates Apollo's edge here
-- **VIX 16–25**: Athena retained across all four bands; Apollo never beats Athena 1:1 above VIX 16
-- **VIX > 25**: Skip; Apollo is net-negative there (−₹12/trade)
-- **Net change**: Apollo deploys in one band only (VIX < 11) instead of six; the original three-strategy structure is largely preserved with finer band boundaries
+- **VIX > 25**: Skip replaces Apollo — Apollo is net-negative (−₹12/trade) there
+- **VIX < 11**: Reverted to Artemis — Apollo's +₹685 figure is unreliable (see §5 notes); Sensex Artemis is strongly positive in this band (+₹2,587, N=10)
+- **VIX 11–25**: Unchanged from live routing
+
+### §5 notes — Apollo VIX < 11 reliability
+
+Apollo's +₹685 expectancy in VIX < 11 (N=37) breaks down by year:
+
+| Period | N | WR | Total | Verdict |
+|--------|---|----|-------|---------|
+| 2023 | 16 | 38% | −₹6,370 | Negative |
+| 2024 | 2 | 0% | −₹2,480 | Negative |
+| 2025 | 13 | 46% | +₹21,460 | Positive |
+| 2026 | 6 | 50% | +₹12,750 | Positive |
+
+The positive figure is entirely driven by 2025–2026. The 2023–2024 history (18 trades) is
+net-negative. VIX < 11 only appeared from mid-2023 onwards, giving fewer than 2 full years
+of data. The headline expectancy is within noise for N=37 and should not be used to justify
+routing Apollo into this band. Revert to Artemis until 3+ years of VIX < 11 data exist.
+
+### §5 notes — Artemis Sensex VIX < 11
+
+Artemis Sensex (Sep 2025–Mar 2026, 27 trades) shows strong performance in VIX < 11:
+90% WR, +₹2,587 expectancy. This contrasts with Nifty Artemis which was negative in that
+band (−₹892, N=3 — too small to be meaningful). The Sensex instrument appears structurally
+better suited to the low-VIX regime, likely because Sensex options carry more premium per
+unit at equivalent strikes. This is a preliminary finding (N=10); confirm after a full year.
+
+### §5 notes — VIX 15–16 gap risk
+
+Artemis Sensex had two losses in VIX 15–16 (0% WR, −₹9,233). The larger of the two
+(Feb 5, 2026: −₹7,914) was caused by an overnight gap-up following a Trump trade deal
+announcement, in a post-budget week where VIX was temporarily elevated. This is a
+macro event risk, not a VIX-band-specific structural issue. The same event would have hit
+Athena equally hard. No routing logic prevents gap-up/gap-down overnight shocks.
 
 ---
 
@@ -117,9 +145,8 @@ All analysis uses:
 | Artemis (12–13, 15–16) | 58 | 72.4% | +₹60,507 | −₹8,011 | 3 | −₹7,400 | 7.55 |
 | Apollo (< 11 only) | 37 | — | — | — | — | — | — |
 
-Apollo at 1 lot in VIX < 11 (37 trades, +₹685/trade expectancy): its drawdown profile in
-this narrow band alone has not been separately computed. Total P&L ≈ +₹25k, and given
-N=37 this band contributes modestly to overall system P&L.
+Apollo is no longer recommended in VIX < 11 (see §5 notes). The routing reverts to Artemis
+across the full VIX < 16 range, matching the current live routing.
 
 ### Why not 4 lots for Apollo
 
@@ -134,14 +161,16 @@ consistent risk-capital basis Apollo's scaling advantage disappears. All three r
 
 ## 7. Apollo routed performance (vs unfiltered, 1 lot)
 
-| | Unfiltered (all VIX) | Routed (VIX < 11 only) |
-|-|---------------------|------------------------|
-| Trades | 608 | 37 |
-| Expectancy | +₹154/trade | +₹685/trade |
+Apollo is not deployed under the current routing map (VIX > 25 is Skip; VIX < 11 reverts
+to Artemis). The full-range and routed backtest files remain as reference:
 
-Apollo is deployed in VIX < 11 only under the 1-lot routing map. The 4-lot routed run
-(343 trades across 6 bands, +₹1,42,396) remains in `data/trade_summary_phase2_routed.csv`
-as a reference for if/when lot scaling is revisited.
+| File | Description |
+|------|-------------|
+| `data/trade_summary_phase2_vix_all.csv` | All VIX levels, 608 trades |
+| `data/trade_summary_phase2_routed.csv` | 4-lot routed bands (superseded) |
+
+Revisit Apollo routing if VIX < 11 accumulates 3+ full years of data or if a high-VIX
+regime (> 25) returns and the Skip decision needs revisiting.
 
 ---
 
@@ -193,11 +222,10 @@ Apollo cannot be manually overridden (existing behaviour preserved).
 
 ## 9. Go/no-go gate for live deployment
 
-- [ ] Paper trade the new routing for ≥ 2 weeks across all active VIX bands
-- [ ] Confirm Apollo production does not apply an independent VIX gate below 16
-- [ ] Confirm Athena and Artemis accept a `lots` override parameter (or default to 1 lot — acceptable since they only deploy 1 lot under this map)
-- [ ] Confirm Apollo 4-lot margin is available for all routed bands (especially intraday peaks)
-- [ ] First live session at 4 lots Apollo: monitor closely; have manual exit ready
+- [ ] Update `leto_config.py` VIX boundaries: `VIX_ARTEMIS_MAX = 16.0`, `VIX_ATHENA_MAX = 25.0`, Skip above 25
+- [ ] Confirm VIX > 25 stand-down is wired (currently routes to Apollo — change to Skip)
+- [ ] No Apollo routing changes required; Apollo remains live only for manually-held open positions
+- [ ] Monitor Artemis Sensex VIX < 11 performance — revisit routing if N reaches 30+ trades
 
 ---
 

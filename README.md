@@ -99,12 +99,14 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 
 **Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload. Apollo is never overridden — if VIX > 25, Apollo runs regardless.
 
-> **Pending upgrade:** Routing research (June 2026) finds two boundary adjustments improve expectancy without changing lot sizing. See `plans/leto-routing-optimisation.md` for full analysis.
+> **Pending upgrade:** Routing research (June 2026) finds one boundary adjustment: VIX > 25
+> becomes Skip (Apollo is net-negative there). Everything else matches current live routing.
+> Apollo's earlier recommendation for VIX < 11 was withdrawn — insufficient data (N=37,
+> 2023–2026 only, negative in 2023–2024). See `plans/leto-routing-optimisation.md`.
 >
 > | VIX Band | Current | Planned | Lots |
 > |----------|---------|---------|------|
-> | < 11 | Artemis | **Apollo** | 1 |
-> | 11–16 | Artemis | Artemis | 1 |
+> | < 16 | Artemis | Artemis | 1 |
 > | 16–25 | Athena | Athena | 1 |
 > | > 25 | Apollo | **Skip** | — |
 
