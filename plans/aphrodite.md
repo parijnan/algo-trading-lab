@@ -1,6 +1,13 @@
 # Plan: Aphrodite — Intraday Iron Condor (VIX < 11)
 
-**Status: FEASIBILITY COMPLETE — architecture decision pending**
+**Status: SHELVED (June 2026) — premise removed by Apollo retirement**
+
+> **Why shelved:** Aphrodite was designed to use the ₹52L of idle capital during VIX < 11
+> phases while Apollo ran on ₹8L margin. Apollo has been retired from the routing map
+> (net-negative at VIX > 25; Iris takes that slot; Artemis covers VIX < 16 with full
+> capital). There is no longer a VIX < 11 idle-capital scenario for Aphrodite to exploit.
+> Feasibility analysis and design notes are preserved below for reference. Revisit only if
+> a VIX < 11 strategy is deployed that again leaves substantial capital idle.
 
 ---
 
