@@ -36,18 +36,18 @@ A market-neutral credit spread strategy that starts as a weekly Sensex Iron Cond
 | Broker | Angel Broking (SmartConnect) |
 | Status | Live |
 
-### [Apollo](./apollo_production/) — Nifty High-VIX Trend Following
-A directional ITM debit spread strategy deployed when India VIX > 25. Uses dual-timeframe Supertrend (75-min and 15-min) to identify and trade sustained directional moves in Nifty options.
+### [Apollo](./apollo_production/) — Nifty High-VIX Trend Following *(retiring)*
+A directional ITM debit spread strategy. Net-negative at VIX > 25 (−₹12/trade) and outperformed by Artemis/Athena across VIX 11–25 on a 1:1 basis. Iris replaces it at VIX > 25 after live validation. No new entries will be routed to Apollo once Iris is integrated.
 
 | | |
 |---|---|
 | Instrument | Nifty weekly options |
 | Structure | ITM debit spread (directional, one side only) |
 | Signal | Dual Supertrend — 75-min regime, 15-min entry/exit |
-| Deploy condition | India VIX < 11 (routing map) |
+| Deploy condition | **Retiring** — manages open positions only |
 | Broker | Angel Broking (SmartConnect) |
 | Production config | D-R-D06g |
-| Status | Live |
+| Status | Live (open position management only) |
 
 ### Aphrodite — Intraday Iron Condor (concept)
 An intraday short-premium iron condor on Nifty weekly options, intended to deploy alongside Apollo during VIX < 11 phases using the idle capital. Sell 2σ OTM strikes, hedge at 3σ, close before end of day — no overnight exposure.

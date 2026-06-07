@@ -2,6 +2,12 @@
 
 Part of the **Algo Trading Lab** project.
 
+> **Retirement notice:** Apollo has no band in the final routing map. It is net-negative
+> at VIX > 25 (−₹12/trade) and is outperformed by Artemis/Athena across VIX 11–25 on a
+> 1:1 lot basis. Iris replaces it at VIX > 25 after live validation. Apollo production
+> (D-R-D06g) remains live only to manage any open positions; no new entries will be routed
+> to it. See `plans/leto-routing-optimisation.md`.
+
 ## Strategy Overview
 
 A dual-timeframe Supertrend trend-following options strategy. Apollo takes a directional position — one side only, in the direction of the trend.
@@ -9,7 +15,7 @@ A dual-timeframe Supertrend trend-following options strategy. Apollo takes a dir
 | Parameter | Value |
 |---|---|
 | Instrument | Nifty weekly options |
-| Deploy condition | See routing map — `plans/leto-routing-optimisation.md` |
+| Deploy condition | **Retired from routing** — Iris takes VIX > 25 post live validation |
 | Higher timeframe | 75-min Supertrend (trend regime) |
 | Lower timeframe | 15-min Supertrend (entry/exit trigger) |
 | Structure | ITM debit spread — buy ITM (−50 from ATM) + sell OTM (300 pts away) |
