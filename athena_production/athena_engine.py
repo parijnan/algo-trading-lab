@@ -928,7 +928,10 @@ class Athena:
                     _reset_counters()
                     self._update_elapsed = TRADE_UPDATE_INTERVAL
             else:
-                sleep(60)
+                now = datetime.now()
+                entry_today = datetime.combine(now.date(), self._entry_time)
+                secs = (entry_today - now).total_seconds()
+                sleep(int(secs) if secs > 1 else 30)
                 _reset_counters()
         if self.state.status == 'in_trade':
             try: self._send_trade_update()
