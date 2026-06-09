@@ -715,10 +715,37 @@ class Athena:
             if self.state.emer_active and 'emer' in p: pl_pts = round(pl_pts + (p['emer'] - self.state.emer_entry), 2)
             pl_pts = round(pl_pts + self.state.running_realised_pl, 2)
         except: pl_pts = 0.0
-        row = {'time_stamp': now.strftime('%Y-%m-%d %H:%M:%S'), 'spot': p.get('spot'), 'ce_sell_ltp': p.get('ce_sell'), 'pe_sell_ltp': p.get('pe_sell'), 'ce_buy_ltp': p.get('ce_buy'), 'pe_buy_ltp': p.get('pe_buy'), 'unrealised_pl': round(pl_pts, 2), 'exit_reason': exit_reason}
-        if self.state.wings_enabled: row['pe_wing_ltp'] = p.get('pe_wing')
-        if self.state.emer_active: row['emer_ltp'] = p.get('emer')
-        log_file = self._get_log_filepath(); df = pd.DataFrame([row]); df.to_csv(log_file, mode='a', index=False, header=not os.path.exists(log_file))
+        row = {
+            'time_stamp': now.strftime('%Y-%m-%d %H:%M:%S'),
+            'entry_spot': self.state.entry_spot, 'entry_vix': self.state.entry_vix,
+            'ce_strike': self.state.ce_sell_strike, 'pe_strike': self.state.pe_sell_strike,
+            'sell_expiry': self.state.sell_expiry, 'buy_expiry': self.state.buy_expiry,
+            'spot': p.get('spot'),
+            'ce_sell_entry': self.state.ce_sell_entry, 'ce_sell_ltp': p.get('ce_sell'),
+            'pe_sell_entry': self.state.pe_sell_entry, 'pe_sell_ltp': p.get('pe_sell'),
+            'ce_buy_entry': self.state.ce_buy_entry,   'ce_buy_ltp': p.get('ce_buy'),
+            'pe_buy_entry': self.state.pe_buy_entry,   'pe_buy_ltp': p.get('pe_buy'),
+            'unrealised_pl': round(pl_pts, 2), 'exit_reason': exit_reason,
+        }
+        if self.state.wings_enabled:
+            row['pe_wing_strike'] = self.state.pe_wing_strike
+            row['pe_wing_entry'] = self.state.pe_wing_entry
+            row['pe_wing_ltp'] = p.get('pe_wing')
+        if self.state.emer_active:
+            row['emer_strike'] = self.state.emer_strike
+            row['emer_entry'] = self.state.emer_entry
+            row['emer_ltp'] = p.get('emer')
+        log_file = self._get_log_filepath()
+        df = pd.DataFrame([row])
+        if os.path.exists(log_file):
+            existing_cols = pd.read_csv(log_file, nrows=0).columns.tolist()
+            if existing_cols != df.columns.tolist():
+                old_df = pd.read_csv(log_file).reindex(columns=df.columns)
+                pd.concat([old_df, df], ignore_index=True).to_csv(log_file, index=False)
+            else:
+                df.to_csv(log_file, mode='a', index=False, header=False)
+        else:
+            df.to_csv(log_file, index=False)
 
     def _send_trade_update(self, prices=None):
         if self.state.status != 'in_trade': return
