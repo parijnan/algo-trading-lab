@@ -81,6 +81,25 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
 - **PE Wing Salvage (`backtest_wing_salvage.py`):** Automatically exiting the redundant PE wing when the CE Parachute triggers. 
 - **Results:** Improved win rate (64.2%) and R:R (1.37), though absolute profit was slightly lower due to exit slippage.
 
+- **Reactive PE Wing (`backtest_wing_reactive.py`):** Replaces the static always-on 0.05-delta PE wing with a
+  conditional hedge. Wing is bought only when `spot < entry_spot − 150 pts`; sold when `spot > entry_spot`.
+  No overnight lock — the wing is held naturally through overnight/weekends until spot recovers.
+  `entry_spot` is the 10:30 spot at trade entry and is fixed for the entire trade.
+- **Results (WING_SLIPPAGE=1.0, 2020–2026, 125 trades):**
+  - Total P&L: **+₹165,308** vs ₹149,130 baseline (+₹16,178 / +10.8%)
+  - Win rate: **64.0%** vs 58.9% baseline (+5.1 pp)
+  - Reward:Risk: 1.46 vs 1.65 baseline (slight degradation — moderate losers receive no wing protection below the 150-pt trigger)
+  - Wing drag: **−181 pts** vs −455 pts baseline (60% reduction); 98 buys across 125 trades (0.78/trade)
+  - Wing slippage: 155 pts vs ~228 pts baseline
+- **EOD variant (`backtest_wing_eod.py`):** Also tested — forced daily buy at 15:15 + morning sell at 9:20.
+  Performed significantly worse (₹116,015, −939 pts wing drag) due to 437 transactions × slippage overhead.
+  The daily cycle adds cost without proportional protection. Not pursued further.
+- **Per-trade logs:** `data_wing_reactive/trade_logs/trade_NNNN_YYYY-MM-DD.csv` — one file per trade with
+  1-min resolution: spot, VIX, `entry_spot`, `wing_trigger_level`, wing state (active/strike/entry/ltp/P&L),
+  and cumulative P&L. Gitignored (generated output).
+- **Status (June 2026):** Reactive wing shows clear improvement in P&L and win rate. Pending review of
+  trade logs to understand which wing-active trades drove the improvement before production consideration.
+
 - **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
   buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.
 - **Results:** Degraded performance at every offset. No configuration improved on baseline.
