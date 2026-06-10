@@ -42,7 +42,7 @@ from configs import (
     ENABLE_SPREAD_SL, SPREAD_SL_POINTS,
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
     ENABLE_ASYMMETRIC_DELTA, DELTA_TESTED_SIDE, DELTA_SAFE_SIDE,
-    ENABLE_SAFETY_WINGS, SAFETY_WING_DELTA,
+    ENABLE_PE_WING, PE_WING_DELTA,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_WING_THRESHOLD, ADJUSTMENT_MIN_CREDIT_GAIN,
@@ -1253,14 +1253,14 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
         ce_wing_strike = None
         pe_wing_strike = None
-        if ENABLE_SAFETY_WINGS:
+        if ENABLE_PE_WING:
             # --- Phase 2 Adjustment: PE-Only Wing ---
             # We skip the CE wing to save cost.
             ce_wing_strike = None
             ce_wing_raw = 0.0
             
             pe_wing_strike, pe_wing_raw = select_strike(
-                spot, buy_expiry_end, entry_ts, 'pe', opt_df_cache, SAFETY_WING_DELTA)
+                spot, buy_expiry_end, entry_ts, 'pe', opt_df_cache, PE_WING_DELTA)
 
         # ----------------------------------------------------------------
         # Load all option files (4 for base + 2 for wings)
@@ -1291,7 +1291,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         
         ce_wing_df = None
         pe_wing_df = None
-        if ENABLE_SAFETY_WINGS:
+        if ENABLE_PE_WING:
             if ce_wing_strike:
                 ce_wing_key = (buy_expiry_end, ce_wing_strike, 'ce')
                 if ce_wing_key not in opt_df_cache:
@@ -1339,7 +1339,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         
         ce_wing_entry = 0.0
         pe_wing_entry = 0.0
-        if ENABLE_SAFETY_WINGS:
+        if ENABLE_PE_WING:
             if ce_wing_df is not None:
                 ce_wing_raw = get_option_price(ce_wing_df, entry_ts, 'open')
                 if ce_wing_raw is not None:
@@ -1373,7 +1373,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_sell_entry, pe_sell_entry,
             ce_buy_entry,  pe_buy_entry)
 
-        wing_str = f" | CE wing {ce_wing_strike} @ {ce_wing_entry:.1f} | PE wing {pe_wing_strike} @ {pe_wing_entry:.1f}" if ENABLE_SAFETY_WINGS else ""
+        wing_str = f" | CE wing {ce_wing_strike} @ {ce_wing_entry:.1f} | PE wing {pe_wing_strike} @ {pe_wing_entry:.1f}" if ENABLE_PE_WING else ""
         logger.info(
             f"  ENTRY {entry_date} | Spot: {spot:.0f} | "
             f"CE sell {ce_sell_strike} @ {ce_sell_entry:.1f} | "
@@ -1493,7 +1493,7 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         
         ce_wing_exit = ce_wing_ltp
         pe_wing_exit = pe_wing_ltp
-        if ENABLE_SAFETY_WINGS:
+        if ENABLE_PE_WING:
             if ce_wing_df is not None:
                 ce_wing_exit, _ = get_exit_price(ce_wing_df, ce_wing_ltp, is_buy=False)
             if pe_wing_df is not None:

@@ -111,17 +111,16 @@ DELTA_TESTED_SIDE               = 0.25    # Delta for the side the market is mov
 DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is moving away from
 
 # ---------------------------------------------------------------------------
-# Safety Wings (Path B)
-# Buys far-OTM wings at entry to cap maximum loss (Calendar Condor).
+# PE Safety Wing
+# Buys far-OTM PE put at entry to cap maximum loss on gap down.
 # ---------------------------------------------------------------------------
-ENABLE_SAFETY_WINGS             = True
-SAFETY_WING_DELTA               = 0.05    # Target delta for the safety wings
-# ---------------------------------------------------------------------------
+ENABLE_PE_WING                  = True
+PE_WING_DELTA                   = 0.05    # Target delta for the PE safety wing
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll (DISABLED for final verification)
 # ---------------------------------------------------------------------------
 ENABLE_ADJUSTMENT               = False
-ADJUST_BUY_LEG                  = True
+ADJUST_BUY_LEG                  = False
 ADJUSTMENT_TRIGGER_OFFSET       = -150
 ADJUSTMENT_WING_THRESHOLD       = 15.0
 ADJUSTMENT_MIN_CREDIT_GAIN      = 15.0
