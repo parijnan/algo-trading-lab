@@ -72,6 +72,7 @@ from configs import (
     ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA,
     EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     ELM_EXIT_TIME, SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
+    REPO_ROOT,
 )
 
 warnings.filterwarnings('ignore')
@@ -723,10 +724,8 @@ def main():
 
     nifty_1m, vix_1m = load_index_data()
 
-    # Load holidays via same path as baseline
     holidays_df = None
-    holiday_path = os.path.join(
-        os.path.dirname(_DIR), 'data_pipeline', 'data', 'holidays.csv')
+    holiday_path = os.path.join(REPO_ROOT, 'data_pipeline', 'config', 'holidays.csv')
     if os.path.exists(holiday_path):
         holidays_df = pd.read_csv(holiday_path, parse_dates=['date'])
         holidays_df['date'] = holidays_df['date'].dt.date

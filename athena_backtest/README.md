@@ -85,12 +85,12 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
   conditional hedge. Wing is bought only when `spot < entry_spot − 150 pts`; sold when `spot > entry_spot`.
   No overnight lock — the wing is held naturally through overnight/weekends until spot recovers.
   `entry_spot` is the 10:30 spot at trade entry and is fixed for the entire trade.
-- **Results (WING_SLIPPAGE=1.0, 2020–2026, 125 trades):**
-  - Total P&L: **+₹165,308** vs ₹149,130 baseline (+₹16,178 / +10.8%)
-  - Win rate: **64.0%** vs 58.9% baseline (+5.1 pp)
-  - Reward:Risk: 1.46 vs 1.65 baseline (slight degradation — moderate losers receive no wing protection below the 150-pt trigger)
-  - Wing drag: **−181 pts** vs −455 pts baseline (60% reduction); 98 buys across 125 trades (0.78/trade)
-  - Wing slippage: 155 pts vs ~228 pts baseline
+- **Results (WING_SLIPPAGE=1.0, 2020–2026, 124 trades):**
+  - Total P&L: **+₹171,382** vs ₹149,130 baseline (+₹22,252 / +14.9%)
+  - Win rate: **63.7%** vs 58.9% baseline (+4.8 pp)
+  - Reward:Risk: **1.56** vs 1.65 baseline (slight degradation — moderate losers receive no wing protection below the 150-pt trigger)
+  - Wing drag: **−113 pts** vs −455 pts baseline (75% reduction); 95 buys across 124 trades (0.77/trade)
+  - Wing slippage: 149 pts vs ~228 pts baseline
 - **EOD variant (`backtest_wing_eod.py`):** Also tested — forced daily buy at 15:15 + morning sell at 9:20.
   Performed significantly worse (₹116,015, −939 pts wing drag) due to 437 transactions × slippage overhead.
   The daily cycle adds cost without proportional protection. Not pursued further.
@@ -99,6 +99,8 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
   and cumulative P&L. Gitignored (generated output).
 - **Status (June 2026):** Reactive wing shows clear improvement in P&L and win rate. Pending review of
   trade logs to understand which wing-active trades drove the improvement before production consideration.
+  Note: initial run had 125 trades due to a wrong holidays file path (data/holidays.csv vs config/holidays.csv);
+  corrected to 124 matching baseline.
 
 - **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
   buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.
