@@ -4,11 +4,15 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 
 ## Strategy Structure
 - **Core:** 4-leg Double Calendar (Sell 0.30 Delta weekly, Buy same strikes on Monthly).
-- **Hedge:** PE-Only Safety Wing (Buy 0.05 Delta on Monthly).
+- **Hedge:** Reactive PE Wing (Buy 0.05 Delta Monthly PE when spot drops 1.75% below `entry_spot`; sell when spot recovers above `entry_spot`). No wing at entry.
 - **Emergency Hedge:** Smart Parachute (Buy Monthly CE if Spot >= CE Strike + 150).
 - **Entry:** 10:30 AM on the day before the weekly sell expiry.
 - **Exit:** 10:25 AM on the day before the weekly sell expiry (ELM).
 - **Adjustments:** None (Static structure for maximum efficiency).
+
+> **Pending deployment (June 2026):** See `plans/athena-reactive-wing-production.md`.
+> Currently running with always-on wing (`wings_enabled=True` in state). New trades after deployment
+> will use reactive wing (`use_reactive_wing=True`). Active trade is unaffected.
 
 ## Architecture
 - `athena_engine.py`: Main execution engine (Entry, Polling Loop, Exit).
