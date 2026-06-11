@@ -57,7 +57,7 @@ from configs import (
 )
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths (set at runtime in main() based on --offset; defaults for offset=150)
 # ---------------------------------------------------------------------------
 _DIR        = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR     = os.path.join(_DIR, 'data_wing_reactive')
@@ -67,7 +67,7 @@ SUMMARY_CSV = os.path.join(OUT_DIR, 'trade_summary_wing_reactive.csv')
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-WING_TRIGGER_OFFSET = 150    # pts below entry_spot to buy wing
+WING_TRIGGER_OFFSET = 150    # overridden by --offset CLI arg
 WING_DELTA          = PE_WING_DELTA  # 0.05
 
 # 1.0 = apple-to-apple vs baseline; 0.50 = realistic sensitivity
@@ -643,10 +643,23 @@ def save_and_summarise(all_trades):
 # ---------------------------------------------------------------------------
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Reactive PE wing backtest')
+    parser.add_argument('--offset', type=int, default=150,
+                        help='Pts below entry_spot to trigger wing buy (default: 150)')
+    args = parser.parse_args()
+
+    global WING_TRIGGER_OFFSET, OUT_DIR, LOGS_DIR, SUMMARY_CSV
+    WING_TRIGGER_OFFSET = args.offset
+    OUT_DIR     = os.path.join(_DIR, f'data_wing_reactive_{args.offset:03d}')
+    LOGS_DIR    = os.path.join(OUT_DIR, 'trade_logs')
+    SUMMARY_CSV = os.path.join(OUT_DIR, f'trade_summary_wing_reactive_{args.offset:03d}.csv')
+
     logger.info('=== Reactive Wing Backtest ===')
     logger.info(f'  WING_SLIPPAGE       = {WING_SLIPPAGE} pts/transaction')
     logger.info(f'  WING_TRIGGER_OFFSET = {WING_TRIGGER_OFFSET} pts below entry_spot')
     logger.info(f'  Exit trigger        : spot > entry_spot (no overnight lock)')
+    logger.info(f'  Output dir          : {OUT_DIR}')
 
     nifty_1m, vix_1m = load_index_data()
 
