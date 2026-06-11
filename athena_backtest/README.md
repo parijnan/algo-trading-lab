@@ -82,25 +82,53 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
 - **Results:** Improved win rate (64.2%) and R:R (1.37), though absolute profit was slightly lower due to exit slippage.
 
 - **Reactive PE Wing (`backtest_wing_reactive.py`):** Replaces the static always-on 0.05-delta PE wing with a
-  conditional hedge. Wing is bought only when `spot < entry_spot − 150 pts`; sold when `spot > entry_spot`.
-  No overnight lock — the wing is held naturally through overnight/weekends until spot recovers.
+  conditional hedge. Wing is bought only when spot drops a threshold below `entry_spot`; sold when
+  `spot > entry_spot`. No overnight lock — wing held naturally through overnight/weekends until spot recovers.
   `entry_spot` is the 10:30 spot at trade entry and is fixed for the entire trade.
-- **Results (WING_SLIPPAGE=1.0, 2020–2026, 124 trades):**
-  - Total P&L: **+₹171,382** vs ₹149,130 baseline (+₹22,252 / +14.9%)
-  - Win rate: **63.7%** vs 58.9% baseline (+4.8 pp)
-  - Reward:Risk: **1.56** vs 1.65 baseline (slight degradation — moderate losers receive no wing protection below the 150-pt trigger)
-  - Wing drag: **−113 pts** vs −455 pts baseline (75% reduction); 95 buys across 124 trades (0.77/trade)
-  - Wing slippage: 149 pts vs ~228 pts baseline
-- **EOD variant (`backtest_wing_eod.py`):** Also tested — forced daily buy at 15:15 + morning sell at 9:20.
-  Performed significantly worse (₹116,015, −939 pts wing drag) due to 437 transactions × slippage overhead.
-  The daily cycle adds cost without proportional protection. Not pursued further.
-- **Per-trade logs:** `data_wing_reactive/trade_logs/trade_NNNN_YYYY-MM-DD.csv` — one file per trade with
-  1-min resolution: spot, VIX, `entry_spot`, `wing_trigger_level`, wing state (active/strike/entry/ltp/P&L),
-  and cumulative P&L. Gitignored (generated output).
-- **Status (June 2026):** Reactive wing shows clear improvement in P&L and win rate. Pending review of
-  trade logs to understand which wing-active trades drove the improvement before production consideration.
-  Note: initial run had 125 trades due to a wrong holidays file path (data/holidays.csv vs config/holidays.csv);
-  corrected to 124 matching baseline.
+  Supports two trigger modes via CLI:
+  - `--offset N` — fixed points below entry_spot (e.g. `--offset 250`)
+  - `--pct P` — percentage of entry_spot (e.g. `--pct 1.75`); self-normalises as spot level changes
+
+- **EOD variant (`backtest_wing_eod.py`):** Tested daily buy at 15:15 + morning sell at 9:20.
+  Worse (₹116,015, −939 pts wing drag, 437 transactions). Not pursued further.
+
+- **Fixed-offset sweep (50–300 pts):** Peak at 250 pts (₹181,795). Fixed offsets are not spot-normalised —
+  250 pts = 2.3% at 2020 Nifty levels but only 1.0% at 2024 levels. Superseded by pct sweep.
+
+- **Percentage-offset sweep (0.5%–2.0%, June 2026):** Trigger = `entry_spot × pct`. Wing fires only once
+  spot has moved the same *relative* distance regardless of the index level.
+
+  | Config | Total P&L (₹) | Win Rate | R:R | Wing P&L (pts) | Wing Txs | Max Loss (₹) |
+  |---|---|---|---|---|---|---|
+  | Baseline (always-on) | 149,130 | 58.9% | 1.65 | −455 | ~228 | −8,229 |
+  | 0.5% | 168,009 | 64.5% | 1.50 | −165 | 139 | — |
+  | 0.75% | 171,561 | 62.9% | 1.63 | −110 | 106 | — |
+  | 1.0% | 176,706 | 64.5% | 1.55 | −31 | 82 | — |
+  | 1.25% | 175,721 | 63.7% | 1.58 | −46 | 71 | — |
+  | 1.5% | 179,777 | 63.7% | 1.59 | +16 | 55 | — |
+  | **1.75%** | **180,443** | **62.9%** | **1.67** | **+27** | **48** | **−8,489** |
+  | 2.0% | 185,780 | 64.5% | 1.60 | +109 | 40 | −9,162 |
+
+  Wing P&L turns net positive at 1.5%. P&L improves monotonically through 2.0%; sweep extended to 2.25–2.5%
+  (results pending).
+
+- **Sustainability analysis — 1.75% vs 2.0%:**
+  Both configs share the same median P&L (₹1,202) and max consecutive losses (4).
+  1.75% is the more sustainable choice:
+  - Skewness: 0.673 vs 0.593 (better upside tail)
+  - Avg loser: −₹2,139 vs −₹2,222
+  - Downside deviation: ₹2,928 vs ₹3,053
+  - Sortino-like ratio: 0.497 vs 0.491
+  - Max loss: −₹8,489 vs −₹9,162 (2.0% exceeds the always-on baseline max loss)
+  The 2.0% config earns only ₹43/trade more in mean P&L by accepting a heavier left tail.
+
+- **Per-trade logs:** `data_wing_reactive_pct_NNN/trade_logs/trade_NNNN_YYYY-MM-DD.csv` — one file per trade
+  with 1-min resolution: spot, VIX, `entry_spot`, `wing_trigger_level`, wing state, and cumulative P&L.
+  Gitignored (generated output).
+
+- **Status (June 2026):** 1.75% pct-offset is the leading production candidate — beats baseline by +₹31,313
+  (+21%), restores R:R to 1.67 (above baseline 1.65), and keeps max loss within one standard deviation of
+  the always-on baseline. Pending 2.25–2.5% sweep confirmation before final selection.
 
 - **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
   buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.

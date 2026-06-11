@@ -339,6 +339,7 @@ artemis_backtest/data_vix15/
 athena_backtest/data_wing_eod/
 athena_backtest/data_wing_reactive/
 athena_backtest/data_wing_reactive_*/
+athena_backtest/data_wing_reactive_pct_*/
 
 # Iris backtest — per-trade logs and summary (generated outputs)
 iris_backtest/data/trade_logs/

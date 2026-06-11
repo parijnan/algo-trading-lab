@@ -57,7 +57,7 @@ from configs import (
 )
 
 # ---------------------------------------------------------------------------
-# Paths (set at runtime in main() based on --offset; defaults for offset=150)
+# Paths (set at runtime in main() based on --offset/--pct; defaults for offset=150)
 # ---------------------------------------------------------------------------
 _DIR        = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR     = os.path.join(_DIR, 'data_wing_reactive')
@@ -67,7 +67,8 @@ SUMMARY_CSV = os.path.join(OUT_DIR, 'trade_summary_wing_reactive.csv')
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-WING_TRIGGER_OFFSET = 150    # overridden by --offset CLI arg
+WING_TRIGGER_OFFSET = 150    # overridden by --offset CLI arg (fixed points)
+WING_TRIGGER_PCT    = None   # overridden by --pct CLI arg (% of entry_spot); takes precedence
 WING_DELTA          = PE_WING_DELTA  # 0.05
 
 # 1.0 = apple-to-apple vs baseline; 0.50 = realistic sensitivity
@@ -96,6 +97,7 @@ def _wing_sell_price(raw: float) -> float:
 def _build_snapshot(
     ts, spot, vix,
     entry_spot,
+    trigger_offset,
     ce_sell_strike, pe_sell_strike,
     ce_sell_entry, ce_buy_entry,
     pe_sell_entry, pe_buy_entry,
@@ -117,7 +119,7 @@ def _build_snapshot(
         'spot':                 round(spot, 2),
         'vix':                  round(vix, 2) if vix is not None else None,
         'entry_spot':           round(entry_spot, 2),
-        'wing_trigger_level':   round(entry_spot - WING_TRIGGER_OFFSET, 2),
+        'wing_trigger_level':   round(entry_spot - trigger_offset, 2),
         'ce_sell_strike':       ce_sell_strike,
         'pe_sell_strike':       pe_sell_strike,
         'ce_sell_ltp':          round(ce_sell_ltp, 2),
@@ -162,6 +164,7 @@ def _scan_reactive(
     pe_sell_entry, pe_buy_entry,
     total_net_debit, max_theoretical_profit,
     entry_spot,
+    trigger_offset,
     elm_time,
     buy_expiry_end,
     opt_df_cache,
@@ -248,7 +251,7 @@ def _scan_reactive(
                     emer_ltp_val   = 0.0
 
         # ---- Reactive wing buy ----
-        if not wing_active and spot < entry_spot - WING_TRIGGER_OFFSET:
+        if not wing_active and spot < entry_spot - trigger_offset:
             stk, pr = select_strike(spot, buy_expiry_end, ts, 'pe',
                                     opt_df_cache, WING_DELTA)
             if stk:
@@ -297,6 +300,7 @@ def _scan_reactive(
         trade_log.append(_build_snapshot(
             ts, spot, vix_val,
             entry_spot,
+            trigger_offset,
             ce_sell_strike, pe_sell_strike,
             ce_sell_entry, ce_buy_entry,
             pe_sell_entry, pe_buy_entry,
@@ -462,11 +466,15 @@ def run_backtest(nifty_1m, vix_1m, contracts_df, holidays_df=None):
             ce_sell_df, pe_sell_df, ce_buy_df, pe_buy_df,
             ce_sell_entry, pe_sell_entry, ce_buy_entry, pe_buy_entry)
 
+        trigger_offset = (spot * WING_TRIGGER_PCT / 100.0) if WING_TRIGGER_PCT is not None \
+                         else WING_TRIGGER_OFFSET
+
         logger.info(f'  ENTRY {entry_date} | Spot: {spot:.0f} | '
                     f'CE sell {ce_sell_strike} @ {ce_sell_entry:.1f} | '
                     f'PE sell {pe_sell_strike} @ {pe_sell_entry:.1f} | '
                     f'Net debit: {total_net_debit:.1f} | '
-                    f'Sell exp: {sell_expiry_date} | Buy exp: {buy_expiry_date}')
+                    f'Sell exp: {sell_expiry_date} | Buy exp: {buy_expiry_date} | '
+                    f'Wing trigger: -{trigger_offset:.1f} pts')
 
         trade_log = []
         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
@@ -483,6 +491,7 @@ def run_backtest(nifty_1m, vix_1m, contracts_df, holidays_df=None):
             pe_sell_entry, pe_buy_entry,
             total_net_debit, max_theoretical_profit,
             spot,
+            trigger_offset,
             elm_time, buy_expiry_end, opt_df_cache,
             trade_log,
         )
@@ -645,21 +654,35 @@ def save_and_summarise(all_trades):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Reactive PE wing backtest')
-    parser.add_argument('--offset', type=int, default=150,
-                        help='Pts below entry_spot to trigger wing buy (default: 150)')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--offset', type=int, default=None,
+                       help='Fixed pts below entry_spot to trigger wing buy')
+    group.add_argument('--pct', type=float, default=None,
+                       help='%% of entry_spot below which wing is triggered (e.g. 1.5)')
     args = parser.parse_args()
 
-    global WING_TRIGGER_OFFSET, OUT_DIR, LOGS_DIR, SUMMARY_CSV
-    WING_TRIGGER_OFFSET = args.offset
-    OUT_DIR     = os.path.join(_DIR, f'data_wing_reactive_{args.offset:03d}')
-    LOGS_DIR    = os.path.join(OUT_DIR, 'trade_logs')
-    SUMMARY_CSV = os.path.join(OUT_DIR, f'trade_summary_wing_reactive_{args.offset:03d}.csv')
+    global WING_TRIGGER_OFFSET, WING_TRIGGER_PCT, OUT_DIR, LOGS_DIR, SUMMARY_CSV
+
+    if args.pct is not None:
+        WING_TRIGGER_PCT = args.pct
+        pct_tag = f'pct_{int(args.pct * 100):03d}'
+        OUT_DIR     = os.path.join(_DIR, f'data_wing_reactive_{pct_tag}')
+        LOGS_DIR    = os.path.join(OUT_DIR, 'trade_logs')
+        SUMMARY_CSV = os.path.join(OUT_DIR, f'trade_summary_wing_reactive_{pct_tag}.csv')
+        trigger_desc = f'{args.pct}% of entry_spot (spot-normalised)'
+    else:
+        offset = args.offset if args.offset is not None else 150
+        WING_TRIGGER_OFFSET = offset
+        OUT_DIR     = os.path.join(_DIR, f'data_wing_reactive_{offset:03d}')
+        LOGS_DIR    = os.path.join(OUT_DIR, 'trade_logs')
+        SUMMARY_CSV = os.path.join(OUT_DIR, f'trade_summary_wing_reactive_{offset:03d}.csv')
+        trigger_desc = f'{offset} pts below entry_spot (fixed)'
 
     logger.info('=== Reactive Wing Backtest ===')
-    logger.info(f'  WING_SLIPPAGE       = {WING_SLIPPAGE} pts/transaction')
-    logger.info(f'  WING_TRIGGER_OFFSET = {WING_TRIGGER_OFFSET} pts below entry_spot')
-    logger.info(f'  Exit trigger        : spot > entry_spot (no overnight lock)')
-    logger.info(f'  Output dir          : {OUT_DIR}')
+    logger.info(f'  WING_SLIPPAGE   = {WING_SLIPPAGE} pts/transaction')
+    logger.info(f'  Wing trigger    : {trigger_desc}')
+    logger.info(f'  Exit trigger    : spot > entry_spot (no overnight lock)')
+    logger.info(f'  Output dir      : {OUT_DIR}')
 
     nifty_1m, vix_1m = load_index_data()
 
