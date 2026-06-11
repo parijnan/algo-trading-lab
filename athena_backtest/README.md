@@ -106,29 +106,33 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
   | 1.0% | 176,706 | 64.5% | 1.55 | −31 | 82 | — |
   | 1.25% | 175,721 | 63.7% | 1.58 | −46 | 71 | — |
   | 1.5% | 179,777 | 63.7% | 1.59 | +16 | 55 | — |
-  | **1.75%** | **180,443** | **62.9%** | **1.67** | **+27** | **48** | **−8,489** |
-  | 2.0% | 185,780 | 64.5% | 1.60 | +109 | 40 | −9,162 |
+  | **1.75%** | **179,764** | **62.9%** | **1.66** | **+16** | **48** | **−8,489** |
+  | 2.0% | 183,401 | 64.5% | 1.56 | +72 | 39 | −9,230 |
 
-  Wing P&L turns net positive at 1.5%. P&L improves monotonically through 2.0%; sweep extended to 2.25–2.5%
-  (results pending).
+  Wing P&L turns net positive at 1.5%. P&L improves monotonically through 2.0%.
+  Rows 0.5%–1.5% use pre-fix execution timing; 1.75% and 2.0% re-run after timing fix (see below).
 
-- **Sustainability analysis — 1.75% vs 2.0%:**
+- **Timing fix (June 2026):** The original code detected the wing trigger at bar T's close but executed
+  at bar T's open — a 1-bar lookahead. Fixed by introducing `wing_buy_pending` / `wing_sell_pending`
+  flags: trigger is detected at close of bar T, execution deferred to open of bar T+1. Impact is small
+  (−₹679 for 1.75%, −₹2,379 for 2.0%) and does not change the production candidate selection.
+
+- **Sustainability analysis — 1.75% vs 2.0% (post-fix):**
   Both configs share the same median P&L (₹1,202) and max consecutive losses (4).
   1.75% is the more sustainable choice:
-  - Skewness: 0.673 vs 0.593 (better upside tail)
-  - Avg loser: −₹2,139 vs −₹2,222
-  - Downside deviation: ₹2,928 vs ₹3,053
-  - Sortino-like ratio: 0.497 vs 0.491
-  - Max loss: −₹8,489 vs −₹9,162 (2.0% exceeds the always-on baseline max loss)
-  The 2.0% config earns only ₹43/trade more in mean P&L by accepting a heavier left tail.
+  - Skewness: 0.649 vs 0.537 (better upside tail)
+  - Downside deviation: ₹2,159 vs ₹2,283
+  - Sortino-like ratio: 0.671 vs 0.648
+  - Max loss: −₹8,489 vs −₹9,230 (2.0% exceeds the always-on baseline max loss)
+  The 2.0% config earns only ₹30/trade more in mean P&L by accepting a heavier left tail.
 
 - **Per-trade logs:** `data_wing_reactive_pct_NNN/trade_logs/trade_NNNN_YYYY-MM-DD.csv` — one file per trade
   with 1-min resolution: spot, VIX, `entry_spot`, `wing_trigger_level`, wing state, and cumulative P&L.
   Gitignored (generated output).
 
-- **Status (June 2026):** 1.75% pct-offset is the leading production candidate — beats baseline by +₹31,313
-  (+21%), restores R:R to 1.67 (above baseline 1.65), and keeps max loss within one standard deviation of
-  the always-on baseline. Pending 2.25–2.5% sweep confirmation before final selection.
+- **Status (June 2026):** 1.75% pct-offset is the leading production candidate — beats baseline by +₹30,634
+  (+21%), R:R 1.66 (above baseline 1.65), max loss −₹8,489 (within range of baseline −₹8,229). Post-fix
+  numbers confirmed. Ready for production port pending paper session validation.
 
 - **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
   buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.

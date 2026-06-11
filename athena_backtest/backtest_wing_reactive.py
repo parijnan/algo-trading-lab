@@ -197,6 +197,10 @@ def _scan_reactive(
     wing_tx_count    = 0
     wing_slippage_paid = 0.0
 
+    # Pending flags: trigger detected at bar T's close; execute at bar T+1's open
+    wing_buy_pending  = False
+    wing_sell_pending = False
+
     sl_hit_ts     = None
     sl_hit_reason = None
     running_peak_pl = 0.0
@@ -206,7 +210,42 @@ def _scan_reactive(
     ]
 
     for ts, row in window.iterrows():
-        spot = float(row['close'])
+        bar_open = float(row['open'])
+        spot     = float(row['close'])
+
+        # ---- Execute pending wing actions at this bar's open ----
+        if wing_buy_pending:
+            stk, pr = select_strike(bar_open, buy_expiry_end, ts, 'pe',
+                                    opt_df_cache, WING_DELTA)
+            if stk:
+                key = (buy_expiry_end, stk, 'pe')
+                if key not in opt_df_cache:
+                    opt_df_cache[key] = load_option_data(buy_expiry_end, stk, 'pe')
+                wing_df       = opt_df_cache[key]
+                wing_entry_v  = _wing_buy_price(pr)
+                wing_ltp_v    = pr
+                wing_strike_v = stk
+                wing_active   = True
+                wing_tx_count      += 1
+                wing_slippage_paid += WING_SLIPPAGE
+                logger.debug(f'  [WING-BUY] {wing_strike_v} @ {wing_entry_v:.2f} '
+                             f'at {ts} | spot={bar_open:.0f} entry={entry_spot:.0f}')
+            wing_buy_pending = False
+
+        if wing_sell_pending and wing_active:
+            raw_exit = get_option_price(wing_df, ts, 'open') or wing_ltp_v
+            exit_px  = _wing_sell_price(raw_exit)
+            net_pl   = round(exit_px - wing_entry_v, 2)
+            wing_total_pl      += net_pl
+            wing_slippage_paid += WING_SLIPPAGE
+            logger.debug(f'  [WING-SELL] {wing_strike_v} @ {exit_px:.2f} | '
+                         f'pl={net_pl:.2f} | spot={bar_open:.0f}')
+            wing_active   = False
+            wing_df       = None
+            wing_strike_v = None
+            wing_entry_v  = 0.0
+            wing_ltp_v    = 0.0
+            wing_sell_pending = False
 
         # ---- Update main leg LTPs ----
         v = get_option_price(ce_sell_df, ts, 'close')
@@ -251,37 +290,14 @@ def _scan_reactive(
                     emer_ltp_val   = 0.0
 
         # ---- Reactive wing buy ----
-        if not wing_active and spot < entry_spot - trigger_offset:
-            stk, pr = select_strike(spot, buy_expiry_end, ts, 'pe',
-                                    opt_df_cache, WING_DELTA)
-            if stk:
-                key = (buy_expiry_end, stk, 'pe')
-                if key not in opt_df_cache:
-                    opt_df_cache[key] = load_option_data(buy_expiry_end, stk, 'pe')
-                wing_df       = opt_df_cache[key]
-                wing_entry_v  = _wing_buy_price(pr)
-                wing_ltp_v    = pr
-                wing_strike_v = stk
-                wing_active   = True
-                wing_tx_count      += 1
-                wing_slippage_paid += WING_SLIPPAGE
-                logger.debug(f'  [WING-BUY] {wing_strike_v} @ {wing_entry_v:.2f} '
-                             f'at {ts} | spot={spot:.0f} entry={entry_spot:.0f}')
+        # Trigger at bar T close → set pending; execute at bar T+1 open
+        if not wing_active and not wing_buy_pending and spot < entry_spot - trigger_offset:
+            wing_buy_pending = True
 
         # ---- Reactive wing exit ----
-        if wing_active and spot > entry_spot:
-            raw_exit = get_option_price(wing_df, ts, 'close') or wing_ltp_v
-            exit_px  = _wing_sell_price(raw_exit)
-            net_pl   = round(exit_px - wing_entry_v, 2)
-            wing_total_pl      += net_pl
-            wing_slippage_paid += WING_SLIPPAGE
-            logger.debug(f'  [WING-SELL] {wing_strike_v} @ {exit_px:.2f} | '
-                         f'pl={net_pl:.2f} | spot={spot:.0f}')
-            wing_active   = False
-            wing_df       = None
-            wing_strike_v = None
-            wing_entry_v  = 0.0
-            wing_ltp_v    = 0.0
+        # Trigger at bar T close → set pending; execute at bar T+1 open
+        if wing_active and not wing_sell_pending and spot > entry_spot:
+            wing_sell_pending = True
 
         # ---- P&L and exit checks ----
         ce_unrealised   = (ce_sell_entry - running_ce_sell) + (running_ce_buy - ce_buy_entry)
