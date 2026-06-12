@@ -130,9 +130,9 @@ signal (not a VIX proxy): useful for Athena strike placement and range-break exi
   with 1-min resolution: spot, VIX, `entry_spot`, `wing_trigger_level`, wing state, and cumulative P&L.
   Gitignored (generated output).
 
-- **Status (June 2026):** 1.75% pct-offset is the leading production candidate — beats baseline by +₹30,634
-  (+21%), R:R 1.66 (above baseline 1.65), max loss −₹8,489 (within range of baseline −₹8,229). Post-fix
-  numbers confirmed. Ready for production port pending paper session validation.
+- **Status (June 2026):** 1.75% pct-offset is **deployed to production** (commit d1e87bd, 2026-06-11).
+  Beats baseline by +₹30,634 (+21%), R:R 1.66, max loss −₹8,489. See `plans/athena-reactive-wing-production.md`
+  for verification checklist.
 
 - **PE Parachute (`backtest_pe_chute.py`):** Symmetric downside hedge — when spot falls below the PE sell strike,
   buy a 0.35-delta monthly PE and close the PE safety wing. Sweep tested trigger offsets from −50 to +100 pts.

@@ -1,5 +1,8 @@
 # Plan: Reactive PE Wing — Athena Production Port
 
+> **[IMPLEMENTED]** — Deployed 2026-06-11, commit d1e87bd. All steps complete.
+> First live trade after this date will use `use_reactive_wing=True`. Verify against checklist below.
+
 ## Context
 
 The always-on 0.05-delta PE safety wing costs −455 pts over 114 trades (−4 pts/trade on average).
@@ -15,20 +18,6 @@ above `entry_spot` — was backtested and corrected for a 1-bar timing lookahead
 - Wing transactions: 48 over 124 trades (0.39 avg/trade)
 
 See `athena_backtest/README.md` for full sweep table and sustainability analysis.
-
----
-
-## Active Trade Safety
-
-There is currently an active trade. It carries `wings_enabled = True` in the state CSV (always-on
-wing bought at entry). The two new state fields introduced by this plan default to `False` when
-absent from the CSV. The new `_manage_reactive_wing` method is gated on `use_reactive_wing`, which
-will be `False` for the active trade. The active trade exits Monday 10:25 and is completely
-unaffected by this deployment.
-
-**Deployment can happen any time before Monday 10:30.** Recommended: after the 10:25 exit and
-before the 10:30 entry (clean restart with no open position). Deploying before Monday while the
-active trade is running is also safe.
 
 ---
 

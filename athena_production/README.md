@@ -10,10 +10,6 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 - **Exit:** 10:25 AM on the day before the weekly sell expiry (ELM).
 - **Adjustments:** None (Static structure for maximum efficiency).
 
-> **Pending deployment (June 2026):** See `plans/athena-reactive-wing-production.md`.
-> Currently running with always-on wing (`wings_enabled=True` in state). New trades after deployment
-> will use reactive wing (`use_reactive_wing=True`). Active trade is unaffected.
-
 ## Architecture
 - `athena_engine.py`: Main execution engine (Entry, Polling Loop, Exit).
 - `configs_live.py`: Strategy parameters, `QTY_FREEZE` limits, and `ORDER_TIMEOUT_SEC`.

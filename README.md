@@ -454,6 +454,7 @@ algo-trading-lab/
 │   ├── individual-order-details.md       # [BLOCKED] individual_order_details() returns AB1007 on this account
 │   ├── artemis-manual-adjustment.md       # [IMPLEMENTED] Slack-triggered mid-session manual adjustment for Artemis
 │   ├── athena-manual-adjustment.md        # [IMPLEMENTED] Slack-triggered CE parachute entry/exit for Athena
+│   ├── athena-reactive-wing-production.md # [IMPLEMENTED] Reactive PE wing (1.75% trigger) — deployed 2026-06-11
 │   ├── manual-routing-strike-search.md   # [IMPLEMENTED] Manual routing override + binary search strike selection
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
