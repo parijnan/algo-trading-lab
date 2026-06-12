@@ -81,6 +81,10 @@ class AthenaState:
     emer_attempts:        int             = 0
     running_realised_pl:  float           = 0.0     # Locked in P&L from salvage exits
 
+    # Reactive PE wing state
+    use_reactive_wing:    bool            = False   # True when trade uses reactive (not always-on) logic
+    reactive_wing_active: bool            = False   # True while reactive PE wing is currently held
+
     # Order management
     lots:                 int             = 1
     net_debit:            Optional[float] = None

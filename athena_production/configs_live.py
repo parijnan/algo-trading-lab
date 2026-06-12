@@ -61,7 +61,8 @@ VIX_FILTER_HIGH     = 25.0
 # ---------------------------------------------------------------------------
 TARGET_DELTA_SOLD   = 0.30
 SAFETY_WING_DELTA   = 0.05
-ENABLE_SAFETY_WINGS = True          # If True, buys PE wing at entry (Phase 2 is PE-only)
+ENABLE_SAFETY_WINGS = False         # Reactive mode: wing bought on trigger, not at entry
+REACTIVE_WING_PCT   = 1.75          # % below entry_spot that triggers reactive PE wing buy
 
 STRIKE_STEP         = 100           # Nifty strike interval for Calendar
 BUY_LEG_MIN_DTE     = 16            # Roll buy leg to next month if DTE < this

@@ -27,7 +27,7 @@ from configs_live import (
     MARKET_OPEN, MARKET_CLOSE,
     ENTRY_TIME, ELM_EXIT_TIME,
     VIX_FILTER_LOW, VIX_FILTER_HIGH,
-    TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS,
+    TARGET_DELTA_SOLD, SAFETY_WING_DELTA, ENABLE_SAFETY_WINGS, REACTIVE_WING_PCT,
     ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, ORDER_TIMEOUT_SEC,
     EMERGENCY_TRIGGER_OFFSET, EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
 
@@ -303,6 +303,7 @@ class Athena:
         return orderid_list
 
     def _fetch_order_details(self, orderid_list, token, symbol, expected_lots=0):
+        self._last_fetch_timed_out = False
         if DRY_RUN:
             fill = self._get_ltp(EXCHANGE_NFO, symbol, token) or 0.0
             return fill, expected_lots, datetime.now()
@@ -410,6 +411,7 @@ class Athena:
                 elapsed = (datetime.now() - start_time).total_seconds()
                 if elapsed >= timeout:
                     logger.warning(f"Timeout reaching {timeout}s for {symbol}. Returning current state.")
+                    self._last_fetch_timed_out = True
                     avg_price = round(total_val / total_qty, 2) if total_qty > 0 else 0.0
                     filled_at_timeout = int(total_qty // LOT_SIZE)
                     if expected_lots > 0 and filled_at_timeout < expected_lots:
@@ -425,6 +427,7 @@ class Athena:
 
         if expected_lots > 0:
             slack_bot_sendtext(f"⚠️ *Athena*: Zero fills on {symbol}. Expected {expected_lots} lots.", SLACK_ERRORS_CHANNEL)
+        self._last_fetch_timed_out = True
         return 0.0, 0, datetime.now()
 
     def _calculate_lots(self, strikes_dict=None):
@@ -480,7 +483,7 @@ class Athena:
             str(self.state.ce_buy_token):  +lots * LOT_SIZE,
             str(self.state.pe_buy_token):  +lots * LOT_SIZE,
         }
-        if self.state.wings_enabled and self.state.pe_wing_token:
+        if (self.state.wings_enabled or self.state.reactive_wing_active) and self.state.pe_wing_token:
             expected[str(self.state.pe_wing_token)] = +lots * LOT_SIZE
         if self.state.emer_active and self.state.emer_token:
             expected[str(self.state.emer_token)] = +lots * LOT_SIZE
@@ -503,8 +506,9 @@ class Athena:
     def _execute_entry(self, strikes_dict, spot, vix):
         logger.info("=== EXECUTING ENTRY ===")
         target_lots = self._calculate_lots(strikes_dict)
-        self.state.wings_enabled = ENABLE_SAFETY_WINGS
-        
+        self.state.wings_enabled    = ENABLE_SAFETY_WINGS
+        self.state.use_reactive_wing = not ENABLE_SAFETY_WINGS
+
         # 1. Determine batches based on QTY_FREEZE
         l_limit = self._qty_freeze // LOT_SIZE
         batches = []
@@ -629,9 +633,9 @@ class Athena:
             ('ce_buy', self.state.ce_buy_symbol, self.state.ce_buy_token, 'SELL'),
             ('pe_buy', self.state.pe_buy_symbol, self.state.pe_buy_token, 'SELL')
         ]
-        if self.state.wings_enabled:
+        if self.state.wings_enabled or self.state.reactive_wing_active:
             exit_legs.append(('pe_wing', self.state.pe_wing_symbol, self.state.pe_wing_token, 'SELL'))
-            
+
         # 2. Fire all market orders in a fast burst
         order_receipts = {}
         for key, sym, tok, side in exit_legs:
@@ -652,9 +656,9 @@ class Athena:
             (self.state.ce_sell_entry - exit_fills['ce_sell']) + 
             (self.state.pe_sell_entry - exit_fills['pe_sell']), 2
         )
-        if self.state.wings_enabled:
+        if self.state.wings_enabled or self.state.reactive_wing_active:
             pl_pts = round(pl_pts + (exit_fills['pe_wing'] - self.state.pe_wing_entry), 2)
-            
+
         pl_pts = round(pl_pts + self.state.running_realised_pl, 2)
         pl_rs_per_lot = round(pl_pts * LOT_SIZE, 2)
         
@@ -679,7 +683,7 @@ class Athena:
             return self._poll_prices_rest()
         prices = {'spot': self.feed.get_ltp(NIFTY_INDEX_TOKEN)}
         keys = ['ce_sell', 'pe_sell', 'ce_buy', 'pe_buy']
-        if self.state.wings_enabled: keys += ['pe_wing']
+        if self.state.wings_enabled or self.state.reactive_wing_active: keys += ['pe_wing']
         if self.state.emer_active: keys += ['emer']
         for key in keys:
             tok = getattr(self.state, f"{key}_token")
@@ -691,7 +695,7 @@ class Athena:
     def _poll_prices_rest(self):
         prices = {'spot': self._get_ltp(EXCHANGE_NSE, 'NIFTY 50', NIFTY_INDEX_TOKEN)}
         keys = ['ce_sell', 'pe_sell', 'ce_buy', 'pe_buy']
-        if self.state.wings_enabled: keys += ['pe_wing']
+        if self.state.wings_enabled or self.state.reactive_wing_active: keys += ['pe_wing']
         if self.state.emer_active: keys += ['emer']
         for key in keys:
             sym = getattr(self.state, f"{key}_symbol"); tok = getattr(self.state, f"{key}_token"); ltp = self._get_ltp(EXCHANGE_NFO, sym, tok)
@@ -711,7 +715,7 @@ class Athena:
         now = datetime.now()
         try:
             pl_pts = round((p['ce_buy'] - self.state.ce_buy_entry) + (p['pe_buy'] - self.state.pe_buy_entry) + (self.state.ce_sell_entry - p['ce_sell']) + (self.state.pe_sell_entry - p['pe_sell']), 2)
-            if self.state.wings_enabled: pl_pts = round(pl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
+            if self.state.wings_enabled or self.state.reactive_wing_active: pl_pts = round(pl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
             if self.state.emer_active and 'emer' in p: pl_pts = round(pl_pts + (p['emer'] - self.state.emer_entry), 2)
             pl_pts = round(pl_pts + self.state.running_realised_pl, 2)
         except: pl_pts = 0.0
@@ -727,7 +731,7 @@ class Athena:
             'pe_buy_entry': self.state.pe_buy_entry,   'pe_buy_ltp': p.get('pe_buy'),
             'unrealised_pl': round(pl_pts, 2), 'exit_reason': exit_reason,
         }
-        if self.state.wings_enabled:
+        if self.state.wings_enabled or self.state.reactive_wing_active:
             row['pe_wing_strike'] = self.state.pe_wing_strike
             row['pe_wing_entry'] = self.state.pe_wing_entry
             row['pe_wing_ltp'] = p.get('pe_wing')
@@ -752,12 +756,12 @@ class Athena:
         p = prices if prices is not None else self._poll_prices()
         try:
             pl_pts = round((p['ce_buy'] - self.state.ce_buy_entry) + (p['pe_buy'] - self.state.pe_buy_entry) + (self.state.ce_sell_entry - p['ce_sell']) + (self.state.pe_sell_entry - p['pe_sell']), 2)
-            if self.state.wings_enabled: pl_pts = round(pl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
+            if self.state.wings_enabled or self.state.reactive_wing_active: pl_pts = round(pl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
             if self.state.emer_active and 'emer' in p: pl_pts = round(pl_pts + (p['emer'] - self.state.emer_entry), 2)
             pl_pts = round(pl_pts + self.state.running_realised_pl, 2)
             if pl_pts > self.state.max_unrealised_pl: self.state.max_unrealised_pl = pl_pts
             self.state.last_spot = p.get('spot'); self.state.last_ce_sell_ltp = p.get('ce_sell'); self.state.last_pe_sell_ltp = p.get('pe_sell'); self.state.last_ce_buy_ltp = p.get('ce_buy'); self.state.last_pe_buy_ltp = p.get('pe_buy')
-            if self.state.wings_enabled: self.state.last_pe_wing_ltp = p.get('pe_wing')
+            if self.state.wings_enabled or self.state.reactive_wing_active: self.state.last_pe_wing_ltp = p.get('pe_wing')
             if self.state.emer_active: self.state.last_emer_ltp = p.get('emer')
             save_state(self.state)
         except: return
@@ -806,6 +810,81 @@ class Athena:
         elif self.state.emer_active:
             if force or current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
                 self._close_emer_if_active()
+
+    def _manage_reactive_wing(self, current_spot):
+        if not self.state.use_reactive_wing:
+            return
+        if not self.state.entry_spot:
+            return
+
+        trigger_level = self.state.entry_spot * (1.0 - REACTIVE_WING_PCT / 100.0)
+
+        if not self.state.reactive_wing_active:
+            if getattr(self, '_wing_buy_cooldown_until', None) and datetime.now() < self._wing_buy_cooldown_until:
+                return
+            if current_spot < trigger_level:
+                buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date()
+                vix = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
+                stk = self._find_delta_strike(current_spot, vix, buy_exp, SAFETY_WING_DELTA, 'pe')
+                if stk:
+                    sym, tok = self._fetch_symbol_and_token(stk, 'pe', buy_exp)
+                    if sym:
+                        oids = self._place_order('BUY', sym, tok, self.state.lots)
+                        fill, q, ft = self._fetch_order_details(oids, tok, sym, self.state.lots)
+                        if fill > 0:
+                            self.state.reactive_wing_active = True
+                            self.state.pe_wing_strike = stk
+                            self.state.pe_wing_symbol = sym
+                            self.state.pe_wing_token  = tok
+                            self.state.pe_wing_entry  = fill
+                            save_state(self.state)
+                            self.feed.subscribe_options([tok])
+                            slack_bot_sendtext(
+                                f"🛡️ *Athena WING*: Bought PE {stk} @ {fill:.1f} | "
+                                f"spot={current_spot:.0f} trigger={trigger_level:.0f}",
+                                SLACK_TRADE_ALERTS)
+                        elif self._last_fetch_timed_out:
+                            self._wing_buy_cooldown_until = datetime.now() + timedelta(seconds=30)
+                            logger.warning(f"Reactive wing BUY fill timeout at {current_spot:.0f}. Cooling down 30s.")
+                            slack_bot_sendtext(
+                                f"⚠️ *Athena*: Reactive wing BUY fill timeout (spot={current_spot:.0f}). Cooling 30s.",
+                                SLACK_ERRORS_CHANNEL)
+                        else:
+                            logger.warning(f"Reactive wing BUY zero fill at {current_spot:.0f}. Will retry.")
+                            slack_bot_sendtext(
+                                f"⚠️ *Athena*: Reactive wing BUY zero fill (spot={current_spot:.0f}).",
+                                SLACK_ERRORS_CHANNEL)
+
+        elif self.state.reactive_wing_active:
+            if current_spot > self.state.entry_spot:
+                if getattr(self, '_wing_sell_cooldown_until', None) and datetime.now() < self._wing_sell_cooldown_until:
+                    return
+                oids = self._place_order('SELL', self.state.pe_wing_symbol, self.state.pe_wing_token, self.state.lots)
+                fill, q, ft = self._fetch_order_details(oids, self.state.pe_wing_token, self.state.pe_wing_symbol, self.state.lots)
+                if fill > 0:
+                    realised = round(fill - self.state.pe_wing_entry, 2)
+                    self.state.running_realised_pl  += realised
+                    self.state.reactive_wing_active  = False
+                    self.state.pe_wing_strike        = None
+                    self.state.pe_wing_symbol        = None
+                    self.state.pe_wing_token         = None
+                    self.state.pe_wing_entry         = None
+                    save_state(self.state)
+                    slack_bot_sendtext(
+                        f"🛡️ *Athena WING*: Sold PE wing @ {fill:.1f} | "
+                        f"pl={realised:+.1f} pts | spot={current_spot:.0f}",
+                        SLACK_TRADE_ALERTS)
+                elif self._last_fetch_timed_out:
+                    self._wing_sell_cooldown_until = datetime.now() + timedelta(seconds=30)
+                    logger.warning(f"Reactive wing SELL fill timeout at {current_spot:.0f}. Cooling down 30s.")
+                    slack_bot_sendtext(
+                        f"⚠️ *Athena*: Reactive wing SELL fill timeout (spot={current_spot:.0f}). Cooling 30s.",
+                        SLACK_ERRORS_CHANNEL)
+                else:
+                    logger.warning(f"Reactive wing SELL zero fill at {current_spot:.0f}. Will retry.")
+                    slack_bot_sendtext(
+                        f"⚠️ *Athena*: Reactive wing SELL zero fill (spot={current_spot:.0f}).",
+                        SLACK_ERRORS_CHANNEL)
 
     def _check_slack_commands(self):
         """
@@ -886,7 +965,7 @@ class Athena:
                 self.state.ce_sell_token, self.state.pe_sell_token,
                 self.state.ce_buy_token,  self.state.pe_buy_token,
             ]
-            if self.state.wings_enabled and self.state.pe_wing_token:
+            if (self.state.wings_enabled or self.state.reactive_wing_active) and self.state.pe_wing_token:
                 leg_tokens.append(self.state.pe_wing_token)
             if self.state.emer_active and self.state.emer_token:
                 leg_tokens.append(self.state.emer_token)
@@ -917,7 +996,7 @@ class Athena:
                                     self.state.ce_sell_token, self.state.pe_sell_token,
                                     self.state.ce_buy_token,  self.state.pe_buy_token,
                                 ]
-                                if self.state.wings_enabled and self.state.pe_wing_token:
+                                if (self.state.wings_enabled or self.state.reactive_wing_active) and self.state.pe_wing_token:
                                     leg_tokens.append(self.state.pe_wing_token)
                                 self.feed.subscribe_options([t for t in leg_tokens if t])
                                 self._update_elapsed = 0.0
@@ -929,6 +1008,7 @@ class Athena:
                     prices = self._poll_prices(); spot = prices.get('spot')
                     if spot:
                         self._manage_emergency_hedge(spot)
+                        self._manage_reactive_wing(spot)
                         pending = getattr(self, '_pending_parachute', None)
                         if pending is not None:
                             self._pending_parachute = None
@@ -974,7 +1054,7 @@ class Athena:
                     (p['pe_buy'] - self.state.pe_buy_entry) +
                     (self.state.ce_sell_entry - p['ce_sell']) +
                     (self.state.pe_sell_entry - p['pe_sell']), 2)
-                if self.state.wings_enabled and p.get('pe_wing'):
+                if (self.state.wings_enabled or self.state.reactive_wing_active) and p.get('pe_wing'):
                     _pnl_pts = round(_pnl_pts + (p['pe_wing'] - self.state.pe_wing_entry), 2)
                 if self.state.emer_active and p.get('emer'):
                     _pnl_pts = round(_pnl_pts + (p['emer'] - self.state.emer_entry), 2)
