@@ -799,6 +799,146 @@ Of 43 PE SL events (option_sl + index_sl), only **12 (28%)** had spot crossing m
 
 ---
 
+### 10.6 Artemis — OI Wall Migration (Empirically Tested, June 2026)
+
+**Scope:** 84 Artemis Nifty traded weeks (2023-09 to 2025-08). For each week, the OI wall strike (CE and PE) is tracked from entry bar to each EOD observation point. Wall **delta** = (wall strike at observation) − (entry wall strike). Script: `validate_artemis_wall_delta.py`.
+
+**Motivation:** §10.4 found strong IC for full-week wall extrema (e.g., r=−0.511*** for minimum CE wall delta vs CE P&L). The question is whether wall *migration* — how the wall moves during the week — provides an independent, forward-looking signal that could support the four derivative use cases raised: (1) SL trigger, (2) adjustment trigger, (3) position skewing, (4) adjustment timing.
+
+---
+
+#### 10.6.1 Wall Migration Statistics
+
+CE wall migrates strongly during a typical Artemis week:
+
+| Metric | CE wall delta | PE wall delta |
+|---|---|---|
+| Mean (full week) | −337 pts | +335 pts |
+| Median (full week) | −200 pts | +100 pts |
+| Std | 519 pts | 592 pts |
+| P10 | −1000 pts | −270 pts |
+| P90 | +170 pts | +1000 pts |
+| Mean intraday extremum | −604 pts (min) | +640 pts (max) |
+
+56% of weeks see CE wall move DOWN (toward spot); 58% see PE wall move UP. Both reflect the standard expiry-approach effect: OI concentrates near ATM as Thursday nears, pushing CE wall down and PE wall up regardless of market direction.
+
+At **Tuesday EOD** (Day 1 post-entry, i.e., ~end of second trading day):
+
+| Metric | CE wall delta | PE wall delta |
+|---|---|---|
+| Mean | −257 pts | +283 pts |
+| Median | 0 pts | +100 pts |
+| Std | 465 pts | 592 pts |
+
+The median Tue EOD CE wall delta is 0 — half of weeks show zero movement at that point.
+
+---
+
+#### 10.6.2 Full-Window IC — Wall Delta vs Leg P&L
+
+The full-week wall delta features show strong Spearman IC:
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| Min CE wall delta (most downward) | −0.511*** | +0.412*** | −0.203 |
+| CE wall delta (end vs entry) | −0.483*** | +0.418*** | −0.139 |
+| PE wall delta (end vs entry) | −0.382*** | +0.286** | −0.080 |
+
+Sign interpretation: CE wall moving **up** (positive delta) = spot moved up = CE (call sell) at risk → lower CE P&L. CE wall moving down = spot moved down = CE safer, PE at risk → CE P&L better but PE P&L worse. These patterns are consistent across legs.
+
+**Critical caveat:** The full-window extremum (min CE wall delta over the whole week) is computed after the fact — you cannot observe the week's minimum until the week ends. It may merely track the same underlying market move that caused the SL.
+
+---
+
+#### 10.6.3 Critical Test: Does Wall Migration Add Anything Beyond Spot Direction?
+
+**The key finding of this analysis.**
+
+CE wall delta at Tue EOD correlates strongly with spot move to Tue EOD: **r=+0.455*** (n=84). This means wall migration is highly collinear with spot direction — they are not independent signals.
+
+**Partial Spearman IC** (wall delta vs P&L, controlling for spot move to Tue EOD using rank residuals):
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| CE wall delta (Tue EOD) | −0.025 | +0.068 | +0.048 |
+| PE wall delta (Tue EOD) | +0.075 | −0.123 | −0.028 |
+
+**All partial ICs are near zero and statistically insignificant.** After controlling for where spot moved by Tuesday, the OI wall delta carries no additional information about final P&L. Wall migration is a proxy for spot direction, not an independent signal.
+
+This means:
+
+> The +0.511*** full-window IC for min CE wall delta with CE P&L is entirely explained by the direction spot moved during the week. There is no independent OI positioning signal beyond what spot already tells you.
+
+---
+
+#### 10.6.4 Fixed-Decision-Time IC and Year-Split Stability
+
+Raw (uncontrolled) IC at Tue EOD:
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| CE wall delta (Tue EOD) | −0.269* | +0.342** | +0.022 |
+| PE wall delta (Tue EOD) | −0.103 | +0.103 | −0.040 |
+| CE wall OI % change (Tue EOD) | +0.021 | −0.233* | −0.108 |
+| PE wall OI % change (Tue EOD) | −0.029 | +0.207 | +0.150 |
+
+The CE wall delta shows nominally significant IC (r=−0.269*) but year-split reveals instability:
+
+| Period | n | CE wall delta → CE P&L | CE wall delta → PE P&L |
+|---|---|---|---|
+| 2023-2024 | 61 | −0.174 (not sig) | +0.431*** |
+| 2025 | 23 | −0.533** | +0.156 (not sig) |
+| All | 84 | −0.269* | +0.342** |
+
+The CE→CE path is significant only in 2025 (n=23), and the CE→PE path is significant only in 2023-24 and reverses in 2025. This instability — opposite legs significant in opposite years — is consistent with the partial IC result: the raw correlation simply tracks spot, and which leg spot hurts changes with regime.
+
+---
+
+#### 10.6.5 Use Case Assessment — All Four Closed
+
+**SL trigger (CE):** A trigger fires when CE wall moves UP significantly by Tue EOD (spot moved up = CE at risk). Threshold analysis:
+
+| Threshold (CE wall ≥ X) | N triggered | CE SL if triggered | CE SL baseline | Sensitivity |
+|---|---|---|---|---|
+| ≥ +900 pts | 1/84 | 100% | 51% | 2% |
+| ≥ +300 pts | 5/84 | 60% | 51% | 7% |
+| ≥ +100 pts | 10/84 | 60% | 51% | 14% |
+| ≥ 0 pts (any up) | 59/84 | 58% | 51% | 79% |
+
+At tight thresholds (≥300 pts), sensitivity is 2–7% — the trigger almost never fires in the weeks that need it. At loose thresholds (≥0 pts), 59/84 weeks fire and SL rate lifts only from 51% to 58% — not meaningful lift. **CLOSED.**
+
+**SL trigger (PE):** PE wall delta threshold analysis (PE wall moving DOWN = PE at risk):
+
+| Threshold (PE wall ≤ X) | N triggered | PE SL if triggered | PE SL baseline | Sensitivity |
+|---|---|---|---|---|
+| ≤ −900 pts | 3/84 | 33% | 51% | 2% |
+| ≤ −300 pts | 17/84 | 35% | 51% | 14% |
+| ≤ 0 pts | 56/84 | 61% | 51% | 79% |
+
+No significant lift beyond baseline at any usable threshold. PE wall migration adds nothing. **CLOSED.**
+
+**Adjustment trigger:** CE wall delta at Tue EOD has r=−0.269* with CE P&L (raw), but partial IC = −0.025 (zero) after controlling for spot. Not actionable without adding something that spot direction doesn't already give. **CLOSED.**
+
+**Position skewing (leg weighting):** Wall asymmetry = CE wall delta − PE wall delta at Tue EOD. Asymmetry sign predicts worse leg correctly in only **56%** of 84 weeks (barely above 50% random). No skewing signal. **CLOSED.**
+
+**Adjustment timing (intraweek):** CE wall delta IC with CE P&L evolves from r=−0.020 (Mon EOD, not sig) to r=−0.269* (Tue EOD) to r=−0.443*** (Wed EOD) to r=−0.483*** (Thu EOD). The signal strengthens through the week, but since it merely tracks spot direction, knowing "CE wall moved down a lot by Wednesday" is the same as knowing "spot moved up a lot by Wednesday" — both are obvious from the spot price itself. **CLOSED.**
+
+---
+
+#### 10.6.6 Summary
+
+| Use Case | Status | Core Reason |
+|---|---|---|
+| SL trigger (CE) | **CLOSED** | Partial IC ≈ 0; thresholds have ≤14% sensitivity at meaningful SL rate lift |
+| SL trigger (PE) | **CLOSED** | No IC before or after spot control; threshold analysis shows no lift |
+| Adjustment trigger | **CLOSED** | Nominally significant raw IC collapses to zero in partial IC test |
+| Position skewing | **CLOSED** | 56% correct-leg ID from asymmetry sign (≈ random) |
+| Adjustment timing | **CLOSED** | Signal is present but entirely explained by spot direction |
+
+**Overall verdict:** OI wall migration is a real and measurable phenomenon (full-week IC r=−0.511***) but is entirely contemporaneous with and explained by spot direction. It carries **no independent information** beyond knowing where spot moved. If you want to skew, adjust, or hedge based on intraday market direction, tracking spot directly is both simpler and at least as informative as tracking OI wall migration.
+
+---
+
 ### 10.5 Former Speculative Intervention Ideas (Pre-Empirical)
 
 *(Retained for reference — these were the pre-empirical hypotheses. All have been replaced by empirical tests above.)*
@@ -827,6 +967,11 @@ python research/oi_analysis/signal_quality.py
 
 # Step 3: Run the Athena CE parachute validation (standalone, builds features on the fly)
 python research/oi_analysis/validate_athena.py
+
+# Step 4: Run Artemis validation scripts (require pre-built nifty_oi_features.csv)
+python research/oi_analysis/validate_artemis_entry.py        # §10.3 — entry OI features
+python research/oi_analysis/validate_artemis_intraday.py     # §10.4 — intraday OI path
+python research/oi_analysis/validate_artemis_wall_delta.py   # §10.6 — wall migration
 ```
 
 ### 11.2 Selective Date Ranges
@@ -889,6 +1034,7 @@ oi_series = oi_at_strike(
 | `data/artemis_entry_oi_joined.csv` | 150 Artemis Nifty trades with OI features at entry (§10.3) | 150 |
 | `data/artemis_sensex_entry_oi_joined.csv` | 27 Artemis Sensex trades with OI features at entry (§10.3.6) | 27 |
 | `data/artemis_intraday_oi_joined.csv` | 84 Artemis Nifty trades with intraday OI path features (§10.4) | 84 |
+| `data/artemis_wall_delta_joined.csv` | 84 Artemis Nifty trades with per-day wall delta features (§10.6) | 84 |
 | `data/signal_quality_ic.csv` | IC table: one row per feature, one column per horizon | 10 |
 | `data/signal_quality_quintiles.csv` | Quintile lift: forward returns per (feature, horizon, quintile) | ~500 |
 | `data/signal_quality_barrier.csv` | Wall breakthrough rates by proximity bucket | 8 |
