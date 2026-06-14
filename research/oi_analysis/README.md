@@ -556,25 +556,153 @@ The breakthrough *does* happen occasionally, and when it does, it tends to be vi
 
 **Override for macro events:** Any OI-based filter should be bypassed if there is a known macro catalyst (election results, central bank decisions, major earnings). OI reflects pre-event positioning, not the event outcome itself.
 
-### 10.2 Athena — Weekly Trade Selection
+### 10.2 Athena — Weekly Trade Selection (Empirically Validated, June 2026)
 
-**Application:** Before entering a new Athena trade (Monday morning entry), observe the OI structure:
+This section documents the results of `validate_athena_entry.py`, which tested OI features at entry against P&L outcomes for all 124 Athena VIX 16–25 trades (2020–2026). See `data/athena_entry_oi_joined.csv` for the full joined dataset.
 
-- High PCR_near or PCR_broad (top quintile of historical distribution) → the week is likely to settle higher. This favours Athena's CE side: the call wing is safer (market going up means the put wing is the risk). Consider starting with a wider CE margin or being less aggressive about the CE wing.
-- High PE wall OI (top quintile) → bullish week expected; the PE wing is well-supported and the trade is safer.
-- High total OI → range-bound week likely; the double calendar is expected to be profitable. Premium decay will be efficient.
-- Max pain significantly below current spot (max_pain_dist_pts strongly negative) → settlement likely below current level; the PE wing is under more stress.
+#### 10.2.1 PCR_near: The Primary Entry Quality Signal
 
-### 10.3 Artemis — Settlement Direction Prediction
+**PCR_near is the strongest OI predictor of Athena trade quality** (Spearman r = +0.288, p < 0.001 for total P&L; r = +0.260, p = 0.005 for CE-side P&L). The signal is **stable across both time periods**:
 
-Artemis sells straddles at ATM and profits when spot stays near the entry level at expiry. The to_expiry IC of +0.074 for PCR_broad means that at the start of the week, PCR provides a directional lean for where Sensex (or Nifty, where the signal is validated) will settle.
+| Period | n | PCR_near → total_pl | PCR_near → ce_pl |
+|---|---|---|---|
+| Early 2020–2022 | 92 | r = +0.303 | r = +0.281 |
+| Recent 2023–2026 | 21 | r = +0.143 | r = +0.258 |
 
-**Application:** Use weekly PCR as an early asymmetric hedge signal. If PCR is very high (top quintile), settlement is more likely to be above the straddle center → a slight PE bias in position sizing (sell slightly more PE than CE premium, or start with a wider PE strike) may improve expected value.
+The CE-side correlation is more consistent than the total-P&L correlation across periods, which is expected: total P&L includes the reactive PE wing (which flows through `running_realised_pl` and is not in `ce_pl_points` or `pe_pl_points`).
 
-**Sensex forward testing:** The OI model is trained on Nifty (371 expiries). For Sensex (18 months of OI data until March 2026), the model should be applied with the following adjustments:
-- Use Sensex OI data in the `oi` column (already handled by the engine)
-- Strike step is 100 (Sensex strikes are in 100-point increments vs Nifty's 50)
-- The same features and interpretation should apply if Sensex and Nifty are correlated (which they are, at approximately 0.95+ correlation)
+**Quintile P&L breakdown by PCR_near at entry:**
+
+| PCR quintile | Mean total P&L | Mean CE P&L | Mean PE P&L | n |
+|---|---|---|---|---|
+| Q1 (lowest 20%) | **−3.9 pts** | −18.4 pts | +3.9 pts | 23 |
+| Q2 | +30.8 pts | +20.5 pts | +6.3 pts | 22 |
+| Q3 | +8.1 pts | +5.9 pts | −0.8 pts | 23 |
+| Q4 | +27.7 pts | +9.8 pts | +16.7 pts | 22 |
+| Q5 (highest 20%) | **+54.9 pts** | +48.8 pts | +9.3 pts | 23 |
+
+The Q1→Q5 spread is 58.8 pts total (67.2 pts on the CE side). This is the single largest explainable factor in Athena trade outcomes found so far.
+
+#### 10.2.2 Why the Mechanism is Not a Directional Skew
+
+The intuitive hypothesis was: *high PCR (bullish market structure) → CE at risk → widen CE strike, tighten PE strike.* This was tested directly and **rejected**.
+
+The correlation of PCR_near with CE P&L is **positive** (+0.260), not negative. High PCR does not make CE more dangerous — it makes the entire trade better.
+
+The mechanism is simpler: **high PCR weeks in the VIX 16–25 regime are calm, bullish weeks where the double calendar decays profitably.** The CE calendar spread has a natural profit zone slightly above the sell strike (far-month CE offsets near-month losses), so even in high-PCR weeks when spot occasionally presses past the CE sell strike, the CE spread still profits. The spot move data confirms the pattern:
+
+| PCR quintile | Mean CE pressure (max_spot − ce_strike) | Mean PE pressure (pe_strike − min_spot) |
+|---|---|---|
+| Q1 | −17.5 pts (spot stayed below CE) | **+74.5 pts** (spot breached PE by 74.5 pts) |
+| Q5 | **+24.7 pts** (spot breached CE by 24.7 pts) | −54.9 pts (spot stayed above PE) |
+
+In Q1 (low PCR, bearish weeks): spot drops hard into PE territory. The reactive PE wing fires and captures most of the downside gain. The CE calendar is hurt (mean ce_pl = −18.4) not because of CE breach, but because the volatility expansion during the drop hurts the sold CE (vega risk). In Q5 (high PCR, bullish weeks): CE is slightly breached but the calendar structure absorbs it and still profits.
+
+**Strike skew is not supported by this data.** The signal predicts week quality overall, not which side to protect. The wall features (wall_asym, wall_oi_ratio, ce_wall_dist_pct) show no consistent relationship with per-side P&L (all correlations under 0.15, mostly unstable across time periods).
+
+#### 10.2.3 Entry Filter — The Actionable Conclusion
+
+Skipping the **bottom PCR quintile** (approximately PCR_near < 0.75 in recent data) improves mean P&L by **+8.1 pts per trade** (from 22.3 to 30.4 pts, a +36% improvement) at the cost of skipping 23 of 124 trades (19%). The skipped trades have a mean P&L of −3.9 pts.
+
+**Entry filter simulation (skip bottom 20% by feature):**
+
+| Feature | Kept | Mean P&L (kept) | Mean P&L (skip) | ΔMean |
+|---|---|---|---|---|
+| pcr_near | 100 | +30.4 pts | **−3.9 pts** | **+8.1 pts** |
+| wall_oi_ratio | 100 | +25.6 pts | +15.0 pts | +3.3 pts |
+| ce_wall_dist_pct | 100 | +24.7 pts | +18.3 pts | +2.4 pts |
+| pcr_broad | 100 | +24.0 pts | +21.1 pts | +1.7 pts |
+
+PCR_near is the only feature with a large, consistent, and statistically significant entry filter effect.
+
+**Implementation path:** Add a `pcr_near` check in `backtest.py` at entry (same location as the VIX filter). PCR_near at 10:30 on entry day for the sell expiry. Calibrate threshold on 2019–2022, apply to 2023–2026. The infrastructure is already in `oi_engine.py` — compute on-the-fly or from the pre-built features CSV. Live use requires calling `build_oi_profile()` for the current sell expiry at 10:30 each entry day.
+
+### 10.3 Artemis — Entry OI Analysis (Empirically Tested, June 2026)
+
+This section documents the results of `validate_artemis_entry.py`, run on 150 Artemis Nifty VIX < 16 trades from 2019–2025. See `data/artemis_entry_oi_joined.csv` for the full joined dataset.
+
+#### 10.3.1 Summary Finding: OI Is Informationally Weak for Artemis at Entry
+
+Unlike Athena (where PCR_near has r=+0.288 with trade P&L), **no OI feature predicts Artemis total trade quality with meaningful strength**. The strongest correlations are in the 0.06–0.15 range and none reach statistical significance for total P&L:
+
+| Feature | total_pl r | ce_pl r | pe_pl r |
+|---|---|---|---|
+| pcr_near | −0.001 | −0.066 | +0.075 |
+| pcr_broad | −0.003 | −0.137 | +0.153 |
+| wall_oi_ratio | −0.122 | −0.132 | +0.011 |
+| ce_wall_dist_pct | +0.072 | +0.111 | −0.118 |
+
+#### 10.3.2 The Directional Hypothesis Holds in Sign but Fails in Magnitude
+
+For a short strangle, the expected channel is: *high PCR (bullish market structure) → CE at risk, PE safe.* This is confirmed in direction for `pcr_broad` (ce_pl r=−0.137, pe_pl r=+0.153, both p≈0.06–0.09). The signs are correct. But the magnitude is too weak for either an entry filter or a strike skew to be reliable.
+
+**The quintile breakdown shows the right directional shape but modest CE-side P&L variation:**
+
+| PCR quintile | Mean CE P&L | Mean PE P&L | Mean total P&L |
+|---|---|---|---|
+| Q1 (lowest PCR) | **+11.6 pts** | +2.2 pts | **+22.3 pts** |
+| Q2 | −2.4 pts | +1.5 pts | +4.3 pts |
+| Q3 | +8.2 pts | −5.1 pts | +6.3 pts |
+| Q4 | +4.1 pts | +4.7 pts | +9.4 pts |
+| Q5 (highest PCR) | **+2.3 pts** | **+5.3 pts** | **+11.1 pts** |
+
+The CE P&L falls from Q1 to Q5 (from +11.6 to +2.3) and PE P&L rises (from +2.2 to +5.3) — consistent with the directional channel. However, the total P&L is **highest in Q1 (lowest PCR)**, not Q5. This means:
+
+1. The directional asymmetry exists (PCR tells you which side gets hit) but it doesn't translate into better overall outcomes in high-PCR weeks.
+2. In low-VIX conditions, both sides tend to do well; the low-PCR (bearish-leaning) weeks are not meaningfully worse.
+
+#### 10.3.3 The Signal Does Not Hold Across Time Periods
+
+The GO/NO-GO time-split check reveals why this signal cannot be built on:
+
+| Feature | Period | total_pl r | ce_pl r | pe_pl r | n |
+|---|---|---|---|---|---|
+| pcr_near | 2019–2022 | +0.094 | **−0.201** | +0.117 | 33 |
+| pcr_near | 2023–2025 | −0.021 | **−0.028** | +0.037 | 117 |
+
+The directional signal for CE (r=−0.201 in early period) essentially vanishes in the recent 117-trade period (r=−0.028). The early-period signal was driven by the small sample of 33 trades in 2019–2022, which happen to show the pattern more clearly but cannot be separated from sampling noise at that size. The recent period (where 78% of all Artemis Nifty trades sit) shows no directional OI signal at entry.
+
+#### 10.3.4 Entry Filter: Reversed or Absent
+
+For Athena, skipping the bottom PCR quintile improved mean P&L by +8.1 pts. For Artemis, the effect is **reversed**: the bottom PCR quintile (Q1, lowest PCR) has the *highest* mean total P&L (+22.3 pts), and skipping it would *hurt* outcomes (−2.9 pts per trade). No OI feature provides a reliable entry quality filter for Artemis.
+
+#### 10.3.5 Why Artemis Is Informationally Different
+
+Two structural reasons why OI carries less information for Artemis:
+
+1. **VIX regime.** Artemis trades when VIX < 16 — a complacent, low-hedging environment. In low-VIX weeks, institutional options positioning is lighter and PCR variation is narrower. The "wall of puts protecting the market" dynamic that gives PCR its predictive power in higher-VIX regimes is simply less present. The OI signal has less to say when less hedging is happening.
+
+2. **Regime shift in retail options participation.** 117 of 150 Artemis Nifty trades occur in 2023–2025, when weekly Nifty options became heavily retail-driven. The OI structure in this period is noisier — retail OI reflects speculative positioning more than institutional hedging, which is the channel behind PCR's predictive value.
+
+#### 10.3.6 Sensex Extension (Empirically Tested, June 2026)
+
+`validate_artemis_sensex.py` was run on 27 Sensex traded weeks (Sep 2025 – Mar 2026), building Sensex OI profiles on-the-fly with `strike_step=100`. Results are directional indicators only — n=27 requires |r| > 0.39 for p < 0.05 and nothing here clears that bar.
+
+**PCR_near is directionally consistent with Nifty:**
+
+| Feature | Metric | Sensex r | Nifty r | Match |
+|---|---|---|---|---|
+| pcr_near | ce_pl | −0.068 | −0.066 | ✓ |
+| pcr_near | pe_pl | +0.181 | +0.075 | ✓ |
+| pcr_broad | ce_pl | +0.024 | −0.137 | ✗ |
+| pcr_broad | pe_pl | +0.158 | +0.153 | ✓ |
+| wall_oi_ratio | ce_pl | +0.194 | −0.132 | ✗ |
+
+The `pcr_near` CE correlation (Sensex −0.068, Nifty −0.066) is remarkably similar across the two markets — both point in the expected direction and are nearly identical in magnitude. The PE correlation also matches. This supports the Nifty–Sensex structural similarity (≈0.95+ correlation) holding at the OI-signal level.
+
+However, the strength of the signal is identical to Nifty — meaning neither market provides a significant signal, and the Sensex data does not add statistical power (it is all from the recent 2025–2026 period where the Nifty signal was already weak at r=−0.028 for the recent sub-period).
+
+**The tercile breakdown shows a different total-P&L pattern vs Nifty:**
+
+| PCR_near tercile | Mean total P&L (Sensex) |
+|---|---|
+| Lo (PCR < 0.9) | +59.6 pts |
+| Mid | +52.8 pts |
+| Hi (PCR > 1.2) | **+119.9 pts** |
+
+Unlike Nifty (where Q1 was best at +22.3 pts), Sensex shows the highest P&L in the high-PCR tercile. This aligns with how Athena performs: high PCR → good week overall. Artemis Sensex appears to behave more like Athena in this dimension, possibly because the Sensex short-week strangle structure has more calendar-spread-like vega exposure than the Nifty structure.
+
+**Bottom line for Artemis:** No OI-based entry intervention is currently supported for either Nifty or Sensex. The PCR_near directional signal is real in sign (CE worse, PE better, when PCR is high) and confirmed consistently across both markets — but at r≈−0.07 it is too weak to filter entries or justify a strike skew. Revisit when the combined Nifty + Sensex trade universe reaches 300+ trades, or if live Sensex OI data resumes.
 
 ### 10.4 New Intervention Ideas
 
@@ -662,6 +790,9 @@ oi_series = oi_at_strike(
 |---|---|---|
 | `data/nifty_oi_features.csv` | Pre-built OI features for all 371 expiries | 277,248 |
 | `data/athena_emer_oi_validation.csv` | 21-event CE parachute validation results | 21 |
+| `data/athena_entry_oi_joined.csv` | 124 Athena trades with OI features at entry (§10.2) | 124 |
+| `data/artemis_entry_oi_joined.csv` | 150 Artemis Nifty trades with OI features at entry (§10.3) | 150 |
+| `data/artemis_sensex_entry_oi_joined.csv` | 27 Artemis Sensex trades with OI features at entry (§10.3.6) | 27 |
 | `data/signal_quality_ic.csv` | IC table: one row per feature, one column per horizon | 10 |
 | `data/signal_quality_quintiles.csv` | Quintile lift: forward returns per (feature, horizon, quintile) | ~500 |
 | `data/signal_quality_barrier.csv` | Wall breakthrough rates by proximity bucket | 8 |
@@ -700,4 +831,4 @@ Trade 72 (entry 2022-03-30, sell_expiry 2022-04-07) had missing CE wall data (Na
 
 ---
 
-*Built June 2026. Engine: `oi_engine.py`. Data: 371 Nifty weekly expiries (2019–2026), 197,448 unique 5-min bars after dedup. Signal quality computed on `signal_quality.py`.*
+*Built June 2026. Engine: `oi_engine.py`. Data: 371 Nifty weekly expiries (2019–2026), 197,448 unique 5-min bars after dedup. Signal quality: `signal_quality.py`. Athena entry validation: `validate_athena_entry.py` (124 trades). Artemis Nifty validation: `validate_artemis_entry.py` (150 trades). Artemis Sensex validation: `validate_artemis_sensex.py` (27 trades, Sep 2025–Mar 2026).*
