@@ -704,17 +704,112 @@ Unlike Nifty (where Q1 was best at +22.3 pts), Sensex shows the highest P&L in t
 
 **Bottom line for Artemis:** No OI-based entry intervention is currently supported for either Nifty or Sensex. The PCR_near directional signal is real in sign (CE worse, PE better, when PCR is high) and confirmed consistently across both markets — but at r≈−0.07 it is too weak to filter entries or justify a strike skew. Revisit when the combined Nifty + Sensex trade universe reaches 300+ trades, or if live Sensex OI data resumes.
 
-### 10.4 New Intervention Ideas
+### 10.4 Artemis — Intraday OI Wall and Max Pain Analysis (Empirically Tested, June 2026)
 
-The OI model suggests several interventions that go beyond the existing strategy logic:
+**Scope:** 84 Artemis Nifty traded weeks (2023-09 to 2025-08) for which 1-minute bar logs are available. OI features (5-minute cadence, pre-built) are joined to each trade log via `pd.merge_asof` with `direction='backward'` to prevent lookahead. Entry-bar features and intraday minimums/maximums are extracted for each week. Script: `validate_artemis_intraday.py`.
 
-**1. Max pain convergence trade (near-expiry):** On Wednesday afternoon (1–2 days before expiry), if spot is significantly above max pain (max_pain_dist_pts strongly negative, meaning max pain is below spot), this suggests expiry will pull spot lower. The Athena PE wing or a dedicated PE hedge could be sized up at this point. Similarly, if spot is below max pain (max_pain_dist_pts positive), consider reducing PE exposure.
+---
 
-**2. Wall proximity alert:** When spot enters the 0.5–1% proximity zone of the CE wall, the breakthrough rate is only 1.9% in the next 2 hours. However, when a breakthrough does happen, it is likely large and fast. A flag at this proximity threshold could prepare the CE parachute for immediate deployment rather than waiting for the standard 150-point trigger.
+#### 10.4.1 Use Case 1 — Entry Strike Placement Near OI Wall
 
-**3. PCR-driven position sizing:** Enter Athena with larger notional size when PCR is in the top quintile (bullish OI structure, PE well-supported) and smaller size when PCR is in the bottom quintile (CE-heavy, bearish lean, more risk to the CE wing).
+**Hypothesis:** Place the CE (or PE) sell strike near the OI wall for natural resistance/support.
 
-**4. PE chute entry filter:** The PE chute (PE parachute — buy ATM put as hedge when market falls sharply) could be qualified by PCR_near < 0.6 (very low PCR = call-heavy = market structure is bearish). The 5D IC for pcr_near of +0.042 suggests that very low PCR is a contrarian bullish signal in the general case, meaning the PE chute fired in low-PCR environments may be a false alarm.
+**Finding: CLOSED.** Entry-time wall distance features have no significant IC with leg P&L:
+
+| Feature | CE P&L IC | PE P&L IC | Total P&L IC |
+|---|---|---|---|
+| CE wall dist at entry | +0.102 | −0.046 | +0.097 |
+| PE wall dist at entry | +0.087 | −0.115 | +0.044 |
+| CE wall buffer (wall above sell %) | +0.190 | −0.235* | +0.013 |
+
+*Threshold for p<0.05 at n=84: |r| > 0.21. Only one value (CE wall buffer → PE P&L) crosses it, and the sign is counter-intuitive.*
+
+There is also a structural reason this is impractical: in every one of the 84 weeks, the CE OI wall (max-OI strike in the call chain) was **already above the CE sell strike**. Median buffer = +1.6% (wall is ~300 Nifty points above the sell strike). The OI wall does not provide new placement guidance — strikes are already sold below the natural resistance.
+
+---
+
+#### 10.4.2 Use Case 2 — Asymmetric Strike Skew from Wall Asymmetry
+
+**Hypothesis:** When the CE wall is much further from spot than the PE wall (`wall_asym` = ce_wall_dist − pe_wall_dist), the CE side is structurally protected → widen CE, tighten PE.
+
+**Finding: CLOSED.** Wall asymmetry at entry shows no usable IC for either leg. Entry PCR (which subsumes wall asymmetry information) already showed IC collapse in 2023–2025 (§10.3.3). No entry-snapshot OI feature passes the gate for Artemis Nifty.
+
+---
+
+#### 10.4.3 Use Case 3 — Intraday SL Triggers via Wall Proximity / Breach
+
+**Hypothesis:** When spot approaches within X% of the CE or PE wall during the trade week, tighten the SL for that leg or exit early.
+
+**Finding: CLOSED — breach rate = 0%.** In all 84 weeks, spot never crossed the CE or PE OI wall at any point during the trade. The wall (max-OI strike) is structurally positioned beyond the sell strikes in the 2023–2025 VIX<16 regime:
+
+- CE sell strike is typically 100–200 pts OTM
+- CE OI wall is an additional 300 pts beyond that (well into deep-OTM call space)
+- By the time spot would reach the OI wall, the CE `index_sl` (triggered when spot crosses the sell strike) would have already fired
+
+Intraday min wall distance has no significant IC with SL hits (CE: r=−0.027, PE: r=+0.151, both insignificant). **OI wall proximity is not a viable intraday trigger for Artemis.**
+
+---
+
+#### 10.4.4 Use Case 4 — Max Pain as Intraday Adjustment Trigger
+
+**Hypothesis:** When spot moves far from max pain during the week, the exposed leg is at risk.
+
+**Finding: PARTIAL — strong contemporaneous correlation, limited predictive lead time.**
+
+Intraday max pain movement is the strongest OI signal found across the entire Artemis Nifty dataset:
+
+| Feature | CE P&L IC | PE P&L IC | Total P&L IC |
+|---|---|---|---|
+| Min spot-vs-max_pain during week | +0.554*** | −0.423*** | +0.128 |
+| Max spot-vs-max_pain during week | +0.508*** | −0.665*** | −0.033 |
+
+*`max_pain_dist_pts` = spot − max_pain_strike at each bar.*
+
+The mechanism is direct: when spot rises far above max pain, the PE sell strike gets tested. When spot drops far below max pain, the CE sell strike gets tested. These are not coincidences — they reflect the same underlying directional move. The correlation is strong but largely contemporaneous.
+
+**Threshold analysis (max_max_pain_dist_pts → PE SL):**
+
+| Threshold (spot above max pain by) | Weeks crossing | PE SL rate | Weeks not crossing | PE SL rate |
+|---|---|---|---|---|
+| +50 pts | 71 | 59% | 13 | 8% |
+| **+100 pts** | **38** | **79%** | **46** | **28%** |
+| +150 pts | 28 | 82% | 56 | 36% |
+| +200 pts | 16 | 81% | 68 | 44% |
+
+The +100 pts threshold is the most actionable: 79% PE SL rate when spot reaches max_pain+100 at any point during the week, vs 28% base rate.
+
+**Timing check:** Does the threshold fire before the PE SL event?
+
+Of 43 PE SL events (option_sl + index_sl), only **12 (28%)** had spot crossing max_pain+100 pts *before* the SL event. For those 12, median lead time was 730 minutes (>12 hours). The remaining 72% of PE SL events happened without the threshold being crossed first — driven by option premium moves (VIX spikes) or rapid directional gaps, not gradual spot drift.
+
+**Conclusion:** The max_pain+100 trigger has high specificity when it fires (79% PE SL rate) but very low sensitivity (catches only 28% of SL events). It is not usable as a standalone trigger. It could serve as a complementary confirmation signal alongside existing SL logic, or as a readiness flag (when spot approaches max_pain+100, heighten monitoring of PE premium).
+
+---
+
+#### 10.4.5 Summary — Gate Assessment for All Four Use Cases
+
+| Use Case | Status | Reason |
+|---|---|---|
+| 1. Entry strike near OI wall | **CLOSED** | No significant entry IC; wall already beyond sell strike structurally |
+| 2. Asymmetric CE/PE skew | **CLOSED** | Wall asymmetry has no IC; entry PCR already shown weak |
+| 3. Intraday SL trigger on wall breach | **CLOSED** | Breach rate = 0% in 84-week sample; wall unreachable in VIX<16 regime |
+| 4. Max pain adjustment trigger | **OPEN (limited)** | Strong correlation but 72% miss rate; complementary signal only |
+
+**Research verdict:** For Artemis in the VIX<16 regime, OI wall features carry no actionable intraday information. Max pain distance is the only channel with a real signal, but it is too noisy as a standalone trigger. The primary OI opportunity for Artemis remains the Athena-style PCR entry filter (§10.2), which would need Artemis-specific validation once ≥300 trades are available.
+
+---
+
+### 10.5 Former Speculative Intervention Ideas (Pre-Empirical)
+
+*(Retained for reference — these were the pre-empirical hypotheses. All have been replaced by empirical tests above.)*
+
+**1. Max pain convergence trade (near-expiry):** On Wednesday afternoon, if spot is significantly above max pain, this suggests expiry will pull spot lower. The Athena PE wing or a dedicated PE hedge could be sized up. — *Partially supported by §10.4.4 (max pain movement correlates with outcomes) but not validated for near-expiry timing specifically.*
+
+**2. Wall proximity alert:** When spot enters the 0.5–1% proximity zone of the CE wall, the breakthrough rate is only 1.9% in the next 2 hours. — *Valid for Athena (§9), moot for Artemis (wall breach rate = 0%).*
+
+**3. PCR-driven position sizing:** Enter Athena with larger notional size when PCR is in the top quintile. — *Supported for Athena (§10.2); not supported for Artemis (§10.3).*
+
+**4. PE chute entry filter:** The PE chute could be qualified by PCR_near < 0.6. — *Hypothesis not empirically tested; precursor IC work (§10.3) suggests PCR is too weak for Artemis to support this.*
 
 ---
 
@@ -793,6 +888,7 @@ oi_series = oi_at_strike(
 | `data/athena_entry_oi_joined.csv` | 124 Athena trades with OI features at entry (§10.2) | 124 |
 | `data/artemis_entry_oi_joined.csv` | 150 Artemis Nifty trades with OI features at entry (§10.3) | 150 |
 | `data/artemis_sensex_entry_oi_joined.csv` | 27 Artemis Sensex trades with OI features at entry (§10.3.6) | 27 |
+| `data/artemis_intraday_oi_joined.csv` | 84 Artemis Nifty trades with intraday OI path features (§10.4) | 84 |
 | `data/signal_quality_ic.csv` | IC table: one row per feature, one column per horizon | 10 |
 | `data/signal_quality_quintiles.csv` | Quintile lift: forward returns per (feature, horizon, quintile) | ~500 |
 | `data/signal_quality_barrier.csv` | Wall breakthrough rates by proximity bucket | 8 |
@@ -831,4 +927,4 @@ Trade 72 (entry 2022-03-30, sell_expiry 2022-04-07) had missing CE wall data (Na
 
 ---
 
-*Built June 2026. Engine: `oi_engine.py`. Data: 371 Nifty weekly expiries (2019–2026), 197,448 unique 5-min bars after dedup. Signal quality: `signal_quality.py`. Athena entry validation: `validate_athena_entry.py` (124 trades). Artemis Nifty validation: `validate_artemis_entry.py` (150 trades). Artemis Sensex validation: `validate_artemis_sensex.py` (27 trades, Sep 2025–Mar 2026).*
+*Built June 2026. Engine: `oi_engine.py`. Data: 371 Nifty weekly expiries (2019–2026), 197,448 unique 5-min bars after dedup. Signal quality: `signal_quality.py`. Athena entry validation: `validate_athena_entry.py` (124 trades). Artemis Nifty entry validation: `validate_artemis_entry.py` (150 trades). Artemis Sensex validation: `validate_artemis_sensex.py` (27 trades, Sep 2025–Mar 2026). Artemis intraday wall/max pain validation: `validate_artemis_intraday.py` (84 trades, 2023–2025).*
