@@ -357,6 +357,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 
 | Module | Description | Status |
 |---|---|---|
+| [`research/oi_analysis/`](./research/oi_analysis/) | Open Interest (OI) feature extractor and signal quality map. Fully vectorised engine builds CE/PE wall, max pain, PCR, and OI delta features at 5-min resolution for all 371 Nifty weekly expiries (2019–2026). Signal quality tested across 10 features × 10 forward horizons (15min → expiry settlement) on 197,448 bars. PCR near/broad and wall_oi_ratio show consistent positive IC across all horizons (peaks at +0.07 to_expiry, p<0.001). CE parachute validated against 21 Athena events — 80% classification accuracy using PCR threshold. Barrier analysis: CE wall holds in 98% of 2hr windows. See [`research/oi_analysis/README.md`](./research/oi_analysis/README.md) for full findings. | Active — signal integration next |
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
 | [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot. | Complete |
@@ -601,6 +602,18 @@ algo-trading-lab/
 │       ├── .gitkeep
 │       └── trade_logs/             # Per-trade minute-by-minute option price logs
 ├── research/                       # Exploratory research modules (not used by production code)
+│   ├── oi_analysis/                # OI feature extractor + signal quality map (Nifty, 2019–2026)
+│   │   ├── README.md               # Full design, methodology, and findings (NotebookLM source)
+│   │   ├── oi_engine.py            # Core vectorised feature engine: wall, PCR, max pain, OI delta
+│   │   ├── build_nifty_features.py # Batch builder — all 371 expiries → nifty_oi_features.csv
+│   │   ├── validate_athena.py      # 21-event CE parachute OI validation
+│   │   ├── signal_quality.py       # IC + quintile lift + barrier analysis (197K bars × 10 horizons)
+│   │   └── data/                   # Generated outputs (gitignored except README)
+│   │       ├── nifty_oi_features.csv          # 277,248 rows — pre-built OI features
+│   │       ├── athena_emer_oi_validation.csv  # 21-event validation results
+│   │       ├── signal_quality_ic.csv          # Spearman IC table
+│   │       ├── signal_quality_quintiles.csv   # Quintile lift by (feature, horizon)
+│   │       └── signal_quality_barrier.csv     # Wall breakthrough rates
 │   ├── range_detection/            # Nifty/Sensex range detection research (ADX + PA methods)
 │   │   ├── range_detector.py       # ADX-gated — daily OHLC
 │   │   ├── range_detector_75min.py # ADX-gated — 75-min (resampled from 1-min)
