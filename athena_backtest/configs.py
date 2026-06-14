@@ -116,6 +116,8 @@ DELTA_SAFE_SIDE                 = 0.30    # Delta for the side the market is mov
 # ---------------------------------------------------------------------------
 ENABLE_PE_WING                  = True
 PE_WING_DELTA                   = 0.05    # Target delta for the PE safety wing
+ENABLE_REACTIVE_PE_WING         = True
+REACTIVE_PE_WING_TRIGGER_PCT    = 1.75    # % drop from entry_spot to trigger PE wing buy
 # ---------------------------------------------------------------------------
 # Adjustment — winning side roll (DISABLED for final verification)
 # ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ from configs import (
     ENABLE_TRAIL_STOP, TRAIL_ACTIVATION_POINTS, TRAIL_POINTS,
     ENABLE_ASYMMETRIC_DELTA, DELTA_TESTED_SIDE, DELTA_SAFE_SIDE,
     ENABLE_PE_WING, PE_WING_DELTA,
+    ENABLE_REACTIVE_PE_WING, REACTIVE_PE_WING_TRIGGER_PCT,
     ELM_EXIT_TIME,
     ENABLE_ADJUSTMENT, ADJUST_BUY_LEG,
     ADJUSTMENT_TRIGGER_OFFSET, ADJUSTMENT_WING_THRESHOLD, ADJUSTMENT_MIN_CREDIT_GAIN,
@@ -713,7 +714,8 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                                   ce_wing_entry: float = 0.0, pe_wing_entry: float = 0.0,
                                   last_ce_wing_ltp: float = 0.0, last_pe_wing_ltp: float = 0.0,
                                   ce_wing_strike: int = None, pe_wing_strike: int = None,
-                                  opt_df_cache: dict = None, buy_expiry_end: pd.Timestamp = None):
+                                  opt_df_cache: dict = None, buy_expiry_end: pd.Timestamp = None,
+                                  reactive_wing_state: dict = None):
     """
     Append 1-min snapshots for every minute in (from_ts, to_ts] to trade_log.
     Checks all exit conditions, Emergency Hedge, and structural adjustments.
@@ -746,7 +748,8 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
     ]
 
     for ts, row in window.iterrows():
-        spot = float(row['close'])
+        spot     = float(row['close'])
+        bar_open = float(row['open'])
         vix  = get_1min_value(vix_1m, ts, 'close')
 
         # Update LTPs
@@ -792,13 +795,48 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
                     emer_entry  = 0.0
                     emer_ltp    = 0.0
 
+        if ENABLE_REACTIVE_PE_WING and reactive_wing_state is not None and entry_spot is not None:
+            rws = reactive_wing_state
+            if rws.get('buy_pending'):
+                stk, pr = select_strike(bar_open, buy_expiry_end, ts, 'pe', opt_df_cache, PE_WING_DELTA)
+                if stk:
+                    rws['df']     = opt_df_cache.get((buy_expiry_end, stk, 'pe'))
+                    rws['entry']  = apply_slippage(pr, is_buy=True)
+                    rws['ltp']    = pr
+                    rws['strike'] = stk
+                    rws['active'] = True
+                rws['buy_pending'] = False
+            if rws.get('sell_pending') and rws['active']:
+                raw_exit = get_option_price(rws['df'], ts, 'open') or rws['ltp']
+                exit_px  = apply_slippage(raw_exit, is_buy=False)
+                window_realised_pl += round(exit_px - rws['entry'], 2)
+                rws['active'] = False
+                rws['df']     = None
+                rws['strike'] = None
+                rws['entry']  = 0.0
+                rws['ltp']    = 0.0
+                rws['sell_pending'] = False
+            if rws['active'] and rws['df'] is not None:
+                v = get_option_price(rws['df'], ts, 'close')
+                if v is not None:
+                    rws['ltp'] = v
+            trigger_level = entry_spot * (1 - REACTIVE_PE_WING_TRIGGER_PCT / 100.0)
+            if not rws['active'] and not rws.get('buy_pending') and spot < trigger_level:
+                rws['buy_pending'] = True
+            if rws['active'] and not rws.get('sell_pending') and spot > entry_spot:
+                rws['sell_pending'] = True
+
         ce_unrealised_pl = calc_strategy_pl(ce_sell_entry, running_ce_sell,
                                              ce_buy_entry,  running_ce_buy,
                                              ce_wing_entry, running_ce_wing,
                                              emer_entry, emer_ltp)
+        _rws = reactive_wing_state
+        eff_pe_wing_entry  = _rws['entry']  if (_rws and _rws['active']) else pe_wing_entry
+        eff_pe_wing_ltp    = _rws['ltp']    if (_rws and _rws['active']) else running_pe_wing
+        eff_pe_wing_strike = _rws['strike'] if (_rws and _rws['active']) else pe_wing_strike
         pe_unrealised_pl = calc_strategy_pl(pe_sell_entry, running_pe_sell,
                                              pe_buy_entry,  running_pe_buy,
-                                             pe_wing_entry, running_pe_wing)
+                                             eff_pe_wing_entry, eff_pe_wing_ltp)
         combined_unrealised_pl = round(ce_unrealised_pl + pe_unrealised_pl, 2)
         cumulative_pl = round(running_realised_pl + window_realised_pl + combined_unrealised_pl, 2)
 
@@ -815,8 +853,8 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
             total_net_debit, max_theoretical_profit,
             running_realised_pl=(running_realised_pl + window_realised_pl),
             ce_wing_ltp=running_ce_wing, ce_wing_entry=ce_wing_entry,
-            pe_wing_ltp=running_pe_wing, pe_wing_entry=pe_wing_entry,
-            ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
+            pe_wing_ltp=eff_pe_wing_ltp, pe_wing_entry=eff_pe_wing_entry,
+            ce_wing_strike=ce_wing_strike, pe_wing_strike=eff_pe_wing_strike,
             emer_strike=emer_strike, emer_entry=emer_entry, emer_ltp=emer_ltp
         ))
 
@@ -1253,12 +1291,12 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
         ce_wing_strike = None
         pe_wing_strike = None
-        if ENABLE_PE_WING:
+        if ENABLE_PE_WING and not ENABLE_REACTIVE_PE_WING:
             # --- Phase 2 Adjustment: PE-Only Wing ---
             # We skip the CE wing to save cost.
             ce_wing_strike = None
             ce_wing_raw = 0.0
-            
+
             pe_wing_strike, pe_wing_raw = select_strike(
                 spot, buy_expiry_end, entry_ts, 'pe', opt_df_cache, PE_WING_DELTA)
 
@@ -1399,6 +1437,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
         pe_wing_ltp = pe_wing_entry
         running_realised_pl = 0.0
         running_peak_pl = 0.0
+        rw_state = {'active': False, 'buy_pending': False, 'sell_pending': False,
+                    'df': None, 'entry': 0.0, 'ltp': 0.0, 'strike': None}
         (ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
          sl_ts, sl_reason, running_peak_pl,
          adj_trigger_ts, adj_winning_side,
@@ -1425,7 +1465,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
             ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
             last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
             ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
-            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
+            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
+            reactive_wing_state=rw_state)
         running_realised_pl += window_realised_emer_pl
 
         # ----------------------------------------------------------------
@@ -1563,7 +1604,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                         ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
                         last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
                         ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
-                        opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
+                        opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
+                        reactive_wing_state=rw_state)
                 running_realised_pl += window_realised_emer_pl
                 if sl_ts is None:
                     sl_ts = scan_end; sl_reason = 'pre_expiry'
@@ -1634,7 +1676,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                             ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
                             last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
                             ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
-                            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
+                            opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
+                            reactive_wing_state=rw_state)
                     running_realised_pl += window_realised_emer_pl
                     # Re-price exit with updated sl_ts/sl_reason from resumed scan
                     if sl_ts is None:
@@ -1716,7 +1759,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                     ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
                                     last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
                                     ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
-                                    opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
+                                    opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
+                                    reactive_wing_state=rw_state)
                             running_realised_pl += window_realised_emer_pl
                             if sl_ts is None:
                                 sl_ts = scan_end; sl_reason = 'pre_expiry'
@@ -1820,7 +1864,8 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                                 ce_wing_entry=ce_wing_entry, pe_wing_entry=pe_wing_entry,
                                 last_ce_wing_ltp=ce_wing_ltp, last_pe_wing_ltp=pe_wing_ltp,
                                 ce_wing_strike=ce_wing_strike, pe_wing_strike=pe_wing_strike,
-                                opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end)
+                                opt_df_cache=opt_df_cache, buy_expiry_end=buy_expiry_end,
+                                reactive_wing_state=rw_state)
 
                         running_realised_pl += window_realised_emer_pl
 
@@ -1877,6 +1922,13 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 adj_pe_new_sell_exit = pe_sell_exit
                 adj_pe_new_buy_exit  = pe_buy_exit if ADJUST_BUY_LEG else None
 
+            # Reactive wing final close (adj path)
+            if ENABLE_REACTIVE_PE_WING and rw_state['active'] and rw_state['df'] is not None:
+                raw_rw = get_option_price(rw_state['df'], exit_ts, use_col) or rw_state['ltp']
+                rw_exit_px = apply_slippage(raw_rw, is_buy=False) if slip else raw_rw
+                running_realised_pl = round(running_realised_pl + (rw_exit_px - rw_state['entry']), 2)
+                rw_state['active'] = False
+
             # Final strategy P&L = locked in gains + final leg P&L
             total_pl = round(running_realised_pl + base_pl, 2)
 
@@ -1886,6 +1938,13 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 f"Total P&L: {total_pl:+.1f} pts ({total_pl * LOT_SIZE:+,.0f})"
             )
         else:
+            # Reactive wing final close (base path)
+            if ENABLE_REACTIVE_PE_WING and rw_state['active'] and rw_state['df'] is not None:
+                raw_rw = get_option_price(rw_state['df'], exit_ts, use_col) or rw_state['ltp']
+                rw_exit_px = apply_slippage(raw_rw, is_buy=False) if slip else raw_rw
+                running_realised_pl = round(running_realised_pl + (rw_exit_px - rw_state['entry']), 2)
+                rw_state['active'] = False
+
             total_pl = round(running_realised_pl + base_pl, 2)
             logger.info(
                 f"  BASE EXIT {sl_reason:20s} | {exit_ts} | "
