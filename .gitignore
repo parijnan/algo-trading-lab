@@ -346,3 +346,6 @@ iris_backtest/data/trade_logs/
 iris_backtest/data/iris_backtest_summary.csv
 iris_backtest/data/strategy_backtest_trades.csv
 iris_backtest/data/strategy_sweep.csv
+
+# OI analysis — generated feature CSVs
+research/oi_analysis/data/
