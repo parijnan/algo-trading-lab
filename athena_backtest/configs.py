@@ -145,6 +145,18 @@ LOT_SIZE                = 65            # Nifty lot size (update if SEBI changes
 RISK_FREE_RATE          = 5.0           # Annualised risk-free rate (%) for mibian BS
 
 # ---------------------------------------------------------------------------
+# OI entry filter
+# Skip entry if pcr_near (near-expiry put-call ratio) at entry time is below threshold.
+# pcr_near is looked up from OI_FEATURES_PATH at the sell_expiry / entry_time.
+# Threshold is the empirical 20th percentile from the 124-trade Athena VIX-16-25 sample.
+# When pcr_near is unavailable (no OI data for that expiry), the entry is NOT skipped.
+# ---------------------------------------------------------------------------
+ENABLE_OI_FILTER        = False
+OI_FILTER_PCR_MIN       = 0.71
+OI_FEATURES_PATH        = os.path.join(
+    REPO_ROOT, 'research', 'oi_analysis', 'data', 'nifty_oi_features.csv')
+
+# ---------------------------------------------------------------------------
 # Backtest scope
 # ---------------------------------------------------------------------------
 BACKTEST_START_DATE     = '2020-01-01'

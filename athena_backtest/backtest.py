@@ -52,6 +52,7 @@ from configs import (
     EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
+    ENABLE_OI_FILTER, OI_FILTER_PCR_MIN, OI_FEATURES_PATH,
 )
 
 warnings.filterwarnings('ignore')
@@ -1176,11 +1177,36 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
 
     entry_ts_str = f" {ENTRY_TIME}:00"
 
+    # OI entry filter — build sell_expiry skip set once before the main loop
+    oi_skip_set = set()
+    if ENABLE_OI_FILTER:
+        if not os.path.exists(OI_FEATURES_PATH):
+            logger.warning(f"OI features not found at {OI_FEATURES_PATH} — OI filter disabled")
+        else:
+            logger.info(f"Loading OI features for entry filter (pcr_near >= {OI_FILTER_PCR_MIN})...")
+            oi_feat = pd.read_csv(OI_FEATURES_PATH, parse_dates=['ts'])
+            for sell_exp in all_expiry_dates:
+                prior = get_prior_expiry(sell_exp, contracts_df)
+                if prior is None:
+                    continue
+                ed = compute_entry_date(prior, holidays_set)
+                if ed is None:
+                    continue
+                ets = pd.Timestamp(f"{ed} {ENTRY_TIME}:00")
+                sub = oi_feat[(oi_feat['expiry'] == str(sell_exp)) & (oi_feat['ts'] <= ets)]
+                if sub.empty:
+                    continue
+                pcr = sub.iloc[-1].get('pcr_near', float('nan'))
+                if pd.notna(pcr) and pcr < OI_FILTER_PCR_MIN:
+                    oi_skip_set.add(sell_exp)
+            logger.info(f"  OI filter: {len(oi_skip_set)} sell expiries flagged for skip")
+
     # Skip reason counters — logged at end to show where entries are failing
     skip_counts = {
         'no_entry_day':   0,
         'no_spot':        0,
         'vix_filtered':   0,
+        'oi_filtered':    0,
         'no_buy_expiry':  0,
         'expiry_not_in_contracts': 0,
         'strike_failed':  0,
@@ -1228,6 +1254,12 @@ def run_backtest(nifty_1m: pd.DataFrame, vix_1m: pd.DataFrame,
                 logger.debug(f"  {sell_expiry_date}: VIX {entry_vix} outside "
                              f"[{VIX_FILTER_LOW}, {VIX_FILTER_HIGH}] — skipping")
                 continue
+
+        # OI entry filter
+        if ENABLE_OI_FILTER and sell_expiry_date in oi_skip_set:
+            skip_counts['oi_filtered'] += 1
+            logger.debug(f"  {sell_expiry_date}: pcr_near below {OI_FILTER_PCR_MIN} — OI filter skip")
+            continue
 
         # ----------------------------------------------------------------
         # Expiry selection

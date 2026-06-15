@@ -341,6 +341,9 @@ athena_backtest/data_wing_reactive/
 athena_backtest/data_wing_reactive_*/
 athena_backtest/data_wing_reactive_pct_*/
 
+# Athena backtest — OI entry filter research output
+athena_backtest/data_oi_filter/
+
 # Iris backtest — per-trade logs and summary (generated outputs)
 iris_backtest/data/trade_logs/
 iris_backtest/data/iris_backtest_summary.csv
