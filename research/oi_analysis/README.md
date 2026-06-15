@@ -617,6 +617,30 @@ PCR_near is the only feature with a large, consistent, and statistically signifi
 
 **Implementation path:** Add a `pcr_near` check in `backtest.py` at entry (same location as the VIX filter). PCR_near at 10:30 on entry day for the sell expiry. Calibrate threshold on 2019–2022, apply to 2023–2026. The infrastructure is already in `oi_engine.py` — compute on-the-fly or from the pre-built features CSV. Live use requires calling `build_oi_profile()` for the current sell expiry at 10:30 each entry day.
 
+#### 10.2.4 Full Backtest with OI Entry Filter (June 2026)
+
+The filter was implemented and validated against the full backtest engine (`athena_backtest/backtest_oi_filter.py`). The threshold is hardcoded at `pcr_near ≥ 0.71` (the empirical 20th-percentile from the 124-trade sample). The filter is built as a skip-set inside `run_backtest()`, after the VIX filter and before strike selection. The full `contracts_df` is preserved for correct prior-expiry chain computation — pre-filtering `contracts_df` would corrupt entry-date calculations for subsequent expiries.
+
+**Full backtest results (pcr_near ≥ 0.71, 23 trades removed = 19% of universe):**
+
+| Period | n | Total P&L | Mean P&L | Win Rate | R:R |
+|---|---|---|---|---|---|
+| Baseline — full sample | 124 | **+2,765.6 pts** | +22.3 pts | 62.9% | 1.66 |
+| Filtered — full sample | 101 | **+2,854.6 pts** | +28.3 pts | 66.3% | 2.13 |
+| Baseline — early 2020–22 | 102 | +1,690.4 pts | +16.6 pts | 59.8% | 1.49 |
+| Filtered — early 2020–22 | 84 | +1,908.2 pts | +22.7 pts | 63.1% | 1.87 |
+| Baseline — recent 2023+ | 22 | +1,075.2 pts | +48.9 pts | 77.3% | 2.44 |
+| Filtered — recent 2023+ | 17 | +946.3 pts | +55.7 pts | 82.4% | 7.63 |
+
+**The critical observation is in the period totals:**
+
+- **Early period:** Filter adds +217.8 pts in total (18 trades removed, mean −12.1 pts — clear signal).
+- **Recent period:** Filter *costs* −128.9 pts in total (5 trades removed, mean +25.8 pts — below the 48.9 pt baseline mean, but still positive). The 5 removed recent trades include the +193.35 pt winner (2024-06-05, pcr=0.437) alongside 2 losers (−108 pts, −12 pts).
+
+The full-sample improvement (+89 pts, +6.0 pts mean) comes entirely from the early period. In 2023+, the filter is net negative in total P&L. The mean improvement in recent period (+6.8 pts) is a numerical artefact of removing 5 trades whose average (+25.8 pts) is below the baseline mean — not a signal.
+
+**Verdict: WEAK-PASS / Defer deployment.** The IC in the recent period is 0.143 (vs 0.303 in early period), and the filter gives up real total P&L in the only period that matters for live trading. Do not deploy until at least 12 months of out-of-sample data confirm the signal is stable post-2022.
+
 ### 10.3 Artemis — Entry OI Analysis (Empirically Tested, June 2026)
 
 This section documents the results of `validate_artemis_entry.py`, run on 150 Artemis Nifty VIX < 16 trades from 2019–2025. See `data/artemis_entry_oi_joined.csv` for the full joined dataset.
@@ -1108,6 +1132,9 @@ python research/oi_analysis/validate_artemis_entry.py        # §10.3 — entry 
 python research/oi_analysis/validate_artemis_intraday.py     # §10.4 — intraday OI path
 python research/oi_analysis/validate_artemis_wall_delta.py      # §10.6 — wall migration
 python research/oi_analysis/validate_artemis_max_pain_drift.py  # §10.7 — max pain drift
+
+# Step 5: Run the Athena OI entry filter backtest (requires pre-built features CSV)
+python athena_backtest/backtest_oi_filter.py    # §10.2.4 — full backtest with pcr_near gate
 ```
 
 ### 11.2 Selective Date Ranges
