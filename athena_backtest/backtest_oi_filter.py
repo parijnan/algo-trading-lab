@@ -66,12 +66,12 @@ def _summary_row(df):
 
 
 def print_comparison():
-    sep = '─' * 88
+    sep = '─' * 100
 
     print()
-    print('═' * 88)
+    print('═' * 100)
     print(f'COMPARISON: Baseline vs OI-filtered  (pcr_near ≥ {_cfg.OI_FILTER_PCR_MIN})')
-    print('═' * 88)
+    print('═' * 100)
 
     if not os.path.exists(_BASELINE):
         print('[WARN] No baseline trade_summary.csv — comparison unavailable.')
@@ -91,14 +91,16 @@ def print_comparison():
     removed  = b[b['entry_time'].dt.date.isin(b_dates - f_dates)].copy()
 
     def row_str(label, br, fr):
-        return (f'  {label:24s}  {br["n"]:>5d}   {br["mean"]:>+8.1f}   '
+        return (f'  {label:24s}  {br["n"]:>5d}   {br["total"]:>+8.1f}   {br["mean"]:>+7.1f}   '
                 f'{br["wr"]:>6.1f}%   {br["rr"]:>5.2f}   '
-                f'{fr["n"]:>5d}   {fr["mean"]:>+8.1f}   '
+                f'{fr["n"]:>5d}   {fr["total"]:>+8.1f}   {fr["mean"]:>+7.1f}   '
                 f'{fr["wr"]:>6.1f}%   {fr["rr"]:>5.2f}')
 
-    hdr = (f'  {"Period":24s}  {"N":>5s}   {"MeanPL":>8s}   {"WinRate":>7s}   '
-           f'{"R:R":>5s}   {"N":>5s}   {"MeanPL":>8s}   {"WinRate":>7s}   {"R:R":>5s}')
-    shdr = (f'  {"":24s}  {"── baseline ──":>30s}    {"── filtered ──":>28s}')
+    sep = '─' * 100
+    hdr = (f'  {"Period":24s}  {"N":>5s}   {"TotalPL":>8s}   {"MeanPL":>7s}   '
+           f'{"WinRate":>7s}   {"R:R":>5s}   {"N":>5s}   {"TotalPL":>8s}   {"MeanPL":>7s}   '
+           f'{"WinRate":>7s}   {"R:R":>5s}')
+    shdr = (f'  {"":24s}  {"── baseline ──":>35s}      {"── filtered ──":>33s}')
 
     print(hdr)
     print(shdr)
