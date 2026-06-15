@@ -939,6 +939,141 @@ No significant lift beyond baseline at any usable threshold. PE wall migration a
 
 ---
 
+### 10.7 Artemis — Max Pain Drift (Empirically Tested, June 2026)
+
+**Scope:** 84 Artemis Nifty traded weeks (2023-09 to 2025-08). Script: `validate_artemis_max_pain_drift.py`.
+
+**Motivation:** §10.4 found the full-week max_pain_dist extremum has strong IC (r=−0.665*** for max_max_pain_dist vs PE P&L, r=+0.554*** for min_max_pain_dist vs CE P&L). The question is whether the max pain strike migrating during the week — or the fixed-time distance between spot and max pain at a midweek observation point — provides an actionable, independent signal.
+
+Two features tested in parallel:
+- **max_pain_delta** = max_pain_strike(t) − max_pain_strike(entry): how far the OI-weighted fair-value strike has moved
+- **max_pain_dist** = spot(t) − max_pain_strike(t): how far spot currently sits above/below the max pain level
+
+---
+
+#### 10.7.1 Migration Statistics
+
+Max pain STRIKE moves very little at Tue EOD (median = 0 pts) but can swing substantially over the full week:
+
+| Metric | MP strike delta (full week) | MP delta at Tue EOD | MP dist at Tue EOD |
+|---|---|---|---|
+| Mean | −2 pts | +4 pts | 0 pts |
+| Median | 0 pts | 0 pts | −11 pts |
+| Std | 298 pts | 115 pts | 80 pts |
+| P10 | −400 pts | −150 pts | −98 pts |
+| P90 | +300 pts | +135 pts | +115 pts |
+
+Unlike CE/PE wall migration (mean −337 pts, −257 pts at Tue EOD), the max pain strike is much more stable midweek — large migrations mostly occur Wednesday–Thursday as expiry nears. The full-week max_pain_dist extrema are substantial (mean max = +122 pts, mean min = −112 pts), consistent with §10.4's findings.
+
+---
+
+#### 10.7.2 Full-Window IC (Contemporaneous Reference)
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| Min MP delta (most downward) | −0.658*** | +0.673*** | −0.103 |
+| Max MP delta (most upward) | −0.634*** | +0.605*** | −0.100 |
+| MP delta (end vs entry) | **−0.694****** | **+0.654****** | −0.115 |
+| Min MP dist (spot most below max_pain) | +0.554*** | −0.423*** | +0.128 |
+| Max MP dist (spot most above max_pain) | +0.508*** | **−0.665****** | −0.033 |
+
+These are the strongest ICs in the entire Artemis OI feature set. The max_max_pain_dist reproduces the §10.4 result (r=−0.665***). The full-week MP delta is similarly strong (r=−0.694***). However, all are computed with information only available at week end.
+
+---
+
+#### 10.7.3 Critical Test: Does Max Pain Drift Add Anything Beyond Spot?
+
+Max pain strike delta at Tue EOD correlates with spot move at Tue EOD: **r=+0.861*****.** This is even tighter coupling than wall migration (+0.455). The max pain strike is essentially a smoothed, stickier, discretized proxy for spot — it updates as OI shifts to new strikes but always tracks where spot has moved.
+
+Partial Spearman IC (controlling for spot move to Tue EOD):
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| MP strike delta (Tue EOD) | −0.151 | +0.096 | −0.034 |
+| MP dist (Tue EOD) | −0.033 | −0.089 | −0.091 |
+
+**All partial ICs are near zero and statistically insignificant.** After controlling for where spot moved by Tuesday, neither the max pain strike position nor its distance from spot adds any information about final P&L.
+
+---
+
+#### 10.7.4 Fixed-Time IC and Year-Split Stability
+
+Raw IC at Tue EOD is strong before spot control:
+
+| Feature | CE P&L | PE P&L | Total P&L |
+|---|---|---|---|
+| MP strike delta (Tue EOD) | −0.538*** | +0.598*** | −0.056 |
+| MP dist (Tue EOD) | +0.385*** | −0.524*** | −0.029 |
+
+Note the sign of MP dist: **spot above max_pain → CE P&L BETTER (r=+0.385***)** and PE P&L worse. This is the "max pain gravity" effect — when spot runs above the OI fair-value level, it tends to revert (good for CE call sell), while the PE put sell is temporarily under pressure.
+
+Year-split:
+
+| Feature → Target | 2023-24 (n=61) | 2025 (n=23) |
+|---|---|---|
+| MP delta → CE P&L | −0.507*** | −0.616** |
+| MP delta → PE P&L | +0.660*** | +0.421* |
+| MP dist → CE P&L | +0.352** | +0.405 |
+| **MP dist → PE P&L** | **−0.650****** | **−0.067** |
+
+Max pain delta is **stable across years** (both CE and PE legs significant in both periods) — unlike CE/PE wall migration which was inconsistent. But this stability is a property of the signal tracking spot (spot direction is consistently predictive), not of an independent OI signal.
+
+Max pain DISTANCE → PE P&L shows the same collapse as wall migration: −0.650*** in 2023-24, −0.067 in 2025. Not stable.
+
+---
+
+#### 10.7.5 Threshold Analysis — MP Dist at Tue EOD as PE SL Readiness Flag
+
+**§8 PE SL trigger:**
+
+| Threshold (mp_dist ≥ X) | N triggered | PE SL if triggered | PE SL baseline | Sensitivity |
+|---|---|---|---|---|
+| ≥ +150 pts | 6/84 | **83%** | 51% | 12% |
+| ≥ +100 pts | 10/84 | **70%** | 51% | 16% |
+| ≥ +75 pts | 15/84 | **80%** | 51% | 28% |
+| ≥ +50 pts | 18/84 | **78%** | 51% | 33% |
+| ≥ +25 pts | 27/84 | 74% | 51% | 47% |
+| ≥ 0 pts | 40/84 | 70% | 51% | 65% |
+
+At ≥+50 pts: PE SL rate lifts from 51% baseline to 78%, with 33% sensitivity. This is a real, material lift — when spot is 50+ pts above max pain at Tuesday EOD, that week has a 78% chance of hitting PE SL. However, 67% of PE SL events occur without this flag (sensitivity only 33%), and the year-split instability (2025 collapse) means this is not a robust standalone trigger.
+
+**§9 CE SL (spot above max_pain → CE reversal):**
+
+At mp_dist ≥ +150 pts: **CE SL rate = 0%** (6 events, no CE SL). This is the max pain gravity effect: spot so far above max_pain it tends to revert, protecting CE. However, n=6 is too small for reliable conclusions.
+
+---
+
+#### 10.7.6 Intraday Timing — Signal Available Monday EOD
+
+MP delta is detectable even on Monday EOD (entry day):
+
+| Observation | MP delta → CE P&L | MP delta → PE P&L |
+|---|---|---|
+| Mon EOD | −0.336** | +0.305** |
+| Tue EOD | −0.538*** | +0.598*** |
+| Wed EOD | −0.611*** | +0.710*** |
+| Thu EOD | −0.694*** | +0.654*** |
+
+The signal is present from the start but is just tracking intraday spot direction. Monday EOD signal significance means: "if spot moved significantly on Monday, the week is likely directional" — which requires no OI data to observe.
+
+---
+
+#### 10.7.7 Summary
+
+| Use Case | Status | Core Reason |
+|---|---|---|
+| SL trigger (PE): mp_dist ≥ +50 pts at Tue EOD | **OPEN (limited)** | 78% PE SL rate vs 51% baseline; 33% sensitivity; year-split unstable (2025 collapse) |
+| SL trigger (CE): mp_dist or mp_delta | **CLOSED** | Partial IC ≈ 0; spot above max_pain is bullish for CE (reversal), not bearish |
+| Adjustment trigger | **CLOSED** | Partial IC ≈ 0 after spot control; year-split unstable for MP dist |
+| Position skewing | **CLOSED** | Direction asymmetry is just spot direction; no independent OI signal |
+| Adjustment timing | **CLOSED** | Early signal (Mon EOD) is just early spot move; r=+0.861*** with spot |
+
+**Overall verdict:** Max pain drift shares the same fundamental problem as wall migration — it tracks spot direction rather than representing independent OI information (r=+0.861*** for MP delta vs spot move). After controlling for spot direction, all ICs collapse. The one partial exception is `mp_dist ≥ +50 pts at Tue EOD` as a PE SL readiness flag (+27% SL rate lift, 33% sensitivity), but this is unstable across years and partially explained by spot position.
+
+The max pain gravity effect (spot far above max_pain → CE tends to reverse) is real in the data but operates through spot itself, not through OI repositioning.
+
+---
+
 ### 10.5 Former Speculative Intervention Ideas (Pre-Empirical)
 
 *(Retained for reference — these were the pre-empirical hypotheses. All have been replaced by empirical tests above.)*
@@ -971,7 +1106,8 @@ python research/oi_analysis/validate_athena.py
 # Step 4: Run Artemis validation scripts (require pre-built nifty_oi_features.csv)
 python research/oi_analysis/validate_artemis_entry.py        # §10.3 — entry OI features
 python research/oi_analysis/validate_artemis_intraday.py     # §10.4 — intraday OI path
-python research/oi_analysis/validate_artemis_wall_delta.py   # §10.6 — wall migration
+python research/oi_analysis/validate_artemis_wall_delta.py      # §10.6 — wall migration
+python research/oi_analysis/validate_artemis_max_pain_drift.py  # §10.7 — max pain drift
 ```
 
 ### 11.2 Selective Date Ranges
@@ -1035,6 +1171,7 @@ oi_series = oi_at_strike(
 | `data/artemis_sensex_entry_oi_joined.csv` | 27 Artemis Sensex trades with OI features at entry (§10.3.6) | 27 |
 | `data/artemis_intraday_oi_joined.csv` | 84 Artemis Nifty trades with intraday OI path features (§10.4) | 84 |
 | `data/artemis_wall_delta_joined.csv` | 84 Artemis Nifty trades with per-day wall delta features (§10.6) | 84 |
+| `data/artemis_max_pain_drift_joined.csv` | 84 Artemis Nifty trades with per-day max pain drift features (§10.7) | 84 |
 | `data/signal_quality_ic.csv` | IC table: one row per feature, one column per horizon | 10 |
 | `data/signal_quality_quintiles.csv` | Quintile lift: forward returns per (feature, horizon, quintile) | ~500 |
 | `data/signal_quality_barrier.csv` | Wall breakthrough rates by proximity bucket | 8 |
