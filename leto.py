@@ -518,6 +518,8 @@ def _send_session_report(summaries, session_date):
         if exit_raw == 'overnight_hold':
             if pnl_pts is not None:
                 lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*  _(unrealised at close)_")
+            elif s.get('pnl_rs') is not None:
+                lines.append(f"  ↳ P&L        : *{pnl_rs:+,.0f} Rs*  _(unrealised at close)_")
             else:
                 lines.append(f"  ↳ P&L        : *Position carried forward overnight*")
         elif pnl_pts is not None:
