@@ -1,0 +1,262 @@
+# Plan: Greek Analysis — Diagnostic and Predictive Research
+
+**Status: Not started.**
+
+---
+
+## 1. Motivation
+
+Every backtest and live session is summarized as total P&L points. We have never empirically
+verified whether the strategies make money *the way they are designed to*. The central questions:
+
+- Does Athena (calendar condor) harvest theta and benefit from vega, or are wins actually driven
+  by vol crush and accidental direction?
+- Does Artemis (iron condor) P&L track spot containment as expected, and is the dominant Greek
+  the delta of the untested leg?
+- Are our fixed-point exit triggers (EMERGENCY_TRIGGER_OFFSET, OPTION_SL_MULTIPLIER) appropriate,
+  or does their effectiveness vary with vol regime?
+
+The TC and OI research tracks were both predictive signals. Both died the same death: in-sample
+appearance, period-split collapse, small-n fragility. This research track leads with *diagnostic*
+work — measurement that cannot overfit — and only enters predictive territory where there is a
+mechanistic justification (Greek-threshold exit triggers).
+
+---
+
+## 2. Organizing Principle
+
+**Diagnostic** (branches 1–4): measure what our existing trades already did. No signal, no
+in/out-of-sample distinction, no overfitting risk. High certainty of insight.
+
+**Predictive** (branches 5–6): new entry/exit signals derived from Greeks. Subject to the full
+IC / period-split / sample-size gauntlet. Treat with low prior.
+
+---
+
+## 3. Shared Infrastructure — `greek_engine.py`
+
+All branches share a common Greek computation layer at `research/greek_analysis/greek_engine.py`.
+
+### Core functions
+
+```python
+def compute_iv(option_price, spot, strike, dte_years, rate, option_type) -> float:
+    """Back out IV from market price using mibian (Black-Scholes)."""
+
+def compute_greeks(iv, spot, strike, dte_years, rate, option_type) -> dict:
+    """Return delta, gamma, theta, vega from mibian."""
+
+def load_trade_logs(trade_logs_dir) -> pd.DataFrame:
+    """Load per-bar trade logs from the backtest trade_logs/ directory.
+    Returns one row per (trade_id, bar_ts) with columns:
+      spot, ce_sell_ltp, ce_buy_ltp, pe_sell_ltp, pe_buy_ltp,
+      ce_wing_ltp, pe_wing_ltp, dte_near, dte_far, vix."""
+
+def position_greeks(legs: list[LegParams], spot, ts) -> dict:
+    """Compute net delta/gamma/theta/vega for a multi-leg position at a point in time.
+    legs is a list of (strike, expiry, option_type, direction, qty) tuples."""
+```
+
+### Compute cost note
+
+The full backtest is 600K rows × 462 expiries. IV computation via mibian per row per leg is
+expensive. Cache IV to parquet per trade at first run; subsequent branches reuse the cache.
+Estimated runtime: 15–30 min first pass; <1 min on cached runs.
+
+### Data requirements
+
+- `athena_backtest/data/trade_logs/` — per-bar snapshots during each trade
+- `athena_backtest/data/trade_summary.csv` — entry/exit metadata
+- `data_pipeline/data/nifty/options/` — raw option price data (already used by backtest)
+- `data_pipeline/data/indices/india_vix.csv` — VIX at each bar
+
+---
+
+## 4. Branch Descriptions
+
+### Branch 1: P&L Attribution (`pnl_attribution/`)
+
+**Type:** Diagnostic. **Priority:** Highest.
+
+Decompose each trade's realized P&L into delta, gamma, theta, and vega contributions.
+
+Method:
+1. For each bar in the trade, compute net Greeks at the position level.
+2. P&L change between bar t and t+1 splits as:
+   - Delta contribution: Δspot × net_delta × lot_size
+   - Gamma contribution: ½ × Δspot² × net_gamma × lot_size
+   - Theta contribution: Δt × net_theta (time decay, expected to be positive for Athena)
+   - Vega contribution: ΔIV × net_vega × lot_size
+   - Residual: unexplained (should be small if Greeks are well-estimated)
+3. Sum contributions over the full trade lifetime.
+
+Output: `data/pnl_attribution.csv` — one row per trade with columns:
+  `trade_id, entry_date, total_pl, delta_contrib, gamma_contrib, theta_contrib, vega_contrib, residual`
+
+Key questions:
+- What fraction of Athena P&L comes from theta vs vega?
+- On losing trades, which Greek drives the loss (delta/gamma = direction; vega = vol expansion)?
+- Does the attribution pattern differ between early 2020-22 and recent 2023+?
+
+Entry point: `research/greek_analysis/pnl_attribution/run.py`
+
+---
+
+### Branch 2: Greek Profile (`greek_profile/`)
+
+**Type:** Diagnostic. **Priority:** High.
+
+Track net position delta/gamma/theta/vega as a time series from entry to exit. Aggregate across
+all trades to get the typical Greek trajectory.
+
+Questions:
+- Does net delta stay near zero (market-neutral) throughout, or does it drift?
+- When does gamma exposure spike (approaching expiry) vs when is the position well-hedged?
+- Does net vega confirm the calendar is long-vega (far month dominates near month)?
+
+The wings complicate the vega sign — verify empirically rather than assuming the calendar
+construction guarantees long-vega throughout.
+
+Output: `data/greek_profiles.parquet` — per-bar Greeks for each trade.
+Aggregate plots: mean ± std of each Greek over normalized trade-time (0=entry, 1=exit).
+
+Entry point: `research/greek_analysis/greek_profile/run.py`
+
+---
+
+### Branch 3: IV Term Structure (`iv_term_structure/`)
+
+**Type:** Diagnostic first, then optionally predictive. **Priority:** Medium.
+
+At entry time, compute ATM IV for the near (sell) expiry and the far (buy) expiry.
+
+Metrics:
+- Term structure slope: `far_IV / near_IV`
+- Calendar value index: `near_IV - far_IV` in vol points
+- Correlation of slope with trade P&L (Spearman IC)
+
+This is the options-market analog of the pcr_near OI signal. A steeper term structure (near_IV
+higher) means we're selling the more expensive vol — the calendar's edge is larger.
+
+Period split (2020-22 vs 2023+) mandatory. If IC is period-stable, treat as a potential entry
+filter and apply the same IC/barrier gauntlet from OI analysis.
+
+Output: `data/iv_term_structure.csv` — entry-time IV values and slope for each trade.
+
+Entry point: `research/greek_analysis/iv_term_structure/run.py`
+
+---
+
+### Branch 4: Realized vs Implied Vol (`realized_vs_implied/`)
+
+**Type:** Diagnostic. **Priority:** Medium.
+
+For each trade: compute entry IV at the sell strike, then compute realized vol over the actual
+holding period.
+
+Metrics:
+- `rv_iv_ratio = realized_vol / entry_iv` (ratio > 1 = vol underpriced; we got hurt)
+- Segmented by exit type: expiry hold, SL hit, target hit
+- Correlation of rv_iv_ratio with trade P&L
+
+Key question: when we lose, is it because spot moved adversarially (delta/gamma loss) or because
+vol expanded beyond what we priced in (vega loss)?
+
+This directly connects to the P&L attribution branch — use attribution output to validate.
+
+Output: `data/rv_iv_analysis.csv`
+
+Entry point: `research/greek_analysis/realized_vs_implied/run.py`
+
+---
+
+### Branch 5: IV Skew (`iv_skew/`)
+
+**Type:** Predictive. **Priority:** Low. Set prior low — same gauntlet as OI filter.
+
+At entry: CE sell IV vs PE sell IV at the strikes actually traded.
+
+Skew metric: `(put_iv - call_iv) / atm_iv` — positive = market pricing more downside risk.
+
+Hypothesis: enter when skew is low (market not pricing excessive downside) → calendar is more
+symmetric, both sides contribute theta. High-skew entries are asymmetrically expensive to enter
+and carry more directional risk on the PE side.
+
+Mandatory: Spearman IC, quintile P&L analysis, period split. If IC is unstable across periods,
+close the branch immediately (same verdict path as pcr_near).
+
+Output: `data/iv_skew_signal.csv`
+
+Entry point: `research/greek_analysis/iv_skew/run.py`
+
+---
+
+### Branch 6: Greek Exit Triggers (`greek_exit_triggers/`)
+
+**Type:** Predictive (backtest behavior change). **Priority:** Medium. Highest mechanistic
+justification of the predictive branches.
+
+Current Athena emergency hedge trigger: `spot >= ce_sell_strike + EMERGENCY_TRIGGER_OFFSET`
+(fixed 150 points). A fixed point offset is not vol-aware — 150 points carries far more
+delta/gamma risk when VIX is 23 vs when VIX is 17.
+
+Proposed: trigger the CE emergency hedge when the delta of the CE sell leg exceeds a threshold
+(e.g., 0.45–0.50) rather than when spot crosses a fixed point offset.
+
+Implementation: `athena_backtest/backtest_greek_exit.py` — thin wrapper following the
+`backtest_vix15.py` / `backtest_oi_filter.py` pattern. Patches
+`EMERGENCY_TRIGGER_MODE = 'delta'` and `EMERGENCY_DELTA_THRESHOLD = 0.45` into configs;
+output to `data_greek_exit/`.
+
+Baseline comparison: same `print_comparison()` structure as backtest_oi_filter.py.
+
+Note: this requires Greek computation *during the backtest loop* (not post-hoc), which means
+`backtest.py` must call `compute_greeks()` at each bar where the trigger is checked. This is a
+more invasive change than the OI filter. Only start this branch after branches 1–2 establish
+that Greek computation at bar frequency is feasible within the backtest framework.
+
+Entry point: `research/greek_analysis/greek_exit_triggers/run.py` (analysis only);
+backtest variant at `athena_backtest/backtest_greek_exit.py`.
+
+---
+
+## 5. Execution Sequence
+
+1. **Build `greek_engine.py`** — shared IV/Greek computation + trade log loader. Validate on
+   a single trade before full-sample run.
+2. **Branch 1 (pnl_attribution)** — most diagnostic value, establishes compute feasibility.
+3. **Branch 2 (greek_profile)** — reuses same per-bar Greek data; run immediately after.
+4. **Branch 3 (iv_term_structure)** — entry-time only, cheaper compute; diagnostic first.
+5. **Branch 4 (realized_vs_implied)** — validates / cross-checks branch 1 findings.
+6. **Branch 5 (iv_skew)** — only if 3 and 4 suggest vol structure is meaningfully predictive.
+7. **Branch 6 (greek_exit_triggers)** — only if branch 1 confirms delta/gamma is the dominant
+   loss driver on emergency hedge trades; confirms the mechanism before changing behavior.
+
+---
+
+## 6. Success Criteria
+
+| Branch | Success | Close condition |
+|---|---|---|
+| pnl_attribution | Attribution explains ≥ 80% of P&L; theta + vega confirmed as dominant | Always completes (diagnostic) |
+| greek_profile | Net vega sign confirmed; gamma trajectory documented | Always completes (diagnostic) |
+| iv_term_structure | IC computed; period split assessed | IC unstable → no entry filter; diagnostic finding retained |
+| realized_vs_implied | rv_iv_ratio distribution by exit type documented | Always completes (diagnostic) |
+| iv_skew | IC > 0.15, period-stable | IC < 0.10 or sign-unstable → close immediately |
+| greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close |
+
+---
+
+## 7. Files
+
+| Path | Purpose |
+|---|---|
+| `research/greek_analysis/greek_engine.py` | Shared IV/Greek computation |
+| `research/greek_analysis/pnl_attribution/run.py` | Branch 1 |
+| `research/greek_analysis/greek_profile/run.py` | Branch 2 |
+| `research/greek_analysis/iv_term_structure/run.py` | Branch 3 |
+| `research/greek_analysis/realized_vs_implied/run.py` | Branch 4 |
+| `research/greek_analysis/iv_skew/run.py` | Branch 5 |
+| `research/greek_analysis/greek_exit_triggers/run.py` | Branch 6 analysis |
+| `athena_backtest/backtest_greek_exit.py` | Branch 6 backtest variant |
+| `research/greek_analysis/README.md` | Running findings log |

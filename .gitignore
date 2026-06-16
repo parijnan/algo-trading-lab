@@ -352,3 +352,15 @@ iris_backtest/data/strategy_sweep.csv
 
 # OI analysis — generated feature CSVs
 research/oi_analysis/data/
+
+# Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
+research/greek_analysis/pnl_attribution/data/*.csv
+research/greek_analysis/pnl_attribution/data/*.parquet
+research/greek_analysis/greek_profile/data/*.csv
+research/greek_analysis/greek_profile/data/*.parquet
+research/greek_analysis/iv_term_structure/data/*.csv
+research/greek_analysis/iv_term_structure/data/*.parquet
+research/greek_analysis/realized_vs_implied/data/*.csv
+research/greek_analysis/iv_skew/data/*.csv
+research/greek_analysis/greek_exit_triggers/data/*.csv
+athena_backtest/data_greek_exit/
