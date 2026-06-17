@@ -11,11 +11,12 @@ Replicates the live Artemis strategy logic exactly, including:
   - ELM exit at elm_time (lesser premium side exits)
   - Expiry exit at Thursday 15:30
 
-Execution model (mirrors Apollo convention and live reality):
-  - Signal/trigger detected on candle CLOSE
-  - Execution at OPEN of the next candle
+Execution model (mirrors live reality):
+  - Entry: at open of the 10:30 candle (strategy starts at bar boundary)
+  - SL / ELM trigger: detected on candle CLOSE → execution at OPEN of the next candle
   - ELM exit: open of 15:16 candle
   - Expiry: close of last available candle; 0.05 if missing and OTM
+  - VIX gate: last completed VIX bar before entry (10:29 close)
 
 Run generate_contracts.py first to produce contracts.csv.
 Run precompute_vix.py (or let this script handle it) before the main loop.
@@ -53,7 +54,7 @@ from configs import (
     LOT_COUNT,
 )
 from data_loader import (
-    load_index_data, load_vix_daily, load_option_data,
+    load_index_data, load_option_data,
     get_price, get_index_price,
     scan_strikes_for_premium,
 )
@@ -883,8 +884,7 @@ def run_backtest():
     # --- Load index data ---
     logger.info("Loading index data...")
     index_df = load_index_data(INDEX_FILE)
-    vix_df   = load_vix_daily(VIX_INDEX_FILE)
-    vix_map  = dict(zip(vix_df['date'], vix_df['vix_open']))
+    vix_df = load_index_data(VIX_INDEX_FILE)
     logger.info(f"  Index rows : {len(index_df):,}")
 
     os.makedirs(os.path.dirname(TRADE_SUMMARY_FILE), exist_ok=True)
@@ -907,8 +907,9 @@ def run_backtest():
         entry_date = entry_anchor.date()
         logger.info(f"\nWeek: entry {entry_date} | expiry {expiry_ts.date()}")
 
-        # --- VIX gate ---
-        entry_vix = vix_map.get(entry_date)
+        # --- VIX gate: read the last completed VIX bar before entry (10:29 close) ---
+        entry_vix = get_index_price(
+            vix_df, entry_anchor - pd.Timedelta(minutes=1), col='close')
         if entry_vix is None:
             logger.info(f"  VIX data missing for {entry_date} — skipping")
             all_records.append(
@@ -926,9 +927,9 @@ def run_backtest():
                                       skipped='skipped_vix'))
             continue
 
-        # --- Entry: spot at 10:30 close, execute at 10:31 open ---
-        signal_ts = entry_anchor                          # 10:30
-        exec_ts   = signal_ts + pd.Timedelta(minutes=1)  # 10:31
+        # --- Entry: execute at 10:30 open (strategy runs at bar start) ---
+        signal_ts = entry_anchor   # 10:30
+        exec_ts   = signal_ts      # enter at open of the 10:30 candle
 
         entry_spot = get_index_price(index_df, signal_ts, col='close')
         if entry_spot is None:
@@ -1025,8 +1026,8 @@ def run_backtest():
             if ce['status'] != 'closed':
                 update_ltps(ce, ts)
 
-            # VIX for log
-            vix_now = vix_map.get(ts.date())
+            # VIX for log — close of the current bar
+            vix_now = get_index_price(vix_df, ts, col='close')
 
             # ---------------------------------------------------------------
             # Log snapshot
