@@ -502,12 +502,14 @@ def adjust_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
 
 def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
                    expiry_ts: pd.Timestamp, dte: int, lots: int,
-                   vix_band: str):
+                   vix_band: str, cutoff_time: pd.Timestamp):
     """
     Re-enter a spread that was previously closed (other side triggered SL first).
     Mirrors live initialize_spread() re-entry path.
     """
-    # Reset spread to fresh state but keep type
+    prior_base_pl = spread['pl']
+    prior_add_pl  = spread['add_pl']
+
     new_sell_strike = select_new_sell_strike_for_reentry(
         spread['type'], spot, spread['sell_strike'] or 0)
 
@@ -528,7 +530,10 @@ def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
             f"  [{spread['type'].upper()}] Re-entry: no data at {exec_ts} — skipping")
         return
 
-    # Reset all fields
+    enter_additional = exec_ts < cutoff_time
+    add_lots = lots // 2 if enter_additional else 0
+
+    # Reset all fields, carrying forward prior P&L
     spread['sell_strike']   = new_sell_strike
     spread['buy_strike']    = new_buy_strike
     spread['sell_df']       = sell_df
@@ -539,25 +544,26 @@ def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
     spread['buy_ltp']       = buy_price
     spread['sell_exit']     = None
     spread['buy_exit']      = None
-    spread['booked_pl']     = 0.0
-    spread['pl']            = 0.0
-    spread['additional_lots'] = 0
-    spread['add_buy_entry'] = None
-    spread['add_buy_ltp']   = None
+    spread['booked_pl']     = prior_base_pl
+    spread['pl']            = prior_base_pl
+    spread['additional_lots'] = add_lots
+    spread['add_buy_entry'] = buy_price if enter_additional else None
+    spread['add_buy_ltp']   = buy_price if enter_additional else None
     spread['add_buy_exit']  = None
-    spread['add_buy_df']    = None
-    spread['add_booked_pl'] = 0.0
-    spread['add_pl']        = 0.0
+    spread['add_buy_df']    = buy_df if enter_additional else None
+    spread['add_booked_pl'] = prior_add_pl
+    spread['add_pl']        = prior_add_pl
     spread['exit_reason']   = None
     spread['exit_time']     = None
-    spread['status']        = 'active'
+    spread['status']        = 'active_additional' if enter_additional else 'active'
 
     set_sl(spread, dte, vix_band)
 
     logger.info(
         f"  [{spread['type'].upper()}] Re-entered: "
         f"sell {new_sell_strike} @ {sell_price:.2f} | "
-        f"buy {new_buy_strike} @ {buy_price:.2f}")
+        f"buy {new_buy_strike} @ {buy_price:.2f}"
+        + (f" | Additional lots: {add_lots}" if enter_additional else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1068,8 +1074,9 @@ def run_backtest():
 
                     # Handle the CE spread after PE SL
                     if ce['status'] == 'closed':
-                        # Both sides now closed — week ends
-                        pass
+                        # CE was already closed — re-enter it with rolled strike
+                        reenter_spread(ce, spot, sl_exec_ts, expiry_ts,
+                                       current_dte, lots, vix_band, cutoff_time)
                     elif ce['status'] in ('active', 'adjusted',
                                           'adjusted_additional', 'active_additional',
                                           'adjusted_elm', 'active_additional_elm',
@@ -1098,7 +1105,9 @@ def run_backtest():
                     logger.info(f"  CE EXIT | pl: {ce['pl']:+.2f}")
 
                     if pe['status'] == 'closed':
-                        pass
+                        # PE was already closed — re-enter it with rolled strike
+                        reenter_spread(pe, spot, sl_exec_ts, expiry_ts,
+                                       current_dte, lots, vix_band, cutoff_time)
                     elif pe['status'] in ('active', 'adjusted',
                                           'adjusted_additional', 'active_additional',
                                           'adjusted_elm', 'active_additional_elm',

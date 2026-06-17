@@ -20,7 +20,7 @@ INSTRUMENT              = 'sensex'
 # ---------------------------------------------------------------------------
 # Set to None to use all available contracts for the selected instrument.
 # Dates are inclusive. Format: 'YYYY-MM-DD'.
-BACKTEST_START_DATE     = None
+BACKTEST_START_DATE     = '2025-09-01'
 BACKTEST_END_DATE       = None
 
 # ---------------------------------------------------------------------------
@@ -45,8 +45,8 @@ HOLIDAYS_FILE           = os.path.join(PIPELINE_CFG, 'holidays.csv')
 # Output and generated files — all under artemis_backtest/data/
 BACKTEST_DIR            = os.path.dirname(os.path.abspath(__file__))
 CONTRACTS_FILE          = os.path.join(BACKTEST_DIR, 'data', 'contracts.csv')
-TRADE_LOGS_DIR          = os.path.join(BACKTEST_DIR, 'data', 'trade_logs')
-TRADE_SUMMARY_FILE      = os.path.join(BACKTEST_DIR, 'data', 'trade_summary.csv')
+TRADE_LOGS_DIR          = os.path.join(BACKTEST_DIR, 'data', f'trade_logs_{INSTRUMENT}')
+TRADE_SUMMARY_FILE      = os.path.join(BACKTEST_DIR, 'data', f'trade_summary_{INSTRUMENT}.csv')
 
 # ---------------------------------------------------------------------------
 # Instrument-specific parameters
