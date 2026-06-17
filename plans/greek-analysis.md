@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Not started.**
+**Status: Branch 1 (pnl_attribution) COMPLETE. Branch 2 (greek_profile) is next — reuses IV cache.**
 
 ---
 

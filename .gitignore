@@ -353,6 +353,9 @@ iris_backtest/data/strategy_sweep.csv
 # OI analysis — generated feature CSVs
 research/oi_analysis/data/
 
+# Greek analysis — shared IV cache (computed by branch 1, reused by all branches)
+research/greek_analysis/data/iv_cache/
+
 # Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
 research/greek_analysis/pnl_attribution/data/*.csv
 research/greek_analysis/pnl_attribution/data/*.parquet
