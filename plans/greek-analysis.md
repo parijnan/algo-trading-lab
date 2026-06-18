@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE. Branch 2 (greek_profile) is next — reuses IV cache.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) is next — reuses IV cache.**
 
 ---
 
@@ -99,6 +99,18 @@ Key questions:
 - Does the attribution pattern differ between early 2020-22 and recent 2023+?
 
 Entry point: `research/greek_analysis/pnl_attribution/run.py`
+
+**Findings (Athena, 124 trades):** Theta +57 pts/trade (primary engine). Gamma −33.8 (consistent
+drag). Vega −14.4 avg; flips on losses (−38 on losers vs 0 on winners) — losing trades are
+vega-driven. Athena is net short-vega, not long-vega as designed.
+
+Entry point: `research/greek_analysis/pnl_attribution/run_artemis.py`
+
+**Findings (Artemis, 173 trades):** Theta +48.8 pts/trade (primary engine). Gamma −34.0 (identical
+drag to Athena). Vega −24.5 (larger drag than Athena — iron condor is structurally short-vega).
+Losses are delta-driven (Δ=−27.8 on losers vs +13.9 on winners) — spot breaks directionally past
+sell strike. Athena and Artemis have opposite loss mechanisms: Athena loses on vol expansion,
+Artemis loses on spot movement.
 
 ---
 

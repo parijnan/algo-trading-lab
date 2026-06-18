@@ -50,7 +50,7 @@ Data sources:
 
 **Athena: Complete. Output: `pnl_attribution/data/pnl_attribution.csv` (124 rows, 2020–2026).**
 
-**Artemis: Script written (`run_artemis.py`). Cold run pending — see open issue below.**
+**Artemis: Complete. Output: `pnl_attribution/data/pnl_attribution_artemis.csv` (173 rows: 146 Nifty 2020–2025 + 27 Sensex 2025–2026).**
 
 Decompose each trade's realized P&L into delta, gamma, theta, and vega contributions.
 
@@ -228,6 +228,108 @@ IV fail bars: 0 / 221,919 (0.0% — all bars attributed).
 large diffs (trades 94, 107, 115, 120 — diffs of +48, +20, +15, +92 pts) likely have
 multiple wing/emer entry-exit cycles within the trade; these inflate `actual_mtm` vs
 `total_pl_points` which only records final P&L. Not a code bug.
+
+---
+
+### Branch 1: P&L Attribution — Artemis (173 trades: 146 Nifty + 27 Sensex)
+
+**Methodology note:** Same bar-to-bar Taylor decomposition as Athena. 4-leg iron condor (PE
+sell/buy + CE sell/buy), single weekly expiry. Per-leg IV per bar. Variable strikes — strikes
+change after SL-triggered roll/adjustment. Status-gated: leg attribution skipped once that
+side is `'closed'`. Base lots only (`pe_pl + ce_pl`); add lot P&L tracked separately from
+summary. IV fail bars: 24,455 / 232,595 (10.5%) — deep ITM bars after roll where
+`ltp ≤ intrinsic + 0.5` (intrinsic guard in `greek_engine.compute_iv`). Those bars land in
+residual.
+
+**Aggregate (all 173 trades):**
+
+| Component | Sum (pts) | Mean/trade | % of MtM |
+|---|---|---|---|
+| Theta | +8,444 | +48.8 | +309% |
+| Delta | +657 | +3.8 | +24% |
+| Gamma | −5,885 | −34.0 | −215% |
+| Vega | −4,230 | −24.5 | −155% |
+| Residual | +3,748 | +21.7 | +137% |
+| **Actual MtM (base)** | **+2,733** | — | — |
+| Add lot P&L (summary) | +1,806 | — | — |
+| Total P&L (summary) | +4,568 | — | — |
+
+IV fail bars: 24,455 / 232,595 (10.5% — deep ITM bars after roll, intrinsic guard triggered).
+
+**Key findings:**
+
+1. **Theta confirmed as the primary engine (+48.8 pts/trade).** Consistent with design —
+   Artemis is a short-vol, time-decay strategy. Theta at +309% of MtM means it earns decay
+   faster than gamma/vega drag consumes it on average.
+
+2. **Gamma is the primary drag (−34 pts/trade, −215% of MtM).** Comparable to Athena (−33.8).
+   Iron condor structure has two exposed sell strikes and no far-dated longs to offset gamma
+   exposure, so the absolute drag is similar to the calendar despite being a different structure.
+
+3. **Vega drag is larger than Athena (−24.5 vs −14.4 pts/trade).** Artemis is structurally
+   short-vega (no far-dated long buy to partially offset). Vol expansions hurt more. This is
+   consistent with design — iron condor has a short-vol profile; calendar is closer to vol-neutral.
+
+4. **Delta near zero on aggregate (+3.8 pts/trade) — market neutrality confirmed.**
+   Nifty specifically: Δ = −0.17/trade (essentially flat). Sensex: Δ = +25.3/trade (positive
+   bias, likely due to the smaller sample of 27 trades including a trending Sensex period).
+
+5. **Losses are delta-driven; Athena losses are vega-driven.** This is the critical
+   structural difference:
+
+   | | Wins (n=131) | Losses (n=42) |
+   |---|---|---|
+   | Theta | +48.7 | +49.1 |
+   | Delta | +13.9 | −27.8 |
+   | Gamma | −34.5 | −32.4 |
+   | Vega | −22.1 | −31.9 |
+
+   Theta is near-identical across wins and losses (time decay is constant). On losing trades,
+   delta is the dominant driver (−27.8 pts vs +13.9 on wins) — spot broke directionally past
+   the sell strike. Vega also worsens on losses but is secondary. For Athena, losses were
+   primarily vega-driven; for Artemis, they are primarily delta-driven. This reflects the
+   mechanical difference: Artemis exits on index SL (spot crosses sell strike), so losses
+   correspond to directional moves.
+
+6. **Add lots nearly equal base lots.** Base lot P&L: +2,733 pts. Add lot P&L: +1,806 pts
+   (0.5× weighted). Add lots are entered after a successful side adjustment, so they enter on
+   a position that is already working — their contribution per unit is structurally higher.
+
+7. **Nifty vs Sensex per-trade scale:**
+
+   | Instrument | n | θ mean | v mean | Δ mean | Γ mean |
+   |---|---|---|---|---|---|
+   | Nifty | 146 | +35.3 | −18.3 | −0.2 | −23.0 |
+   | Sensex | 27 | +121.8 | −57.5 | +25.3 | −93.4 |
+
+   Sensex per-trade values are roughly 3–4× Nifty — consistent with the index ratio (~4.5×)
+   and fewer bars per trade (shorter hold). Sensex delta bias (+25.3) should be monitored as
+   the Sensex sample grows.
+
+8. **Period split (Nifty):**
+
+   | Period | n | θ mean | v mean | Δ mean |
+   |---|---|---|---|---|
+   | 2020–2022 | 32 | +28.7 | −9.0 | −0.07 |
+   | 2023+ | 114 | +37.2 | −21.0 | −0.20 |
+
+   Same pattern as Athena: stronger theta in recent period, worse vega drag. Higher IV
+   environment in 2023+ benefits theta (more premium) but also carries more vol expansion risk.
+
+**Comparison to Athena:**
+
+| | Athena (124 trades) | Artemis (173 trades) |
+|---|---|---|
+| Theta | +57.0 | +48.8 |
+| Gamma | −33.8 | −34.0 |
+| Vega | −14.4 | −24.5 |
+| Delta | +8.3 | +3.8 |
+| Loss driver | Vega | Delta |
+
+Gamma drag is nearly identical (~34 pts/trade). Theta is higher for Athena per trade.
+Vega drag is significantly worse for Artemis — as expected given the structural difference
+(short-vega iron condor vs near-neutral calendar). The loss mechanism differs: Athena loses
+on vol expansion; Artemis loses on directional moves through the sell strike.
 
 ---
 
