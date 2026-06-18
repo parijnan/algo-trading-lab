@@ -366,8 +366,26 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
         return handoff, summary
 
-    # Priority 2: no open positions — route on current VIX
+    # Priority 2: no open positions — manual override or VIX route
     vix = _get_vix(obj)
+
+    # Manual override applies on all days (including Friday), before VIX routing and stand-down.
+    mode, strategy = _load_route_override()
+    if mode == 'manual':
+        if vix is None:
+            logger.warning("Manual override active but VIX fetch failed — proceeding without VIX.")
+            vix = 0.0
+        logger.info(f"Manual override active. Routing to {strategy.capitalize()} (VIX {vix:.2f}, bypasses VIX and Friday stand-down).")
+        _slack(f"*Leto*: ⚙️ Manual override active. Routing to *{strategy.capitalize()}* (VIX {vix:.2f}).")
+        if strategy == 'artemis':
+            handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
+        elif strategy == 'athena':
+            handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+        else:  # iris
+            _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
+            return False, summary
+        return handoff, summary
+
     if vix is None:
         if is_friday:
             logger.info("Friday and no open positions — standing down.")
@@ -403,21 +421,7 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
             _slack(f"*Leto*: Friday. VIX {vix:.2f}. No fresh entries today.")
             return False, None
 
-    # Priority 3: Mon–Thu, no open positions — manual override or 3-way VIX route
-    mode, strategy = _load_route_override()
-    if mode == 'manual':
-        logger.info(f"Manual override active. Routing to {strategy.capitalize()} (VIX {vix:.2f}, override bypasses VIX constraint).")
-        _slack(f"*Leto*: ⚙️ Manual override active. Routing to *{strategy.capitalize()}* (VIX {vix:.2f}).")
-        if strategy == 'artemis':
-            handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
-        elif strategy == 'athena':
-            handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
-        else:  # iris
-            _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
-            return False, summary
-        return handoff, summary
-
-    # Auto routing
+    # Auto routing (Mon–Thu, auto mode)
     if vix <= VIX_ARTEMIS_MAX:
         logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
