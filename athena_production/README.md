@@ -41,14 +41,16 @@ graph TD
     
     Status -- Idle --> DayCheck{Entry Day 10:30?}
     DayCheck -- Yes --> Strikes[Select Double Calendar Strikes]
-    Strikes --> Entry[Batch Entry: Buy Monthly -> Sell Weekly -> Buy PE Wing]
+    Strikes --> Entry[Batch Entry: Buy Monthly -> Sell Weekly]
     Entry --> Poll[Monitoring Loop: 500ms WS / TRADE_UPDATE_INTERVAL REST fallback]
     
     Status -- In Trade --> WS[Start WebSocket LTP Feed]
     WS --> Poll
     
-    Poll -- Spot >= CE + Offset --> Hedge[Deploy Parachute CE Hedge]
-    Poll -- Spot <= CE + Offset --> Unhedge[Exit Parachute CE Hedge]
+    Poll -- "Spot >= CE Strike + 150" --> Hedge[Deploy Parachute CE Hedge]
+    Poll -- "Parachute active & Spot < CE Strike + 150" --> Unhedge[Exit Parachute CE Hedge]
+    Poll -- "Spot drops 1.75% below entry_spot" --> WingIn[Buy Reactive PE Wing]
+    Poll -- "Wing active & Spot recovers above entry_spot" --> WingOut[Sell Reactive PE Wing]
     
     Poll --> ExitCheck{Pre-expiry Exit Time?}
     ExitCheck -- Yes --> Close[Close All Legs: Buy Weekly first]

@@ -89,15 +89,15 @@ Single cron entry point. Logs in to Angel One, checks market hours and holidays,
 2. If an active Iris trade is found in `iris_state.csv` — route to Iris regardless of VIX or day.
 3. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
 4. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
-5. **Friday, no open position:**
+5. **No open position, manual override active** → route unconditionally to the selected strategy (Artemis, Athena, or Iris) regardless of VIX or day of week (including Friday).
+6. **Friday, no open position, auto mode:**
    - **VIX > 25.0** → Iris
    - **VIX ≤ 25.0** → Stand down
-6. **Mon–Thu, no open position — manual override or 3-way VIX route:**
-   - **Manual override active** → route unconditionally to the selected strategy (Artemis, Athena, or Iris) regardless of VIX
+7. **Mon–Thu, no open position, auto mode — 3-way VIX route:**
    - **VIX ≤ 16.0** → Artemis
    - **16.0 < VIX ≤ 25.0** → Athena
    - **VIX > 25.0** → Iris
-7. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
+8. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
 
 **Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena / 🟣 Force Iris). Force overrides bypass VIX — the selected strategy routes unconditionally. The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload.
 
@@ -120,12 +120,12 @@ graph TD
     CheckState -- Athena --> RunAthena[Execute Athena]
     CheckState -- Artemis --> RunArtemis[Execute Artemis]
 
-    CheckState -- None --> FridayCheck{Friday?}
+    CheckState -- None --> OverrideCheck{Manual Override?}
+    OverrideCheck -- "mode=manual" --> RunOverride[Execute Selected Strategy]
+    OverrideCheck -- "mode=auto" --> FridayCheck{Friday?}
     FridayCheck -- "Yes, VIX > 25" --> RunIris
     FridayCheck -- "Yes, VIX ≤ 25" --> StandDown[Stand Down]
-    FridayCheck -- No --> OverrideCheck{Manual Override?}
-    OverrideCheck -- "mode=manual, VIX ≤ 25" --> RunOverride[Execute Selected Strategy]
-    OverrideCheck -- "mode=auto or VIX > 25" --> VIXCheck{Read VIX}
+    FridayCheck -- No --> VIXCheck{Read VIX}
     VIXCheck -- "< 16" --> RunArtemis
     VIXCheck -- "16 - 25" --> RunAthena
     VIXCheck -- "> 25" --> RunIris
