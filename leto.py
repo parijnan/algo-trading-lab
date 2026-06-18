@@ -515,7 +515,14 @@ def _send_session_report(summaries, session_date):
 
         lines.append(f"  ↳ Entry: {entry_time}   Exit: {exit_time}  ·  {exit_str}")
 
-        if exit_raw == 'overnight_hold':
+        if strategy == 'Artemis' and s.get('realised_pnl_rs') is not None:
+            realised   = s['realised_pnl_rs']
+            unrealised = s['unrealised_pnl_rs']
+            lines.append(f"  ↳ Realised   : {realised:+,.0f} Rs")
+            if unrealised != 0:
+                lines.append(f"  ↳ Unrealised : {unrealised:+,.0f} Rs  _(MTM at close)_")
+            lines.append(f"  ↳ Total P&L  : *{pnl_rs:+,.0f} Rs*")
+        elif exit_raw == 'overnight_hold':
             if pnl_pts is not None:
                 lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*  _(unrealised at close)_")
             elif s.get('pnl_rs') is not None:

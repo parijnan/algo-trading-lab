@@ -847,12 +847,15 @@ class IronCondor:
         if not traded:
             return {'strategy': 'Artemis', 'traded': False, 'no_trade_reason': 'Stand-down'}
 
-        # Outcome: if one side was SL-hit and closed during the week, its status
-        # is 'closed' while the other is still active/adjusted.
+        # Outcome: if one side was SL-hit and closed, the surviving side is
+        # 'reinforced' only if it actually has additional lots (status contains
+        # 'additional'); otherwise it's just 'active'.
         if pe_st == 'closed' and ce_st not in ('closed', 'open'):
-            outcome = 'PE side closed — CE reinforced'
+            ce_label = 'CE reinforced' if 'additional' in ce_st else 'CE active'
+            outcome = f'PE side closed — {ce_label}'
         elif ce_st == 'closed' and pe_st not in ('closed', 'open'):
-            outcome = 'CE side closed — PE reinforced'
+            pe_label = 'PE reinforced' if 'additional' in pe_st else 'PE active'
+            outcome = f'CE side closed — {pe_label}'
         else:
             outcome = 'Neutral'
 
@@ -862,6 +865,12 @@ class IronCondor:
              (self.pe_spread.additional_pl  * add_lots / max(self.pe_spread.lots, 1)) +
              (self.ce_spread.additional_pl  * add_lots / max(self.ce_spread.lots, 1))
             ) * lot_size, 2)
+        realised_rs = round(
+            (self.pe_spread.booked_pl + self.ce_spread.booked_pl +
+             (self.pe_spread.additional_booked_pl * add_lots / max(self.pe_spread.lots, 1)) +
+             (self.ce_spread.additional_booked_pl * add_lots / max(self.ce_spread.lots, 1))
+            ) * lot_size, 2)
+        unrealised_rs = round(pl_rs - realised_rs, 2)
 
         if self.current_datetime > self.expiry:
             exit_reason = 'Expiry'
@@ -876,11 +885,13 @@ class IronCondor:
             entry_str = '?'
 
         return {
-            'strategy':    'Artemis',
-            'traded':      True,
-            'lots':        self.pe_spread.lots,
-            'outcome':     outcome,
-            'pnl_rs':      pl_rs,
-            'exit_reason': exit_reason,
-            'entry_time':  entry_str,
+            'strategy':       'Artemis',
+            'traded':         True,
+            'lots':           self.pe_spread.lots,
+            'outcome':        outcome,
+            'pnl_rs':         pl_rs,
+            'realised_pnl_rs':   realised_rs,
+            'unrealised_pnl_rs': unrealised_rs,
+            'exit_reason':    exit_reason,
+            'entry_time':     entry_str,
         }
