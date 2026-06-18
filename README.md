@@ -171,9 +171,11 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 Mid-session adjustments for Artemis and Athena, executed via each strategy's own order engine on the next monitoring cycle (≤ 0.5s). If the strategy is not actively running, the flag remains on disk until cleared.
 
 - **`🔧 Adjust Artemis`**: opens a modal to select which side to exit (PE or CE). The algo exits that spread and rolls the other side's sell inward using the same `adjust_spread()` logic as an SL-triggered adjustment (roll distance and additional lots per `trade_settings.csv`).
-- **`🪂 Adjust Athena`**: opens a modal with two options:
+- **`🪂 Adjust Athena`**: opens a modal with four options:
   - *Enter CE Parachute* — buys the OTM CE hedge using the same delta-targeting logic as the auto-trigger, bypassing the spot condition and attempt cap.
   - *Exit CE Parachute* — closes the active CE hedge, bypassing the spot exit condition.
+  - *Enter PE Wing* — buys the reactive PE wing using the same delta-targeting logic as the auto-trigger, bypassing the spot drop trigger condition.
+  - *Exit PE Wing* — closes the active PE wing, bypassing the spot recovery condition.
 
 ### Routing and Sizing Override
 Four routing buttons and the sizing modal live together in one section:
