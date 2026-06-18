@@ -21,13 +21,13 @@ CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 SIZING_OVERRIDE_PATHS = {
     'Artemis': os.path.join(BASE_DIR, 'artemis_production', 'data', 'sizing_override.json'),
     'Athena':  os.path.join(BASE_DIR, 'athena_production',  'data', 'sizing_override.json'),
-    'Apollo':  os.path.join(BASE_DIR, 'apollo_production',  'data', 'sizing_override.json'),
+    'Iris':    os.path.join(BASE_DIR, 'iris_production',    'data', 'sizing_override.json'),
 }
 ROUTING_STATE_FILE = os.path.join(DATA_DIR, "routing_state.json")
 
 # Strategy State File Paths
 ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
-APOLLO_STATE  = os.path.join(BASE_DIR, "apollo_production",  "data", "apollo_state.csv")
+IRIS_STATE    = os.path.join(BASE_DIR, "iris_production",    "data", "iris_state.csv")
 ARTEMIS_DATA  = os.path.join(BASE_DIR, "artemis_production", "data")
 
 # Ensure logs directory exists
@@ -185,7 +185,7 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Routing and Sizing Override:*\nForce strategy selection for the next Mon–Thu entry and manage position sizing across strategies. Apollo always runs if VIX > 25."}
+        "text": {"type": "mrkdwn", "text": "*Routing and Sizing Override:*\nForce strategy selection for the next Mon–Thu entry and manage position sizing across strategies. Force overrides bypass VIX — route unconditionally to the selected strategy."}
     },
     {
         "type": "actions",
@@ -205,6 +205,11 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "🟢 Force Athena"},
                 "action_id": "btn_route_athena"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🟣 Force Iris"},
+                "action_id": "btn_route_iris"
             },
             {
                 "type": "button",
@@ -307,14 +312,14 @@ def _archive_artemis():
 def reset_all_states():
     """
     Reset all strategy state files without placing any orders.
-    Apollo/Athena: set status=idle. Artemis: full archive (mirrors _archive_trade).
+    Athena/Iris: set status=idle. Artemis: full archive (mirrors _archive_trade).
     Returns a list of result strings for the Slack confirmation message.
     """
     results = []
 
     for label, path, col in [
         ("Athena", ATHENA_STATE, "status"),
-        ("Apollo", APOLLO_STATE, "status"),
+        ("Iris",   IRIS_STATE,   "status"),
     ]:
         if not os.path.exists(path):
             results.append(f"{label}: not found (skipped)")
@@ -476,7 +481,7 @@ def handle_route_artemis(ack, body, say):
             f"🔵 *Routing Override Set* by <@{user_id}>\n"
             f"*Mode:* Manual\n"
             f"*Strategy:* Artemis (Sensex IC)\n"
-            f"_Apollo routing is unaffected — VIX > 25 always routes to Apollo._"
+            f"_Override is unconditional — Artemis routes regardless of VIX._"
         ))
     else:
         say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
@@ -490,7 +495,21 @@ def handle_route_athena(ack, body, say):
             f"🟢 *Routing Override Set* by <@{user_id}>\n"
             f"*Mode:* Manual\n"
             f"*Strategy:* Athena (Nifty Calendar)\n"
-            f"_Apollo routing is unaffected — VIX > 25 always routes to Apollo._"
+            f"_Override is unconditional — Athena routes regardless of VIX._"
+        ))
+    else:
+        say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
+
+@app.action("btn_route_iris")
+def handle_route_iris(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_route_override("manual", "iris"):
+        say(channel=_CH, text=(
+            f"🟣 *Routing Override Set* by <@{user_id}>\n"
+            f"*Mode:* Manual\n"
+            f"*Strategy:* Iris (Nifty Scalping)\n"
+            f"_Override is unconditional — Iris routes regardless of VIX._"
         ))
     else:
         say(channel=_CH_ERRORS, text="❌ *Error*: Failed to set routing override. Check daemon logs on VPS.")
@@ -560,7 +579,7 @@ def handle_athena_adjust_btn(ack, body, client):
             "blocks": [
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "Select the parachute action. The algo will execute it on the next monitoring cycle using the same order engine as the automatic trigger."}
+                    "text": {"type": "mrkdwn", "text": "Select the adjustment action. The algo will execute it on the next monitoring cycle using the same order engine as the automatic trigger."}
                 },
                 {
                     "type": "input",
@@ -570,8 +589,10 @@ def handle_athena_adjust_btn(ack, body, client):
                         "type": "radio_buttons",
                         "action_id": "radio_action",
                         "options": [
-                            {"text": {"type": "plain_text", "text": "Enter CE Parachute — buy OTM CE hedge (delta-targeted, bypasses spot trigger condition)"}, "value": "enter"},
-                            {"text": {"type": "plain_text", "text": "Exit CE Parachute — close the active CE hedge position (bypasses spot exit condition)"}, "value": "exit"}
+                            {"text": {"type": "plain_text", "text": "Enter CE Parachute — buy OTM CE hedge (delta-targeted, bypasses spot trigger condition)"}, "value": "enter_parachute"},
+                            {"text": {"type": "plain_text", "text": "Exit CE Parachute — close the active CE hedge position (bypasses spot exit condition)"}, "value": "exit_parachute"},
+                            {"text": {"type": "plain_text", "text": "Enter PE Wing — buy PE protective wing (delta-targeted, bypasses spot trigger condition)"}, "value": "enter_wing"},
+                            {"text": {"type": "plain_text", "text": "Exit PE Wing — close the active PE wing position (bypasses spot recovery condition)"}, "value": "exit_wing"}
                         ]
                     }
                 }
@@ -584,8 +605,14 @@ def handle_athena_adjust_submission(ack, body, view, say):
     action = view["state"]["values"]["block_action"]["radio_action"]["selected_option"]["value"]
     user_id = body["user"]["id"]
     ack()
-    if write_flag(f"ATHENA_PARACHUTE:{action}", user_id):
-        action_str = "Enter CE Parachute" if action == "enter" else "Exit CE Parachute"
+    _FLAG_MAP = {
+        "enter_parachute": ("ATHENA_PARACHUTE:enter", "Enter CE Parachute"),
+        "exit_parachute":  ("ATHENA_PARACHUTE:exit",  "Exit CE Parachute"),
+        "enter_wing":      ("ATHENA_PE_WING:enter",   "Enter PE Wing"),
+        "exit_wing":       ("ATHENA_PE_WING:exit",    "Exit PE Wing"),
+    }
+    flag_cmd, action_str = _FLAG_MAP.get(action, (None, None))
+    if flag_cmd and write_flag(flag_cmd, user_id):
         say(channel=_CH, text=(
             f"🪂 *Athena Manual Adjustment* triggered by <@{user_id}>\n"
             f"*Action:* {action_str}\n"
@@ -620,7 +647,7 @@ def handle_pos_sizing_btn(ack, body, client):
                         "options": [
                             {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
                             {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
-                            {"text": {"type": "plain_text", "text": "Apollo (Nifty Trend)"}, "value": "Apollo"}
+                            {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"}
                         ]
                     }
                 },

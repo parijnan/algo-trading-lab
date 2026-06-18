@@ -18,7 +18,7 @@ CREDS_FILE   = DATA_DIR / 'user_credentials.csv'
 HOLIDAYS_FILE = DATA_DIR / 'holidays.csv'
 
 # ── Kill switch ───────────────────────────────────────────────────────────────
-DRY_RUN = True      # MUST be manually set to False for live trading
+DRY_RUN = False     # paper parity confirmed; set True to revert to paper mode
 
 # ── Signal entry time constraints ────────────────────────────────────────────
 # 332 of 360 trades in the 09:15 window fire at exactly 09:20 (first 5-min bar).
@@ -35,8 +35,10 @@ MAX_ENTRY_TIME = '15:00'            # no entry after this time — last valid en
 SKIP_ENTRY_WINDOWS = [('10:45', '11:30')]
 
 # ── Instrument ────────────────────────────────────────────────────────────────
-LOT_SIZE          = 65
-LOT_COUNT         = 1               # position size in lots (start small)
+LOT_SIZE              = 65
+LOT_COUNT             = 40          # position size in lots when LOT_CALC = False
+LOT_CALC              = False       # True = auto-calculate from available cash; False = use LOT_COUNT
+CASH_PER_LOT_REQUIRED = 25000       # cash reserved per lot for dynamic sizing (ITM-150 premium + buffer)
 STRIKE_STEP       = 50              # Nifty strike grid
 ITM_DEPTH_STEPS   = 3               # 3 × 50 = 150 pts ITM
 MIN_DTE           = 2               # skip expiry if ELM date is today or earlier
@@ -72,3 +74,14 @@ ORDER_TIMEOUT_SEC = 30              # seconds to wait for order fill (WS fast pa
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
 # Channels imported from leto_config at runtime to avoid hardcoding tokens here.
+
+# ── Sizing override ───────────────────────────────────────────────────────────
+# Written by slack_listener.py Manage Sizing modal to data/sizing_override.json.
+# Overrides LOT_CALC and LOT_COUNT at import time. Delete the file to revert.
+try:
+    import json as _json, pathlib as _pl
+    _s = _json.loads((_pl.Path(__file__).parent / 'data' / 'sizing_override.json').read_text())
+    LOT_CALC  = bool(_s['lot_calc'])
+    LOT_COUNT = int(_s['lot_count'])
+except Exception:
+    pass

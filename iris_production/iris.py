@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from configs import (
     DRY_RUN, DATA_DIR, FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
-    REPO_ROOT, LOT_COUNT, LOT_SIZE, NIFTY_TOKEN, VIX_TOKEN,
+    REPO_ROOT, LOT_COUNT, LOT_SIZE, LOT_CALC, CASH_PER_LOT_REQUIRED,
+    NIFTY_TOKEN, VIX_TOKEN,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, MARKET_CLOSE, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
@@ -91,10 +92,14 @@ def _slack(msg: str, channel=None) -> None:
 # ---------------------------------------------------------------------------
 
 class Iris:
-    def __init__(self, obj, auth_token: str, api_key: str,
-                 client_code: str, instrument_df: pd.DataFrame):
+    def __init__(self, obj, auth_token: str, instrument_df: pd.DataFrame,
+                 api_key: str = None, client_code: str = None):
         self.obj            = obj
         self.auth_token     = auth_token
+        if api_key is None or client_code is None:
+            _creds       = pd.read_csv(CREDS_FILE).iloc[0]
+            api_key      = api_key      or str(_creds['api_key'])
+            client_code  = client_code  or str(_creds['user_name'])
         self._api_key       = api_key
         self._client_code   = client_code
         self.instrument_df    = instrument_df
@@ -102,6 +107,17 @@ class Iris:
         self.feed             = None
         self.order_watcher    = OrderFillWatcher()
         self._shutdown        = False
+
+        # Session summary for Leto session report
+        self._summary = {
+            'strategy':        'Iris',
+            'traded':          False,
+            'no_trade_reason': 'No signal',
+        }
+        self._trade_count   = 0
+        self._total_pnl_pts = 0.0
+        self._total_pnl_rs  = 0.0
+        self._peak_pnl_pts  = 0.0
 
         # Live ST state — seeded in _setup()
         self._df_5m        = None   # 5-min bar history with supertrend
@@ -115,6 +131,71 @@ class Iris:
     def _handle_signal(self, signum, frame):
         logger.info('Shutdown signal received.')
         self._shutdown = True
+
+    # -----------------------------------------------------------------------
+    # Lot sizing
+    # -----------------------------------------------------------------------
+
+    def _calculate_lots(self) -> int:
+        """
+        LOT_CALC = False: return LOT_COUNT from configs (manual control).
+        LOT_CALC = True:  auto-calculate from available pure cash.
+                          Iris buys naked long options; only cash (not collateral) is usable.
+                          Lots = max(1, pure_cash // CASH_PER_LOT_REQUIRED).
+        """
+        if not LOT_CALC:
+            logger.debug(f"Lot sizing: fixed LOT_COUNT={LOT_COUNT}")
+            return LOT_COUNT
+        try:
+            rms         = self.obj.rmsLimit()['data']
+            total_power = float(rms['availablecash'])
+            collateral  = float(rms['collateral'])
+            pure_cash   = round(total_power - collateral, 2)
+            lots        = max(1, int(pure_cash // CASH_PER_LOT_REQUIRED))
+            logger.info(
+                f"Lot sizing: Total Power={total_power:,.0f} | Pure Cash={pure_cash:,.0f} | "
+                f"CASH_PER_LOT={CASH_PER_LOT_REQUIRED:,} | Final Lots={lots}")
+            return lots
+        except Exception as e:
+            logger.warning(f"rmsLimit() failed ({e}) — falling back to LOT_COUNT={LOT_COUNT}")
+            return LOT_COUNT
+
+    # -----------------------------------------------------------------------
+    # Circuit breaker
+    # -----------------------------------------------------------------------
+
+    def _check_slack_commands(self) -> None:
+        """
+        Check for persistent Slack command flags during the live session.
+        Handles EXIT (liquidate + halt) and KILL (halt immediately, positions held).
+        DISABLE is a startup gate handled by Leto; no action is taken here.
+        """
+        flag_path = REPO_ROOT / 'data' / 'SLACK_COMMAND.flag'
+        if not flag_path.exists():
+            return
+        try:
+            command = flag_path.read_text().strip()
+
+            if command == "EXIT":
+                msg = "⚠️ *Iris*: Slack `Exit Trade` detected. Liquidating..."
+                logger.critical(msg.replace('*', ''))
+                _slack(msg, SLACK_TRADE_ALERTS)
+                if self.state.status == 'in_trade':
+                    self._execute_exit(reason='slack_exit')
+                raise Exception("Session terminated by Slack !exit command.")
+
+            elif command == "KILL":
+                msg = "🚨 *Iris*: Slack `Kill Switch` detected. Dropping control immediately."
+                logger.critical(msg.replace('*', ''))
+                _slack(msg, SLACK_TRADE_ALERTS)
+                # State left as-is so the position can be resumed or managed manually.
+                raise Exception("Session terminated by Slack !kill command.")
+
+            # DISABLE: do nothing here. Leto catches it at next startup.
+
+        except Exception as e:
+            if "Session terminated" in str(e): raise
+            logger.error(f"Error reading slack command flag: {e}")
 
     # -----------------------------------------------------------------------
     # Setup / teardown
@@ -195,66 +276,75 @@ class Iris:
     # Main loop
     # -----------------------------------------------------------------------
 
-    def run(self) -> None:
+    def run(self) -> tuple[bool, dict]:
         if not self._setup():
-            return
+            self._summary['no_trade_reason'] = 'Setup failed'
+            return False, self._summary
 
         next_5m_close  = self._next_bar_close(datetime.now(), ENTRY_TF_MIN)
         last_update_ts = time.time()
 
         market_close = datetime.strptime(MARKET_CLOSE, '%H:%M').time()
 
-        while not self._shutdown and FLAG_PATH.exists():
-            now = datetime.now()
+        try:
+            while not self._shutdown and FLAG_PATH.exists():
+                self._check_slack_commands()
+                now = datetime.now()
 
-            # ── Market-close auto-shutdown ──────────────────────────────
-            if now.time() >= market_close:
-                logger.info(f'Market closed ({MARKET_CLOSE}) — shutting down.')
-                _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — market closed. Shutting down.',
-                       SLACK_TRADEBOT_CHANNEL)
-                break
+                # ── Market-close auto-shutdown ──────────────────────────
+                if now.time() >= market_close:
+                    logger.info(f'Market closed ({MARKET_CLOSE}) — shutting down.')
+                    _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — market closed. Shutting down.',
+                           SLACK_TRADEBOT_CHANNEL)
+                    break
 
-            # ── In-trade: tight exit loop ───────────────────────────────
-            if self.state.status == 'in_trade':
-                self._check_exit_conditions(now)
+                # ── In-trade: tight exit loop ───────────────────────────
+                if self.state.status == 'in_trade':
+                    self._check_exit_conditions(now)
 
-                # Periodic Slack update
-                if time.time() - last_update_ts >= TRADE_UPDATE_SEC:
-                    self._send_trade_update()
-                    last_update_ts = time.time()
+                    # Periodic Slack update
+                    if time.time() - last_update_ts >= TRADE_UPDATE_SEC:
+                        self._send_trade_update()
+                        last_update_ts = time.time()
 
-            # ── 5-min bar close: update ST, check entry/flip ────────────
-            if now >= next_5m_close:
-                candle = self._fetch_candle(next_5m_close, ENTRY_TF_MIN)
-                if candle:
-                    flip, direction = self._update_5m_st(candle)
+                # ── 5-min bar close: update ST, check entry/flip ────────
+                if now >= next_5m_close:
+                    candle = self._fetch_candle(next_5m_close, ENTRY_TF_MIN)
+                    if candle:
+                        flip, direction = self._update_5m_st(candle)
 
-                    # Update 15-min regime at each 15-min boundary
-                    if next_5m_close.minute % REGIME_TF_MIN == 0:
-                        self._update_15m_regime(next_5m_close)
+                        # Update 15-min regime at each 15-min boundary
+                        if next_5m_close.minute % REGIME_TF_MIN == 0:
+                            self._update_15m_regime(next_5m_close)
 
-                    if self.state.status == 'watching' and flip and direction:
-                        if self._regime_aligned(direction):
-                            if self._before_min_entry_time(now):
-                                logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
-                            elif self._in_skip_window(now):
-                                logger.info(f'Signal {direction} skipped — in skip window')
-                            elif self._after_max_entry_time(next_5m_close):
-                                logger.info(f'Signal {direction} skipped — after MAX_ENTRY_TIME')
-                            else:
-                                self._execute_entry(direction, now)
+                        if self.state.status == 'watching' and flip and direction:
+                            if self._regime_aligned(direction):
+                                if self._before_min_entry_time(now):
+                                    logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
+                                elif self._in_skip_window(now):
+                                    logger.info(f'Signal {direction} skipped — in skip window')
+                                elif self._after_max_entry_time(next_5m_close):
+                                    logger.info(f'Signal {direction} skipped — after MAX_ENTRY_TIME')
+                                else:
+                                    self._execute_entry(direction, now)
 
-                    elif self.state.status == 'in_trade' and flip:
-                        # Trend flip against open trade = exit
-                        if direction and direction != self.state.direction:
-                            self._execute_exit('trend_flip')
+                        elif self.state.status == 'in_trade' and flip:
+                            # Trend flip against open trade = exit
+                            if direction and direction != self.state.direction:
+                                self._execute_exit('trend_flip')
 
-                next_5m_close += timedelta(minutes=ENTRY_TF_MIN)
+                    next_5m_close += timedelta(minutes=ENTRY_TF_MIN)
 
-            sleep_secs = 0.5 if self.state.status == 'in_trade' else 1.0
-            time.sleep(sleep_secs)
+                sleep_secs = 0.5 if self.state.status == 'in_trade' else 1.0
+                time.sleep(sleep_secs)
 
-        self._teardown()
+        except Exception as e:
+            if "Session terminated" in str(e): raise
+            logger.error(f"Unhandled exception in Iris run loop: {e}")
+            _slack(f"⚠️ *Iris* EXCEPTION: {e}", SLACK_ERRORS_CHANNEL)
+        finally:
+            self._teardown()
+        return False, self._summary
 
     # -----------------------------------------------------------------------
     # Signal
@@ -384,14 +474,16 @@ class Iris:
         if not symbol:
             return
 
-        order_id = place_order(self.obj, 'BUY', symbol, token, LOT_COUNT, DRY_RUN)
+        lots = self._calculate_lots()
+
+        order_id = place_order(self.obj, 'BUY', symbol, token, lots, DRY_RUN)
         if not order_id:
             logger.error('Entry order failed.')
             return
 
         # get_fill_price handles feed subscription, WS fast path, and REST fallback
         fill_price = get_fill_price(self.obj, self.order_watcher, order_id,
-                                    symbol, token, LOT_COUNT, DRY_RUN, self.feed)
+                                    symbol, token, lots, DRY_RUN, self.feed)
         if fill_price is None and not DRY_RUN:
             logger.error('Fill verification failed — position state unknown.')
             return
@@ -408,12 +500,22 @@ class Iris:
         self.state.entry_price = fill_price
         self.state.entry_spot  = spot
         self.state.entry_time  = now.isoformat()
-        self.state.lots        = LOT_COUNT
+        self.state.lots        = lots
         save_state(self.state)
+
+        self._trade_count += 1
+        self._summary.update({
+            'traded':      True,
+            'direction':   direction,
+            'lots':        lots,
+            'entry_time':  now.strftime('%H:%M'),
+            'spot_entry':  spot,
+        })
+        self._summary.pop('no_trade_reason', None)
 
         msg = (f'{"[PAPER] " if DRY_RUN else ""}⚡ *Iris*: Entered {direction.upper()}\n'
                f'Nifty: {spot:.0f} | {strike}{option_type.upper()} {expiry}\n'
-               f'Entry premium: {fill_price:.1f} pts | Lots: {LOT_COUNT}\n'
+               f'Entry premium: {fill_price:.1f} pts | Lots: {lots}\n'
                f'Stop: -{STOP_LOSS_PCT*100:.0f}%  Target: +{PROFIT_TARGET_PCT*100:.0f}%  '
                f'Exit by: {EXIT_BY_TIME}')
         logger.info(msg.replace('\n', '  '))
@@ -435,7 +537,10 @@ class Iris:
         # P&L checks — only when entry price is known
         entry = self.state.entry_price or 0
         if entry > 0 and ltp:
-            pnl_pct = (ltp - entry) / entry
+            unrealised_pts = ltp - entry
+            if unrealised_pts > self._peak_pnl_pts:
+                self._peak_pnl_pts = unrealised_pts
+            pnl_pct = unrealised_pts / entry
             if pnl_pct >= PROFIT_TARGET_PCT:
                 self._execute_exit(f'profit_target ({pnl_pct:+.1%})')
                 return
@@ -471,6 +576,17 @@ class Iris:
 
         pnl_pts = fill_price - entry                    # option points per unit
         pnl_rs  = pnl_pts * lots * LOT_SIZE            # total rupees
+
+        self._total_pnl_pts += pnl_pts
+        self._total_pnl_rs  += pnl_rs
+        self._summary.update({
+            'exit_time':    datetime.now().strftime('%H:%M'),
+            'exit_reason':  reason,
+            'pnl_pts':      self._total_pnl_pts,
+            'pnl_rs':       self._total_pnl_rs,
+            'peak_pnl_pts': self._peak_pnl_pts,
+            'trade_count':  self._trade_count,
+        })
 
         self.feed.unsubscribe_options([token])
 
@@ -600,7 +716,7 @@ def main():
     try:
         obj, auth_token, api_key, client_code = _login()
         instrument_df = _load_instrument_df()
-        iris = Iris(obj, auth_token, api_key, client_code, instrument_df)
+        iris = Iris(obj, auth_token, instrument_df, api_key=api_key, client_code=client_code)
         iris.run()
     except KeyboardInterrupt:
         logger.info('KeyboardInterrupt.')

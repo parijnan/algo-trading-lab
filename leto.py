@@ -6,7 +6,7 @@ Responsibilities:
   - Login to Angel One (one session, one API key)
   - Market hours and holiday check — exit before any strategy is initialised
   - Scrip master download and filtering for Nifty (NFO) and Sensex (BFO)
-  - VIX-based routing: Artemis (VIX <= 16), Athena (16 < VIX <= 25), Apollo (VIX > 25)
+  - VIX-based routing: Artemis (VIX <= 16), Athena (16 < VIX <= 25), Iris (VIX > 25)
   - Re-routing loop: Supports strategy hand-back if VIX breaches at entry time
   - Session teardown (terminateSession) after strategy returns
 
@@ -17,7 +17,7 @@ Cron on delos:
 Strategy interfaces:
   Artemis : artemis.run(obj, auth_token, instrument_df_sensex) — returns True for hand-back
   Athena  : athena_engine.Athena(obj, auth_token, instrument_df)  — returns True for hand-back
-  Apollo  : apollo.Apollo(obj, auth_token, instrument_df)  — returns False (market close)
+  Iris    : iris.Iris(obj, auth_token, instrument_df)  — returns False (market close)
 """
 
 import os
@@ -39,6 +39,7 @@ from SmartApi import SmartConnect
 # ---------------------------------------------------------------------------
 REPO_ROOT      = os.path.dirname(os.path.abspath(__file__))
 APOLLO_DIR     = os.path.join(REPO_ROOT, "apollo_production")
+IRIS_DIR       = os.path.join(REPO_ROOT, "iris_production")
 ARTEMIS_DIR    = os.path.join(REPO_ROOT, "artemis_production")
 ATHENA_DIR     = os.path.join(REPO_ROOT, "athena_production")
 SHARED_DIR     = os.path.join(REPO_ROOT, "shared")
@@ -136,7 +137,7 @@ def _load_route_override():
         importlib.reload(_cfg)
         mode     = _cfg.ROUTING_MODE
         strategy = _cfg.MANUAL_STRATEGY
-        if mode not in ('auto', 'manual') or strategy not in ('artemis', 'athena'):
+        if mode not in ('auto', 'manual') or strategy not in ('artemis', 'athena', 'iris'):
             raise ValueError(f"unexpected values: mode={mode!r}, strategy={strategy!r}")
         return mode, strategy
     except ModuleNotFoundError:
@@ -274,6 +275,21 @@ def _apollo_trade_open():
         return False
 
 
+def _iris_trade_open():
+    """Return True if iris_state.csv records an active trade."""
+    state_file = os.path.join(IRIS_DIR, 'data', 'iris_state.csv')
+    if not os.path.exists(state_file):
+        return False
+    try:
+        df = pd.read_csv(state_file)
+        if df.empty:
+            return False
+        return str(df.iloc[0].get('status', 'idle')) == 'in_trade'
+    except Exception as e:
+        logger.error(f"Could not read Iris state file: {e}")
+        return False
+
+
 def _artemis_trade_open():
     """
     Return True if either pe_trade_params.csv or ce_trade_params.csv records
@@ -330,7 +346,13 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         logger.info("Open Apollo trade detected. Routing to Apollo.")
         _slack("*Leto*: Open Apollo trade detected. Routing to Apollo.")
         _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
-        return False, summary  # No re-routing if position open
+        return False, summary
+
+    if _iris_trade_open():
+        logger.info("Open Iris trade detected. Routing to Iris.")
+        _slack("*Leto*: Open Iris trade detected. Routing to Iris.")
+        _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
+        return False, summary
 
     if _athena_trade_open():
         logger.info("Open Athena trade detected. Routing to Athena.")
@@ -367,9 +389,9 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
 
         # Friday: Artemis/Athena do not enter fresh unless forced.
         if vix > VIX_ATHENA_MAX:
-            logger.info(f"Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
-            _slack(f"*Leto*: Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
-            _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
+            logger.info(f"Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Iris.")
+            _slack(f"*Leto*: Friday. VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Iris.")
+            _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
             return False, summary
         elif force_athena and vix > VIX_ARTEMIS_MAX:
             logger.info(f"Friday (FORCED). VIX {vix:.2f} in (16, 25]. Routing to Athena.")
@@ -383,16 +405,19 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
 
     # Priority 3: Mon–Thu, no open positions — manual override or 3-way VIX route
     mode, strategy = _load_route_override()
-    if mode == 'manual' and vix <= VIX_ATHENA_MAX:
-        logger.info(f"Manual override active. VIX {vix:.2f}. Routing to {strategy.capitalize()}.")
+    if mode == 'manual':
+        logger.info(f"Manual override active. Routing to {strategy.capitalize()} (VIX {vix:.2f}, override bypasses VIX constraint).")
         _slack(f"*Leto*: ⚙️ Manual override active. Routing to *{strategy.capitalize()}* (VIX {vix:.2f}).")
         if strategy == 'artemis':
             handoff, summary = _run_artemis(obj, auth_token, instrument_df_sensex)
-        else:
+        elif strategy == 'athena':
             handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
+        else:  # iris
+            _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
+            return False, summary
         return handoff, summary
 
-    # Auto routing (also handles manual + VIX > 25 → Apollo)
+    # Auto routing
     if vix <= VIX_ARTEMIS_MAX:
         logger.info(f"VIX {vix:.2f} <= {VIX_ARTEMIS_MAX}. Routing to Artemis.")
         _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Artemis*.")
@@ -404,9 +429,9 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         handoff, summary = _run_athena(obj, auth_token, instrument_df_nifty)
         return handoff, summary
     else:
-        logger.info(f"VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Apollo.")
-        _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Apollo*.")
-        _, summary = _run_apollo(obj, auth_token, instrument_df_nifty)
+        logger.info(f"VIX {vix:.2f} > {VIX_ATHENA_MAX}. Routing to Iris.")
+        _slack(f"*Leto*: VIX {vix:.2f}. Routing to *Iris*.")
+        _, summary = _run_iris(obj, auth_token, instrument_df_nifty)
         return False, summary
 
 
@@ -423,6 +448,28 @@ def _run_apollo(obj, auth_token, instrument_df_nifty):
     apollo = Apollo(obj, auth_token, instrument_df_nifty)
     handoff, summary = apollo.run()
     logger.info(f"Apollo returned. Handoff signal: {handoff}")
+    return bool(handoff), summary
+
+
+def _run_iris(obj, auth_token, instrument_df_nifty):
+    """Run Iris. Returns (handback: bool, summary: dict)."""
+    logger.info("Starting Iris.")
+    if IRIS_DIR not in sys.path:
+        sys.path.insert(0, IRIS_DIR)
+    from iris import Iris  # type: ignore
+
+    flag_path = os.path.join(IRIS_DIR, 'data', 'iris_active.flag')
+    try:
+        open(flag_path, 'w').close()
+        iris = Iris(obj, auth_token, instrument_df_nifty,
+                    api_key=api_key, client_code=user_name)
+        handoff, summary = iris.run()
+    finally:
+        try:
+            os.remove(flag_path)
+        except FileNotFoundError:
+            pass   # teardown already removed it
+    logger.info(f"Iris returned. Handoff signal: {handoff}")
     return bool(handoff), summary
 
 
@@ -457,6 +504,7 @@ def _run_artemis(obj, auth_token, instrument_df_sensex):
 
 _STRATEGY_SUBTITLE = {
     'Apollo':  'Nifty Debit Spread',
+    'Iris':    'Nifty Scalping',
     'Athena':  'Nifty Double Calendar',
     'Artemis': 'Sensex Iron Condor',
 }
@@ -499,6 +547,11 @@ def _send_session_report(summaries, session_date):
         if strategy == 'Apollo':
             direction = s.get('direction', '?').capitalize()
             lines.append(f"  ↳ Direction  : {direction}  |  Lots: {lots}")
+        elif strategy == 'Iris':
+            direction   = s.get('direction', '?').capitalize()
+            trade_count = s.get('trade_count', 1)
+            count_str   = f"{trade_count} trade{'s' if trade_count != 1 else ''}"
+            lines.append(f"  ↳ Direction  : {direction}  |  Lots: {lots}  |  {count_str}")
         elif strategy == 'Athena':
             sp_in  = s.get('spot_entry')
             sp_out = s.get('spot_exit')

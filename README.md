@@ -6,22 +6,22 @@ A personal algorithmic trading laboratory for backtesting, optimising, and autom
 
 ### [Iris](./iris_production/) — Nifty Directional Scalping
 
-A manually-armed directional scalping strategy. Arms/disarms via Slack; auto-enters on
-ST_FAST (5m+15m dual supertrend) signals. Buys a single ITM-150 Nifty weekly call/put.
-Exits on profit target, stop loss, trend flip, or 30-min per-trade timer. Independent of
-Leto's VIX routing.
+Directional scalping strategy — active at VIX > 25. Auto-enters on ST_FAST (5m+15m dual
+supertrend) signals. Buys a single ITM-150 Nifty weekly call/put. Exits on profit target,
+stop loss, trend flip, or 30-min per-trade timer. Routed by Leto; runs under Leto's session.
 
 | | |
 |---|---|
 | Instrument | Nifty weekly options — long ITM-150 call/put, nearest expiry |
 | Signal | ST_FAST — 5-min ST flip aligned with 15-min regime (~200/year) |
 | Entry | Market order, 5-min after signal bar close |
+| Position size | 40 lots (static, `LOT_COUNT=40` in configs.py) |
 | Profit target | 10% of entry premium |
 | Stop loss | 25% of entry premium |
 | Max hold | 30 min per trade · last entry 15:00 open · daily cutoff 15:15 |
 | Skip window | 10:45–11:30 (dead zone — post-opening settling) |
 | Backtest | 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot (7.4 yr) |
-| Status | **Paper mode** — `DRY_RUN=True` in configs.py (first session 2026-06-04) |
+| Status | **Live** — `DRY_RUN=False`, 40 lots static |
 
 ### [Artemis](./artemis_production/) — Sensex Dynamic Credit Spread
 A market-neutral credit spread strategy that starts as a weekly Sensex Iron Condor. During trends, it dynamically transforms into a **directional credit spread** by exiting the tested side and reinforcing the winning side with rolled strikes and additional lots (position sizing scales up to 150% of the base).
@@ -36,8 +36,8 @@ A market-neutral credit spread strategy that starts as a weekly Sensex Iron Cond
 | Broker | Angel Broking (SmartConnect) |
 | Status | Live |
 
-### [Apollo](./apollo_production/) — Nifty High-VIX Trend Following *(retiring)*
-A directional ITM debit spread strategy. Net-negative at VIX > 25 (−₹12/trade) and outperformed by Artemis/Athena across VIX 11–25 on a 1:1 basis. Iris replaces it at VIX > 25 after live validation. No new entries will be routed to Apollo once Iris is integrated.
+### [Apollo](./apollo_production/) — Nifty High-VIX Trend Following *(retired from routing)*
+A directional ITM debit spread strategy. Net-negative at VIX > 25 (−₹12/trade). Replaced by Iris at the VIX > 25 slot. Apollo is retained in Leto solely to manage any remaining open positions — no new entries are routed to it.
 
 | | |
 |---|---|
@@ -82,34 +82,30 @@ A market-neutral, theta-positive strategy designed for mid-regime VIX (16–25).
 ## Session Router
 
 ### [Leto](./leto.py) — Strategy Router and Session Manager
-Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Apollo, Athena, or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
+Single cron entry point. Logs in to Angel One, checks market hours and holidays, downloads the scrip master, reads VIX, and routes to Iris, Athena, or Artemis. Owns the full session lifecycle — `generateSession` and `terminateSession` are called exactly once per day, here.
 
 **Routing logic (current live — 3-way gate):**
-1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo regardless of VIX or day.
-2. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
-3. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
-4. **Friday, no open position:**
-   - **VIX > 25.0** → Apollo
+1. If an active Apollo trade is found in `apollo_state.csv` — route to Apollo (transition: manages remaining open positions only).
+2. If an active Iris trade is found in `iris_state.csv` — route to Iris regardless of VIX or day.
+3. If an active Athena trade is found in `athena_state.csv` — route to Athena regardless of VIX or day.
+4. If an active Artemis trade is found in `pe_trade_params.csv` or `ce_trade_params.csv` — route to Artemis regardless of VIX or day.
+5. **Friday, no open position:**
+   - **VIX > 25.0** → Iris
    - **VIX ≤ 25.0** → Stand down
-5. **Mon–Thu, no open position — manual override or 3-way VIX route:**
-   - **Manual override active + VIX ≤ 25.0** → route to the selected strategy (Artemis or Athena); VIX > 25 always routes to Apollo regardless of override
+6. **Mon–Thu, no open position — manual override or 3-way VIX route:**
+   - **Manual override active** → route unconditionally to the selected strategy (Artemis, Athena, or Iris) regardless of VIX
    - **VIX ≤ 16.0** → Artemis
    - **16.0 < VIX ≤ 25.0** → Athena
-   - **VIX > 25.0** → Apollo
-6. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
+   - **VIX > 25.0** → Iris
+7. **Handoff Mechanism:** If a strategy stands down due to a VIX breach at 10:30 AM, Leto re-evaluates routing. `leto_config.py` is reloaded on each reroute iteration so a Slack override applied mid-session takes effect immediately.
 
-**Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena). The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload. Apollo is never overridden — if VIX > 25, Apollo runs regardless.
+**Manual routing override** is set via the Slack Control Panel (buttons: ⚡ Auto / 🔵 Force Artemis / 🟢 Force Athena / 🟣 Force Iris). Force overrides bypass VIX — the selected strategy routes unconditionally. The current mode is persisted in `data/routing_state.json` (gitignored) — `leto_config.py` reads from it on every reload.
 
-> **Pending upgrade:** One routing change pending Iris live validation. Apollo is
-> net-negative at VIX > 25 (−₹12/trade); Iris is +₹443/trade (64% WR, N=77) in that band.
-> Once Iris completes live testing and is integrated into Leto, it replaces Apollo at VIX > 25.
-> See `plans/leto-routing-optimisation.md`.
->
-> | VIX Band | Current | Target | Lots |
-> |----------|---------|--------|------|
-> | < 16 | Artemis | Artemis | 1 |
-> | 16–25 | Athena | Athena | 1 |
-> | > 25 | Apollo | **Iris** | 1 |
+| VIX Band | Strategy | Notes |
+|----------|----------|-------|
+| ≤ 16 | Artemis | Sensex iron condor |
+| 16–25 | Athena | Nifty double calendar |
+| > 25 | Iris | Nifty scalping (ST_FAST) |
 
 ### Orchestration Flow
 
@@ -119,21 +115,22 @@ graph TD
     Login --> Setup[Download Scrip Master & Load Holidays]
     Setup --> CheckState{Active Trade Found?}
 
-    CheckState -- Apollo --> RunApollo[Execute Apollo]
+    CheckState -- Apollo --> RunApollo[Execute Apollo<br/>open positions only]
+    CheckState -- Iris --> RunIris[Execute Iris]
     CheckState -- Athena --> RunAthena[Execute Athena]
     CheckState -- Artemis --> RunArtemis[Execute Artemis]
 
     CheckState -- None --> FridayCheck{Friday?}
-    FridayCheck -- "Yes, VIX > 25" --> RunApollo
+    FridayCheck -- "Yes, VIX > 25" --> RunIris
     FridayCheck -- "Yes, VIX ≤ 25" --> StandDown[Stand Down]
     FridayCheck -- No --> OverrideCheck{Manual Override?}
     OverrideCheck -- "mode=manual, VIX ≤ 25" --> RunOverride[Execute Selected Strategy]
-    OverrideCheck -- "mode=auto or VIX > 25" --> VIXCheck{Read VIX at 10:30 AM}
+    OverrideCheck -- "mode=auto or VIX > 25" --> VIXCheck{Read VIX}
     VIXCheck -- "< 16" --> RunArtemis
     VIXCheck -- "16 - 25" --> RunAthena
-    VIXCheck -- "> 25" --> RunApollo
+    VIXCheck -- "> 25" --> RunIris
 
-    RunApollo & RunAthena & RunArtemis & RunOverride --> Result{Hand-off?}
+    RunIris & RunAthena & RunArtemis & RunOverride --> Result{Hand-off?}
     Result -- Yes --> OverrideCheck
     Result -- No/Market Close --> Logout[Terminate Session]
     Logout --> End([Leto Complete])
@@ -141,14 +138,14 @@ graph TD
 
 ## Resilient Order Execution
 
-All production strategies (Artemis, Apollo, Athena) implement a robust order placement engine designed to handle broker API failures:
+All production strategies (Artemis, Athena, Iris) implement a robust order placement engine designed to handle broker API failures:
 
 - **ID-Exclusion Ghost Recovery:** Catches `DataException` and `NetworkException`. Instead of blind retries, the engine maintains a session list of processed IDs and reconciles the Order Book using documented fields (`symbol`, `qty`, `type`) to identify and recover lost orders, preventing double-fills during connectivity issues.
 - **Proactive Rate Limiting:** Enforces a strict limit of **10 orders per second** as mandated by SEBI for retail participants. A client-side gatekeeper tracks timestamps and enforces a proactive 1.1s sleep *before* the 11th order is fired.
 - **Sub-Second Verification:** Uses an "Execution-Burst, Verification-Second" pattern. Batch fills are verified instantly (typically <200ms) with a 1.1s safety window for discrepancies.
 - **Session Kill Switch:** Detects session-level failures (invalid tokens) and aborts execution to return control to Leto, preventing infinite failing retry loops.
 - **Fill Verification:** Uses iterative `while` loops for quantity splitting to ensure exactly the requested lot count is processed, preventing lot dropping due to freeze-limit math errors.
-- **Orphan Fill Cleanup:** Post-burst audit after every entry. If one leg fills more than another, the excess is immediately squared off with a counter-order to maintain balanced exposure across all legs. Apollo records the confirmed (minimum) lot count to state; Athena additionally handles this across batches.
+- **Orphan Fill Cleanup:** Post-burst audit after every entry. If one leg fills more than another, the excess is immediately squared off with a counter-order to maintain balanced exposure across all legs. Athena handles this across batches.
 - **WebSocket Order Fill Verification:** All strategies run a background `OrderFillWatcher` daemon thread (subclassing `SmartWebSocketOrderUpdate`) that captures AB05/AB02/AB03 events into a thread-safe `live_orders` dict. `_fetch_order_details` polls this dict every 50ms instead of calling `orderBook()`, reducing fill verification from ~1s REST round-trips to <300ms. If the socket is not ready or times out, the original REST fallback is used transparently.
 - **Real-Time WebSocket LTP Feed:** All strategies start a `SharedFeed` daemon thread (`websocket_feed.py`) at session open. Index tokens (Nifty or Sensex) are pre-subscribed at connect; option leg tokens are subscribed after entry and unsubscribed after exit. In-trade monitoring loops run at 500ms intervals (versus previous 20–60s REST polling), decoupling sub-second SL/parachute reaction from the configurable Slack reporting cadence. If the WebSocket disconnects mid-session, `SharedFeed` attempts reconnection with exponential backoff (5→10→20→40→60s, up to 5 attempts), resubscribes all tokens on success, and sends a Slack alert via the caller's `alert_callback`. During reconnect, strategies fall back to REST polling at the full configured interval. If all reconnect attempts fail, the REST fallback remains active and a final alert fires to `#error-alerts`.
 - **Tick Error Debouncing:** Malformed or undecodable WS ticks are silently discarded by the feed thread and counted. After 10+ errors within a 5-minute window, a single Slack alert fires to `#error-alerts`. Repeated flapping is suppressed by a 300s cooldown on alerts.
@@ -167,7 +164,7 @@ A dedicated `slack_listener.py` daemon runs on the VPS, using Slack Socket Mode 
 - **`⏸️ Disable Algo`**: Sets a persistent flag that prevents Leto from starting any new sessions or routing to strategies.
 - **`✅ Clear Flag`**: Removes all blocking flags to resume normal automated operations.
 - **`🚀 Start Leto`**: Manually triggers the `leto.py` orchestrator outside of the standard cron schedule.
-- **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Apollo and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
+- **`🔄 Reset State`**: Resets all strategy state files to idle without placing any orders. Iris and Athena have their `status` column set to `idle`; Artemis state CSVs are fully archived. Intended for use after manually closing positions directly via the broker app.
 - **`⬇️ Git Pull`**: Runs `git pull` on the VPS and posts the output to `#tradebot-updates`. Eliminates the need to SSH in for routine code updates. Note: if `slack_listener.py` itself is updated, a manual restart of the listener is still required to pick up those changes.
 
 ### Manual Adjustment
@@ -179,11 +176,12 @@ Mid-session adjustments for Artemis and Athena, executed via each strategy's own
   - *Exit CE Parachute* — closes the active CE hedge, bypassing the spot exit condition.
 
 ### Routing and Sizing Override
-Three routing buttons and the sizing modal live together in one section:
+Four routing buttons and the sizing modal live together in one section:
 - **`⚡ Auto (VIX)`**: Restores standard VIX-based routing (default state).
-- **`🔵 Force Artemis`**: Routes to Artemis on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
-- **`🟢 Force Athena`**: Routes to Athena on the next Mon–Thu session where VIX ≤ 25. VIX > 25 still routes to Apollo.
-- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Apollo. Updates are written to a gitignored `data/sizing_override.json` inside each strategy directory; the strategy reads this at startup and overrides the defaults in `configs_live.py` / `trade_settings.csv`.
+- **`🔵 Force Artemis`**: Routes unconditionally to Artemis regardless of VIX.
+- **`🟢 Force Athena`**: Routes unconditionally to Athena regardless of VIX.
+- **`🟣 Force Iris`**: Routes unconditionally to Iris regardless of VIX.
+- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Iris. Updates are written to a gitignored `data/sizing_override.json` inside each strategy directory; the strategy reads this at startup and overrides the defaults in `configs_live.py`.
 
 The routing mode is persisted in `data/routing_state.json` (gitignored, defaults to `auto/artemis` if absent). `leto_config.py` reads from it on every `importlib.reload()`, so a change applied mid-session takes effect on the next Leto loop without a restart.
 
@@ -245,11 +243,11 @@ The `data_pipeline/` infrastructure uses a dual-layer messaging system:
 |---|---|
 | < 16 | Artemis |
 | 16 – 25 | Athena |
-| > 25 | Apollo (always — overrides manual override) |
+| > 25 | Iris |
 
-Open position detection overrides VIX routing in all cases — an active Apollo, Artemis, or Athena trade is always resumed to completion regardless of current VIX or day of week.
+Open position detection overrides VIX routing in all cases — an active Artemis, Athena, or Iris trade is always resumed to completion regardless of current VIX or day of week.
 
-The Slack routing override (Force Artemis / Force Athena) only applies when VIX ≤ 25 on a Mon–Thu no-position day. VIX > 25 always routes to Apollo; the Friday stand-down is never overridden.
+The Slack routing override (Force Artemis / Force Athena / Force Iris) routes unconditionally to the selected strategy, bypassing VIX. Friday stand-down is not overridden.
 
 ## Regulatory Compliance
 
@@ -582,8 +580,8 @@ algo-trading-lab/
 │       └── trade_logs/
 ├── iris_production/                # Iris live paper/production trading
 │   ├── README.md                   # Execution flowchart, signal/exit tables, module docs
-│   ├── iris.py                     # Main strategy loop (DRY_RUN=True by default)
-│   ├── configs.py                  # All tunable parameters — flip DRY_RUN here
+│   ├── iris.py                     # Main strategy loop
+│   ├── configs.py                  # All tunable parameters (DRY_RUN, LOT_COUNT, exits)
 │   ├── state.py                    # IrisState dataclass + CSV persistence
 │   ├── functions.py                # ST helpers, strike selection, order placement, guardian check
 │   ├── logger_setup.py             # File + console logging

@@ -811,7 +811,7 @@ class Athena:
             if force or current_spot <= (self.state.ce_sell_strike + EMERGENCY_EXIT_OFFSET):
                 self._close_emer_if_active()
 
-    def _manage_reactive_wing(self, current_spot):
+    def _manage_reactive_wing(self, current_spot, force_enter=False, force_exit=False):
         if not self.state.use_reactive_wing:
             return
         if not self.state.entry_spot:
@@ -820,9 +820,9 @@ class Athena:
         trigger_level = self.state.entry_spot * (1.0 - REACTIVE_WING_PCT / 100.0)
 
         if not self.state.reactive_wing_active:
-            if getattr(self, '_wing_buy_cooldown_until', None) and datetime.now() < self._wing_buy_cooldown_until:
+            if not force_enter and getattr(self, '_wing_buy_cooldown_until', None) and datetime.now() < self._wing_buy_cooldown_until:
                 return
-            if current_spot < trigger_level:
+            if force_enter or current_spot < trigger_level:
                 buy_exp = datetime.strptime(self.state.buy_expiry, '%Y-%m-%d').date()
                 vix = self.feed.get_ltp(VIX_TOKEN) or self._get_ltp(EXCHANGE_NSE, 'INDIA VIX', VIX_TOKEN) or 18.0
                 stk = self._find_delta_strike(current_spot, vix, buy_exp, SAFETY_WING_DELTA, 'pe')
@@ -856,8 +856,8 @@ class Athena:
                                 SLACK_ERRORS_CHANNEL)
 
         elif self.state.reactive_wing_active:
-            if current_spot > self.state.entry_spot:
-                if getattr(self, '_wing_sell_cooldown_until', None) and datetime.now() < self._wing_sell_cooldown_until:
+            if force_exit or current_spot > self.state.entry_spot:
+                if not force_exit and getattr(self, '_wing_sell_cooldown_until', None) and datetime.now() < self._wing_sell_cooldown_until:
                     return
                 oids = self._place_order('SELL', self.state.pe_wing_symbol, self.state.pe_wing_token, self.state.lots)
                 fill, q, ft = self._fetch_order_details(oids, self.state.pe_wing_token, self.state.pe_wing_symbol, self.state.lots)
@@ -917,6 +917,13 @@ class Athena:
                         self._pending_parachute = action
                         os.remove(flag_path)
                         logger.info(f"Manual parachute action queued: {action}.")
+
+                elif command.startswith("ATHENA_PE_WING:"):
+                    action = command.split(":")[1].lower()
+                    if action in ('enter', 'exit'):
+                        self._pending_pe_wing = action
+                        os.remove(flag_path)
+                        logger.info(f"Manual PE wing action queued: {action}.")
 
                 # If command == "DISABLE", we do nothing inside the loop.
                 # Leto will catch it on the next startup.
@@ -1022,6 +1029,21 @@ class Athena:
                                     slack_bot_sendtext("⚠️ *Athena*: Manual parachute exit ignored — no active parachute.", SLACK_ERRORS_CHANNEL)
                                 else:
                                     self._close_emer_if_active()
+                        pending_wing = getattr(self, '_pending_pe_wing', None)
+                        if pending_wing is not None:
+                            self._pending_pe_wing = None
+                            if pending_wing == 'enter':
+                                if not self.state.use_reactive_wing:
+                                    slack_bot_sendtext("⚠️ *Athena*: Manual PE wing entry ignored — reactive wing not enabled in this session.", SLACK_ERRORS_CHANNEL)
+                                elif self.state.reactive_wing_active:
+                                    slack_bot_sendtext("⚠️ *Athena*: Manual PE wing entry ignored — wing already active.", SLACK_ERRORS_CHANNEL)
+                                else:
+                                    self._manage_reactive_wing(spot, force_enter=True)
+                            elif pending_wing == 'exit':
+                                if not self.state.reactive_wing_active:
+                                    slack_bot_sendtext("⚠️ *Athena*: Manual PE wing exit ignored — no active wing.", SLACK_ERRORS_CHANNEL)
+                                else:
+                                    self._manage_reactive_wing(spot, force_exit=True)
                         if self._update_elapsed >= TRADE_UPDATE_INTERVAL:
                             self._append_trade_log_row(prices=prices)
                             self._send_trade_update(prices=prices)
