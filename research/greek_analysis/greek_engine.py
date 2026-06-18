@@ -47,9 +47,14 @@ def compute_iv(ltp: float, spot: float, strike: float,
     Returns None when:
       - DTE < 0.0001 days (sub-minute to expiry — model unstable)
       - LTP < 0.05 (effectively zero — cannot meaningfully back out IV)
+      - Time value < 0.5 pts (LTP ≈ intrinsic — mibian root-finder has no valid
+        solution when price is at or below intrinsic, causing an infinite loop)
       - mibian returns non-finite or out-of-range IV
     """
     if dte_days < 1e-4 or ltp < 0.05:
+        return None
+    intrinsic = max(0.0, (strike - spot) if option_type == 'pe' else (spot - strike))
+    if ltp <= intrinsic + 0.5:
         return None
     try:
         args = [float(spot), float(strike), RISK_FREE_RATE, float(dte_days)]

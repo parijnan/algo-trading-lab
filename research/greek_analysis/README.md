@@ -48,23 +48,33 @@ Data sources:
 
 ### Branch 1 — P&L Attribution (`pnl_attribution/`)
 
-**Status: Complete. Output: `pnl_attribution/data/pnl_attribution.csv` (124 rows).**
+**Athena: Complete. Output: `pnl_attribution/data/pnl_attribution.csv` (124 rows, 2020–2026).**
+
+**Artemis: Script written (`run_artemis.py`). Cold run pending — see open issue below.**
 
 Decompose each trade's realized P&L into delta, gamma, theta, and vega contributions.
 
 Method: at each 1-min bar, compute net position Greeks. Attribute bar-to-bar P&L change as:
-- Delta: Δspot × net_delta × lot_size
-- Gamma: ½ × Δspot² × net_gamma × lot_size
+- Delta: Δspot × net_delta
+- Gamma: ½ × Δspot² × net_gamma
 - Theta: Δt × net_theta
-- Vega: ΔIV × net_vega × lot_size
+- Vega: ΔIV × net_vega
 - Residual: unexplained (should be small)
 
-Key questions:
-- What fraction of Athena P&L comes from theta vs vega?
-- On losing trades, which Greek drives the loss — directional (delta/gamma) or vol (vega)?
-- Does the attribution pattern differ early (2020–22) vs recent (2023+)?
+Artemis-specific differences from Athena (`run_artemis.py`):
+- Single weekly expiry (not dual sell/buy expiries)
+- 4 legs with variable per-bar strikes (change after SL-triggered roll)
+- Status-gated: leg attribution skipped when side is `'closed'`
+- Base lot P&L only (`pe_pl + ce_pl`); add lot P&L tracked separately
+- IV cache: `research/greek_analysis/data/iv_cache_artemis/` (separate from Athena)
+- Runs both Nifty (146 trades) and Sensex (27 trades); combined output
 
-Output: `data/pnl_attribution.csv` — one row per trade.
+Key questions (Artemis):
+- Is Artemis P&L theta-dominated or delta-dominated (spot containment)?
+- On losing trades, which Greek drives the loss — directional move (delta/gamma) or vol expansion (vega)?
+- Does the Greek profile differ between the VIX 12–13 and VIX 15–16 sweet spots?
+
+Output: `data/pnl_attribution_artemis.csv` — one row per trade (Nifty + Sensex combined).
 
 ---
 
@@ -227,8 +237,11 @@ multiple wing/emer entry-exit cycles within the trade; these inflate `actual_mtm
 # 1. Build shared engine and validate on a single trade
 python research/greek_analysis/greek_engine.py --validate
 
-# 2. Branch 1 — P&L attribution (full backtest, cold run ~20 min)
+# 2. Branch 1 — P&L attribution
+#    Athena (cold run ~20 min, warm <1 min):
 python research/greek_analysis/pnl_attribution/run.py
+#    Artemis (cold run ~60–90 min once compute_iv intrinsic guard is in place):
+python research/greek_analysis/pnl_attribution/run_artemis.py
 
 # 3. Branch 2 — Greek profile (reuses cached IV from branch 1)
 python research/greek_analysis/greek_profile/run.py
