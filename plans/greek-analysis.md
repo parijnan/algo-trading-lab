@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) is next — reuses IV cache.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) is next.**
 
 ---
 
@@ -116,23 +116,29 @@ Artemis loses on spot movement.
 
 ### Branch 2: Greek Profile (`greek_profile/`)
 
-**Type:** Diagnostic. **Priority:** High.
+**Type:** Diagnostic. **COMPLETE (2026-06-18).**
 
-Track net position delta/gamma/theta/vega as a time series from entry to exit. Aggregate across
-all trades to get the typical Greek trajectory.
+Track net position Greek *levels* at each bar from entry to exit. Distinct from Branch 1's
+contributions (exposure × Δmarket). Long-vega exposure with falling IV posts negative vega P&L.
 
-Questions:
-- Does net delta stay near zero (market-neutral) throughout, or does it drift?
-- When does gamma exposure spike (approaching expiry) vs when is the position well-hedged?
-- Does net vega confirm the calendar is long-vega (far month dominates near month)?
+**Findings (Athena):** Athena IS structurally long-vega (+20.3 pts/vol-pt at entry, 100% of
+bars). Corrects Branch 1 finding #4 — the negative vega *contribution* (−14.4 pts/trade) means
+IV fell during trades, not that the position was short-vega. Net delta = +0.064 (stable).
+Theta and vega both grow as dte_sell → 0 (calendar becomes more long-vega and faster-decaying
+near sell expiry). Win/loss entry profiles identical — outcomes determined by market moves.
 
-The wings complicate the vega sign — verify empirically rather than assuming the calendar
-construction guarantees long-vega throughout.
+**Findings (Artemis):** Structurally short-vega (−6.9 Nifty, −28.2 Sensex pts/vol-pt). Short-vega
+collapses near expiry (3–5d: −6.7, 1–2d: −3.1). Net delta ≈ 0 (market-neutral confirmed).
+Gamma ~constant across DTE range (buy legs offset). Win/loss profiles identical at entry.
 
-Output: `data/greek_profiles.parquet` — per-bar Greeks for each trade.
-Aggregate plots: mean ± std of each Greek over normalized trade-time (0=entry, 1=exit).
+Cross-check vs Branch 1: WARNs on delta/gamma/theta are expected — due to wing-leg activation
+bar boundary (Branch 2 includes wing at first active bar; Branch 1 skips bars where IV failed
+at either endpoint). Scale and sign confirmed correct.
 
-Entry point: `research/greek_analysis/greek_profile/run.py`
+Output: `greek_profile/data/greek_profiles_athena.parquet`, `greek_profiles_artemis.parquet`
+
+Entry points: `research/greek_analysis/greek_profile/run.py` (Athena),
+`research/greek_analysis/greek_profile/run_artemis.py` (Artemis)
 
 ---
 

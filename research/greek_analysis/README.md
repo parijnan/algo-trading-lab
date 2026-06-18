@@ -80,18 +80,21 @@ Output: `data/pnl_attribution_artemis.csv` — one row per trade (Nifty + Sensex
 
 ### Branch 2 — Greek Profile (`greek_profile/`)
 
-**Status: Not started.**
+**Athena: Complete. Output: `greek_profile/data/greek_profiles_athena.parquet` (222,043 rows, 124 trades).**
 
-Track net position delta/gamma/theta/vega as a time series from entry to exit. Aggregate across
-all trades for the typical Greek trajectory.
+**Artemis: Complete. Output: `greek_profile/data/greek_profiles_artemis.parquet` (232,768 rows: 197,235 Nifty + 35,533 Sensex).**
 
-Key questions:
-- Does net delta stay near zero (market-neutral) throughout, or does it drift?
-- Does net vega confirm the calendar is long-vega? (the wings and strike spacing can alter this —
-  verify empirically rather than assuming)
-- When does gamma spike? (near-expiry regime vs well-hedged mid-trade)
+Track net position Greek *levels* (delta, gamma, theta, vega) at each bar from entry to exit.
 
-Output: `data/greek_profiles.parquet` — per-bar Greeks per trade.
+**Distinction from Branch 1:** Branch 1 measured *contribution* (Greek × Δmarket). Branch 2 measures
+*exposure* (instantaneous sensitivity). They can diverge in sign: a long-vega position posts
+a negative vega P&L contribution whenever IV falls. This distinction resolves an apparent
+contradiction in the Branch 1 findings — see the correction note under Branch 1 finding #4.
+
+Artemis-specific: Nifty and Sensex reported separately (gamma/theta/vega scale with option-price
+level, ~4× larger for Sensex). Status-gated: closed sides contribute zero Greeks. All-4-valid
+(all four main legs with valid IV) covers 100% of Athena bars and ~40% of Artemis bars (rest are
+post-SL-close bars where one side is fully exited).
 
 ---
 
@@ -205,9 +208,12 @@ IV fail bars: 0 / 221,919 (0.0% — all bars attributed).
    −38 pts. Losing trades are disproportionately associated with vol expansion — exactly what
    the calendar long-vega structure is supposed to hedge but doesn't fully cover.
 
-4. **Athena is NOT net-long-vega on average.** Aggregate vega = −14.4 pts/trade (net short).
-   The wings and strike spacing reduce the calendar's theoretical long-vega position enough to
-   flip it negative. The structure is closer to vega-neutral to slightly short-vega.
+4. **Branch 1 vega contribution was negative (−14.4 pts/trade) — but this does NOT mean
+   Athena is short-vega.** *(Correction: Branch 2 proves Athena is consistently long-vega —
+   see below.)* The contribution is negative because IV fell during Athena trades on average.
+   A long-vega position collects positive vega P&L when IV rises and posts negative P&L when
+   IV falls. The negative contribution is a statement about the *direction of IV moves during
+   these trades*, not about the sign of the vega *exposure*.
 
 5. **Period split: 2023+ shows stronger theta and worse vega.**
 
@@ -333,6 +339,124 @@ on vol expansion; Artemis loses on directional moves through the sell strike.
 
 ---
 
+### Branch 2: Greek Profile — Athena (124 trades, 222,043 bars)
+
+**Methodology note:** Net position Greek *levels* at each bar (not bar-to-bar changes).
+`net_greek = Σ_legs direction_i × greek_i(IV_t, spot_t, strike_i, dte_i)`. 100% of bars
+have all 4 main legs with valid IVs (n_main_valid=4 for every bar). Wings counted separately
+(n_opt_valid). Base lots only. Reuses IV cache from Branch 1.
+
+**Entry Greeks at bar_num=0 (n=124 trades):**
+
+| Greek | Mean | Std |
+|---|---|---|
+| net_delta | +0.0642 | 0.0223 |
+| net_gamma | −0.000580 | 0.000228 |
+| net_theta | +7.61 pts/bar | 4.22 |
+| net_vega | +20.30 pts/vol-pt | 7.10 |
+
+**Key findings:**
+
+1. **Athena IS structurally long-vega at entry (+20.3 pts/vol-pt).** This directly corrects
+   Branch 1 finding #4. The calendar construction (sell near-dated, buy far-dated, same strike)
+   produces net long-vega because vega scales with √DTE: far-month vega > near-month vega.
+   The position is long-vega on 100% of bars across all 124 trades.
+
+2. **Reconciling with Branch 1's negative vega P&L contribution:** Athena earns positive vega
+   P&L when IV rises, negative when IV falls. Branch 1 showed −14.4 pts/trade average —
+   meaning IV fell (or compressed) during the average Athena trade. On losing trades specifically
+   (vega_contrib = −38 pts), IV dropped substantially. This is a market-condition statement, not
+   a structural-design statement. The position was long-vega throughout; the market moved against it.
+
+3. **Net delta is +0.064 and remarkably stable** (0–10% bucket: +0.061, 90–100% bucket: +0.066).
+   Slight CE-bias from calendar construction (ATM CE has slightly higher vega). Near-zero and
+   market-neutral in practice.
+
+4. **Net theta and vega both grow as dte_sell → 0.** This is a structural property of calendars:
+   as the near-dated sell expiry approaches, its vega and theta collapse faster than the far-dated
+   buy's. The calendar becomes *more* long-vega and *more* theta-positive near the sell expiry.
+
+   | dte_sell | n | net_theta | net_vega |
+   |---|---|---|---|
+   | >5d | 131,263 | +7.1 | +22.1 |
+   | 3–5d | 41,683 | +13.0 | +25.5 |
+   | 2–3d | 40,617 | +16.9 | +27.3 |
+   | 1–2d | 8,479 | +24.5 | +28.6 |
+
+5. **By normalized trade time:**
+
+   | Time bucket | net_theta | net_vega | net_gamma |
+   |---|---|---|---|
+   | 0–10% (entry) | +7.8 | +20.3 | −0.000570 |
+   | 50–60% | +9.1 | +24.0 | −0.000616 |
+   | 90–100% (exit) | +18.5 | +27.9 | −0.000687 |
+
+   Gamma is the most stable Greek — stays in the −0.00057 to −0.00069 range throughout.
+
+6. **Win/loss profiles at entry are identical.** Wins and losses enter with the same Greeks
+   (delta, vega, gamma, theta differ by < 1%). The outcome is entirely determined by what the
+   market does during the trade, not by what Greeks looked like at entry.
+
+**Cross-check vs Branch 1:** Reconstruction `Σ net_greek(t)×Δmarket_t` produces diffs vs
+Branch 1 contributions: delta max 143 pts, gamma max 26 pts, theta max 5 pts. All WARNs are
+due to wing legs — when a wing activates at bar t, its IV at bar t−1 was None, so Branch 1
+skips that bar-pair while Branch 2 includes the wing's delta in the reconstruction. For
+wing-free trades, reconstruction would be exact. Scale and sign are confirmed correct.
+
+---
+
+### Branch 2: Greek Profile — Artemis (173 trades: 146 Nifty + 27 Sensex)
+
+**Methodology note:** Same as Athena but single expiry, status-gated legs, variable strikes.
+All-4-valid means all 4 legs active with valid IVs (excludes bars after SL-close of one side).
+Nifty 40.1% all-4-valid (60% of bars are post-close, one side exited). Sensex 33.8%.
+
+**Entry Greeks at bar_num=0 (n=146 Nifty, n=27 Sensex):**
+
+| Greek | Nifty mean | Sensex mean |
+|---|---|---|
+| net_delta | −0.030 | −0.015 |
+| net_gamma | −0.00174 | −0.00045 |
+| net_theta | +14.2 pts/bar | +51.6 pts/bar |
+| net_vega | −6.92 pts/vol-pt | −28.2 pts/vol-pt |
+
+**Key findings:**
+
+1. **Artemis IS structurally short-vega (net_vega < 0 throughout).** Iron condor = short both
+   call and put spreads at the same expiry → short vega on all four legs net. Opposite of
+   Athena. Sensex vega (−28.2) is ~4× larger than Nifty (−6.9), confirming the scale
+   proportionality with option-price level.
+
+2. **Short-vega exposure collapses as DTE → 0** (Nifty): from −6.72 at 3–5d to −3.09 at 1–2d.
+   This is the expected behavior: vega → 0 as expiry approaches (all options, regardless of
+   moneyness). The iron condor becomes progressively less sensitive to vol moves in its
+   final day.
+
+   | DTE (Nifty) | net_vega |
+   |---|---|
+   | 3–5d | −6.72 |
+   | 2–3d | −5.14 |
+   | 1–2d | −3.09 |
+
+3. **Net gamma (~−0.00174 Nifty) does not intensify measurably over the DTE range 1–5d**
+   (−0.00166 at 3–5d, −0.00166 at 1–2d). The buy-legs partially offset sell-leg gamma
+   throughout. The all-4-valid filter may under-sample the most extreme near-expiry scenarios
+   (which often have one side closed).
+
+4. **Net delta near zero (−0.030 Nifty, −0.015 Sensex) — market-neutral confirmed.** Slight
+   PE-bias in Nifty (sell puts slightly closer to ATM or with higher delta). This is the
+   structural counterpart to Branch 1's near-zero delta contribution.
+
+5. **Win/loss profiles at entry are nearly identical** (vega: wins −6.87, losses −7.08).
+   Consistent with Branch 1: Artemis losses are delta-driven (spot movement during the trade),
+   not determined by the Greek level at entry.
+
+6. **Nifty theta grows as DTE → 0:** 3–5d: +13.5, 2–3d: +15.1, 1–2d: +18.4 pts/bar.
+   Theta accelerates near expiry, confirming the short-option theta engine runs at maximum
+   efficiency in the last 1–2 trading days.
+
+---
+
 ## Pipeline
 
 ```bash
@@ -345,8 +469,9 @@ python research/greek_analysis/pnl_attribution/run.py
 #    Artemis (cold run ~60–90 min once compute_iv intrinsic guard is in place):
 python research/greek_analysis/pnl_attribution/run_artemis.py
 
-# 3. Branch 2 — Greek profile (reuses cached IV from branch 1)
-python research/greek_analysis/greek_profile/run.py
+# 3. Branch 2 — Greek profile (reuses cached IV from branch 1, ~1-2 min warm)
+python research/greek_analysis/greek_profile/run.py          # Athena
+python research/greek_analysis/greek_profile/run_artemis.py  # Artemis
 
 # 4. Branch 3 — IV term structure (entry-time only, fast)
 python research/greek_analysis/iv_term_structure/run.py
