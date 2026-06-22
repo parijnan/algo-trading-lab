@@ -258,6 +258,56 @@ def fetch_full_range_index(obj, exchange: str, token: str,
     return combined
 
 
+def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> pd.DataFrame:
+    """
+    Broker sometimes skips a single 1-minute candle; the next bar's open is then
+    wrong because it should equal the close of the phantom bar.  Pattern:
+      - missing candle OHLC = close of the preceding bar (flat carry-forward)
+      - following bar's open should equal that same value
+
+    For each gap of exactly 2 minutes (one candle missing):
+      1. Insert a synthetic flat candle (OHLC = prev close, volume = 0).
+      2. Correct the open of the bar that follows the gap.
+    """
+    if len(df) < 2:
+        return df, 0
+
+    df = df.sort_values("time_stamp").reset_index(drop=True)
+
+    synthetic_rows = []
+    open_fixes: dict = {}
+
+    for i in range(1, len(df)):
+        gap_min = (df.loc[i, "time_stamp"] - df.loc[i - 1, "time_stamp"]).total_seconds() / 60
+        if gap_min == 2.0:
+            prev_close = df.loc[i - 1, "close"]
+            missing_ts = df.loc[i - 1, "time_stamp"] + pd.Timedelta(minutes=1)
+            row = {col: 0 for col in df.columns}
+            row.update({
+                "time_stamp": missing_ts,
+                "open": prev_close, "high": prev_close,
+                "low": prev_close,  "close": prev_close,
+                "volume": 0,
+            })
+            synthetic_rows.append(row)
+            open_fixes[i] = prev_close
+
+    if not synthetic_rows:
+        return df, 0
+
+    label = f"[{display_name}] " if display_name else ""
+    logger.info(f"{label}Inserting {len(synthetic_rows)} synthetic flat candle(s) "
+                f"and correcting {len(open_fixes)} bar open(s).")
+
+    for idx, new_open in open_fixes.items():
+        df.at[idx, "open"] = new_open
+
+    result = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
+    result.sort_values("time_stamp", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result, len(synthetic_rows)
+
+
 # ===========================================================================
 # Generic index updater
 # ===========================================================================
@@ -294,6 +344,15 @@ def update_index(obj, display_name: str, exchange: str,
     if new_data.empty:
         logger.info(f"[{display_name}] no new data fetched.")
         return
+
+    new_data, gap_fills = fill_missing_candles(new_data, display_name)
+    if gap_fills:
+        slack_bot_sendtext(
+            f"⚠️ *Gap Fill Applied* | {display_name} ({filename})\n"
+            f"{gap_fills} missing 1-min candle(s) detected and filled with flat "
+            f"carry-forward values. Open of the following bar corrected.",
+            SLACK_ERROR_CHANNEL
+        )
 
     # Normalise timestamps to the file's format: "2026-03-11 15:29:00+05:30"
     if new_data["time_stamp"].dt.tz is None:
