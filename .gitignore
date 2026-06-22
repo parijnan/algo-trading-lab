@@ -319,8 +319,13 @@ data_pipeline/data/nifty/temp/
 data/unified_performance_snapshot.csv
 data/debug_analysis_*.json
 
-# Iris backtest — generated excursion CSVs and comparison output
+# Iris backtest — generated excursion CSVs, comparison output, and charts
 iris_backtest/data/*.csv
+iris_backtest/data/*.png
+
+# Iris Friday analysis — research output (committed)
+!iris_backtest/data/iris_friday_artemis.csv
+!iris_backtest/data/iris_friday_artemis_distribution.png
 
 # Iris production — runtime data and logs
 iris_production/data/iris_state.csv
