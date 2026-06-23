@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) is next.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) CLOSED (2026-06-23): vol-aware thesis invalid (p=0.67), early-warning (delta=0.45) fires 56 vs 21 trades but Δmean=−0.45 pts full-sample, −0.69 pts recent — both periods degraded. All branches complete.**
 
 ---
 
@@ -212,29 +212,21 @@ Entry point: `research/greek_analysis/iv_skew/run.py`
 
 ### Branch 6: Greek Exit Triggers (`greek_exit_triggers/`)
 
-**Type:** Predictive (backtest behavior change). **Priority:** Medium. Highest mechanistic
-justification of the predictive branches.
+**Type:** Predictive. **CLOSED (2026-06-23).** Both close conditions triggered.
 
-Current Athena emergency hedge trigger: `spot >= ce_sell_strike + EMERGENCY_TRIGGER_OFFSET`
-(fixed 150 points). A fixed point offset is not vol-aware — 150 points carries far more
-delta/gamma risk when VIX is 23 vs when VIX is 17.
+Hypothesis: replace fixed offset trigger with CE sell delta ≥ 0.45 for vol-aware activation.
 
-Proposed: trigger the CE emergency hedge when the delta of the CE sell leg exceeds a threshold
-(e.g., 0.45–0.50) rather than when spot crosses a fixed point offset.
+**Findings:**
+- Diagnostic (run.py): offset trigger fires at CE sell delta = 0.77 median (DTE 1-3 days, deep
+  ITM). Vol-aware thesis DOES NOT HOLD — trigger delta is constant across VIX (p=0.67, n.s.).
+  Early-warning hypothesis tested instead (delta=0.45 fires much earlier, catches 56 vs 21 trades).
+- Backtest (backtest_greek_exit.py): full-sample Δ=−0.45 pts, recent Δ=−0.69 pts. Neither
+  improves. 35 additional fires are near-miss winners; hedge cost on false positives (−56 pts
+  total) exceeds gains from earlier activation on true threats.
+- Structural conclusion: the mechanism is correct for its purpose (late-stage parachute, fires
+  at DTE 1-3 days). Firing earlier imposes unrecoverable cost on the strategy.
 
-Implementation: `athena_backtest/backtest_greek_exit.py` — thin wrapper following the
-`backtest_vix15.py` / `backtest_oi_filter.py` pattern. Patches
-`EMERGENCY_TRIGGER_MODE = 'delta'` and `EMERGENCY_DELTA_THRESHOLD = 0.45` into configs;
-output to `data_greek_exit/`.
-
-Baseline comparison: same `print_comparison()` structure as backtest_oi_filter.py.
-
-Note: this requires Greek computation *during the backtest loop* (not post-hoc), which means
-`backtest.py` must call `compute_greeks()` at each bar where the trigger is checked. This is a
-more invasive change than the OI filter. Only start this branch after branches 1–2 establish
-that Greek computation at bar frequency is feasible within the backtest framework.
-
-Entry point: `research/greek_analysis/greek_exit_triggers/run.py` (analysis only);
+Entry point: `research/greek_analysis/greek_exit_triggers/run.py` (analysis);
 backtest variant at `athena_backtest/backtest_greek_exit.py`.
 
 ---
@@ -262,7 +254,7 @@ backtest variant at `athena_backtest/backtest_greek_exit.py`.
 | iv_term_structure | IC computed; period split assessed | IC unstable → no entry filter; diagnostic finding retained |
 | realized_vs_implied | rv_iv_ratio distribution by exit type documented | Always completes (diagnostic) |
 | iv_skew | IC > 0.15, period-stable | IC < 0.10 or sign-unstable → close immediately |
-| greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close |
+| greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close — CLOSED (2026-06-23): Δ=−0.45 full, −0.69 recent |
 
 ---
 

@@ -50,6 +50,7 @@ from configs import (
     ADJUSTMENT_NEW_STRIKE_DISTANCE, ADJUSTMENT_EXCLUDED_DAYS,
     ENABLE_EMERGENCY_HEDGE, EMERGENCY_HEDGE_DELTA, EMERGENCY_TRIGGER_OFFSET,
     EMERGENCY_EXIT_OFFSET, EMERGENCY_MAX_ATTEMPTS,
+    EMERGENCY_TRIGGER_MODE, EMERGENCY_DELTA_THRESHOLD,
     SLIPPAGE_POINTS, LOT_SIZE, RISK_FREE_RATE,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
     ENABLE_OI_FILTER, OI_FILTER_PCR_MIN, OI_FEATURES_PATH,
@@ -773,7 +774,13 @@ def append_1min_snapshots_window(from_ts: pd.Timestamp, to_ts: pd.Timestamp,
         # --- Emergency Hedge Logic ---
         if ENABLE_EMERGENCY_HEDGE and buy_expiry_end is not None and opt_df_cache is not None:
             if not emer_active and emer_attempts < EMERGENCY_MAX_ATTEMPTS:
-                if spot >= ce_sell_strike - EMERGENCY_TRIGGER_OFFSET:
+                if EMERGENCY_TRIGGER_MODE == 'delta' and sell_expiry_end is not None:
+                    _dte = max((sell_expiry_end.date() - ts.date()).days, 0.5)
+                    _d   = compute_delta(spot, ce_sell_strike, _dte, running_ce_sell, 'ce')
+                    _trigger = _d is not None and _d >= EMERGENCY_DELTA_THRESHOLD
+                else:
+                    _trigger = spot >= ce_sell_strike - EMERGENCY_TRIGGER_OFFSET
+                if _trigger:
                     stk, pr = select_strike(spot, buy_expiry_end, ts, 'ce', opt_df_cache, EMERGENCY_HEDGE_DELTA)
                     if stk:
                         emer_strike = stk

@@ -134,9 +134,12 @@ ADJUSTMENT_EXCLUDED_DAYS        = (0,)
 # ---------------------------------------------------------------------------
 ENABLE_EMERGENCY_HEDGE          = True
 EMERGENCY_HEDGE_DELTA           = 0.35    # Monthly CE bought on upside stress
-EMERGENCY_TRIGGER_OFFSET        = -150    # pts past CE strike to BUY hedge
+EMERGENCY_TRIGGER_OFFSET        = -150    # pts past CE strike to BUY hedge (offset mode)
 EMERGENCY_EXIT_OFFSET           = 0       # pts from CE strike to SELL hedge (on reversal)
 EMERGENCY_MAX_ATTEMPTS          = 1       # Limit whipsaw cost
+# Branch 6 — delta-mode trigger
+EMERGENCY_TRIGGER_MODE          = 'offset'  # 'offset' | 'delta' — default = existing behavior
+EMERGENCY_DELTA_THRESHOLD       = 0.45      # CE sell leg delta at which to buy parachute (delta mode)
 # ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------

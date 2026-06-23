@@ -187,20 +187,35 @@ Output: `iv_skew/data/iv_skew_signal.csv`
 
 ### Branch 6 — Greek Exit Triggers (`greek_exit_triggers/`)
 
-**Status: Not started. Requires branches 1–2 first.**
+**CLOSED (2026-06-23). Both close conditions triggered.**
 
-Replace Athena's fixed `EMERGENCY_TRIGGER_OFFSET` (150 points) with a delta-threshold on the CE
-sell leg (e.g., delta ≥ 0.45). A fixed point offset is not vol-aware: the same 150-point move
-carries more risk at VIX 23 than VIX 17.
+Replace Athena's fixed `EMERGENCY_TRIGGER_OFFSET` (150 points) with a delta-threshold (≥ 0.45)
+on the CE sell leg.
 
-Implementation: `athena_backtest/backtest_greek_exit.py` — thin wrapper following the
-`backtest_oi_filter.py` pattern. Output to `athena_backtest/data_greek_exit/`.
+**Diagnostic finding (run.py):**
+The offset trigger fires when the CE sell leg delta is already 0.77 median (deep ITM, DTE 1-3
+days). Vol-aware thesis DOES NOT HOLD: trigger delta is ~constant across VIX (p=0.67, n.s.).
+The early-warning hypothesis (fire earlier, at delta 0.45) was tested instead.
 
-Gate: only start this branch after branches 1–2 confirm that delta/gamma is the dominant loss
-driver on emergency hedge trades — otherwise the mechanistic justification is weak.
+**Backtest result (backtest_greek_exit.py):**
 
-Output: `data/greek_exit_triggers.csv` (analysis); backtest results in
-`athena_backtest/data_greek_exit/`.
+| Period     | n   | Baseline mean | Delta mode mean | Δ |
+|---|---|---|---|---|
+| Full sample | 124 | +22.30 pts | +21.85 pts | −0.45 |
+| Early 2020–22 | 102 | +16.57 pts | +16.17 pts | −0.40 |
+| Recent 2023+ | 22 | +48.88 pts | +48.19 pts | −0.69 |
+
+Delta mode fires in 56 trades (vs 21 for offset). The 35 additional fires are near-miss winners;
+hedge premium cost on false positives (−56 pts total) exceeds gains from earlier activation.
+Neither period improves → close condition triggered.
+
+**Structural conclusion:** Athena's emergency hedge mechanism is a late-stage parachute (fires at
+DTE 1-3 days, delta ~0.77). Firing earlier at delta=0.45 provides better protection on the worst
+losers but imposes unrecoverable cost on near-miss winners. The mechanism is working as designed;
+vol-awareness is not a productive axis for improvement.
+
+Output: `data/trigger_delta_analysis.csv` (21 hedged trade diagnostics);
+backtest results in `athena_backtest/data_greek_exit/`.
 
 ---
 
