@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) is next.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) is next.**
 
 ---
 
@@ -195,20 +195,16 @@ Entry point: `research/greek_analysis/realized_vs_implied/run.py`
 
 ### Branch 5: IV Skew (`iv_skew/`)
 
-**Type:** Predictive. **Priority:** Low. Set prior low — same gauntlet as OI filter.
+**Type:** Predictive. **CLOSED (2026-06-23).** Both close conditions triggered.
 
-At entry: CE sell IV vs PE sell IV at the strikes actually traded.
+Skew metric: `(pe_near_iv - ce_near_iv) / near_iv`. Pre-registered hypothesis: negative IC.
 
-Skew metric: `(put_iv - call_iv) / atm_iv` — positive = market pricing more downside risk.
+Findings: IC_raw = +0.022 (< 0.10, wrong sign). Sign-unstable: 2020–22 IC = +0.15, 2023+ IC = −0.19.
+Tercile P&L is non-monotonic. No signal survives VIX or slope partial correlation. Structural note:
+94.4% of trades enter with positive skew — equity market puts are structurally more expensive than
+calls, so there is little variation in skew *direction*, only magnitude.
 
-Hypothesis: enter when skew is low (market not pricing excessive downside) → calendar is more
-symmetric, both sides contribute theta. High-skew entries are asymmetrically expensive to enter
-and carry more directional risk on the PE side.
-
-Mandatory: Spearman IC, quintile P&L analysis, period split. If IC is unstable across periods,
-close the branch immediately (same verdict path as pcr_near).
-
-Output: `data/iv_skew_signal.csv`
+Output: `iv_skew/data/iv_skew_signal.csv`
 
 Entry point: `research/greek_analysis/iv_skew/run.py`
 

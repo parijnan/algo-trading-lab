@@ -133,19 +133,55 @@ first-exiting side (chronologically). ELM is kept as its own bucket (regulatory,
 
 ### Branch 5 — IV Skew (`iv_skew/`)
 
-**Status: Not started.**
+**CLOSED (2026-06-23). Output: `iv_skew/data/iv_skew_signal.csv` (124 rows).**
 
-At entry: CE sell IV vs PE sell IV at the actual strikes traded.
+At entry: CE sell IV vs PE sell IV at the actual strikes actually traded.
 
-Metric: `(put_iv - call_iv) / atm_iv` — positive = market pricing more downside risk.
+Metric: `(pe_near_iv - ce_near_iv) / near_iv` — positive = market pricing more downside risk.
 
-Hypothesis: high-skew entries are asymmetrically expensive; calendar is less symmetric. Low skew
-→ both sides contribute theta equally.
+Delta check: CE and PE sell strikes are delta-symmetric (both target 0.30 delta, mean |delta diff|
+= 0.027), so the IV difference is a clean risk-reversal-style skew measurement with no moneyness
+contamination.
 
-Full IC / period-split / barrier gauntlet required. Close immediately if IC < 0.10 or sign-unstable
-across periods (same close condition as pcr_near).
+Pre-registered hypothesis: negative IC (low skew → better, more symmetric calendar).
 
-Output: `data/iv_skew_signal.csv`
+**Spearman IC (full sample, n=124):**
+
+| Signal | IC | p-value | |
+|---|---|---|---|
+| skew (raw) | +0.022 | 0.81 | n.s. |
+| skew \| VIX controlled | +0.041 | 0.65 | n.s. |
+| skew \| slope controlled | +0.057 | 0.53 | n.s. |
+| skew \| VIX + slope controlled | +0.091 | 0.32 | n.s. |
+
+**Period split:**
+
+| Period | n | IC | p |
+|---|---|---|---|
+| 2020–22 | 102 | +0.153 | 0.12 |
+| 2023+ | 22 | −0.189 | 0.40 |
+
+**Tercile P&L:**
+
+| Tercile | n | Mean | Median |
+|---|---|---|---|
+| Low | 41 | +27.0 | +29.6 |
+| Mid | 41 | +4.0 | −0.5 |
+| High | 42 | +35.5 | +29.8 |
+
+**Close verdict: both conditions triggered.**
+1. `|IC_raw| = 0.022 < 0.10` — no signal.
+2. Sign-unstable across periods (+0.15 in 2020–22, −0.19 in 2023+).
+
+The tercile table is non-monotonic (mid is worst, high is best) — no coherent directional story.
+The pre-registered hypothesis (negative IC) is wrong even in sign for 2020–22. Controlling for
+slope or VIX does not reveal a hidden signal. The skew metric carries no independent predictive
+information about Athena P&L.
+
+Note: 94.4% of trades enter with positive skew (put IV > call IV is structural in equity markets).
+There is essentially no within-sample variation in the direction of skew, only in magnitude.
+
+Output: `iv_skew/data/iv_skew_signal.csv`
 
 ---
 
