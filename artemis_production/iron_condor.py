@@ -859,16 +859,15 @@ class IronCondor:
         else:
             outcome = 'Neutral'
 
-        add_lots = self.pe_spread.additional_lots
         pl_rs = round(
             (self.pe_spread.pl + self.ce_spread.pl +
-             (self.pe_spread.additional_pl  * add_lots / max(self.pe_spread.lots, 1)) +
-             (self.ce_spread.additional_pl  * add_lots / max(self.ce_spread.lots, 1))
+             (self.pe_spread.additional_pl * self.pe_spread.additional_lots / max(self.pe_spread.lots, 1)) +
+             (self.ce_spread.additional_pl * self.ce_spread.additional_lots / max(self.ce_spread.lots, 1))
             ) * lot_size, 2)
         realised_rs = round(
             (self.pe_spread.booked_pl + self.ce_spread.booked_pl +
-             (self.pe_spread.additional_booked_pl * add_lots / max(self.pe_spread.lots, 1)) +
-             (self.ce_spread.additional_booked_pl * add_lots / max(self.ce_spread.lots, 1))
+             (self.pe_spread.additional_booked_pl * self.pe_spread.additional_lots / max(self.pe_spread.lots, 1)) +
+             (self.ce_spread.additional_booked_pl * self.ce_spread.additional_lots / max(self.ce_spread.lots, 1))
             ) * lot_size, 2)
         unrealised_rs = round(pl_rs - realised_rs, 2)
 
