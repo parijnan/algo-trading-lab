@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) is next.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) is next.**
 
 ---
 
@@ -144,22 +144,23 @@ Entry points: `research/greek_analysis/greek_profile/run.py` (Athena),
 
 ### Branch 3: IV Term Structure (`iv_term_structure/`)
 
-**Type:** Diagnostic first, then optionally predictive. **Priority:** Medium.
+**Type:** Diagnostic first, then optionally predictive. **COMPLETE (2026-06-23).**
 
-At entry time, compute ATM IV for the near (sell) expiry and the far (buy) expiry.
+Athena only (single-expiry Artemis has no term structure to measure). Uses traded-strike IVs —
+both CE/PE sell/buy legs share the same strike across expiries, so slope = far_IV/near_IV is
+a clean single-strike term-structure ratio (no skew contamination).
 
-Metrics:
-- Term structure slope: `far_IV / near_IV`
-- Calendar value index: `near_IV - far_IV` in vol points
-- Correlation of slope with trade P&L (Spearman IC)
+**Findings (n=124):**
+- slope IC vs P&L = −0.327 (p=0.0002 ***). spread IC = +0.321 (p=0.0003 ***).
+- Tercile P&L: low-spread (contango) +1.5 pts, mid +31.3, high-spread (backwardation) +33.8 pts.
+- NOT a VIX proxy: VIX IC = −0.087 (p=0.34); VIX-controlled slope IC unchanged at −0.331.
+- Period split: 2020–22 (n=102) IC = −0.347 ***; 2023+ (n=22) IC = −0.185 n.s. (CI ±0.43).
+  Period stability is inconclusive — n=22 too small to distinguish IC=0 from IC=−0.33.
 
-This is the options-market analog of the pcr_near OI signal. A steeper term structure (near_IV
-higher) means we're selling the more expensive vol — the calendar's edge is larger.
+**Signal verdict:** IC ≈ 0.33 is material. Warrants barrier/quintile analysis and out-of-sample
+test before live use. More 2023+ data needed to establish period-stability.
 
-Period split (2020-22 vs 2023+) mandatory. If IC is period-stable, treat as a potential entry
-filter and apply the same IC/barrier gauntlet from OI analysis.
-
-Output: `data/iv_term_structure.csv` — entry-time IV values and slope for each trade.
+Output: `iv_term_structure/data/iv_term_structure.csv` (124 rows, one per trade).
 
 Entry point: `research/greek_analysis/iv_term_structure/run.py`
 

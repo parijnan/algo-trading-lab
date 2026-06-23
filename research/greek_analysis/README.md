@@ -100,19 +100,20 @@ post-SL-close bars where one side is fully exited).
 
 ### Branch 3 — IV Term Structure (`iv_term_structure/`)
 
-**Status: Not started.**
+**Athena only: Complete (2026-06-23). Output: `iv_term_structure/data/iv_term_structure.csv` (124 rows).**
 
-At entry: ATM IV for the near (sell) expiry and far (buy) expiry.
+Note: Artemis is single-expiry; there is no near/far term structure to measure.
 
-Metrics:
-- Term structure slope: far_IV / near_IV
-- Correlation of slope with trade P&L (Spearman IC)
-- Period split (2020–22 vs 2023+) mandatory
+Uses traded-strike IVs (not ATM), which is more precise here: the CE sell and CE buy legs
+use the same strike at different expiries, so `ce_buy_iv / ce_sell_iv` is a clean single-strike
+term-structure ratio with no skew contamination. ATM would mix strikes and conflate skew with
+term structure.
 
-A calendar's edge is larger when near_IV > far_IV — we're selling the more expensive vol.
-If IC is period-stable, may qualify as an entry filter (same gauntlet as pcr_near OI signal).
-
-Output: `data/iv_term_structure.csv`
+Metrics at entry (bar 0):
+- `near_iv` = mean(ce_near_iv, pe_near_iv) — avg IV at sell expiry
+- `far_iv`  = mean(ce_far_iv,  pe_far_iv)  — avg IV at buy expiry
+- `slope`   = far_iv / near_iv             — >1 = contango (far > near), <1 = backwardation
+- `spread`  = near_iv − far_iv             — >0 = backwardation (near > far)
 
 ---
 
@@ -454,6 +455,97 @@ Nifty 40.1% all-4-valid (60% of bars are post-close, one side exited). Sensex 33
 6. **Nifty theta grows as DTE → 0:** 3–5d: +13.5, 2–3d: +15.1, 1–2d: +18.4 pts/bar.
    Theta accelerates near expiry, confirming the short-option theta engine runs at maximum
    efficiency in the last 1–2 trading days.
+
+---
+
+### Branch 3: IV Term Structure — Athena (124 trades, 2020–2026)
+
+**Methodology note:** Entry-bar IV only (bar_num=0). Reuses IV cache from Branch 1 (run time
+< 5 seconds). Traded-strike IVs used; both CE and PE legs share the same strike across expiries,
+so the ratio directly measures term-structure slope without skew contamination. 48.4% of trades
+entered in contango (far > near); 51.6% in backwardation.
+
+**Descriptive statistics at entry:**
+
+| Metric | Mean | Std | Min | Max |
+|---|---|---|---|---|
+| near_iv | 19.05 | 3.74 | 12.51 | 33.89 |
+| far_iv | 18.75 | 2.61 | 13.98 | 26.54 |
+| slope | 0.999 | 0.120 | 0.671 | 1.527 |
+| spread | +0.30 | 2.42 | −6.93 | +11.14 |
+
+**IC vs total P&L — full sample (n=124):**
+
+| Signal | IC | p-value | |
+|---|---|---|---|
+| slope (far/near) | −0.327 | 0.0002 | *** |
+| spread (near−far) | +0.321 | 0.0003 | *** |
+| near_iv alone | +0.069 | 0.45 | n.s. |
+| far_iv alone | −0.114 | 0.21 | n.s. |
+| entry_vix | −0.087 | 0.34 | n.s. |
+
+The slope/spread signal is strong (IC ≈ ±0.32) and independent of VIX level. Note that slope
+and spread are inverse transformations of the same underlying variable — they carry identical
+information; the IC signs just flip.
+
+**Period split:**
+
+| Period | n | slope IC | p | spread IC | p |
+|---|---|---|---|---|---|
+| 2020–22 | 102 | −0.347 | 0.0003 *** | +0.348 | 0.0003 *** |
+| 2023+ | 22 | −0.185 | 0.41 n.s. | +0.144 | 0.52 n.s. |
+
+The 2020–22 IC is strong. The 2023+ result is statistically indeterminate: n=22 gives a 95% CI
+of ±0.43, so an IC of −0.18 in 2023+ is entirely consistent with the true IC still being −0.33
+(or being zero — the data cannot distinguish). This is not a period-instability verdict; it is
+a sample-size limitation.
+
+**Tercile P&L — spread (near−far):**
+
+| Tercile | n | Mean P&L | Median P&L |
+|---|---|---|---|
+| Low (contango) | 41 | +1.5 | −4.5 |
+| Mid | 41 | +31.3 | +19.6 |
+| High (backwardation) | 42 | +33.8 | +36.0 |
+
+Clear monotonic pattern: high-backwardation entries → +33.8 pts mean; contango entries → +1.5 pts mean.
+
+**VIX confound check:**
+- entry_vix IC vs P&L = −0.087 (p=0.34, not significant)
+- slope IC with VIX controlled out: −0.331 (vs raw −0.327) — essentially unchanged
+- spread IC with VIX controlled out: +0.317 (vs raw +0.321) — essentially unchanged
+
+The term structure signal is independent of VIX level. Athena is VIX-gated (16–25), so VIX
+variation within the window is ≤ 9 points; the fact that the IC is not just a VIX proxy is
+important — it means term-structure slope carries information beyond "how stressed is the market."
+
+**CE vs PE slope consistency:** Spearman(ce_slope, pe_slope) = 0.79 (p < 0.0001). The two legs
+respond to the same vol regime; averaging them is well-justified.
+
+**Key findings:**
+
+1. **Backwardation (near_IV > far_IV) is associated with better P&L.** Tercile mean P&L goes
+   from +1.5 (contango) to +33.8 (backwardation). The mechanism is calendar edge: when near-dated
+   vol is expensive relative to far-dated vol, we collect more premium on the sell leg per unit of
+   far-dated hedge cost. A steeper downward slope in the term structure = larger theta collection.
+
+2. **The signal is not a VIX proxy.** VIX itself has no significant IC with P&L (−0.09, p=0.34).
+   The VIX-controlled term structure IC is indistinguishable from the raw IC. Term structure
+   slope contains information about the *shape* of the vol surface that raw vol level does not.
+
+3. **Period stability is inconclusive, not negative.** 2020–22: IC = −0.35 (strong, n=102).
+   2023+: IC = −0.19 (n=22, CI too wide to conclude). More 2023+ data is needed before treating
+   the signal as stable or unstable. The 2023+ sample currently represents only 18% of the total.
+
+4. **Neither near_iv nor far_iv alone has meaningful IC.** The signal is in the *relative* term
+   structure (near vs far), not the absolute vol level. This is consistent with the calendar's
+   theoretical edge being driven by the ratio between near- and far-dated vol.
+
+**Signal verdict:** Strong diagnostic finding. The slope/spread IC of ≈ 0.33 at n=124 is
+material (comparable in magnitude to good factor premia in quantitative finance). Warrants the
+full entry-filter gauntlet (barrier analysis, out-of-sample test, transaction cost adjustment)
+before live implementation. The 2023+ n=22 is too small to establish period-stability — more
+data required. Proceed to barrier/quintile analysis before declaring this an actionable filter.
 
 ---
 
