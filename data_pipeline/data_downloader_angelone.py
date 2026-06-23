@@ -258,16 +258,20 @@ def fetch_full_range_index(obj, exchange: str, token: str,
     return combined
 
 
-def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> pd.DataFrame:
+MAX_FILL_MINUTES = 10   # gaps larger than this are left alone (real halts / pre-open)
+
+
+def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     """
-    Broker sometimes skips a single 1-minute candle; the next bar's open is then
-    wrong because it should equal the close of the phantom bar.  Pattern:
-      - missing candle OHLC = close of the preceding bar (flat carry-forward)
+    Broker sometimes skips 1-minute candles; the next bar's open is then wrong
+    because it should equal the close of the last phantom bar.  Pattern:
+      - each missing candle OHLC = close of the preceding bar (flat carry-forward)
       - following bar's open should equal that same value
 
-    For each gap of exactly 2 minutes (one candle missing):
-      1. Insert a synthetic flat candle (OHLC = prev close, volume = 0).
+    For each intra-session gap of 2–MAX_FILL_MINUTES minutes:
+      1. Insert synthetic flat candles for every missing minute.
       2. Correct the open of the bar that follows the gap.
+    Gaps larger than MAX_FILL_MINUTES are left untouched (real halts, pre-open, etc.).
     """
     if len(df) < 2:
         return df, 0
@@ -279,17 +283,18 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> pd.DataFra
 
     for i in range(1, len(df)):
         gap_min = (df.loc[i, "time_stamp"] - df.loc[i - 1, "time_stamp"]).total_seconds() / 60
-        if gap_min == 2.0:
+        if 2.0 <= gap_min <= MAX_FILL_MINUTES:
             prev_close = df.loc[i - 1, "close"]
-            missing_ts = df.loc[i - 1, "time_stamp"] + pd.Timedelta(minutes=1)
-            row = {col: 0 for col in df.columns}
-            row.update({
-                "time_stamp": missing_ts,
-                "open": prev_close, "high": prev_close,
-                "low": prev_close,  "close": prev_close,
-                "volume": 0,
-            })
-            synthetic_rows.append(row)
+            for m in range(1, int(gap_min)):
+                missing_ts = df.loc[i - 1, "time_stamp"] + pd.Timedelta(minutes=m)
+                row = {col: 0 for col in df.columns}
+                row.update({
+                    "time_stamp": missing_ts,
+                    "open": prev_close, "high": prev_close,
+                    "low": prev_close,  "close": prev_close,
+                    "volume": 0,
+                })
+                synthetic_rows.append(row)
             open_fixes[i] = prev_close
 
     if not synthetic_rows:
