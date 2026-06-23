@@ -176,8 +176,8 @@ QV estimator: `rv_ann = sqrt(Σ rᵢ² / T_years) × 100`. Overnight gaps includ
 - Vol overpriced at entry across all trades: mean ratio = 0.82. Entry IV > realized vol.
 - Winners ratio = 0.81, Losers ratio = 0.86 — tiny difference, not significant (IC = −0.10, p=0.26).
 - rv_iv_ratio has NO predictive power for Athena. Entry IV being "right" or "wrong" is not the loss driver.
-- Branch 1 cross-check confirmed: Athena loses because IV rises DURING the trade (vega channel),
-  not because entry IV was set too low.
+- Branch 1 cross-check confirmed: Athena loses because IV falls DURING the trade (long-vega
+  calendar marks down with vol compression), not because entry IV was set too low.
 
 **Findings (Artemis Nifty, n=146):**
 - Confounded by exit timing: early SL exits produce inflated annualized RV (short window captures vol spike).

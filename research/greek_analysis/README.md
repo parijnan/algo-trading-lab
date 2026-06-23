@@ -202,8 +202,9 @@ IV fail bars: 0 / 221,919 (0.0% — all bars attributed).
    roughly symmetric across wins and losses.
 
 3. **Vega flips between winners and losers.** On wins: vega ≈ 0 (−0.3 pts). On losses: vega =
-   −38 pts. Losing trades are disproportionately associated with vol expansion — exactly what
-   the calendar long-vega structure is supposed to hedge but doesn't fully cover.
+   −38 pts. Athena is long-vega (Branch 2), so a negative vega contribution means IV fell during
+   the trade. Losing trades are disproportionately associated with vol compression — IV dropped
+   substantially from entry to exit, hurting the long-vega calendar position.
 
 4. **Branch 1 vega contribution was negative (−14.4 pts/trade) — but this does NOT mean
    Athena is short-vega.** *(Correction: Branch 2 proves Athena is consistently long-vega —
@@ -578,11 +579,13 @@ continuously. `near_iv` from Branch 3 IV cache at bar_num=0.
    determine whether the trade wins or loses.
 
 3. **Cross-validation of Branch 1 loss mechanism:** Branch 1 showed Athena losers are
-   vega-driven (vega contribution = −38 pts on losers vs ≈ 0 on winners). Branch 4 shows
-   losers do NOT have rv_iv_ratio > 1 (only 21.7% of losers vs 14.1% of winners). The entry
-   IV was not underpriced. **Conclusion: Athena losses come from IV rising DURING the trade
-   (mark-to-market vega loss), not from entry IV being set too low.** The calendar is correctly
-   pricing realized vol at entry but loses when vol expands further intraperiod.
+   vega-driven (vega contribution = −38 pts on losers vs ≈ 0 on winners). Athena is long-vega,
+   so negative vega contribution means IV FELL during those trades. Branch 4 shows losers do NOT
+   have rv_iv_ratio > 1 (only 21.7% of losers vs 14.1% of winners). The entry IV was not
+   underpriced vs realized vol. **Conclusion: Athena losses come from IV falling DURING the trade
+   — the calendar marks down as IV compresses from entry level to exit level. Entry IV correctly
+   reflected eventual realized vol; the loss is path-dependent (IV drops intraperiod, the long-vega
+   calendar loses mark-to-market, and vol does not recover before exit).**
 
 4. **Period split is consistent with no signal:** 2020–22 IC = −0.03 (p=0.74); 2023+ IC = −0.24
    (p=0.28, n=22 too small). Nothing to segment further.
