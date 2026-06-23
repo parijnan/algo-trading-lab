@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) is next.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) is next.**
 
 ---
 
@@ -168,22 +168,26 @@ Entry point: `research/greek_analysis/iv_term_structure/run.py`
 
 ### Branch 4: Realized vs Implied Vol (`realized_vs_implied/`)
 
-**Type:** Diagnostic. **Priority:** Medium.
+**Type:** Diagnostic. **COMPLETE (2026-06-23).**
 
-For each trade: compute entry IV at the sell strike, then compute realized vol over the actual
-holding period.
+QV estimator: `rv_ann = sqrt(Σ rᵢ² / T_years) × 100`. Overnight gaps included. `rv_iv_ratio = rv_ann / near_iv`.
 
-Metrics:
-- `rv_iv_ratio = realized_vol / entry_iv` (ratio > 1 = vol underpriced; we got hurt)
-- Segmented by exit type: expiry hold, SL hit, target hit
-- Correlation of rv_iv_ratio with trade P&L
+**Findings (Athena, n=124):**
+- Vol overpriced at entry across all trades: mean ratio = 0.82. Entry IV > realized vol.
+- Winners ratio = 0.81, Losers ratio = 0.86 — tiny difference, not significant (IC = −0.10, p=0.26).
+- rv_iv_ratio has NO predictive power for Athena. Entry IV being "right" or "wrong" is not the loss driver.
+- Branch 1 cross-check confirmed: Athena loses because IV rises DURING the trade (vega channel),
+  not because entry IV was set too low.
 
-Key question: when we lose, is it because spot moved adversarially (delta/gamma loss) or because
-vol expanded beyond what we priced in (vega loss)?
+**Findings (Artemis Nifty, n=146):**
+- Confounded by exit timing: early SL exits produce inflated annualized RV (short window captures vol spike).
+  Winners (ratio=1.87) > Losers (ratio=1.03) is an artifact of this confound, not a vol signal.
+- ELM exits (all wins, n=26): ratio = 0.85 — regulatory exits before large moves, vol correctly priced.
+- index_sl losses: ratio = 1.08 (spot moved just beyond entry IV) — consistent with directional loss.
+- option_sl losses: ratio = 0.98 — price-based exit at moderate vol, not large spot move.
+- IC = +0.07 (p=0.40, not significant).
 
-This directly connects to the P&L attribution branch — use attribution output to validate.
-
-Output: `data/rv_iv_analysis.csv`
+Outputs: `realized_vs_implied/data/rv_iv_athena.csv`, `rv_iv_artemis.csv`
 
 Entry point: `research/greek_analysis/realized_vs_implied/run.py`
 

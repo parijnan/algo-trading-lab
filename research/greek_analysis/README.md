@@ -119,19 +119,15 @@ Metrics at entry (bar 0):
 
 ### Branch 4 — Realized vs Implied Vol (`realized_vs_implied/`)
 
-**Status: Not started.**
+**Athena: Complete (2026-06-23). Output: `realized_vs_implied/data/rv_iv_athena.csv` (124 rows).**
+**Artemis: Complete (2026-06-23). Output: `realized_vs_implied/data/rv_iv_artemis.csv` (173 rows).**
 
-For each trade: entry IV at the sell strike vs realized vol over the actual holding period.
-
-Metrics:
-- rv_iv_ratio = realized_vol / entry_iv (>1 = vol underpriced; strategy got hurt)
-- Segmented by exit type: expiry hold, SL hit, target hit
-- Correlation with trade P&L
-
-Key question: when we lose, is it because spot moved adversarially (delta/gamma) or because vol
-expanded beyond what was priced in (vega)? Cross-checks branch 1 attribution.
-
-Output: `data/rv_iv_analysis.csv`
+Entry IV from IV cache at bar 0. Realized vol via quadratic variation estimator:
+`rv_ann% = sqrt(Σ rᵢ² / T_years) × 100`, where `T_years = elapsed calendar time / 365`.
+QV is gap-robust — overnight and weekend gaps are naturally included (position is held continuously).
+`rv_iv_ratio = rv_ann / near_iv` (>1 = realized vol exceeded entry IV, vol was underpriced).
+Athena: segment by win/loss (all exits `pre_expiry`). Artemis: segment by exit type of the
+first-exiting side (chronologically). ELM is kept as its own bucket (regulatory, not vol outcome).
 
 ---
 
@@ -549,7 +545,109 @@ data required. Proceed to barrier/quintile analysis before declaring this an act
 
 ---
 
-## Pipeline
+### Branch 4: Realized vs Implied Vol — Athena (124 trades, 2020–2026)
+
+**Methodology note:** Quadratic-variation realized vol estimator, matching mibian's calendar
+convention (T = dte/365). Overnight and weekend gap moves included — positions are held
+continuously. `near_iv` from Branch 3 IV cache at bar_num=0.
+
+**Full-sample summary:**
+
+| Group | n | rv_ann | near_iv | rv_iv_ratio | median ratio |
+|---|---|---|---|---|---|
+| All trades | 124 | 15.71% | 19.05% | 0.825 | 0.781 |
+| Winners | 78 | 15.50% | 19.19% | 0.805 | 0.760 |
+| Losers | 46 | 16.06% | 18.80% | 0.859 | 0.840 |
+
+**Spearman IC vs total P&L (full sample):**
+
+| Signal | IC | p-value | |
+|---|---|---|---|
+| rv_iv_ratio | −0.102 | 0.26 | n.s. |
+| rv_ann | −0.032 | 0.73 | n.s. |
+| entry_iv (near_iv) | +0.069 | 0.45 | n.s. |
+| entry_vix | −0.087 | 0.34 | n.s. |
+
+**Key findings:**
+
+1. **Vol was overpriced at entry across all Athena trades (ratio = 0.82).** On average, spot
+   moved only 82% of what entry IV implied. Athena is selling expensive vol — confirmed.
+
+2. **rv_iv_ratio has NO predictive power for Athena P&L (IC = −0.10, p=0.26).** Losers have
+   only marginally higher ratio (0.86 vs 0.81). Entry IV being "right" or "wrong" does not
+   determine whether the trade wins or loses.
+
+3. **Cross-validation of Branch 1 loss mechanism:** Branch 1 showed Athena losers are
+   vega-driven (vega contribution = −38 pts on losers vs ≈ 0 on winners). Branch 4 shows
+   losers do NOT have rv_iv_ratio > 1 (only 21.7% of losers vs 14.1% of winners). The entry
+   IV was not underpriced. **Conclusion: Athena losses come from IV rising DURING the trade
+   (mark-to-market vega loss), not from entry IV being set too low.** The calendar is correctly
+   pricing realized vol at entry but loses when vol expands further intraperiod.
+
+4. **Period split is consistent with no signal:** 2020–22 IC = −0.03 (p=0.74); 2023+ IC = −0.24
+   (p=0.28, n=22 too small). Nothing to segment further.
+
+---
+
+### Branch 4: Realized vs Implied Vol — Artemis (146 Nifty + 27 Sensex)
+
+**Methodology note:** Exit time for RV = exit time of first-exiting side. ELM exits kept separate
+(regulatory, not vol outcome). Warning: the RV window for early SL exits is shorter, which raises
+annualized vol mechanically — this confounds the exit-type comparison.
+
+**Nifty full-sample summary:**
+
+| Group | n | rv_ann | near_iv | rv_iv_ratio | median ratio |
+|---|---|---|---|---|---|
+| All trades | 146 | 23.42% | 14.16% | 1.660 | 1.009 |
+| Winners | 109 | 26.60% | 14.30% | 1.873 | 1.083 |
+| Losers | 37 | 14.04% | 13.73% | 1.031 | 0.993 |
+
+**By exit type (Nifty, first-exiting side):**
+
+| Exit type | Win/Loss | n | rv_ann | ratio |
+|---|---|---|---|---|
+| elm | wins | 26 | 13.09% | 0.854 |
+| index_sl | wins | 43 | 25.01% | 1.985 |
+| index_sl | losses | 19 | 13.90% | 1.077 |
+| option_sl | wins | 40 | 37.09% | 2.415 |
+| option_sl | losses | 18 | 14.18% | 0.982 |
+
+**Key findings:**
+
+1. **Artemis Nifty rv_iv_ratio is inverted: winners (1.87) > losers (1.03).** This is an
+   artifact of exit timing — not a vol-regime conclusion. Early SL exits (within 1–2 days on
+   volatile days) produce high annualized RV simply because the short window captures a spike.
+   Winning trades often trigger SL on one side early but still collect net credit; these trades
+   show inflated rv_iv_ratio because of the short annualization window.
+
+2. **ELM exits (always wins, n=26): ratio = 0.85.** ELM fires near expiry when options collapse
+   toward intrinsic. Spot has moved little relative to entry IV — correctly showing vol was
+   overpriced for these trades.
+
+3. **index_sl losses have ratio = 1.08 — spot moved slightly more than priced in.** This is
+   consistent with Branch 1's finding that Artemis losses are delta-driven: spot crossed the sell
+   strike directionally. The 1.08 ratio shows a modest but real excess-realized-vol effect.
+
+4. **option_sl losses have ratio = 0.98 — vol was barely mispriced.** Option_sl fires when the
+   option price exceeds a threshold, but spot may not have moved far. These losses happen at
+   moderate vol (ratio near 1), consistent with spread widening from microstructure or modest
+   directional drift rather than large spot moves.
+
+5. **IC = +0.07 (p=0.40) — no significant predictive power.** The confound identified in
+   finding #1 renders rv_iv_ratio uninterpretable as a Spearman signal here.
+
+6. **Cross-validation of Branch 1 loss mechanism:** Branch 1 showed Artemis losses are
+   delta-driven (delta contribution = −27.8 on losers). Branch 4 index_sl losses show ratio =
+   1.08 (spot moved beyond entry IV) — directionally consistent. option_sl losses at ratio = 0.98
+   suggest vol was fairly priced; those losses are price-level exits, not spot-range exits.
+
+7. **Sensex (n=27, all 2023+):** ratio = 2.38 (winners 2.57, losers 1.54). Same directional
+   pattern — no losers below ratio=1 (100% of Sensex losers have ratio > 1). Entry_vix IC = −0.36
+   (p=0.065, borderline) — lower VIX entries do somewhat better, consistent with Sensex being
+   entered in lower-vol periods.
+
+---
 
 ```bash
 # 1. Build shared engine and validate on a single trade
