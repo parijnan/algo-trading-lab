@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) CLOSED (2026-06-23): vol-aware thesis invalid (p=0.67), early-warning (delta=0.45) fires 56 vs 21 trades but Δmean=−0.45 pts full-sample, −0.69 pts recent — both periods degraded. All branches complete.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) CLOSED for both Athena (2026-06-23) and Artemis (2026-06-24): Athena — vol-aware thesis invalid (p=0.67), early-warning (delta=0.45) fires 56 vs 21 trades but Δmean=−0.45 pts full-sample, −0.69 pts recent — both periods degraded; Artemis — closed at diagnostic: trigger delta=0.38 median is already the current offset's natural exposure (50 pts OTM = ~delta 0.38), VIX effect p=0.47 n.s., no backtest run. All branches complete.**
 
 ---
 
@@ -212,22 +212,29 @@ Entry point: `research/greek_analysis/iv_skew/run.py`
 
 ### Branch 6: Greek Exit Triggers (`greek_exit_triggers/`)
 
-**Type:** Predictive. **CLOSED (2026-06-23).** Both close conditions triggered.
+**Type:** Predictive. **CLOSED for both Athena (2026-06-23) and Artemis (2026-06-24).**
 
-Hypothesis: replace fixed offset trigger with CE sell delta ≥ 0.45 for vol-aware activation.
+Hypothesis: replace fixed offset trigger with sell-leg delta threshold for vol-aware activation.
 
-**Findings:**
-- Diagnostic (run.py): offset trigger fires at CE sell delta = 0.77 median (DTE 1-3 days, deep
-  ITM). Vol-aware thesis DOES NOT HOLD — trigger delta is constant across VIX (p=0.67, n.s.).
-  Early-warning hypothesis tested instead (delta=0.45 fires much earlier, catches 56 vs 21 trades).
+**Athena findings (run.py):**
+- Offset trigger fires at CE sell delta = 0.77 median (DTE 1-3 days, deep ITM). Vol-aware thesis
+  DOES NOT HOLD — trigger delta constant across VIX (p=0.67, n.s.).
 - Backtest (backtest_greek_exit.py): full-sample Δ=−0.45 pts, recent Δ=−0.69 pts. Neither
-  improves. 35 additional fires are near-miss winners; hedge cost on false positives (−56 pts
-  total) exceeds gains from earlier activation on true threats.
-- Structural conclusion: the mechanism is correct for its purpose (late-stage parachute, fires
-  at DTE 1-3 days). Firing earlier imposes unrecoverable cost on the strategy.
+  improves. Close condition triggered.
+- Structural conclusion: Athena's hedge is a late-stage parachute firing at delta=0.77. Earlier
+  activation at delta=0.45 imposes unrecoverable cost on near-miss winners.
 
-Entry point: `research/greek_analysis/greek_exit_triggers/run.py` (analysis);
-backtest variant at `athena_backtest/backtest_greek_exit.py`.
+**Artemis findings (run_artemis.py — 80 index_sl events, Nifty + Sensex, 2020–2026):**
+- Offset trigger fires at sell delta = 0.38 median (near-ATM, 50 pts OTM for Nifty). DTE 0–3d.
+  Vol-aware thesis DOES NOT HOLD — VIX effect p=0.47 (n.s.). Std=0.082 is DTE-noise, not vol.
+- A delta threshold of 0.38 would be EQUIVALENT to the current 50-pt offset — same exposure by
+  construction. No backtest run (would be redundant). Close condition triggered at diagnostic.
+- Contrast with Athena: Athena fired deep ITM (delta=0.77) so threshold tested different behaviour;
+  Artemis already calibrated at near-ATM (delta=0.38) — no improvement axis exists.
+
+Entry points: `research/greek_analysis/greek_exit_triggers/run.py` (Athena analysis);
+`research/greek_analysis/greek_exit_triggers/run_artemis.py` (Artemis analysis);
+backtest variant at `athena_backtest/backtest_greek_exit.py` (Athena only — Artemis not needed).
 
 ---
 
@@ -254,7 +261,7 @@ backtest variant at `athena_backtest/backtest_greek_exit.py`.
 | iv_term_structure | IC computed; period split assessed | IC unstable → no entry filter; diagnostic finding retained |
 | realized_vs_implied | rv_iv_ratio distribution by exit type documented | Always completes (diagnostic) |
 | iv_skew | IC > 0.15, period-stable | IC < 0.10 or sign-unstable → close immediately |
-| greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close — CLOSED (2026-06-23): Δ=−0.45 full, −0.69 recent |
+| greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close — Athena CLOSED (2026-06-23): Δ=−0.45 full, −0.69 recent. Artemis CLOSED (2026-06-24): trigger delta=0.38 ≡ offset, VIX p=0.47 n.s. |
 
 ---
 

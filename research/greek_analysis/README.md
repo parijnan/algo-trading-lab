@@ -187,7 +187,9 @@ Output: `iv_skew/data/iv_skew_signal.csv`
 
 ### Branch 6 — Greek Exit Triggers (`greek_exit_triggers/`)
 
-**CLOSED (2026-06-23). Both close conditions triggered.**
+**CLOSED (2026-06-23 Athena; 2026-06-24 Artemis). Both instruments closed at diagnostic stage.**
+
+#### Athena (CLOSED 2026-06-23)
 
 Replace Athena's fixed `EMERGENCY_TRIGGER_OFFSET` (150 points) with a delta-threshold (≥ 0.45)
 on the CE sell leg.
@@ -216,6 +218,35 @@ vol-awareness is not a productive axis for improvement.
 
 Output: `data/trigger_delta_analysis.csv` (21 hedged trade diagnostics);
 backtest results in `athena_backtest/data_greek_exit/`.
+
+---
+
+#### Artemis (CLOSED 2026-06-24)
+
+Replace Artemis's fixed `INDEX_SL_OFFSETS` (50 pts Nifty, 200 pts Sensex) with a delta-threshold
+on the sell leg — motivated by Branch 1 finding that Artemis losses are delta-driven.
+
+**Diagnostic finding (run_artemis.py — 80 index_sl events: 62 Nifty + 20 Sensex, 2020–2026):**
+
+| Metric | Value |
+|---|---|
+| |delta| at trigger (pooled) | mean=0.366, **std=0.082**, median=0.382 |
+| OTM pts at trigger (Nifty) | mean=42.1 (vs 50-pt offset — consistent) |
+| DTE at trigger | mean=1.4d, range 0–3.2d |
+| VIX effect (M-W p, low<14 vs high≥14) | **p=0.47 (n.s.)** |
+| CE vs PE split | CE median=0.396, PE median=0.364 |
+
+Vol-aware thesis DOES NOT HOLD — VIX explains none of the delta variation (p=0.47). The std=0.082
+is DTE-driven, not VIX-structured. A delta threshold of ~0.38 would be **equivalent to the current
+offset** (not a new signal) since the offset already fires at median delta=0.38 by design.
+
+**Close condition triggered at diagnostic stage** — no backtest run (would be redundant).
+
+Compare to Athena: Athena fired at delta=0.77 (deep ITM, 150 pts beyond strike) so the delta
+threshold tested genuinely different behaviour. Artemis fires at delta=0.38 (near-ATM, 50 pts
+before the strike) — the mechanism is already calibrated to a sensible near-ATM exposure level.
+
+Output: `data/trigger_delta_artemis.csv` (80 index_sl event diagnostics).
 
 ---
 
