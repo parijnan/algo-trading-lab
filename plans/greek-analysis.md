@@ -1,6 +1,6 @@
 # Plan: Greek Analysis — Diagnostic and Predictive Research
 
-**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) CLOSED for both Athena (2026-06-23) and Artemis (2026-06-24): Athena — vol-aware thesis invalid (p=0.67), early-warning (delta=0.45) fires 56 vs 21 trades but Δmean=−0.45 pts full-sample, −0.69 pts recent — both periods degraded; Artemis — closed at diagnostic: trigger delta=0.38 median is already the current offset's natural exposure (50 pts OTM = ~delta 0.38), VIX effect p=0.47 n.s., no backtest run. All branches complete.**
+**Status: Branch 1 (pnl_attribution) COMPLETE for both Athena (124 trades) and Artemis (173 trades). Branch 2 (greek_profile) COMPLETE for both. Branch 3 (iv_term_structure) COMPLETE for Athena (2026-06-23). Branch 4 (realized_vs_implied) COMPLETE for Athena and Artemis (2026-06-23). Branch 5 (iv_skew) CLOSED (2026-06-23): IC=+0.022, sign-unstable across periods — both close conditions triggered. Branch 6 (greek_exit_triggers) CLOSED for both Athena (2026-06-23) and Artemis (2026-06-24): Athena — vol-aware thesis invalid (p=0.67), early-warning (delta=0.45) fires 56 vs 21 trades but Δmean=−0.45 pts full-sample, −0.69 pts recent — both periods degraded; Artemis — closed at diagnostic: trigger delta=0.38 median is already the current offset's natural exposure (50 pts OTM = ~delta 0.38), VIX effect p=0.47 n.s., no backtest run. Branch 7 (exit_timing) CLOSED for Artemis (2026-06-24): no gamma/theta crossover at any DTE — position remains theta-positive throughout; breakeven LARGEST at expiry day (11.2 pts vs median realized 3.2 pts, 18.7% pct_gt); surviving-leg post-CE-roll is closest to crossover at 42% — still theta-positive. Losses are directional (delta), not DTE-timing. All branches complete.**
 
 ---
 
@@ -238,6 +238,31 @@ backtest variant at `athena_backtest/backtest_greek_exit.py` (Athena only — Ar
 
 ---
 
+### Branch 7: Gamma/Theta Exit Timing (`exit_timing/`)
+
+**Type:** Diagnostic. **CLOSED for Artemis (2026-06-24).** Athena pending.
+
+**Artemis question:** At what DTE does rising gamma overwhelm theta for the full iron condor?
+Is there an optimal exit before the position becomes gamma-dominated?
+
+**Method:** Vectorized BS greeks (scipy/numpy) for all 4 legs at each 1-min bar, 173 trades.
+Breakeven spot move = √(2·θ_net·Δt/|γ_net|). Compare realized 1-min move distribution by DTE.
+Surviving-leg analysis: split by pre/post-adjustment for index_sl trades.
+
+**Artemis findings:**
+- No crossover at any DTE (0–4d). Position theta-positive throughout.
+- Breakeven INCREASES at expiry: 5.6 pts (3–4d) → 11.2 pts (0–0.5d). Theta accelerates
+  faster than gamma near expiry (θ ∝ 1/√T).
+- %realized_gt_breakeven peaks at 37.9% (2.0–2.5d) — never reaches 50%.
+- Surviving-leg: post-CE-roll closest at 42%, still theta-positive.
+- Close condition: no crossover. Losses are directional (delta from Branch 1), not DTE-timing.
+
+**Athena question (pending):** At what DTE does falling Vega overtake Theta gains?
+Breakeven IV expansion = Θ_net/|V_net| — vol pts of IV rise that neutralize one unit of theta.
+Compare against realized ΔIV distribution by DTE on losing vs winning trades.
+
+---
+
 ## 5. Execution Sequence
 
 1. **Build `greek_engine.py`** — shared IV/Greek computation + trade log loader. Validate on
@@ -262,6 +287,7 @@ backtest variant at `athena_backtest/backtest_greek_exit.py` (Athena only — Ar
 | realized_vs_implied | rv_iv_ratio distribution by exit type documented | Always completes (diagnostic) |
 | iv_skew | IC > 0.15, period-stable | IC < 0.10 or sign-unstable → close immediately |
 | greek_exit_triggers | Full-sample + recent-period improvement vs fixed offset | Both periods must improve; else close — Athena CLOSED (2026-06-23): Δ=−0.45 full, −0.69 recent. Artemis CLOSED (2026-06-24): trigger delta=0.38 ≡ offset, VIX p=0.47 n.s. |
+| exit_timing (Branch 7) | Find crossover DTE where gamma overwhelms theta | No crossover → close. Artemis CLOSED (2026-06-24): no crossover at any DTE (max 37.9% pct_gt, breakeven highest at expiry). Athena pending. |
 
 ---
 

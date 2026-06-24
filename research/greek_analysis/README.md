@@ -734,6 +734,94 @@ annualized vol mechanically — this confounds the exit-type comparison.
 
 ---
 
+---
+
+### Branch 7: Gamma/Theta Exit Timing — Artemis (CLOSED 2026-06-24)
+
+**Type:** Diagnostic. **Status:** CLOSED — no crossover found.
+
+**Question:** At what DTE does rising gamma overwhelm theta for the full Artemis iron condor?
+Is there an optimal exit point before the position becomes gamma-dominated?
+
+**Method:** Vectorized Black-Scholes greeks (scipy/numpy) for all 4 legs at each 1-min bar,
+173 trades × 232,595 bars. Net position theta and gamma at each bar (direction: sell=−1,
+buy=+1). Breakeven spot move = √(2·θ_net·Δt/|γ_net|) — the move at which gamma P&L exactly
+offsets theta P&L for one bar. Compare empirical distribution of realized 1-min moves by DTE
+bucket. Also tracks adjustment state (pre/post SL-triggered roll) to answer the surviving-leg
+question: does the other leg's theta compensate after one side rolls to a new strike?
+
+DTE buckets correspond to intraday windows only (market 9:15–15:30). Half-day windows
+(0.5–1.0d, 1.5–2.0d, etc.) are overnight periods not present in the logs.
+
+**Full-position crossover table (4 legs, 173 trades):**
+
+| DTE bucket | n_bars | be_mean | rlz_p50 | rlz_p90 | %rlz>be |
+|---|---|---|---|---|---|
+| 0.0–0.5d | 64,701 | 11.2 pts | 3.2 pts | 15.4 pts | **18.7%** |
+| 1.0–1.5d | 60,743 | 6.3 pts | 3.1 pts | 13.5 pts | 36.4% |
+| 2.0–2.5d | 60,354 | 5.8 pts | 3.1 pts | 12.8 pts | 37.9% |
+| 3.0–4.0d | 46,797 | 5.6 pts | 2.9 pts | 11.1 pts | 36.4% |
+
+No crossover — `%rlz>be` never reaches 50% at any DTE. The position is theta-positive
+throughout its lifetime.
+
+**Breakeven INCREASES near expiry** (11.2 pts at 0–0.5d vs 5.6 pts at 3–4d). This is
+the structural BS property: as T→0, theta scales as σ/√T (grows fast), gamma scales as
+1/(σ√T) (grows, but slower in practice when multiplied by Δt). The iron condor is MOST
+theta-positive in its final day, not least.
+
+**Net per-bar P&L decomposition (cumulative across all 173 trades):**
+
+| DTE bucket | θ/bar | γ/bar | net/bar | cum_θ | cum_γ |
+|---|---|---|---|---|---|
+| 0.0–0.5d | +0.0216 | −0.0174 | +0.0043 | +1,203 | −966 |
+| 1.0–1.5d | +0.0359 | −0.0280 | +0.0079 | +3,381 | −2,666 |
+| 2.0–2.5d | +0.0433 | −0.0310 | +0.0123 | +5,993 | −4,537 |
+| 3.0–4.0d | +0.0536 | −0.0449 | +0.0087 | +8,502 | −6,638 |
+
+Cumulative totals: θ=+8,502 pts, γ=−6,638 pts, net=+1,864 pts across all 232K bars.
+Cross-checks vs Branch 1 trade-level attribution: consistent sign and scale.
+
+**Surviving-leg analysis (83 index_sl trades, 107,422 bars):**
+
+After one side rolls to a new strike, the surviving opposite leg continues at its original
+position. The question is whether its theta still justifies holding the full position.
+
+| Phase | %rlz>be | be_mean | rlz_mean |
+|---|---|---|---|
+| Pre-adjustment (both intact) | 30% | 8.3 pts | 6.3 pts |
+| Post-PE-roll (CE surviving) | 35% | 5.8 pts | 5.4 pts |
+| Post-CE-roll (PE surviving) | 42% | 8.2 pts | 8.5 pts |
+
+All three phases remain theta-positive (pct_gt < 50%). The surviving leg's theta still
+compensates after the other side rolls. The post-CE-roll phase (PE surviving) is closest to
+the crossover at 42%, because CE roll occurs when spot has moved upward — the surviving PE
+side now faces higher realized vol. Still below the 50% threshold.
+
+**By exit type:**
+- index_sl (n=107K bars): be=7.8 pts, pct_gt=33%, mean_DTE=1.54d
+- option_sl (n=78K bars): be=6.5 pts, pct_gt=34%, mean_DTE=1.59d
+- ELM (n=38K bars): be=7.1 pts, pct_gt=29%, mean_DTE=1.60d
+
+No exit type shows a distinct gamma-dominated regime.
+
+**Structural conclusion:** There is no DTE at which exiting or adjusting earlier would be
+mechanistically justified by gamma/theta economics. Artemis losses (from Branch 1: Δ=−27.8
+on losers) are directional — spot breaks through the sell strike. That is an index-level event,
+not a time-decay-timing failure. No earlier-exit rule is supported by the mechanics.
+
+Cross-check with Branch 4: index_sl losses have rv_iv_ratio=1.08 (spot moved slightly beyond
+entry IV) — directional loss, not gamma-timing. Consistent with Branch 7 finding.
+
+**Close condition:** No crossover exists. Diagnostic complete. No backtest needed.
+
+Outputs: `exit_timing/data/exit_timing_bars_artemis.parquet` (232,595 per-bar rows),
+`exit_timing/data/exit_timing_summary_artemis.csv` (DTE-bucketed aggregates).
+
+Entry point: `research/greek_analysis/exit_timing/run_artemis.py`
+
+---
+
 ```bash
 # 1. Build shared engine and validate on a single trade
 python research/greek_analysis/greek_engine.py --validate
