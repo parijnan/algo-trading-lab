@@ -904,6 +904,45 @@ Cross-check with Branch 4: Athena losses attributed to IV compression during the
 entry mispricing). Branch 7 shows the vega loss is diffuse across DTE, not concentrated near
 expiry — consistent with losses being event-driven vol spikes, not expiry-timing failures.
 
+**Deferred question: delayed entry to exploit the vega-positive zone (2026-06-28)**
+
+The vega sign reversal raised a natural follow-on: if entering at near-leg DTE 1–3d puts
+the position in a simultaneously theta-positive and vega-positive state, is there an edge in
+delaying entry to that zone and avoiding the early vega-negative drag?
+
+**Why the framing is wrong:** The positive realized vega at 1–3d is not structural
+improvement — it is near-leg attrition. As T_near→0, near-leg vega→0 (∝√T_near), so the far-leg
+dominates the realized vega P&L. At DTE=2 the short near-leg has lost ~80% of its vega
+sensitivity; "vega positive" simply means the near-leg can no longer hurt you much. But it also
+can no longer help you: the near-leg premium is ~5–10 pts instead of 30–40 pts, so the calendar
+net debit worsens substantially and total theta collected over the shorter duration falls.
+
+**What the data shows about delayed entry:** At 5–8d DTE (the vega-negative zone):
+
+| Group | tv_mean (pts/bar) | Cumulative over DTE window |
+|---|---|---|
+| Winners | +0.007 | ≈ +5.4 pts/trade |
+| Losers  | −0.001 | ≈ −0.7 pts/trade |
+
+Delaying entry to skip the 5–8d phase would sacrifice +5.4 pts per winner while avoiding only
+−0.7 pts per loser — a 7:1 unfavourable trade-off before considering that the far-leg debit
+also worsens.
+
+**The inflection is at ~3–5d near-leg DTE** (where `vega_mean ≈ 0`), structurally driven by
+near-leg vega collapsing toward far-leg vega. It is not a useful entry signal.
+
+**Why losers don't lose during the early phase:** The −14.4 pts/trade average vega drag
+(Branch 1) is concentrated in specific vol-spike event days that can occur at any DTE, not
+in the 5–8d DTE window specifically. Skipping that window does not avoid the bad events.
+
+**Right questions to ask if revisiting:**
+- Do the vol-spike events that cause loser trades cluster in particular DTE windows? (Branch 1
+  trade-level data can answer this.)
+- Is the entry IV term-structure slope (Branch 3) predictive of when early-phase vega drag
+  is worst? (Entry on steep-backwardation days may front-load the vega risk differently.)
+- If delayed entry is explored in backtest, use entry_at_dte_X as the control variable,
+  measure net debit change as well as tv accumulation, and period-split 2020–22 vs 2023+.
+
 Outputs: `exit_timing/data/exit_timing_bars_athena.parquet` (221,919 per-bar rows),
 `exit_timing/data/exit_timing_summary_athena.csv`, `exit_timing_summary_athena_wl.csv`.
 
