@@ -822,6 +822,95 @@ Entry point: `research/greek_analysis/exit_timing/run_artemis.py`
 
 ---
 
+### Branch 7: Vega/Theta Exit Timing — Athena (CLOSED 2026-06-28)
+
+**Type:** Diagnostic. **Status:** CLOSED — no crossover found.
+
+**Question:** At what near-leg DTE does the realized vega loss overtake theta income for the
+Athena double calendar condor? Is there a DTE at which exiting early would be mechanistically
+justified by vega cost exceeding theta harvest?
+
+**Method:** Vectorized Black-Scholes greeks (scipy/numpy) for all 7 legs at each 1-min bar,
+124 trades × 221,919 bars. Net position theta_bar = Σ direction_i × theta_i × Δt and realized
+vega_bar = Σ direction_i × vega_i × Δiv_i (per-leg IVs, not a uniform vol shock). Bucketed
+by near-leg DTE (sell_expiry DTE at bar t). Cross-check: Σ theta_bar vs Σ vega_bar vs Branch 1
+trade-level totals (θ=+7068, v=−1781).
+
+Note on vega sign: Athena is theoretically net-long-vega (far-leg vega > near-leg vega at same
+strike). Branch 1 found realized vega = −14.4 pts/trade — this is a market-condition statement:
+IV fell during the average Athena trade. A uniform-shock breakeven (θ/|V_net|) would be
+sign-inverted on losing bars because the actual loss mechanism is the term-structure slope
+(near-term IV spikes more than far-term IV on vol-event days), not the vol level. The primary
+metric is therefore `theta_bar + vega_bar` per bar, not a threshold vs uniform IV move.
+
+**Cross-check vs Branch 1 (221,919 bars, 124 trades):**
+Σ theta_bar = +7,059 pts (reference +7,068 pts; 0.1% diff — within IV cache rounding).
+Σ vega_bar  = −1,781 pts (exact match).
+
+**DTE bucket summary (near-leg DTE, iv_fail bars excluded):**
+
+| DTE bucket | n_bars | θ_mean | v_mean | tv_mean | %tv+ | vega_net |
+|---|---|---|---|---|---|---|
+| 1.0–2.0d | 8,361 | +0.017 | +0.082 | +0.100 | 51.3% | +28.6 |
+| 2.0–3.0d | 40,611 | +0.040 | +0.021 | +0.061 | 50.8% | +27.3 |
+| 3.0–5.0d | 41,683 | +0.036 | −0.000 | +0.035 | 50.6% | +25.5 |
+| 5.0–8.0d | 93,238 | +0.031 | −0.027 | +0.004 | 50.5% | +22.9 |
+| 8.0d+    | 38,025 | +0.024 | −0.019 | +0.005 | 50.2% | +20.1 |
+
+Units: θ_mean and v_mean are in pts/bar (1-minute intervals). tv_mean = θ_mean + v_mean.
+%tv+ = fraction of bars where theta+vega > 0 (theta dominates vega on that bar).
+
+No crossover — `tv_mean` is positive at every observed DTE bucket. The 0.0–0.5d and 0.5–1.0d
+buckets have negligible population: ELM forces exit at 10:25 the day before sell_expiry, so
+the near-leg never trades below ~1d DTE. The 0.5–1.0d bucket has exactly 1 bar (statistical
+noise). All actionable DTE range (1–8d+) is theta-positive.
+
+**Vega reverses sign by DTE (structural finding):**
+
+Near-expiry (1–3d): `vega_mean > 0` — the near-leg's vega collapses (vega ∝ √T_near → 0),
+so the far-leg's vega dominates the net exposure. Any vol move benefits the long far-leg more
+than it hurts the short near-leg. The position becomes *more* long-vega as the near leg
+approaches expiry — consistent with Branch 2 finding that net_vega grows as dte_sell → 0.
+
+Early in trade (5–8d): `vega_mean < 0` — the near-leg has moderate vega and near-term IV
+rises disproportionately on vol-event days (term-structure steepening). The short near leg
+loses more from this spike than the long far-leg gains from the smaller far-term IV rise.
+This is the term-structure-slope risk identified in Branch 1.
+
+**Winner/Loser split by DTE:**
+
+| DTE bucket | outcome | θ_mean | v_mean | tv_mean |
+|---|---|---|---|---|
+| 5.0–8.0d | win  | +0.032 | −0.025 | +0.007 |
+| 5.0–8.0d | loss | +0.030 | −0.032 | −0.001 |
+| 8.0d+    | win  | +0.025 | −0.008 | +0.017 |
+| 8.0d+    | loss | +0.022 | −0.036 | −0.015 |
+
+The per-bar difference between winners and losers is tiny (~0.02–0.03 pts/bar). Losing trades
+are not concentrated at a specific DTE — the extra vega cost on losers is diffuse across
+all DTE buckets. This rules out a DTE-based exit that could separate the two groups.
+
+**Structural conclusion:** Athena is theta-positive at all observable DTE buckets. There is no
+DTE at which vega losses structurally exceed theta income — the signal is event-driven (vol
+spikes on specific bad days) rather than DTE-structured. Consistent with Branch 6 finding that
+vol-awareness does not predict emergency hedge outcomes. No DTE-based exit rule is supported.
+
+**Close condition:** No crossover exists. Diagnostic complete. No backtest needed. Branch 7
+CLOSED for both Artemis (gamma/theta) and Athena (vega/theta).
+
+Cross-check with Branch 2: Branch 2 shows net_vega grows as dte_sell → 0 (position becomes
+more long-vega near expiry). Branch 7 confirms this is realized (positive vega_mean at 1–3d).
+Cross-check with Branch 4: Athena losses attributed to IV compression during the trade (not
+entry mispricing). Branch 7 shows the vega loss is diffuse across DTE, not concentrated near
+expiry — consistent with losses being event-driven vol spikes, not expiry-timing failures.
+
+Outputs: `exit_timing/data/exit_timing_bars_athena.parquet` (221,919 per-bar rows),
+`exit_timing/data/exit_timing_summary_athena.csv`, `exit_timing_summary_athena_wl.csv`.
+
+Entry point: `research/greek_analysis/exit_timing/run_athena.py`
+
+---
+
 ```bash
 # 1. Build shared engine and validate on a single trade
 python research/greek_analysis/greek_engine.py --validate
