@@ -950,6 +950,129 @@ Entry point: `research/greek_analysis/exit_timing/run_athena.py`
 
 ---
 
+---
+
+## Post-Branch SL Calibration Assessment — Artemis (CLOSED 2026-06-29)
+
+**Question:** Is there scope to tweak Artemis `index_sl` or `option_sl` based on the interaction
+between delta, theta, and gamma revealed by the Greek analysis branches?
+
+**Answer: No new signal. Both SLs are correctly calibrated for their distinct roles.**
+
+---
+
+### Part 1: Can Greeks improve SL discrimination?
+
+Branch 1 win/loss split for Artemis (173 trades):
+
+| Component | Wins (n=131) | Losses (n=42) |
+|---|---|---|
+| Theta | +48.7 | +49.1 |
+| Gamma | −34.5 | −32.4 |
+| Delta | +13.9 | **−27.8** |
+
+Theta and gamma are statistically identical across wins and losses. Only delta separates outcomes.
+An SL keyed on gamma or theta would be classifying noise by construction. This is not a hunch —
+it is three closed branches (1, 6, 7) converging to the same answer.
+
+Additionally, Greeks are exact functions of spot/DTE/IV, so "fire when gamma exceeds X" is just
+"fire when spot is within Y pts of strike at DTE Z" written differently. The current SLs already
+ARE Greek-equivalent triggers: `index_sl` is the delta threshold (Branch 6 proved trigger delta =
+0.38 ≡ the 50-pt offset). `option_sl` with a DTE-varying multiplier is the gamma-adjusted price
+trigger. There is no new signal unless there is a multi-Greek combination the current
+single-variable triggers cannot express.
+
+---
+
+### Part 2: Is the net-spread option_sl materially different from the sell-only option_sl?
+
+The current `option_sl` fires on `sell_ltp ≥ sell_entry × mult`. It ignores the buy-leg offset.
+A net-spread SL would fire on `sell_ltp − buy_ltp ≥ net_entry × mult_net`.
+
+**Data (61 option_sl trigger bars, Nifty + Sensex):**
+
+| Metric | Mean | Median |
+|---|---|---|
+| Sell leg LTP increase | 31.2 pts | 25.6 pts |
+| Buy leg LTP increase | 4.4 pts | 3.0 pts |
+| Buy offset as % of sell move | 11.6% | 10.7% |
+
+The buy hedge (struck ~300 pts beyond the sell strike) captures ~11% of the sell leg's move at
+trigger. Real but small. The actual net loss at trigger is ~89% of what the sell-only SL implies.
+A net-spread SL would introduce complexity without a structural change in behavior.
+
+**Low-DTE multiplier is load-bearing:** 52% of option_sl fires happen at DTE ≤ 1.5 days from
+expiry (17 at DTE 0–0.5d, 15 at DTE 1–1.5d). ELM did NOT preempt these. The tight low-DTE
+multipliers (SL_1_DTE=1.66, SL_0_DTE=1.33) are genuinely firing and meaningfully constraining.
+
+---
+
+### Part 3: What is spread delta at option_sl trigger? Can we relax to capture the other leg?
+
+**Data (61 option_sl trigger bars with IV from cache):**
+
+| Metric | Value |
+|---|---|
+| Sell |delta| at trigger — count | 61 |
+| Sell |delta| at trigger — mean | 0.320 |
+| Sell |delta| at trigger — median | **0.330** |
+| Sell |delta| at trigger — 75th pct | 0.364 |
+
+**55 out of 61 (90%) of option_sl fires happen at sell |delta| < 0.38** — before index_sl would
+have triggered. The sell-leg delta is remarkably flat across DTE at trigger (~0.33 throughout),
+confirming this is not a DTE-structured phenomenon.
+
+**What this proves:** `index_sl` and `option_sl` protect against different failure modes:
+
+- `index_sl` fires when spot makes a fast, large directional move and delta rises quickly to 0.38+.
+- `option_sl` fires when **option price inflates without a proportionally large spot move** — i.e.,
+  an IV spike. Delta is still ~0.33 (spot has not moved far), but the option is at 2.33× entry
+  because vol expanded. Branch 4 confirmed: option_sl losses have rv_iv_ratio = 0.98 (spot barely
+  moved relative to entry IV). These are vol-expansion losses, not directional losses.
+
+Relaxing option_sl would allow the position to survive through an IV spike — exactly the scenario
+the Athena Branch 1 analysis identified as the primary loss driver for vol-expansion episodes.
+
+**Opposite-leg premium at option_sl trigger:**
+
+| DTE at trigger | n | Mean | Median |
+|---|---|---|---|
+| 3–4.5d (early) | 26 | 27.18 pts | 22.85 pts |
+| 2–3d | 21 | 18.64 pts | 11.65 pts |
+| 0.5–1.5d | 13 | 24.21 pts | 5.50 pts |
+| 0–0.5d (expiry) | 1 | 1.15 pts | — |
+
+At the DTE range where relaxing option_sl would matter most (DTE ≤ 1.5d, 22% of events), the
+opposite-leg median premium is only 5.50 pts. At DTE 3–4.5d, the opposite-leg premium looks
+substantial (22.85 pts median), but the losing side is at delta 0.33 and rising — holding longer
+is a vol-reversion bet in the same elevated-vol environment that caused option_sl to fire. The
+net position spread delta at trigger is ~0.25 (net spread delta of the short spread), so each
+further 1-pt spot move = 0.25 pts incremental loss. Capturing 22 pts of opposite premium requires
+vol to revert and spot to stabilize under the same conditions that triggered the SL.
+
+Artemis already handles the "hold the winning leg" case for index_sl events — when index_sl fires
+on one side, the other side is left to run. option_sl is categorically different: it fires when
+vol is elevated, and holding in an elevated-vol environment is the exact risk Artemis is not
+designed for (it is structurally short-vega).
+
+**Structural conclusion:** No scope to relax option_sl. It is not redundant with index_sl.
+Relaxing it removes the IV-spike protection that index_sl does not provide.
+
+---
+
+### Summary of findings
+
+| Question | Answer |
+|---|---|
+| Can Greeks improve SL discrimination? | No — gamma/theta identical across wins/losses; only delta discriminates, and it's already captured by index_sl |
+| Is net-spread option_sl materially better? | No — buy offset ~11%, adds complexity without structural change |
+| Is low-DTE option_sl multiplier load-bearing? | Yes — 52% of option_sl fires at DTE ≤ 1.5d; ELM does not preempt |
+| What delta is the sell leg at option_sl trigger? | 0.33 median — BELOW index_sl's 0.38 threshold |
+| Do the two SLs overlap in what they protect? | No — index_sl catches directional moves; option_sl catches IV-spike inflation |
+| Scope to relax option_sl to capture other leg? | No — firing environment (elevated vol) is exactly wrong for holding short-vega position |
+
+---
+
 ```bash
 # 1. Build shared engine and validate on a single trade
 python research/greek_analysis/greek_engine.py --validate
