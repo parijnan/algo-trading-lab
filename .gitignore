@@ -352,6 +352,9 @@ athena_backtest/data_oi_filter/
 # Iris backtest — per-trade logs and summary (generated outputs)
 iris_backtest/data/trade_logs/
 iris_backtest/data/iris_backtest_summary.csv
+
+# Leto integrated backtest — generated output
+leto_backtest/data/
 iris_backtest/data/strategy_backtest_trades.csv
 iris_backtest/data/strategy_sweep.csv
 

@@ -385,28 +385,27 @@ Active research plans (forward-looking — not yet wired to production):
 
 ## Consolidated Portfolio Performance (2020–2026)
 
-The following benchmark represents the \"Gold Standard\" performance of the lab's core strategies over a 6-year backtest (**2019-12-31 to 2026-04-20**). All results are **normalised to a ₹1.04L capital base** (Artemis base) for accurate portfolio comparison.
+Routed portfolio results from the **Leto integrated backtest** (`leto_backtest/`). Applies the
+production routing constraint — one active trade at a time, VIX-gated entry — over the full
+backtest data range. 1 lot per strategy throughout. This is the authoritative routed P&L; it
+differs from the sum of isolated strategy backtests because the "no concurrent trade" constraint
+blocks some entries.
 
-| Strategy | VIX Regime | Trade Count | Total P&L (₹) | **Normalised P&L (₹)** | Win Rate |
+| Strategy | VIX Regime | Trades (routed) | Total P&L | Win Rate | Avg/trade |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Artemis** | < 16 | 177 | ₹145,899 | **₹145,899** | ~69% |
-| **Athena** | 16 – 25 | 121 | ₹139,200 | **₹120,641** | ~58% |
-| **Apollo** | > 25 | 18 | ₹46,160 | **₹24,003** | ~61% |
-| **Total** | | **316** | **₹331,259** | **₹290,543** | **~64%** |
+| **Artemis** | < 16 | 163 | ₹1,38,421 | 69.9% | ₹849 |
+| **Athena** | 16 – 25 | 118 | ₹1,32,161 | 56.8% | ₹1,120 |
+| **Iris** | > 25 | 58 | ₹25,589 | 60.3% | ₹441 |
+| **Total** | | **339** | **₹2,96,171** | **63.7%** | **₹874** |
 
-### Risk & Portfolio Metrics
-*Calculated over the full 6-year unified equity curve.*
+| Metric | Value |
+| :--- | :---: |
+| Max drawdown | ₹13,838 (Mar–Apr 2022, consecutive Athena losses) |
+| Calmar ratio | 21.4 |
+| Expectancy | ₹874 per trade |
 
-| Metric | Unified Portfolio | Nifty 50 (Benchmark) |
-| :--- | :---: | :---: |
-| **Sharpe Ratio** | **1.19** | 0.25 |
-| **Sortino Ratio** | **2.80** | 0.34 |
-| **Max Drawdown** | **-4.62%** | -38.4% (Mar 2020) |
-| **Recovery Speed** | **77 Days** | ~220 Days |
-| **Annualised Vol** | **8.54%** | 14.78% |
-| **Portfolio Beta** | **0.01** | 1.00 |
-
-*Note: Apollo results are based on the latest 15-min Supertrend logic with a strict VIX > 25 gate. All metrics account for idle time and assume a 5% risk-free rate.*
+Data cutoffs: Artemis Sensex → 2026-03-02 · Athena → 2026-05-04 · Iris → 2026-05-15.
+Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy backtest refresh.
 
 ---
 
@@ -590,6 +589,15 @@ algo-trading-lab/
 │   ├── tests/
 │   │   └── test_api.py             # API validation script — run before first paper session
 │   └── data/                       # Runtime data (state CSV, credentials — gitignored)
+├── leto_backtest/                  # Leto integrated backtest — routed portfolio simulation
+│   ├── configs.py                  # Date ranges, file paths, VIX thresholds, era split date
+│   ├── loader.py                   # Normalise all 4 strategy trade summaries to common schema
+│   ├── router.py                   # VIX snap at 10:30, routing decision
+│   ├── simulator.py                # Main loop: Era A dual-checkpoint, Era B unified Monday
+│   ├── analysis.py                 # P&L stats, drawdown, Calmar, year-by-year
+│   ├── run.py                      # Entry point
+│   └── data/
+│       └── leto_trade_log.csv      (generated — gitignored)
 ├── iris_backtest/                  # Iris scalping strategy — Track A + B research
 │   ├── README.md
 │   ├── configs.py                  # All signal, data path, and strategy params
