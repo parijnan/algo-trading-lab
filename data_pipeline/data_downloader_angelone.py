@@ -43,6 +43,10 @@ RATE_LIMIT_PER_SEC  = 2
 RATE_LIMIT_PER_MIN  = 180
 RATE_LIMIT_PER_HOUR = 5000
 
+# Retry parameters for broker-side rate limit rejections
+RATE_LIMIT_BACKOFF_SEC = 60   # seconds to sleep after an "exceeding access rate" error
+MAX_RETRIES            = 3    # maximum retry attempts per API call
+
 # Index instruments: (display_name, exchange, symbol_token, filename)
 INDEX_INSTRUMENTS = [
     ("Sensex",    "BSE", "99919000", "sensex.csv"),
@@ -193,19 +197,28 @@ def fetch_candle_chunk(obj, exchange: str, token: str,
     from_str = f"{from_dt.strftime('%Y-%m-%d')} {MARKET_OPEN}"
     to_str   = f"{to_dt.strftime('%Y-%m-%d')} {MARKET_CLOSE}"
 
-    _rate_limiter.wait()
-
-    try:
-        response = obj.getCandleData({
-            "exchange":    exchange,
-            "symboltoken": str(token),
-            "interval":    "ONE_MINUTE",
-            "fromdate":    from_str,
-            "todate":      to_str,
-        })
-    except Exception as e:
-        logger.warning(f"API error for token {token} [{from_str} → {to_str}]: {e}")
-        return pd.DataFrame(columns=OHLCV_HEADERS)
+    for attempt in range(MAX_RETRIES + 1):
+        _rate_limiter.wait()
+        try:
+            response = obj.getCandleData({
+                "exchange":    exchange,
+                "symboltoken": str(token),
+                "interval":    "ONE_MINUTE",
+                "fromdate":    from_str,
+                "todate":      to_str,
+            })
+        except Exception as e:
+            if "exceeding access rate" in str(e) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"Rate limited for token {token} [{from_str} → {to_str}] "
+                    f"– sleeping {RATE_LIMIT_BACKOFF_SEC}s then retrying "
+                    f"(attempt {attempt + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(RATE_LIMIT_BACKOFF_SEC)
+                continue
+            logger.warning(f"API error for token {token} [{from_str} → {to_str}]: {e}")
+            return pd.DataFrame(columns=OHLCV_HEADERS)
+        break
 
     raw = response.get("data") if isinstance(response, dict) else None
     if not raw:
@@ -438,18 +451,28 @@ def update_daily_index(obj, display_name: str, exchange: str,
     to_str   = f"{today.strftime('%Y-%m-%d')} {MARKET_CLOSE}"
     logger.info(f"[{display_name} daily] fetching {from_date} → {today}")
 
-    _rate_limiter.wait()
-    try:
-        response = obj.getCandleData({
-            "exchange":    exchange,
-            "symboltoken": symbol_token,
-            "interval":    "ONE_DAY",
-            "fromdate":    from_str,
-            "todate":      to_str,
-        })
-    except Exception as e:
-        logger.warning(f"[{display_name} daily] API error: {e}")
-        return
+    for attempt in range(MAX_RETRIES + 1):
+        _rate_limiter.wait()
+        try:
+            response = obj.getCandleData({
+                "exchange":    exchange,
+                "symboltoken": symbol_token,
+                "interval":    "ONE_DAY",
+                "fromdate":    from_str,
+                "todate":      to_str,
+            })
+        except Exception as e:
+            if "exceeding access rate" in str(e) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"[{display_name} daily] Rate limited "
+                    f"– sleeping {RATE_LIMIT_BACKOFF_SEC}s then retrying "
+                    f"(attempt {attempt + 1}/{MAX_RETRIES})"
+                )
+                time.sleep(RATE_LIMIT_BACKOFF_SEC)
+                continue
+            logger.warning(f"[{display_name} daily] API error: {e}")
+            return
+        break
 
     raw = response.get("data") if isinstance(response, dict) else None
     if not raw:
