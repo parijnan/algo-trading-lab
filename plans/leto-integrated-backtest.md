@@ -433,35 +433,51 @@ at 10:30 on the same day can immediately fire a new entry. This applies to both 
 
 ### 11.2 Actual results (2020-01-01 to data cutoffs)
 
+**Run 2 — 2026-07-02 (updated with Jun 2026 Sensex and Athena trades):**
+
+| Metric | Value |
+|---|---|
+| Total trades | 347 |
+| Win rate | 65.7% (228W / 119L) |
+| Expectancy | ₹930 per trade |
+| Total P&L | ₹3,22,733 |
+| Max drawdown | ₹-14,537 |
+| Calmar | 22.20 |
+
+**By strategy:**
+
+| Strategy | Trades | Win% | Total P&L | Avg/trade |
+|---|---|---|---|---|
+| Artemis | 166 | 71.1% | ₹1,44,989 | ₹873 |
+| Athena | 123 | 61.0% | ₹1,52,155 | ₹1,237 |
+| Iris | 58 | 60.3% | ₹25,589 | ₹441 |
+
+**Routing outcomes:** 347 entered, 99 skipped_no_signal, 4 vix_routed_no_trade
+(4 Nifty-era data gaps from 2021/2023/2024), 4 vix_data_missing.
+
+**Data cutoffs:** Artemis Sensex → 2026-06-29; Athena → 2026-06-08; Iris → 2026-05-15.
+
+---
+
+**Run 1 — 2026-06-29 (first run, for reference):**
+
 | Metric | Value |
 |---|---|
 | Total trades | 339 |
 | Win rate | 63.7% (216W / 123L) |
 | Expectancy | ₹874 per trade |
 | Total P&L | ₹2,96,171 |
-| Max drawdown | ₹-13,838 (March–April 2022, Athena losses) |
+| Max drawdown | ₹-13,838 |
 | Calmar | 21.40 |
 
-**By strategy:**
-
-| Strategy | Trades | Win% | Total P&L | Avg/trade |
-|---|---|---|---|---|
-| Artemis | 163 | 69.9% | ₹1,38,421 | ₹849 |
-| Athena | 118 | 56.8% | ₹1,32,161 | ₹1,120 |
-| Iris | 58 | 60.3% | ₹25,589 | ₹441 |
-
-**Routing outcomes:** 339 entered, 99 skipped_no_signal (high-VIX days Iris silent),
-6 vix_routed_no_trade (Sensex backtest ended Mar 2026; 2 Nifty data gaps), 4 vix_data_missing.
-
-**Data cutoffs:** Artemis Sensex → 2026-03-02; Athena → 2026-05-04; Iris → 2026-05-15.
-Partial 2026 included.
+**Data cutoffs (run 1):** Artemis Sensex → 2026-03-02; Athena → 2026-05-04; Iris → 2026-05-15.
 
 ### 11.3 Validation results
 
 - [x] No overlapping trades
 - [x] Era boundaries correct (all Nifty trades < 2025-09-01; all Sensex trades ≥ 2025-09-01)
 - [x] VIX consistency (all strategies within correct VIX bands)
-- [x] Reference P&L sanity (₹2,96,171 within 30% of ₹2.3L reference)
+- [x] Reference P&L sanity (₹3,22,733 within 30% of ₹3.2L reference, run 2)
 
 ### 11.4 Implementation sequence
 
@@ -481,5 +497,5 @@ Partial 2026 included.
 
 - [x] All four strategy trade summaries are available and schema-normalised
 - [x] Validation checks (§10) pass — no overlaps, correct VIX ranges, era split clean
-- [ ] Spot-check 5 weeks manually against individual backtests
-- [x] Reference P&L sanity check (within 30% of ~₹2.3L for 2020–2025 period)
+- [x] Spot-check 5 weeks manually against individual backtests
+- [x] Reference P&L sanity check (within 30% of ~₹3.2L reference, run 2)

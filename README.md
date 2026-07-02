@@ -383,7 +383,7 @@ Active research plans (forward-looking — not yet wired to production):
 - [`plans/trend-overlay-strategy.md`](./plans/trend-overlay-strategy.md) — *Poseidon*: proposed
   continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
   before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
-  existing book — realized-P&L drawdown (₹13,838) may understate true intraday tail risk.
+  existing book — realized-P&L drawdown (₹14,537) may understate true intraday tail risk.
 
 ---
 
@@ -397,18 +397,18 @@ blocks some entries.
 
 | Strategy | VIX Regime | Trades (routed) | Total P&L | Win Rate | Avg/trade |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Artemis** | < 16 | 163 | ₹1,38,421 | 69.9% | ₹849 |
-| **Athena** | 16 – 25 | 118 | ₹1,32,161 | 56.8% | ₹1,120 |
+| **Artemis** | < 16 | 166 | ₹1,44,989 | 71.1% | ₹873 |
+| **Athena** | 16 – 25 | 123 | ₹1,52,155 | 61.0% | ₹1,237 |
 | **Iris** | > 25 | 58 | ₹25,589 | 60.3% | ₹441 |
-| **Total** | | **339** | **₹2,96,171** | **63.7%** | **₹874** |
+| **Total** | | **347** | **₹3,22,733** | **65.7%** | **₹930** |
 
 | Metric | Value |
 | :--- | :---: |
-| Max drawdown | ₹13,838 (Mar–Apr 2022, consecutive Athena losses) |
-| Calmar ratio | 21.4 |
-| Expectancy | ₹874 per trade |
+| Max drawdown | ₹14,537 (Mar–Apr 2022, consecutive Athena losses) |
+| Calmar ratio | 22.2 |
+| Expectancy | ₹930 per trade |
 
-Data cutoffs: Artemis Sensex → 2026-03-02 · Athena → 2026-05-04 · Iris → 2026-05-15.
+Data cutoffs: Artemis Sensex → 2026-06-29 · Athena → 2026-06-08 · Iris → 2026-05-15.
 Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy backtest refresh.
 
 ---
@@ -594,6 +594,7 @@ algo-trading-lab/
 │   │   └── test_api.py             # API validation script — run before first paper session
 │   └── data/                       # Runtime data (state CSV, credentials — gitignored)
 ├── leto_backtest/                  # Leto integrated backtest — routed portfolio simulation
+│   ├── README.md                   # Module overview, schema, refresh instructions
 │   ├── configs.py                  # Date ranges, file paths, VIX thresholds, era split date
 │   ├── loader.py                   # Normalise all 4 strategy trade summaries to common schema
 │   ├── router.py                   # VIX snap at 10:30, routing decision

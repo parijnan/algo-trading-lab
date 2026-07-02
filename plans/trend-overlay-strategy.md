@@ -20,7 +20,7 @@ mined out — a new strategy needs a different risk factor, not a better paramet
 
 **The diagnosis:** Artemis/Athena/Apollo/Iris all key off a *level* (VIX threshold, or an
 already-open position). None of them are proactive to a *move*. And the book's only current
-risk stat — Calmar 21.4, max drawdown ₹13,838 (`leto_backtest/analysis.py` on
+risk stat — Calmar 22.2, max drawdown ₹14,537 (`leto_backtest/analysis.py` on
 `leto_trade_log.csv`) — is computed on **cumulative realized trade P&L**, not intraday
 mark-to-market equity. A short-vol book can sit deeply underwater mid-trade and close near
 flat once the SL/theta engine works it out. That number is almost certainly optimistic about
@@ -53,7 +53,7 @@ before it recovered on realized numbers. That gap is the target.
 ## 1. Step 0 — MTM equity curve for the existing book (hard gate, build first)
 
 **Why first:** the entire case for spending engineering effort on a diversifying overlay
-rests on the existing book's true drawdown being materially worse than ₹13,838. If it isn't,
+rests on the existing book's true drawdown being materially worse than ₹14,537. If it isn't,
 the urgency (and possibly the sizing) of this whole plan changes. This must be measured, not
 assumed — it is the single sharpest open question from the research so far.
 
@@ -75,7 +75,7 @@ give per-bar option values already reconstructed for both. What's missing:
   concatenation, not a true multi-strategy overlap problem).
 
 **Metrics to produce:**
-- True max drawdown (₹ and %) on the MTM curve vs the realized-P&L drawdown (₹13,838) — the
+- True max drawdown (₹ and %) on the MTM curve vs the realized-P&L drawdown (₹14,537) — the
   gap is the number that matters.
 - MTM-based Calmar, recomputed.
 - Worst intraday drawdown duration and depth.

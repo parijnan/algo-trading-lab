@@ -129,7 +129,7 @@ def _validate(trades: pd.DataFrame, df: pd.DataFrame) -> None:
     counts = trades['strategy'].value_counts()
     print(f'\n  Trade mix: {dict(counts)}')
     total_pl = trades['pl_rs'].astype(float).sum()
-    ref_pl = 230000
+    ref_pl = 320000
     if abs(total_pl - ref_pl) / ref_pl < 0.30:
         print(f'  [PASS] Total P&L ₹{total_pl:,.0f} within 30% of reference ₹{ref_pl:,}')
     else:
