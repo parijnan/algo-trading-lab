@@ -380,6 +380,10 @@ Active research plans (forward-looking — not yet wired to production):
 - [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Ares*: proposed range-anchored,
   vega-adaptive strategy unifying both axes.
 - [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
+- [`plans/trend-overlay-strategy.md`](./plans/trend-overlay-strategy.md) — *Poseidon*: proposed
+  continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
+  before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
+  existing book — realized-P&L drawdown (₹13,838) may understate true intraday tail risk.
 
 ---
 
