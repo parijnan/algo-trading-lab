@@ -361,6 +361,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 | [`research/oi_analysis/`](./research/oi_analysis/) | Open Interest (OI) feature extractor and signal quality map. Fully vectorised engine builds CE/PE wall, max pain, PCR, and OI delta features at 5-min resolution for all 371 Nifty weekly expiries (2019–2026). Signal quality tested across 10 features × 10 forward horizons (15min → expiry settlement) on 197,448 bars. PCR near/broad and wall_oi_ratio show consistent positive IC across all horizons (peaks at +0.07 to_expiry, p<0.001). CE parachute validated against 21 Athena events — 80% classification accuracy using PCR threshold. Barrier analysis: CE wall holds in 98% of 2hr windows. See [`research/oi_analysis/README.md`](./research/oi_analysis/README.md) for full findings. | Complete — pcr_near entry filter WEAK-PASS (defer deployment) |
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
+| [`research/mtm_equity/`](./research/mtm_equity/) | Portfolio-level MTM equity curve diagnostic (Step 0 of Poseidon plan). Reconstructs 1-min mark-to-market equity across all 347 routed trades (2020–2026) from per-strategy trade logs. Compares true intraday drawdown (₹18,986) to the realized-P&L drawdown (₹14,537) — a 1.3× gap. Includes stress-window replays (2020 COVID, 2022 rate-hike, 2024 election vol). See [`research/mtm_equity/README.md`](./research/mtm_equity/README.md). | Complete — Step 0 gate: weak hidden risk (1.3×) |
 | [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot. | Complete |
 
 Active research plans (forward-looking — not yet wired to production):
@@ -384,6 +385,9 @@ Active research plans (forward-looking — not yet wired to production):
   continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
   before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
   existing book — realized-P&L drawdown (₹14,537) may understate true intraday tail risk.
+  **[Step 0 COMPLETE]** — MTM max DD ₹18,986 (1.3× realized); gap below the 1.5–2× weak-evidence
+  threshold. Case for Poseidon rests on the narrower proactive-window argument. See
+  [`research/mtm_equity/`](./research/mtm_equity/) for the diagnostic.
 
 ---
 
@@ -650,12 +654,20 @@ algo-trading-lab/
 │   │   ├── annotate_athena.py      # Tag Athena trades with range state + VIX signals
 │   │   ├── annotate_artemis.py     # Tag Artemis trades with range state + containment proxies
 │   │   └── outputs/                # Generated charts and exports (gitignored)
-│   └── vix_router/                 # VIX-direction forecast research
-│       ├── data_layer.py           # Load VIX/Nifty 1-min → daily (tz_localize safe)
-│       ├── signals.py              # vrp(), bb_pct(), zscore() — pure date-indexed signals
-│       ├── forecast.py             # Durable interface: build_forecast() / forecast_at()
-│       ├── validate.py             # Phase 0–1 validation battery; run to regenerate outputs
-│       └── outputs/                # horizons.json, signal_validation_h*.csv (gitignored)
+│   ├── vix_router/                 # VIX-direction forecast research
+│   │   ├── data_layer.py           # Load VIX/Nifty 1-min → daily (tz_localize safe)
+│   │   ├── signals.py              # vrp(), bb_pct(), zscore() — pure date-indexed signals
+│   │   ├── forecast.py             # Durable interface: build_forecast() / forecast_at()
+│   │   ├── validate.py             # Phase 0–1 validation battery; run to regenerate outputs
+│   │   └── outputs/                # horizons.json, signal_validation_h*.csv (gitignored)
+│   └── mtm_equity/                 # Portfolio MTM equity curve (Poseidon Step 0)
+│       ├── README.md               # Methodology + findings
+│       ├── configs.py              # Paths, lot sizes, stress-window date ranges
+│       ├── build_mtm.py            # Per-strategy MTM extractors + auto-calibration
+│       ├── equity_curve.py         # Portfolio merge + drawdown computation
+│       ├── run.py                  # Entry point — builds curve, runs validation gates
+│       ├── replay.py               # Stress-window replays (COVID, rate-hike, election vol)
+│       └── data/                   # Generated outputs (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
     ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)

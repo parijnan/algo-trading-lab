@@ -375,6 +375,10 @@ research/greek_analysis/iv_term_structure/data/*.parquet
 research/greek_analysis/realized_vs_implied/data/*.csv
 research/greek_analysis/iv_skew/data/*.csv
 research/greek_analysis/greek_exit_triggers/data/*.csv
+# Greek analysis — exit timing (generated per-bar parquet + summary)
 research/greek_analysis/exit_timing/data/*.csv
 research/greek_analysis/exit_timing/data/*.parquet
 athena_backtest/data_greek_exit/
+
+# MTM equity curve — generated parquet/CSV outputs (Poseidon Step 0)
+research/mtm_equity/data/
