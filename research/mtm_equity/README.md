@@ -153,6 +153,11 @@ proactive-window gap.
    proactive-window dip is modest, check first whether lowering Iris's
    VIX-activation threshold (a config change, not a new engine) covers the
    same gap more cheaply before building Poseidon.
+   **Tested and rejected** — see [`research/iris_threshold/`](../iris_threshold/).
+   `ROUTING_VIX_HIGH` is shared between Athena's ceiling and Iris's floor;
+   lowering it cannibalizes Athena's most profitable VIX band faster than
+   Iris recoups it, and it makes the targeted 2020 window worse, not better.
+   Poseidon is shelved with no substitute action.
 
 ---
 

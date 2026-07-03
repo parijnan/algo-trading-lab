@@ -3,8 +3,9 @@
 **Codename: Poseidon** (working name — god of earthquakes/storms; strategy profits from
 market upheaval rather than calm. Rename freely if a better fit turns up.)
 
-**Status: Concept / design. Step 0 (MTM equity curve) is a hard gate — do not size or build
-the trend engine before it's done.**
+**Status: SHELVED (2026-07-03).** Step 0 complete — MTM gap too weak to justify the engine.
+§8 fallback (cheaper VIX-threshold fix) tested and also rejected. See §9 for the outcome.
+No further work planned; this file is kept for the record and the call-back conditions in §8.
 
 ---
 
@@ -222,3 +223,31 @@ give per-bar option values already reconstructed for both. What's missing:
   separate engine.
 - If both validate and the correlation/stress-window gate (§3.2, §3.5) passes → proceed to
   production design.
+
+---
+
+## 9. Outcome (2026-07-03)
+
+**Step 0 complete** — `research/mtm_equity/`. MTM max DD ₹18,986 vs realized ₹14,537 (1.3×),
+below the §1 gate's 1.5–2× weak-evidence threshold. The full-sample hidden-risk case is weak.
+The 2020 COVID proactive-window dip is real but modest: ₹2,031 below window start on ~₹12K
+starting equity, recovered within 2 days.
+
+**§8 fallback tested and rejected** — `research/iris_threshold/`. Swept `ROUTING_VIX_HIGH`
+(25→22→20→18); at every lower value, book total P&L fell monotonically (₹3,22,733 → ₹2,76,951
+at 18) because the threshold is shared between Athena's ceiling and Iris's floor, and 20–25 is
+Athena's most profitable VIX band. The specific 2020 window this was meant to fix got *worse*,
+not better (+₹6,877 → +₹708 at threshold 22). No cheap fix exists.
+
+**Genuine mechanism found, not fixed:** tracing the baseline COVID window showed Iris didn't
+fire on Mar 6/9 2020 despite VIX > 25 because Athena's Mar 4 trade was still an open position
+(exits Mar 11, `pre_expiry`) and the simulator's no-concurrent-trade constraint blocks routing
+checks — including Iris's — until the active slot frees up. Iris can't preempt an open
+Athena/Artemis position on a VIX spike; it only takes over once that position exits on its own
+terms. Fixing this for real means mid-trade VIX-escalation exit logic in Athena/Artemis, not a
+router config change — out of scope given the ₹2,031/2-day size of the gap it would close.
+
+**Decision:** Poseidon is shelved. No trend-signal work (§2–§6) will be built. This file stays
+as documentation; revisit only if the §8 call-back conditions change (e.g. a future MTM re-run
+shows a materially worse gap, or a new proactive-window episode in fresh data is much larger
+than 2020's).

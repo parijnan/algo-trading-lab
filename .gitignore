@@ -382,3 +382,6 @@ athena_backtest/data_greek_exit/
 
 # MTM equity curve — generated parquet/CSV outputs (Poseidon Step 0)
 research/mtm_equity/data/
+
+# Iris VIX-threshold sweep — generated CSV output (Poseidon §8 fallback)
+research/iris_threshold/data/

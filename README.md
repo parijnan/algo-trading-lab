@@ -362,6 +362,7 @@ all findings go through a dedicated backtest before any strategy wiring.
 | [`research/range_detection/`](./research/range_detection/) | PA range detector (validated, §7 gate passed). Athena + Artemis trades annotated. Down-biased ranges earn 2.5× Artemis P&L; `key_dist_pct` significant at ρ=−0.17. Lot-sizing and strike-anchoring experiments next. | Active — lot sizing + backtest |
 | [`research/vix_router/`](./research/vix_router/) | VIX-direction forecast research — **complete**. VRP validated on full 2019–2026 VIX history + Artemis trade P&L. Verdict: symmetric router not supported; containment is the dominant Artemis driver (ρ=0.32). | Research complete |
 | [`research/mtm_equity/`](./research/mtm_equity/) | Portfolio-level MTM equity curve diagnostic (Step 0 of Poseidon plan). Reconstructs 1-min mark-to-market equity across all 347 routed trades (2020–2026) from per-strategy trade logs. Compares true intraday drawdown (₹18,986) to the realized-P&L drawdown (₹14,537) — a 1.3× gap. Includes stress-window replays (2020 COVID, 2022 rate-hike, 2024 election vol). See [`research/mtm_equity/README.md`](./research/mtm_equity/README.md). | Complete — Step 0 gate: weak hidden risk (1.3×) |
+| [`research/iris_threshold/`](./research/iris_threshold/) | Sweep of `ROUTING_VIX_HIGH` (Iris's activation floor) — tests the Poseidon plan's §8 "cheaper fix" fallback. Rejected: the threshold is shared with Athena's ceiling, so lowering it cannibalizes Athena's most profitable VIX band (20–25) faster than Iris recoups it — book total P&L falls monotonically (₹3,22,733 → ₹2,76,951 at threshold 18), and the targeted 2020 COVID window gets worse, not better (+₹6,877 → +₹708 at threshold 22). See [`research/iris_threshold/README.md`](./research/iris_threshold/README.md). | Complete — rejected, no cheap fix exists |
 | [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot. | Complete |
 
 Active research plans (forward-looking — not yet wired to production):
@@ -385,9 +386,13 @@ Active research plans (forward-looking — not yet wired to production):
   continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
   before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
   existing book — realized-P&L drawdown (₹14,537) may understate true intraday tail risk.
-  **[Step 0 COMPLETE]** — MTM max DD ₹18,986 (1.3× realized); gap below the 1.5–2× weak-evidence
-  threshold. Case for Poseidon rests on the narrower proactive-window argument. See
-  [`research/mtm_equity/`](./research/mtm_equity/) for the diagnostic.
+  **[SHELVED]** — Step 0: MTM max DD ₹18,986 (1.3× realized), below the 1.5–2× weak-evidence
+  threshold (see [`research/mtm_equity/`](./research/mtm_equity/)). §8 fallback (lower Iris's
+  VIX-activation threshold instead of building a new engine) tested and also rejected — the
+  threshold is shared with Athena's ceiling, so lowering it cannibalizes Athena's best VIX band
+  faster than Iris recoups it, and it makes the targeted 2020 proactive window worse, not better
+  (see [`research/iris_threshold/`](./research/iris_threshold/)). No further action; the modest
+  proactive-window gap (₹2,031, recovered in 2 days) is accepted as-is.
 
 ---
 
@@ -660,13 +665,18 @@ algo-trading-lab/
 │   │   ├── forecast.py             # Durable interface: build_forecast() / forecast_at()
 │   │   ├── validate.py             # Phase 0–1 validation battery; run to regenerate outputs
 │   │   └── outputs/                # horizons.json, signal_validation_h*.csv (gitignored)
-│   └── mtm_equity/                 # Portfolio MTM equity curve (Poseidon Step 0)
-│       ├── README.md               # Methodology + findings
-│       ├── configs.py              # Paths, lot sizes, stress-window date ranges
-│       ├── build_mtm.py            # Per-strategy MTM extractors + auto-calibration
-│       ├── equity_curve.py         # Portfolio merge + drawdown computation
-│       ├── run.py                  # Entry point — builds curve, runs validation gates
-│       ├── replay.py               # Stress-window replays (COVID, rate-hike, election vol)
+│   ├── mtm_equity/                 # Portfolio MTM equity curve (Poseidon Step 0)
+│   │   ├── README.md               # Methodology + findings
+│   │   ├── configs.py              # Paths, lot sizes, stress-window date ranges
+│   │   ├── build_mtm.py            # Per-strategy MTM extractors + auto-calibration
+│   │   ├── equity_curve.py         # Portfolio merge + drawdown computation
+│   │   ├── run.py                  # Entry point — builds curve, runs validation gates
+│   │   ├── replay.py               # Stress-window replays (COVID, rate-hike, election vol)
+│   │   └── data/                   # Generated outputs (gitignored)
+│   └── iris_threshold/             # Iris VIX-activation threshold sweep (Poseidon §8 fallback)
+│       ├── README.md               # Methodology + findings — rejected, no cheap fix
+│       ├── sweep_configs.py        # Threshold list, paths, COVID window dates
+│       ├── run_sweep.py            # Entry point — monkeypatches ROUTING_VIX_HIGH, reruns simulation
 │       └── data/                   # Generated outputs (gitignored)
 └── data_pipeline/                  # Automated historical data download
     ├── README.md

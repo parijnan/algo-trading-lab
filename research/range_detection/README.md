@@ -22,9 +22,10 @@ Plans:
 - [`plans/range-vega-strategy.md`](../../plans/range-vega-strategy.md) — *Ares*: proposed
   range-anchored strategy (downstream of steps 3–4; router verdict changes scope).
 - [`plans/athena-entry-filter.md`](../../plans/athena-entry-filter.md) — annotation infra + VIX-signal findings.
-- [`plans/trend-overlay-strategy.md`](../../plans/trend-overlay-strategy.md) — *Poseidon*: proposed
-  trend/crisis-alpha overlay reusing the validated PA range-breakout signal (`range_detector_pa.py`)
-  as its entry trigger, independent of the vega axis this module set aside.
+- [`plans/trend-overlay-strategy.md`](../../plans/trend-overlay-strategy.md) — *Poseidon*: **[SHELVED]**
+  trend/crisis-alpha overlay that would have reused the validated PA range-breakout signal
+  (`range_detector_pa.py`) as its entry trigger. Killed at Step 0 (MTM equity-curve gate weak) —
+  see [`research/mtm_equity/`](../mtm_equity/) and [`research/iris_threshold/`](../iris_threshold/).
 
 ---
 
