@@ -57,14 +57,20 @@ graph TD
     ELMCheck -- Yes --> ELMType{Both Sides Active?}
     ELMType -- Yes --> ChooseSide[Retain Side with Higher Premium / Close Other]
     ELMType -- No --> ELMAdj[Roll Hedge Inward / Exit Additional Lots]
-    ELMCheck -- No --> Expiry{Market Close/Expiry?}
+    ELMCheck -- No --> ExpiryDayClose{Expiry Day & Time >= 15:15?}
+    ExpiryDayClose -- Yes --> ForceClose[Force-Close Any Net-Open Spread<br/>ahead of CAS auction]
+    ExpiryDayClose -- No --> Expiry{Market Close 15:40/Expiry?}
     
     ChooseSide --> Monitor
     ELMAdj --> Monitor
+    ForceClose --> Monitor
     Expiry -- No --> Monitor
     Expiry -- Yes --> Archive[Log & Archive Trade]
     Archive --> End([Exit Artemis])
 ```
+
+### CAS-aware expiry-day close
+Since 3 Aug 2026, NSE/BSE run a Closing Auction Session: Sensex trading stops at 15:15 for a call auction, with the settlement price only discovered afterward and no continuous trading to react to it. To avoid carrying a still-open spread through that blind window, `evaluate_expiry_day_close()` force-closes any spread that is still net-open (`spread_status` not `closed`/`open`) at 15:15 on expiry day itself — distinct from the existing day-*before*-expiry ELM adjustment (`elm_time`, unaffected by CAS). The monitoring loop itself now runs to 15:40 (`closing_time` in `configs.py`), matching the extended derivatives session, but expiry-day exposure is deliberately cut off earlier at 15:15.
 
 `iron_condor.set_session(obj, instrument_df)` propagates both to the PE and CE
 spread objects and handles lot sizing if `lot_calc = true` in `trade_settings.csv`.
