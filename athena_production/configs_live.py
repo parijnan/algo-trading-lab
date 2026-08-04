@@ -48,7 +48,7 @@ VIX_TOKEN           = "99926017"    # India VIX      — NSE CM
 # Market session
 # ---------------------------------------------------------------------------
 MARKET_OPEN         = "09:15"
-MARKET_CLOSE        = "15:30"
+MARKET_CLOSE        = "15:40"   # CAS (3 Aug 2026): derivatives trade till 15:40
 
 # ---------------------------------------------------------------------------
 # VIX regime filter

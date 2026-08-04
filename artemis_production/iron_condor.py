@@ -10,7 +10,7 @@ from configs import (
     pd, lot_size, monitor_frequency, lot_calc, lot_capital,
     vix_threshold, entry_window_minutes, exchange_segment,
     instrument, underlying_token, REPO_ROOT,
-    api_key, user_name,
+    api_key, user_name, expiry_day_close_time,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
 )
 from logger_setup import get_logger
@@ -60,6 +60,7 @@ class IronCondor:
         self.elm_time = self.pe_spread.elm_time
         self.feed = SharedFeed()
         self._update_elapsed = 0.0
+        self.forced_expiry_close = False
         # Check and set ELM status
         if self.current_datetime > self.elm_time:
             if self.ce_spread.spread_status == 'active' and self.pe_spread.spread_status == 'active':
@@ -709,6 +710,23 @@ class IronCondor:
                 self.pe_spread.adjust_for_elm()
                 self._update_trade_book_elm_adjustment('pe')
             self.adjusted_for_elm = True
+
+    # Method to force-close any still net-open spread at 15:15 on expiry day,
+    # ahead of the CAS closing auction — no continuous trading exists after
+    # 15:15 to react to an adverse auction print, so don't carry the position
+    # through 15 minutes of not knowing whether it settles OTM.
+    def evaluate_expiry_day_close(self):
+        self._set_current_datetime()
+        if (self.current_date == self.expiry.date()
+                and self.current_time >= expiry_day_close_time
+                and not self.forced_expiry_close):
+            if self.pe_spread.spread_status not in ('closed', 'open'):
+                self.pe_spread.exit_spread()
+                self._update_trade_book_exit()
+            if self.ce_spread.spread_status not in ('closed', 'open'):
+                self.ce_spread.exit_spread()
+                self._update_trade_book_exit()
+            self.forced_expiry_close = True
 
     # Private method to archive all files after trade is closed
     def _archive_trade(self):

@@ -2,7 +2,7 @@ import os
 import time
 import logging
 import pandas as pd
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as dtime
 from collections import deque
 from io import StringIO
 from urllib.request import urlopen
@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 MARKET_OPEN     = "09:15"
-MARKET_CLOSE    = "15:30"
+MARKET_CLOSE    = "15:40"   # CAS (3 Aug 2026): derivatives trade till 15:40; index
+                            # auction print can land anywhere up to ~15:35
 CANDLE_DATE_FMT  = "%Y-%m-%d %H:%M"           # format expected by getCandleData
 INDEX_TS_FMT     = "%Y-%m-%d %H:%M:%S"        # base format for index csv (tz appended manually)
 OPTIONS_TS_FMT   = "%Y-%m-%dT%H:%M:%S"        # base format for options csv (tz appended manually)
@@ -273,6 +274,16 @@ def fetch_full_range_index(obj, exchange: str, token: str,
 
 MAX_FILL_MINUTES = 10   # gaps larger than this are left alone (real halts / pre-open)
 
+# Closing Auction Session (CAS), live on NSE/BSE from 3 Aug 2026: continuous
+# trading in the underlying index stops at 15:15, followed by a ~15-minute
+# call auction with no 1-minute candles, then a single terminal print (the
+# auction-clearing price) lands somewhere in the 15:16-15:35 range. This is a
+# daily, structural gap — not a broker glitch — so it's handled separately
+# from MAX_FILL_MINUTES-bounded glitch gaps below.
+CAS_AUCTION_WINDOW_START = dtime(15, 16)
+CAS_AUCTION_WINDOW_END   = dtime(15, 40)
+CAS_GAP_MAX_MINUTES      = 20
+
 
 def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     """
@@ -284,41 +295,117 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     For each intra-session gap of 2–MAX_FILL_MINUTES minutes:
       1. Insert synthetic flat candles for every missing minute.
       2. Correct the open of the bar that follows the gap.
-    Gaps larger than MAX_FILL_MINUTES are left untouched (real halts, pre-open, etc.).
+    Gaps larger than MAX_FILL_MINUTES are left untouched (real halts, pre-open, etc.)
+    UNLESS the bar following the gap lands inside the CAS auction window — those
+    gaps also get synthetic flat candles inserted, but the open of the terminal
+    bar is left alone: it's a genuine auction print, and forcing its open to the
+    pre-auction close would produce an invalid candle (open outside the
+    already-reported high/low range).
     """
     if len(df) < 2:
-        return df, 0
+        return df, 0, 0
 
     df = df.sort_values("time_stamp").reset_index(drop=True)
 
     synthetic_rows = []
     open_fixes: dict = {}
+    cas_gap_count = 0
 
     for i in range(1, len(df)):
-        gap_min = (df.loc[i, "time_stamp"] - df.loc[i - 1, "time_stamp"]).total_seconds() / 60
-        if 2.0 <= gap_min <= MAX_FILL_MINUTES:
-            prev_close = df.loc[i - 1, "close"]
-            for m in range(1, int(gap_min)):
-                missing_ts = df.loc[i - 1, "time_stamp"] + pd.Timedelta(minutes=m)
-                row = {col: 0 for col in df.columns}
-                row.update({
-                    "time_stamp": missing_ts,
-                    "open": prev_close, "high": prev_close,
-                    "low": prev_close,  "close": prev_close,
-                    "volume": 0,
-                })
-                synthetic_rows.append(row)
+        prev_ts = df.loc[i - 1, "time_stamp"]
+        gap_min = (df.loc[i, "time_stamp"] - prev_ts).total_seconds() / 60
+        term_time = df.loc[i, "time_stamp"].time()
+
+        is_glitch_gap = 2.0 <= gap_min <= MAX_FILL_MINUTES
+        is_cas_gap = (2.0 <= gap_min <= CAS_GAP_MAX_MINUTES and
+                      CAS_AUCTION_WINDOW_START <= term_time <= CAS_AUCTION_WINDOW_END)
+
+        if not (is_glitch_gap or is_cas_gap):
+            continue
+
+        prev_close = df.loc[i - 1, "close"]
+        for m in range(1, int(gap_min)):
+            missing_ts = prev_ts + pd.Timedelta(minutes=m)
+            row = {col: 0 for col in df.columns}
+            row.update({
+                "time_stamp": missing_ts,
+                "open": prev_close, "high": prev_close,
+                "low": prev_close,  "close": prev_close,
+                "volume": 0,
+            })
+            synthetic_rows.append(row)
+
+        if is_glitch_gap:
             open_fixes[i] = prev_close
+        else:
+            cas_gap_count += 1
+
+    if not synthetic_rows:
+        return df, 0, 0
+
+    label = f"[{display_name}] " if display_name else ""
+    logger.info(f"{label}Inserting {len(synthetic_rows)} synthetic flat candle(s) "
+                f"({cas_gap_count} CAS auction gap(s)) and correcting "
+                f"{len(open_fixes)} bar open(s).")
+
+    for idx, new_open in open_fixes.items():
+        df.at[idx, "open"] = new_open
+
+    result = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
+    result.sort_values("time_stamp", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result, len(synthetic_rows), cas_gap_count
+
+
+# CAS effective date — Nifty/Sensex spot has no ticks after the auction
+# terminal print, but options/derivatives trade on to 15:40 and backtests
+# look up the index price at those later timestamps too. Extend each CAS-era
+# day's last bar forward with flat carry-forward candles (at the terminal
+# print's close, not the pre-auction close) through 15:39. VIX is excluded —
+# it keeps ticking natively and needs no extension.
+CAS_EFFECTIVE_DATE        = date(2026, 8, 3)
+CAS_DAY_END_TARGET        = dtime(15, 39)
+CAS_AFFECTED_INDEX_TOKENS = {"99919000", "99926000"}   # Sensex, Nifty spot
+
+
+def extend_to_day_close(df: pd.DataFrame, display_name: str = "") -> tuple:
+    """
+    On/after CAS_EFFECTIVE_DATE, extend each day whose last bar lands before
+    CAS_DAY_END_TARGET with flat carry-forward candles (OHLC = that day's
+    last close) through CAS_DAY_END_TARGET. Days before the CAS effective
+    date are left untouched — their market genuinely closed at the old time.
+    """
+    if df.empty:
+        return df, 0
+
+    df = df.sort_values("time_stamp").reset_index(drop=True)
+    synthetic_rows = []
+
+    for day, day_df in df.groupby(df["time_stamp"].dt.date):
+        if day < CAS_EFFECTIVE_DATE:
+            continue
+        last_ts = day_df["time_stamp"].iloc[-1]
+        if last_ts.time() >= CAS_DAY_END_TARGET:
+            continue
+        last_close = day_df["close"].iloc[-1]
+        cur = last_ts + pd.Timedelta(minutes=1)
+        while cur.time() <= CAS_DAY_END_TARGET:
+            row = {col: 0 for col in df.columns}
+            row.update({
+                "time_stamp": cur,
+                "open": last_close, "high": last_close,
+                "low": last_close,  "close": last_close,
+                "volume": 0,
+            })
+            synthetic_rows.append(row)
+            cur += pd.Timedelta(minutes=1)
 
     if not synthetic_rows:
         return df, 0
 
     label = f"[{display_name}] " if display_name else ""
-    logger.info(f"{label}Inserting {len(synthetic_rows)} synthetic flat candle(s) "
-                f"and correcting {len(open_fixes)} bar open(s).")
-
-    for idx, new_open in open_fixes.items():
-        df.at[idx, "open"] = new_open
+    logger.info(f"{label}Appending {len(synthetic_rows)} flat carry-forward "
+                f"candle(s) to extend day(s) to {CAS_DAY_END_TARGET} close.")
 
     result = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
     result.sort_values("time_stamp", inplace=True)
@@ -363,14 +450,35 @@ def update_index(obj, display_name: str, exchange: str,
         logger.info(f"[{display_name}] no new data fetched.")
         return
 
-    new_data, gap_fills = fill_missing_candles(new_data, display_name)
-    if gap_fills:
+    new_data, gap_fills, cas_gap_fills = fill_missing_candles(new_data, display_name)
+    glitch_fills = gap_fills - cas_gap_fills if cas_gap_fills else gap_fills
+    if cas_gap_fills and glitch_fills == 0:
+        # Expected daily CAS auction gap only — routine, not an anomaly.
+        slack_bot_sendtext(
+            f"ℹ️ *CAS Gap Fill* | {display_name} ({filename})\n"
+            f"{gap_fills} candle(s) filled across {cas_gap_fills} closing-auction "
+            f"gap(s). Terminal auction print left untouched.",
+            SLACK_DATA_CHANNEL
+        )
+    elif gap_fills:
         slack_bot_sendtext(
             f"⚠️ *Gap Fill Applied* | {display_name} ({filename})\n"
             f"{gap_fills} missing 1-min candle(s) detected and filled with flat "
-            f"carry-forward values. Open of the following bar corrected.",
+            f"carry-forward values ({cas_gap_fills} CAS auction gap(s), "
+            f"{glitch_fills} other). Open of the following glitch bar(s) corrected.",
             SLACK_ERROR_CHANNEL
         )
+
+    if symbol_token in CAS_AFFECTED_INDEX_TOKENS:
+        new_data, day_end_fills = extend_to_day_close(new_data, display_name)
+        if day_end_fills:
+            slack_bot_sendtext(
+                f"ℹ️ *CAS Day-End Extend* | {display_name} ({filename})\n"
+                f"{day_end_fills} flat carry-forward candle(s) appended after the "
+                f"auction print to reach {CAS_DAY_END_TARGET} close (index has no "
+                f"ticks after the auction; derivatives trade on to 15:40).",
+                SLACK_DATA_CHANNEL
+            )
 
     # Normalise timestamps to the file's format: "2026-03-11 15:29:00+05:30"
     if new_data["time_stamp"].dt.tz is None:
@@ -403,11 +511,14 @@ def update_index(obj, display_name: str, exchange: str,
         SLACK_DATA_CHANNEL
     )
 
-    # Data integrity check: Each trading day should have 375 minutes (rows)
-    if len(new_data) < 375:
+    # Data integrity check: each trading day should have ~375 minutes (rows).
+    # Since CAS (3 Aug 2026), the terminal auction print's exact minute is
+    # randomized within the auction window, so the daily count legitimately
+    # varies by a few rows either side of 375 — threshold loosened to 370.
+    if len(new_data) < 370:
         slack_bot_sendtext(
             f"⚠️ *Data Integrity Warning* | {display_name} ({filename})\n"
-            f"Expected at least 375 new rows, but only {len(new_data)} were added.\n"
+            f"Expected at least 370 new rows, but only {len(new_data)} were added.\n"
             f"Please verify if data for any trading day was partial or missing.",
             SLACK_ERROR_CHANNEL
         )

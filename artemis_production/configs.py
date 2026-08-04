@@ -18,7 +18,13 @@ LOGS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 # Session hours
 opening_time = time(9, 15)
-closing_time  = time(15, 30)
+closing_time  = time(15, 40)   # CAS (3 Aug 2026): derivatives trade till 15:40
+
+# Expiry-day early close: CAS means price discovery for the underlying only
+# happens in the 15:15+ closing auction, with no continuous trading to react
+# to it. Force-close any still-open (net-open) spread at 15:15 on expiry day
+# rather than carry it through the auction not knowing if it settles OTM.
+expiry_day_close_time = time(15, 15)
 
 # Scrip master URL — same as before
 scrip_master_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"

@@ -28,6 +28,7 @@ import ctypes
 import logging
 import threading
 import time
+from datetime import datetime, time as dtime
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,9 @@ MODE_LTP = 1
 _CORRELATION_ID = "shared_feed"
 
 # Well-known index tokens — re-exported for caller convenience
-NIFTY_TOKEN = "99926000"
-VIX_TOKEN   = "99926017"
+NIFTY_TOKEN  = "99926000"
+VIX_TOKEN    = "99926017"
+SENSEX_TOKEN = "99919000"
 
 # Tick error debouncing — alert after N errors, then silence for cooldown period
 _TICK_ERROR_ALERT_THRESHOLD = 10
@@ -60,6 +62,17 @@ _TICK_ERROR_COOLDOWN_S      = 300   # 5 minutes
 # Broker sends ping/pong every 10s so a live connection with no ticks means illiquidity.
 _STALE_TICK_THRESHOLD_S = 120   # 2 minutes
 _STALE_ALERT_COOLDOWN_S = 300   # re-alert cooldown per token
+
+# Closing Auction Session (CAS), live on NSE/BSE from 3 Aug 2026: the
+# underlying index (not VIX, which keeps ticking — it's computed from the
+# options order book, unaffected by CAS) stops ticking at 15:15 for a
+# ~15-minute call auction, resuming with a single terminal print somewhere in
+# 15:16-15:40. That's an expected daily quiet period, not a feed problem —
+# suppress the stale-tick watchdog for these two tokens during the window.
+# Option tokens are never exempted; a genuinely illiquid strike still alerts.
+_CAS_AFFECTED_INDEX_TOKENS = {NIFTY_TOKEN, SENSEX_TOKEN}
+_CAS_AUCTION_WINDOW_START  = dtime(15, 15)
+_CAS_AUCTION_WINDOW_END    = dtime(15, 40)
 
 
 class SharedFeed:
@@ -563,10 +576,13 @@ class SharedFeed:
                 continue
 
             now = time.time()
+            in_cas_window = _CAS_AUCTION_WINDOW_START <= datetime.now().time() <= _CAS_AUCTION_WINDOW_END
             with self._lock:
                 check_tokens = list(self._subscribed_index) + list(self._subscribed_options)
 
             for token in check_tokens:
+                if in_cas_window and token in _CAS_AFFECTED_INDEX_TOKENS:
+                    continue   # expected CAS auction quiet period, not a feed issue
                 with self._lock:
                     ts         = self._last_tick_ts.get(token)
                     last_alert = self._stale_alerted.get(token, 0.0)

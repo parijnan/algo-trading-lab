@@ -19,7 +19,7 @@ from pathlib import Path
 # Market hours
 # ---------------------------------------------------------------------------
 MARKET_OPEN     = time(9, 15)
-MARKET_CLOSE    = time(15, 30)
+MARKET_CLOSE    = time(15, 40)   # CAS (3 Aug 2026): derivatives trade till 15:40
 
 # ---------------------------------------------------------------------------
 # VIX routing thresholds

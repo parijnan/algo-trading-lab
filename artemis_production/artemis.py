@@ -42,6 +42,7 @@ def run(obj, auth_token, instrument_df):
             if not iron_condor.monitor_trade():
                 break
             iron_condor.evaluate_adjust_for_elm()
+            iron_condor.evaluate_expiry_day_close()
             iron_condor.evaluate_handle_sl()
             iron_condor.continue_monitoring()
         except Exception as e:
