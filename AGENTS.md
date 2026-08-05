@@ -83,7 +83,7 @@ Athena, and Iris.
 
 | Strategy | Instrument | Structure | VIX band | Status |
 |---|---|---|---|---|
-| **Artemis** | Sensex weekly | Iron condor → reinforced directional spread | ≤ 16 | Live |
+| **Artemis** | Sensex weekly | Iron condor → reinforced directional spread | ≤ 16 | **Disabled since 2026-08-05** (see §5) |
 | **Athena** | Nifty weekly | Double calendar condor + safety wings | 16–25 | Live |
 | **Iris** | Nifty weekly | Directional scalping, ITM-150 long call/put, ST_FAST (5m+15m) | > 25 | Live (`DRY_RUN=False`, 40 lots static) |
 | **Apollo** | Nifty weekly | ITM debit spread, dual supertrend | (was > 25) | Retired from routing — manages open positions only |
@@ -149,6 +149,23 @@ production directory always contains: entry point, `configs.py` /
 
 ## 5. What's Ongoing
 
+- **CAS (Closing Auction Session) adaptation — Artemis disabled 2026-08-05.**
+  NSE/BSE's CAS went live 2026-08-03: continuous trading in the underlying
+  stops at 15:15, ~15min call auction with no ticks, terminal print lands
+  ~15:16-15:35, derivatives trade on to 15:40. System-side adaptation shipped
+  2026-08-04 (`data_downloader_angelone.py` gap-fill/day-end-extend, Artemis/
+  Athena monitoring windows extended to 15:40, Artemis force-closes any
+  net-open spread at 15:15 on expiry day, `websocket_feed.py` stale-tick
+  watchdog suppressed for Nifty/Sensex spot tokens during the auction). Then
+  2026-08-05: Nifty's auction-window move has been large and consistently
+  one-directional on both observed days (+0.82%, +0.62%) while Sensex's own
+  print is comparatively flat — user lost money on the short-call side and
+  disabled Artemis indefinitely pending investigation into suspected
+  closing-auction manipulation (buy pressure in the cash segment during the
+  auction, thin sell-side since fresh short sales can't settle as delivery
+  there). New `cas_auction_tracking.csv` (gitignored) logs the daily move
+  automatically, CSV-only, no Slack. Only 2 days of evidence so far — don't
+  treat the pattern as statistically confirmed yet.
 - **Iris live validation** — Iris took the VIX > 25 slot on 2026-06-18,
   replacing Apollo in routing. Static 40 lots; dynamic sizing deferred.
   Apollo remains in Leto solely to manage any residual open positions.

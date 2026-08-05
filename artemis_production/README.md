@@ -120,6 +120,8 @@ prefixed with the expiry date, leaving `data/` clean for the next week.
 
 ## Status
 
+**⚠️ DISABLED as of 2026-08-05, indefinitely.** NSE/BSE's Closing Auction Session (live 3 Aug 2026) is producing a large, consistent one-directional move on Nifty's closing-auction print — suspected closing-auction price manipulation under investigation, hurting the short-call side. No fixed re-enable date. See the CAS note in the root `CLAUDE.md` and `data_pipeline/data/cas_auction_tracking.csv` for current status before assuming this is trading again.
+
 - [x] Iron condor execution — live and profitable
 - [x] SL handling and spread adjustment — validated
 - [x] ELM adjustment — validated

@@ -303,13 +303,14 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     already-reported high/low range).
     """
     if len(df) < 2:
-        return df, 0, 0
+        return df, 0, 0, []
 
     df = df.sort_values("time_stamp").reset_index(drop=True)
 
     synthetic_rows = []
     open_fixes: dict = {}
     cas_gap_count = 0
+    cas_auction_moves = []
 
     for i in range(1, len(df)):
         prev_ts = df.loc[i - 1, "time_stamp"]
@@ -339,9 +340,16 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
             open_fixes[i] = prev_close
         else:
             cas_gap_count += 1
+            cas_auction_moves.append({
+                "date":              prev_ts.date(),
+                "pre_auction_time":  prev_ts.time(),
+                "pre_auction_close": prev_close,
+                "terminal_time":     term_time,
+                "terminal_close":    df.loc[i, "close"],
+            })
 
     if not synthetic_rows:
-        return df, 0, 0
+        return df, 0, 0, []
 
     label = f"[{display_name}] " if display_name else ""
     logger.info(f"{label}Inserting {len(synthetic_rows)} synthetic flat candle(s) "
@@ -354,7 +362,7 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     result = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
     result.sort_values("time_stamp", inplace=True)
     result.reset_index(drop=True, inplace=True)
-    return result, len(synthetic_rows), cas_gap_count
+    return result, len(synthetic_rows), cas_gap_count, cas_auction_moves
 
 
 # CAS effective date — Nifty/Sensex spot has no ticks after the auction
@@ -413,6 +421,47 @@ def extend_to_day_close(df: pd.DataFrame, display_name: str = "") -> tuple:
     return result, len(synthetic_rows)
 
 
+CAS_TRACKING_FILE = os.path.join(DATA_DIR, "cas_auction_tracking.csv")
+
+
+def log_cas_auction_moves(display_name: str, moves: list):
+    """
+    Append each day's closing-auction move (pre-auction close -> terminal
+    print) to a running tracking log. One row per (date, index). Re-running
+    over an already-logged day overwrites that row rather than duplicating it.
+    """
+    if not moves:
+        return
+
+    rows = []
+    for m in moves:
+        move_pts = m["terminal_close"] - m["pre_auction_close"]
+        move_pct = move_pts / m["pre_auction_close"] * 100
+        rows.append({
+            "date":              m["date"],
+            "index":             display_name,
+            "pre_auction_time":  m["pre_auction_time"],
+            "pre_auction_close": m["pre_auction_close"],
+            "terminal_time":     m["terminal_time"],
+            "terminal_close":    m["terminal_close"],
+            "move_pts":          round(move_pts, 2),
+            "move_pct":          round(move_pct, 4),
+        })
+    new_rows = pd.DataFrame(rows)
+
+    if os.path.exists(CAS_TRACKING_FILE):
+        existing = pd.read_csv(CAS_TRACKING_FILE)
+        combined = pd.concat([existing, new_rows], ignore_index=True)
+        combined.drop_duplicates(subset=["date", "index"], keep="last", inplace=True)
+    else:
+        combined = new_rows
+
+    combined.sort_values(["date", "index"], inplace=True)
+    combined.to_csv(CAS_TRACKING_FILE, index=False)
+    logger.info(f"[{display_name}] CAS auction move logged for {len(rows)} day(s) "
+                f"→ cas_auction_tracking.csv")
+
+
 # ===========================================================================
 # Generic index updater
 # ===========================================================================
@@ -450,7 +499,9 @@ def update_index(obj, display_name: str, exchange: str,
         logger.info(f"[{display_name}] no new data fetched.")
         return
 
-    new_data, gap_fills, cas_gap_fills = fill_missing_candles(new_data, display_name)
+    new_data, gap_fills, cas_gap_fills, cas_auction_moves = fill_missing_candles(new_data, display_name)
+    if symbol_token in CAS_AFFECTED_INDEX_TOKENS:
+        log_cas_auction_moves(display_name, cas_auction_moves)
     glitch_fills = gap_fills - cas_gap_fills if cas_gap_fills else gap_fills
     if cas_gap_fills and glitch_fills == 0:
         # Expected daily CAS auction gap only — routine, not an anomaly.

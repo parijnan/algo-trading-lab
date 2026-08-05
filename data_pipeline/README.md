@@ -28,6 +28,9 @@ Since 3 Aug 2026, NSE/BSE run a Closing Auction Session for Nifty and Sensex: co
 
 Together these make every CAS-era Nifty/Sensex trading day exactly 385 rows (09:15–15:39 inclusive), gapless. The options fetch window (`MARKET_CLOSE`) was widened from 15:30 to 15:40 to match the extended derivatives session.
 
+### CAS Auction-Move Tracking
+`fill_missing_candles` also returns the day's auction-window move (pre-auction close → terminal print, both timestamps) whenever it detects a CAS gap. `log_cas_auction_moves()` appends one row per date/index to `data/cas_auction_tracking.csv`, gated to Nifty/Sensex only — no extra API calls, it's derived from data the pipeline already fetches. This exists to track a suspected closing-auction price-impact pattern (large, consistent one-directional moves on Nifty's auction print) under investigation as of Aug 2026; deliberately logs to CSV only, no Slack notification.
+
 ## Directory Structure
 
 ```
@@ -54,6 +57,7 @@ data_pipeline/
     │   ├── nifty_daily.csv         # Official daily Nifty OHLC (AngelOne, same-day)
     │   ├── sensex_daily.csv        # Official daily Sensex OHLC (AngelOne, same-day)
     │   └── india_vix_daily.csv     # Official daily VIX OHLC (AngelOne, same-day)
+    ├── cas_auction_tracking.csv    # Daily Nifty/Sensex auction-window move (pre-auction close → terminal print)
     ├── sensex/                     # Sensex options — one folder per expiry
     │   └── YYYY-MM-DD/
     └── nifty/
