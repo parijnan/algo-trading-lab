@@ -438,7 +438,7 @@ def log_cas_auction_moves(display_name: str, moves: list):
         move_pts = m["terminal_close"] - m["pre_auction_close"]
         move_pct = move_pts / m["pre_auction_close"] * 100
         rows.append({
-            "date":              m["date"],
+            "date":              str(m["date"]),
             "index":             display_name,
             "pre_auction_time":  m["pre_auction_time"],
             "pre_auction_close": m["pre_auction_close"],
@@ -502,9 +502,9 @@ def log_gap_fade_tracking(display_name: str, df: pd.DataFrame):
         day_close = day_df.iloc[-1]["close"]
 
         rows.append({
-            "date":                   d,
+            "date":                   str(d),
             "index":                  display_name,
-            "prior_auction_date":     prior_row["date"],
+            "prior_auction_date":     str(prior_row["date"]),
             "prior_auction_move_pct": prior_row["move_pct"],
             "day_open":               day_open,
             "day_low":                day_low,
