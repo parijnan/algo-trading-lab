@@ -9,6 +9,7 @@ For full details on design decisions, API behaviour, deployment, and file format
 | Script | Description | Runs on | Schedule |
 |--------|-------------|---------|----------|
 | `data_downloader_angelone.py` | Downloads Sensex options, all 1-min indices, and daily Nifty + VIX OHLC via AngelOne | VPS (`delos`) | Weekdays 15:45 IST |
+| `nse_cas_market_watch.py` | Polls NSE's live Closing Auction Session Market Watch feed (indicative equilibrium price, imbalance, final auction print) every 15s through the 15:14-15:36 window, one row per poll per symbol | VPS (`delos`) | Weekdays 15:12 IST |
 | `data_downloader_icicidirect.py` | Downloads Nifty options via ICICI Direct/Breeze | Laptop | Wednesdays 23:30 IST |
 | `run_angelone_downloader.sh` | Wrapper: git pull → run AngelOne downloader → git push if config changed | VPS (`delos`) | Weekdays 15:45 IST |
 | `run_icicidirect_downloader.sh` | Wrapper: git pull → run ICICI Direct downloader → git push if config changed | Laptop | Wednesdays 23:30 IST |
@@ -30,6 +31,13 @@ Together these make every CAS-era Nifty/Sensex trading day exactly 385 rows (09:
 
 ### CAS Auction-Move Tracking
 `fill_missing_candles` also returns the day's auction-window move (pre-auction close → terminal print, both timestamps) whenever it detects a CAS gap. `log_cas_auction_moves()` appends one row per date/index to `data/cas_auction_tracking.csv`, gated to Nifty/Sensex only — no extra API calls, it's derived from data the pipeline already fetches. This exists to track a suspected closing-auction price-impact pattern (large, consistent one-directional moves on Nifty's auction print) under investigation as of Aug 2026; deliberately logs to CSV only, no Slack notification.
+
+### NSE CAS Market Watch Tracking
+`nse_cas_market_watch.py` polls NSE's own live auction feed directly — a different, richer data source than the mid-day gap-fill above, which only reconstructs the auction's *start* and *end* points from 1-min index candles. NSE's Market Watch page (`nseindia.com/market-data/closing-auction-session`) calls a public JSON endpoint (`/api/NextApi/apiClient/casApi?functionName=getCASData`, found by reading the page's own JS bundle — no official API docs exist for it) that returns, per F&O stock: the VWAP(15:00-15:15) reference price, the ±3% band, the live indicative equilibrium price (IEP) and imbalance quantities as the auction develops, and the final matched price/quantity once it closes. No auth required — cookie handling reuses the Akamai warm-up technique proven in `../../swing-trading-lab/data_pipeline/bhavcopy/nse_session.py` (a homepage hit 403s but still sets cookies; a follow-up hit to a real page completes the set), duplicated here in miniature rather than cross-imported since delos only deploys this repo.
+
+The script polls every 15s from 15:14 to 15:36 and appends one row per (poll, symbol) to `data/cas_market_watch/YYYY-MM-DD.csv` — a full reconstruction of how the auction evolved per stock, not just its endpoints. Skips non-trading days via the root `data/holidays.csv`. Research-only; doesn't feed any live strategy or post to Slack.
+
+**BSE has no equivalent found.** Its Market Watch page is a heavily obfuscated Angular SPA with lazy-loaded route chunks that couldn't be mapped via static analysis (tried: URL guessing, grepping all discoverable JS bundles including the ones with genuine `api.bseindia.com` calls, search-engine site search) — unlike NSE's, which yielded a clean endpoint on the first bundle checked. Live browser network inspection would likely resolve this quickly but is blocked by Claude's own safety restrictions for both `nseindia.com` and `bseindia.com`. Worth revisiting by checking the Network tab manually during a live 15:15-15:30 window if this is wanted later.
 
 ### CAS Gap-Fade Tracking
 `log_gap_fade_tracking()` (called from `update_index`, same Nifty/Sensex-only gate) pairs each new CAS-era day's own open/low/high/close against the *prior* trading day's auction move logged in `cas_auction_tracking.csv`, appending one row per date/index to `data/cas_gap_fade_tracking.csv`. This is a research log testing whether a large one-directional auction move tends to fade the next session (open near the prior close, drift lower) — it does not drive any trading decision. Also derived entirely from data already fetched; CSV only, no Slack notification.
@@ -62,6 +70,8 @@ data_pipeline/
     │   └── india_vix_daily.csv     # Official daily VIX OHLC (AngelOne, same-day)
     ├── cas_auction_tracking.csv    # Daily Nifty/Sensex auction-window move (pre-auction close → terminal print)
     ├── cas_gap_fade_tracking.csv   # Research log: next-day open/low/close vs. prior day's auction move
+    ├── cas_market_watch/           # NSE live auction feed polls, one file per day
+    │   └── YYYY-MM-DD.csv
     ├── sensex/                     # Sensex options — one folder per expiry
     │   └── YYYY-MM-DD/
     └── nifty/
