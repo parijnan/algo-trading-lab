@@ -31,6 +31,9 @@ Together these make every CAS-era Nifty/Sensex trading day exactly 385 rows (09:
 ### CAS Auction-Move Tracking
 `fill_missing_candles` also returns the day's auction-window move (pre-auction close → terminal print, both timestamps) whenever it detects a CAS gap. `log_cas_auction_moves()` appends one row per date/index to `data/cas_auction_tracking.csv`, gated to Nifty/Sensex only — no extra API calls, it's derived from data the pipeline already fetches. This exists to track a suspected closing-auction price-impact pattern (large, consistent one-directional moves on Nifty's auction print) under investigation as of Aug 2026; deliberately logs to CSV only, no Slack notification.
 
+### CAS Gap-Fade Tracking
+`log_gap_fade_tracking()` (called from `update_index`, same Nifty/Sensex-only gate) pairs each new CAS-era day's own open/low/high/close against the *prior* trading day's auction move logged in `cas_auction_tracking.csv`, appending one row per date/index to `data/cas_gap_fade_tracking.csv`. This is a research log testing whether a large one-directional auction move tends to fade the next session (open near the prior close, drift lower) — it does not drive any trading decision. Also derived entirely from data already fetched; CSV only, no Slack notification.
+
 ## Directory Structure
 
 ```
@@ -58,6 +61,7 @@ data_pipeline/
     │   ├── sensex_daily.csv        # Official daily Sensex OHLC (AngelOne, same-day)
     │   └── india_vix_daily.csv     # Official daily VIX OHLC (AngelOne, same-day)
     ├── cas_auction_tracking.csv    # Daily Nifty/Sensex auction-window move (pre-auction close → terminal print)
+    ├── cas_gap_fade_tracking.csv   # Research log: next-day open/low/close vs. prior day's auction move
     ├── sensex/                     # Sensex options — one folder per expiry
     │   └── YYYY-MM-DD/
     └── nifty/

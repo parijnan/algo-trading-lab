@@ -462,6 +462,75 @@ def log_cas_auction_moves(display_name: str, moves: list):
                 f"→ cas_auction_tracking.csv")
 
 
+GAP_FADE_TRACKING_FILE = os.path.join(DATA_DIR, "cas_gap_fade_tracking.csv")
+
+
+def log_gap_fade_tracking(display_name: str, df: pd.DataFrame):
+    """
+    Research-only: pairs each CAS-era day's own open/low/high/close with the
+    prior trading day's closing-auction move (from cas_auction_tracking.csv),
+    to test whether a large one-directional auction move tends to fade the
+    next session. Feeds the CAS manipulation-theory investigation; no bearing
+    on any live strategy.
+    """
+    if df.empty or not os.path.exists(CAS_TRACKING_FILE):
+        return
+
+    df = df.copy()
+    df["date"] = df["time_stamp"].dt.date
+    cas_dates = sorted(d for d in df["date"].unique() if d >= CAS_EFFECTIVE_DATE)
+    if not cas_dates:
+        return
+
+    auction_log = pd.read_csv(CAS_TRACKING_FILE)
+    auction_log = auction_log[auction_log["index"] == display_name].copy()
+    if auction_log.empty:
+        return
+    auction_log["date"] = pd.to_datetime(auction_log["date"]).dt.date
+
+    rows = []
+    for d in cas_dates:
+        prior = auction_log[auction_log["date"] < d].sort_values("date")
+        if prior.empty:
+            continue
+        prior_row = prior.iloc[-1]
+
+        day_df = df[df["date"] == d].sort_values("time_stamp")
+        day_open  = day_df.iloc[0]["open"]
+        day_low   = day_df["low"].min()
+        day_high  = day_df["high"].max()
+        day_close = day_df.iloc[-1]["close"]
+
+        rows.append({
+            "date":                   d,
+            "index":                  display_name,
+            "prior_auction_date":     prior_row["date"],
+            "prior_auction_move_pct": prior_row["move_pct"],
+            "day_open":               day_open,
+            "day_low":                day_low,
+            "day_high":               day_high,
+            "day_close":              day_close,
+            "open_to_low_pct":        round((day_low - day_open) / day_open * 100, 4),
+            "open_to_close_pct":      round((day_close - day_open) / day_open * 100, 4),
+        })
+
+    if not rows:
+        return
+
+    new_rows = pd.DataFrame(rows)
+    if os.path.exists(GAP_FADE_TRACKING_FILE):
+        existing = pd.read_csv(GAP_FADE_TRACKING_FILE)
+        combined = pd.concat([existing, new_rows], ignore_index=True)
+        combined.drop_duplicates(subset=["date", "index"], keep="last", inplace=True)
+    else:
+        combined = new_rows
+
+    combined.sort_values(["date", "index"], inplace=True)
+    combined.to_csv(GAP_FADE_TRACKING_FILE, index=False)
+    logger.info(f"[{display_name}] Gap-fade tracking logged for {len(rows)} day(s) "
+                f"→ cas_gap_fade_tracking.csv")
+
+
 # ===========================================================================
 # Generic index updater
 # ===========================================================================
@@ -530,6 +599,7 @@ def update_index(obj, display_name: str, exchange: str,
                 f"ticks after the auction; derivatives trade on to 15:40).",
                 SLACK_DATA_CHANNEL
             )
+        log_gap_fade_tracking(display_name, new_data)
 
     # Normalise timestamps to the file's format: "2026-03-11 15:29:00+05:30"
     if new_data["time_stamp"].dt.tz is None:
