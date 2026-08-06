@@ -1,6 +1,6 @@
 # Plan: Closing Auction Session (CAS) — Adaptation & Investigation
 
-**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis DISABLED indefinitely since 2026-08-05 pending the manipulation investigation below — no fixed re-enable date. Live incident 2026-08-05 (short 78800 CE, `index_sl` fired at the open on a genuine overnight catch-up gap) surfaced a second, still-unresolved blocking concern (overnight gap-through-stop risk) — explicitly NOT yet added to accepted-risks, still being thought through. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped and running on delos as of 2026-08-05 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`). External corroboration gathered from two independent sources (@Am_Shai, Zerodha Varsity) supports the thin-liquidity mechanism; says nothing about deliberate manipulation. Only ~3 days of evidence — do not overstate any conclusion.**
+**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis kept out of rotation since 2026-08-05 via an active Slack routing override — NOT a code-level disable; if the override lapses without a replacement, Leto auto-routes back to Artemis on any VIX≤16 Monday-Thursday with none of the CAS risks addressed (see §3.1). Overnight gap-through-stop risk (§3) remains unresolved, not on any accepted-risks list. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped 2026-08-05, confirmed working end-to-end in its first live production run 2026-08-06 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`; see §7.3). Backtest/live parity gap (accepted-risk §2.3) closed 2026-08-06 (commit `95a99b2`). **2026-08-06: Iris deployed as the sole live strategy**, force-routed regardless of VIX (static 1-lot first run, scaling planned) — see §9. Sensex's first expiry day under CAS (2026-08-06) produced a materially larger auction move than Nifty's, plus a dramatic options-premium collapse at settlement — see §4.8. External corroboration from three independent sources (@Am_Shai ×2, Zerodha Varsity) supports the thin-liquidity mechanism; says nothing about deliberate manipulation. Only 4 trading days of evidence — do not overstate any conclusion.**
 
 ---
 
@@ -34,7 +34,7 @@ SEBI's stated rationale for introducing CAS (replacing the old VWAP close), per 
 **Risks surfaced and explicitly accepted 2026-08-04** (deliberate calls, not oversights):
 1. **Index-referenced triggers go blind 15:15-15:40** — Artemis's `index_sl` and Athena's parachute/PE-wing triggers compare against a frozen ~15:14 index value in that window; `option_sl` still works normally. Decision: leave silent, bank on `option_sl`.
 2. Apollo untouched (retired from routing — open-position-resume only, safely ignored).
-3. Backtest/live parity broken on Artemis's expiry-day exit (backtests still assume ≤15:30 close). Decision: accepted for now; backtests to be retroactively updated eventually.
+3. Backtest/live parity broken on Artemis's expiry-day exit (backtests still assume ≤15:30 close). Decision: accepted for now; backtests to be retroactively updated eventually. **DONE 2026-08-06 (commit `95a99b2`)** — `artemis_backtest/backtest.py`/`configs.py` now mirror production's `evaluate_expiry_day_close()`, force-closing any still-open spread at 15:15 on expiry day for CAS-era weeks (`CAS_EFFECTIVE_DATE` gate), while pre-CAS weeks keep the original ≤15:30 exit. Landed via a separate chat session in the same repo; verified by reading the diff before stash/pull/commit/push.
 4. Synthetic terminal-print jump in the index CSVs will show as a spurious single-bar ~0.6-0.8% move to any per-minute-return research — flagged, no consumer audit done.
 5. `sensex_daily.csv` update lag after CAS — root-caused as a BSE EOD-publish delay through AngelOne, not a bug; self-heals via the existing incremental-fetch design.
 
@@ -54,6 +54,10 @@ The strategy's automatic PE-side reinforcement (iron condor transform logic: exi
 
 **Status: this gap-through-stop risk is explicitly NOT YET added to any accepted-risks list.** The user has said so directly — still thinking through mitigations. Do not mark it accepted without being told to. It is a second, distinct blocking concern for Artemis's eventual re-enable, separate from the manipulation-theory investigation below — even if that investigation resolves favorably, this risk needs its own answer (wider SL buffers sized for a known structural overnight gap, reduced overnight sizing, or a rule against carrying Sensex positions through a CAS-affected close).
 
+### 3.1 Correction, 2026-08-06: "disabled" is not a code-level state
+
+User corrected the framing used throughout this document and earlier chat turns: Artemis being out of rotation is **not** an explicit disable anywhere in the code. Verified by reading `leto.py::_route()` directly — with no manual override active, auto-routing (Mon-Thu) falls through unconditionally to `if vix <= VIX_ARTEMIS_MAX: ... Routing to Artemis` (~lines 424-426). The *only* thing keeping Artemis out right now is the active Slack manual-override (`routing_state.json` on delos, currently forcing Iris — see §9). **If that override is ever cleared without a replacement, and it's a Monday-Thursday with VIX ≤ 16, Leto will auto-route straight back to Artemis** — with every risk in §2 (accepted) and §3 (unresolved) fully intact, since nothing was added to the routing logic itself to guard against it. Treat "Artemis is disabled" as shorthand for "kept out via an override the user is actively maintaining," not a structural safeguard.
+
 ---
 
 ## 4. Measured evidence: what's actually happening
@@ -68,8 +72,12 @@ The strategy's automatic PE-side reinforcement (iron condor transform logic: exi
 | Aug 4 | Sensex | +0.13% | Flat |
 | Aug 5 | Nifty | +0.22% | Third straight positive day, shrinking magnitude |
 | Aug 5 | Sensex | +0.10% | First clearly positive Sensex reading |
+| Aug 6 | Nifty | +0.03% | Fourth straight positive day, smallest yet — non-expiry day for Nifty |
+| Aug 6 | Sensex | +0.21% | **Sensex's own first expiry day under CAS — largest Sensex move of the 4 days, breaking its own flat pattern** |
 
-Three straight positive Nifty days, shrinking in magnitude (0.82% → 0.62% → 0.22%) — not enough points to call the shrink a real trend vs. noise, but worth watching rather than assuming the effect is static in size.
+Nifty's shrinking-magnitude pattern held through a 4th day (0.82% → 0.62% → 0.22% → 0.03%) — @Am_Shai's 2026-08-05 follow-up post (§5.1) independently reported nearly identical numbers and offered a mechanism: growing market awareness causing shorts to close earlier (from ~14:30) and funds to pre-position ahead of the close, diluting each day's surprise. Self-reported that he called this on day one, not independently verified, but the mechanism is plausible.
+
+**Sensex broke the opposite way on its own expiry day.** Rather than continuing the flat/muted pattern of Aug 3-5, Sensex's Aug 6 auction move (+0.21%) was its largest yet — about 6.6x Nifty's same-day move. See §4.8 for the full picture (this was foreshadowed by the entire morning's rolling-ATM IV climb, not a surprise at the close).
 
 ### 4.2 Next-day gap-fade pattern (`cas_gap_fade_tracking.csv`)
 
@@ -100,7 +108,35 @@ BSE's own bhavcopy carries two closing reference prices per stock: `ClsPric` (ma
 
 ### 4.7 Causality caveat (repeated deliberately throughout)
 
-All of the above measures a **structural/mechanical** pattern — thin sell-side auction liquidity producing a one-directional clearing price on NSE, and no clearing price at all on BSE for these names. It does **not** distinguish "the auction mechanism just works this way" from "someone is doing this deliberately." Keep these two claims separate. Only ~3 days of evidence exist; the market was already on a multi-day up-run before CAS started, so "auction-structural bias" vs. "ordinary bullish momentum" isn't yet cleanly separable statistically.
+All of the above measures a **structural/mechanical** pattern — thin sell-side auction liquidity producing a one-directional clearing price on NSE, and no clearing price at all on BSE for these names. It does **not** distinguish "the auction mechanism just works this way" from "someone is doing this deliberately." Keep these two claims separate. Only ~3 days of evidence exist; the market was already on a multi-day up-run before CAS started, so "auction-structural bias" vs. "ordinary bullish momentum" isn't yet cleanly separable statistically. (Applies equally to §4.8 below.)
+
+### 4.8 Sensex's own expiry day, 2026-08-06 — options IV and settlement behaviour
+
+Own data throughout, via live AngelOne pulls (rolling-ATM strike recomputed at each checkpoint, not held fixed — a fixed strike drifting out of moneyness was caught and corrected mid-session) plus the newly-landed local Sensex options for the 2026-08-06 expiry and the Nifty options for the 2026-08-04 expiry (ICICI Breeze, landed 2026-08-06).
+
+**IV climbed through the whole session, well ahead of the close** — a materially different shape than Nifty's own expiry day:
+
+| Time | Nifty Aug 4 (own expiry) avg IV | Sensex Aug 6 (own expiry) avg IV |
+|---|---|---|
+| ~09:15-11:30 | flat, 15.75%-19.61% (matches pre-CAS baseline) | — |
+| 09:45 | — | 39.25% |
+| ~12:00 | 24.07% | — |
+| 10:08 | — | 44.58% |
+| ~14:00 | 35.58% | — |
+| 11:31 | — | 52.75% |
+| ~15:00 (pre-auction) | **89.97%** | building further into the close |
+
+Pre-CAS baseline (last 3 pre-CAS Thursday expiries, same time-of-day) was ~17.5%-20.5%, cross-checked against India VIX being flat-to-lower than baseline on both days — ruling out generic market-wide vol as the explanation.
+
+**Nifty's shape: flat for ~3 hours, then a late, sharp ramp** (34.5%→90% from 14:00 to 15:00 alone). **Sensex's shape: rising from the first reading, no flat stretch at all.** Plausible read: the market learned from Nifty's Aug 4 event (the first live demonstration of CAS expiry-settlement violence) and priced Sensex's own first exposure in earlier and more continuously, rather than waiting for the final hour.
+
+**Settlement outcome confirms the risk was real, not just anticipated.** The Sensex 78800 ATM straddle was priced at 505.95 (CE 300.90 + PE 205.05) at 15:15; by the time it settled (stable from 15:30 onward) it had collapsed to ~154.65 — CE settling almost exactly at its own intrinsic value (78954.76 − 78800 = 154.76) and PE collapsing to near-zero (spot finished well above strike). All the extrinsic/time value built up all morning was paid out and vanished within ~15 minutes, exactly as option theory predicts once a settlement price becomes known. Mechanically distinct from Nifty's Aug 4 case (24500 CE ~doubled because spot crossed decisively from OTM to ITM) — here the dominant effect was extrinsic-value collapse, not a moneyness flip, even though the call did finish ITM.
+
+**A separate, smaller finding: the option's own price was unstable inside the 15:16-15:29 window, independent of the eventual settlement.** The 78800 CE spiked to a high of 500 at 15:23 — nearly double the 15:15 reference — before crashing back down by 15:27-15:29. This is the option tape gyrating during the running-equilibrium and limit-only phases (§1 mechanics), a distinct risk dimension from the index-freeze problem already tracked — it would affect anyone trying to mark or exit using option LTP during that window, independent of overnight gap risk.
+
+**Contrast at the constituent level (via `cas_market_watch/2026-08-06.csv`, §7.3's tracker, first live production data)**: checked HDFCBANK, RELIANCE, ICICIBANK's own IEP (indicative equilibrium price) trajectories through their NSE auctions today. All three were remarkably **stable** — IEP barely moved from first read to settlement (e.g. HDFCBANK 735.0→734.3→734.3, final 734.3), even though the underlying imbalance quantity (`iiqAtEP`) swung wildly. This is a real contrast to the Sensex option's own gyrations — suggests the intra-window instability is concentrated in the derivatives layer (leverage, thin option-specific order flow), not present in how NSE resolves the underlying stock auctions themselves, at least on a day when Nifty's own move was small (+0.03%).
+
+**Net read**: Sensex's first CAS expiry day showed the same qualitative risk Nifty's Aug 4 expiry did — options pricing in real uncertainty ahead of a settlement, then collapsing/resolving sharply — but with earlier IV buildup, a different mechanical signature at settlement (vega collapse vs. directional flip), and no corresponding chaos in the underlying constituent auctions. Two clean expiry-day data points now exist (one per index), not yet enough to call this a stable pattern, but both point the same direction.
 
 ---
 
@@ -162,7 +198,7 @@ Split into testable-now vs. not-yet, per the standard applied throughout: enumer
 ```
 12 15 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab/data_pipeline && /home/parijnan/anaconda3/bin/python nse_cas_market_watch.py >> ../logs/nse_cas_market_watch_$(date +\%Y\%m\%d).log 2>&1
 ```
-First live run: 2026-08-06 — also Sensex's own first expiry-day CAS test (§5.2). **Check `data_pipeline/data/cas_market_watch/2026-08-06.csv` exists and has a full run's worth of polls (~88 polls × 208 symbols expected) before assuming the cron fired correctly — this was its first live production run, untested end-to-end before deployment.**
+**First live run confirmed clean, 2026-08-06** — also Sensex's own first expiry-day CAS test (§5.2). 83 polls (15:15:15 to 15:35:50), all 208 symbols present on every single poll, no drops. Status transitions from `Open` to `Closed` per-symbol as each stock's own auction resolved, matching expected mechanics. See §4.8 for what it captured.
 
 ### 7.4 Rate-limiting note
 
@@ -170,13 +206,34 @@ AngelOne's historical-candle endpoint hit a sustained, undocumented throttle dur
 
 ---
 
-## 8. Open items / follow-up checklist
+## 8. Strategic response: Iris deployed as sole live strategy (2026-08-06)
+
+With Artemis's re-enable blocked on two open questions (§3, §3.1) and Athena carrying a related-but-lesser version of accepted-risk §2.1, the user re-enabled Leto with **Iris force-routed regardless of VIX** — not just its original VIX>25 slot, a deliberate expansion. This supersedes Athena's 16-25 slot too while the override is active, not just Artemis's.
+
+**Reasoning:**
+1. **Structural CAS-immunity, verified by reading the code, not assumed.** Iris's expiry-selection logic — `MIN_DTE=2` in the backtest (`run_options_sim.py`), and an equivalent ELM-date check in production (`select_expiry()`, `iris_production/functions.py`) — means it **never trades a contract within 2 days of expiry**. Combined with its existing `EXIT_BY_TIME=15:15` intraday-only design, Iris is architecturally insulated from the same-day-settlement dynamics in §4.8, not merely untested against them.
+2. **Backtest evidence checked directly** (`iris_backtest_summary.csv`, 1,208 trades, 2019-04-26 to 2026-07-30, validated in a separate chat session in the same repo — file existence/date-range/DTE-distribution independently confirmed by reading it): VIX≤16 is robust across both all-time (n=641, 59.4% WR, ₹239/trade) and 2023+ only (n=468, 60.0% WR, ₹244/trade) — the strongest, most consistent band. **The 16-25 band is notably weaker in 2023+ than the all-time average suggests** (₹86 vs ₹212/trade). **VIX>25 — the band Iris was originally placed in for being "strongest"** — is actually net-negative in the 2023+ subset (n=5, -₹422/trade, 20% WR; too small a sample to be conclusive alone, but the opposite of reassuring for the live slot Iris has occupied since June).
+3. **User's own market-regime view**: expects VIX to trade predominantly ≤16 going forward given recent regulatory measures, with occasional event-driven spikes reverting. If correct, most exposure lands in Iris's best-supported band regardless of the weaker 16-25/>25 numbers — a forecast underpinning the decision, not something the data itself confirms.
+
+**A related argument was raised and then dropped**: the elevated options IV observed around CAS closing auctions this week (§4.8) was initially proposed as a tailwind for Iris ("premium decay vanishing works in its favor" — since it's a directional option buyer). Dropped once the `MIN_DTE=2`/ELM-date check confirmed Iris never trades close enough to expiry to be exposed to that specific dynamic. The decision rests on points 1-3 above, not this.
+
+**Sizing discipline**: first live run at a **static 1 lot**, not dynamic (`LOT_CALC=False`, set via `iris_production/data/sizing_override.json` — the Slack "Manage Sizing" modal mechanism, same pattern as Artemis/Athena). Explicit user framing: treat "capital under risk" as "capital available," not "capital freed up" — Iris requiring less capital than Artemis/Athena is not itself a reason to size up. Plan is to scale toward Artemis/Athena-comparable size gradually. Note: `sizing_override.json` and `routing_state.json` are both gitignored, delos-only files — not visible from the local machine, so the live values (vs. just the override *mechanism*) couldn't be independently confirmed from here.
+
+**No slippage modeled in the Iris backtest** — confirmed by reading `run_strategy_backtest.py` (produces `iris_backtest_summary.csv`): fills at raw historical `open` price via `_get_price_near()`, no haircut applied. A separate standalone script (`options_slippage.py`) measures realistic bar-to-bar gap empirically but isn't wired into the simulation. User's call: acceptable as-is, not worth backtesting a haircut — Nifty options are liquid enough that they haven't observed significant slippage even on gamma moves, and Iris's websocket-driven trigger plus execution infrastructure should hold up without it.
+
+**Standing operational rule as of this decision**: no ad-hoc AngelOne API calls (live spot/option pulls, IV checks, etc.) from Claude until Leto terminates for the day, now that Iris is live and sharing AngelOne's rate-limit budget — this session's own research pulls repeatedly hit sustained throttling well under documented limits (§7.4). See `feedback_no_angelone_during_live.md` in memory.
+
+---
+
+## 9. Open items / follow-up checklist
 
 When resuming this investigation, check in this order:
 
-1. Does `data_pipeline/data/cas_market_watch/2026-08-06.csv` exist (on delos or synced locally) with a full run's worth of polls? First live-production confirmation of the new tracker.
-2. How many days has `cas_auction_tracking.csv` / `cas_gap_fade_tracking.csv` accumulated since 2026-08-05? Is the shrinking-magnitude pattern in §4.1 continuing, reversing, or noise?
-3. Did the Aug-4-expiry Nifty options data (via the ICICI Wednesday cron) and the Aug-6-expiry Sensex data (via delos, post-expiry) land? Useful for sanity-checking §5.2's Zerodha numbers against our own data, and for the still-untested Sensex expiry-day mechanism.
+1. ~~Does `cas_market_watch/2026-08-06.csv` exist with a full run's worth of polls?~~ **DONE 2026-08-06** — confirmed, 83 polls, all 208 symbols, clean (§7.3). Check subsequent days' files exist too as the cron keeps running.
+2. How many days has `cas_auction_tracking.csv` / `cas_gap_fade_tracking.csv` accumulated since 2026-08-06? Nifty's shrinking-magnitude pattern held through 4 days (§4.1) — is it still shrinking, or has it bottomed out / reversed? Sensex broke its flat pattern on its own expiry day (§4.1, §4.8) — does that hold on the next Sensex expiry (2026-08-13), or was it a one-off?
+3. ~~Did the Aug-4-expiry Nifty options and Aug-6-expiry Sensex options land?~~ **DONE 2026-08-06** — both landed and analyzed in depth (§4.8). Next: does the next Nifty expiry (2026-08-11) and next Sensex expiry (2026-08-13) show the same shape (early IV climb for Sensex, late sharp ramp for Nifty), or was this week idiosyncratic?
 4. Has any SEBI/exchange response emerged regarding the reference-price settlement fix proposed in §5.1?
 5. Is the overnight gap-through-stop risk (§3) still unresolved / not on any accepted-risks list? Don't assume a decision was made without being told.
-6. Is Artemis still disabled? Don't assume either way without checking current state first.
+6. ~~Is Artemis still disabled?~~ **Corrected 2026-08-06 (§3.1)**: it's not a code-level disable, it's contingent on the active Slack override (currently forcing Iris, §9). Check whether that override is still active before assuming Artemis is out of rotation — if it lapsed, Leto may have auto-routed back to Artemis on a qualifying VIX≤16 day.
+7. **New**: how is Iris actually performing live (§9)? Still at static 1 lot, or has sizing been scaled up? Any gap-through or expiry-adjacent incidents that would test the CAS-immunity argument in practice, not just in backtest/code-review?
+8. **New**: does the "market learned from Nifty's Aug 4 event and priced Sensex's Aug 6 expiry in earlier" read (§4.8) hold up on Sensex's *next* expiry (2026-08-13) — i.e. does IV now climb early for Sensex expiries generally, or was Aug 6 specifically anticipatory because it was the first one?
