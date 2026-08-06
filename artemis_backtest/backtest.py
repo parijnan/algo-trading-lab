@@ -52,6 +52,7 @@ from configs import (
     EXPIRY_FALLBACK_PRICE,
     ENABLE_TRADE_LOGS,
     LOT_COUNT,
+    CAS_EFFECTIVE_DATE, EXPIRY_DAY_FORCE_CLOSE_TIME, ENABLE_CAS_EXPIRY_FORCE_CLOSE,
 )
 from data_loader import (
     load_index_data, load_option_data,
@@ -990,9 +991,11 @@ def run_backtest():
             f"buy {ce['buy_strike']} @ {ce['buy_entry']:.2f} | "
             f"SL opt {ce['option_sl']:.2f} | idx {ce['index_sl']:.0f}")
 
-        trade_logs  = []
-        elm_done    = False
+        trade_logs   = []
+        elm_done     = False
+        cas_close_done = False
         entry_exec_ts = exec_ts
+        is_cas_week  = expiry_ts.date() >= CAS_EFFECTIVE_DATE
 
         # -------------------------------------------------------------------
         # Inner loop — 1-min candles from entry to expiry
@@ -1034,6 +1037,25 @@ def run_backtest():
             # ---------------------------------------------------------------
             if ENABLE_TRADE_LOGS:
                 trade_logs.append(_make_log_row(ts, spot, vix_now, pe, ce))
+
+            # ---------------------------------------------------------------
+            # CAS expiry-day force close (mirrors production's
+            # evaluate_expiry_day_close) — on/after CAS_EFFECTIVE_DATE, force
+            # close any still-open spread at 15:15 on the actual expiry day,
+            # before the closing-auction print can distort the nominal 15:30
+            # exit. Distinct from the T-1 ELM mechanism above/below.
+            # ---------------------------------------------------------------
+            if (ENABLE_CAS_EXPIRY_FORCE_CLOSE and is_cas_week and not cas_close_done
+                    and ts.date() == expiry_ts.date()
+                    and ts.time() >= EXPIRY_DAY_FORCE_CLOSE_TIME):
+                cas_exec_ts = ts + pd.Timedelta(minutes=1)
+                if pe['status'] != 'closed':
+                    exit_spread_at(pe, cas_exec_ts, 'cas_expiry_force_close', lots, lots // 2)
+                    logger.info(f"  PE CAS FORCE CLOSE @ {cas_exec_ts} | pl: {pe['pl']:+.2f}")
+                if ce['status'] != 'closed':
+                    exit_spread_at(ce, cas_exec_ts, 'cas_expiry_force_close', lots, lots // 2)
+                    logger.info(f"  CE CAS FORCE CLOSE @ {cas_exec_ts} | pl: {ce['pl']:+.2f}")
+                cas_close_done = True
 
             # ---------------------------------------------------------------
             # Expiry check

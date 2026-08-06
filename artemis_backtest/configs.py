@@ -186,6 +186,25 @@ ENABLE_OPTION_SL        = True
 EXPIRY_FALLBACK_PRICE   = 0.05
 
 # ---------------------------------------------------------------------------
+# CAS (Closing Auction Session) — live since 2026-08-03
+# ---------------------------------------------------------------------------
+# Continuous index trading now halts at 15:15; a closing auction runs until a
+# terminal print lands (anywhere ~15:16-15:35); derivatives keep trading to
+# 15:40. Production Artemis (iron_condor.py::evaluate_expiry_day_close) now
+# force-closes any still-open spread at 15:15 on expiry day itself, to avoid
+# exposure to the auction's post-print repricing. Mirrored here so the
+# backtest matches current production behaviour for CAS-era weeks; weeks
+# before this date keep the original "hold to nominal 15:30 expiry" exit,
+# since that's genuinely what happened before CAS existed.
+# Set ENABLE_CAS_EXPIRY_FORCE_CLOSE = False to see the uncapped-exposure
+# alternative (rides to the old 15:30 mark) for comparison.
+from datetime import date as _date, time as _time
+
+CAS_EFFECTIVE_DATE            = _date(2026, 8, 3)
+EXPIRY_DAY_FORCE_CLOSE_TIME   = _time(15, 15)
+ENABLE_CAS_EXPIRY_FORCE_CLOSE = True
+
+# ---------------------------------------------------------------------------
 # Lot count
 # ---------------------------------------------------------------------------
 LOT_COUNT               = 2
