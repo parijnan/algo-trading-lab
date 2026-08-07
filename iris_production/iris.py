@@ -232,6 +232,22 @@ class Iris:
         else:
             logger.warning('15-min ST warmup not complete — regime undefined.')
 
+        # §4: report seed completion + initial regime state to Slack (Apollo parity —
+        # previously Iris's startup message was generic and said nothing about the
+        # seeded regime, unlike Apollo's "Supertrend seeded (N candles). 75-min
+        # trend: bullish/bearish.").
+        last5 = self._df_5m.iloc[-1]
+        trend5_str = ('bullish' if bool(last5['trend']) else 'bearish') \
+                     if not pd.isna(last5['trend']) else 'warmup'
+        regime_str = ('bullish' if self._regime_trend else 'bearish') \
+                     if self._regime_trend is not None else 'warmup'
+        _slack(f'{"[PAPER] " if DRY_RUN else ""}✅ *Iris*: Supertrend seeded '
+               f'({len(self._df_5m)} 5m / {len(self._df_15m)} 15m bars). '
+               f'5m trend: {trend5_str} · 15m regime: {regime_str}',
+               SLACK_TRADEBOT_CHANNEL)
+
+        self._check_missed_flip_at_startup()
+
         # WebSocket price feed (Nifty index LTP only; option token added on entry)
         feed_token = self.obj.getfeedToken()
         self.feed  = SharedFeed()
@@ -263,6 +279,41 @@ class Iris:
         save_state(self.state)
         logger.info('Setup complete — watchdog armed.')
         return True
+
+    def _check_missed_flip_at_startup(self) -> None:
+        """
+        Alert-only missed-flip detection (§4). If today's seeded 5m or 15m
+        series already contains a flip by the time this session starts (a
+        fresh start well after market open, or a restart after downtime),
+        report it to Slack — otherwise it's only ever visible by reading the
+        log file after the fact, exactly what the original §0 incident
+        investigation required.
+
+        Deliberately alert-only, unlike Apollo's get_last_completed_flip()
+        which auto-enters if the window's still open: a flip discovered
+        after an unknown restart delay means entering partway into a move
+        rather than at its start, which doesn't fit a strategy built around
+        a short, controlled hold time. A human decides whether to act.
+        """
+        if self.state.status == 'in_trade':
+            return
+
+        today = datetime.now().date()
+        for label, dff in (('5m', self._df_5m), ('15m', self._df_15m)):
+            if dff is None or dff.empty:
+                continue
+            todays_flips = dff[(dff['time_stamp'].dt.date == today) & (dff['trend_flip'] == True)]
+            if todays_flips.empty:
+                continue
+            flip = todays_flips.iloc[-1]
+            direction = 'bullish' if bool(flip['trend']) else 'bearish'
+            logger.info(f'Missed-flip check — {label}: last flip today at '
+                        f'{flip["time_stamp"]:%H:%M} → {direction} '
+                        f'(close={flip["close"]:.2f}, ST={flip["supertrend"]:.2f})')
+            _slack(f'ℹ️ *Iris*: {label} flip earlier today at {flip["time_stamp"]:%H:%M} → '
+                   f'*{direction}* (close={flip["close"]:.2f}, ST={flip["supertrend"]:.2f}). '
+                   f'Not auto-acting — review manually if still relevant.',
+                   SLACK_TRADEBOT_CHANNEL)
 
     def _teardown(self) -> None:
         if self.state.status == 'in_trade':
@@ -479,6 +530,16 @@ class Iris:
         for ts in recovered:
             self._missed_candle_ts_list.remove(ts)
 
+    def _st15_snapshot_str(self) -> str:
+        """§7: current ST_15 value/trend for per-cycle logging, whether or not this cycle updated it."""
+        if self._df_15m is None or self._df_15m.empty:
+            return 'n/a'
+        last15 = self._df_15m.iloc[-1]
+        if pd.isna(last15['supertrend']):
+            return 'warmup'
+        trend15_str = 'bullish' if bool(last15['trend']) else 'bearish'
+        return f'{last15["supertrend"]:.2f} ({trend15_str}, as of {last15["time_stamp"]:%H:%M})'
+
     def _update_5m_st(self, candle: dict) -> tuple[bool, str | None]:
         """
         Merge the new 5-min candle into df_5m, recompute ST, detect flip.
@@ -490,17 +551,24 @@ class Iris:
             return False, None
         last = row.iloc[-1]
         bar_ts = candle['time_stamp'].strftime('%H:%M')
+        # §7: log ST_15 alongside ST_5 every cycle, not only when the 15m
+        # boundary itself updates it — previously only visible on 15m bars.
+        st15_str = self._st15_snapshot_str()
 
         if pd.isna(last['trend']) or not last['trend_flip']:
             if not pd.isna(last['supertrend']):
                 trend_str = 'bullish' if bool(last['trend']) else 'bearish'
-                logger.info(f'Bar {bar_ts} — close={last["close"]:.2f}  '
-                            f'ST={last["supertrend"]:.2f}  trend={trend_str}  no flip')
+                logger.info(f'Bar {bar_ts} — ST_5={last["supertrend"]:.2f} '
+                            f'(close={last["close"]:.2f}, {trend_str})  no flip  |  ST_15={st15_str}')
             return False, None
 
         direction = 'bullish' if bool(last['trend']) else 'bearish'
-        logger.info(f'Bar {bar_ts} — close={last["close"]:.2f}  '
-                    f'ST={last["supertrend"]:.2f}  FLIP → {direction}')
+        logger.info(f'Bar {bar_ts} — ST_5={last["supertrend"]:.2f} '
+                    f'(close={last["close"]:.2f})  FLIP → {direction}  |  ST_15={st15_str}')
+        # §6: dedicated regime-change alert, independent of any resulting trade action.
+        _slack(f'🔄 *Iris*: 5-min ST flip → *{direction}* at {bar_ts} '
+               f'(close={last["close"]:.2f}, ST={last["supertrend"]:.2f})',
+               SLACK_TRADEBOT_CHANNEL)
         return True, direction
 
     def _update_15m_regime(self, close_ts: datetime) -> None:
@@ -522,8 +590,12 @@ class Iris:
             prev = self._regime_trend
             self._regime_trend = bool(last['trend'])
             if prev != self._regime_trend:
-                logger.info(f'15-min regime flipped → '
-                            f'{"bullish" if self._regime_trend else "bearish"}')
+                regime_str = 'bullish' if self._regime_trend else 'bearish'
+                logger.info(f'15-min regime flipped → {regime_str}')
+                # §6: dedicated regime-change alert, independent of any resulting trade action.
+                _slack(f'🔄 *Iris*: 15-min regime flipped → *{regime_str}* '
+                       f'(ST={last["supertrend"]:.2f}, close={last["close"]:.2f})',
+                       SLACK_TRADEBOT_CHANNEL)
 
     def _before_min_entry_time(self, ts) -> bool:
         from datetime import datetime as _dt
