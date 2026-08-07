@@ -1,6 +1,6 @@
 # Plan: Closing Auction Session (CAS) — Adaptation & Investigation
 
-**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis kept out of rotation since 2026-08-05 via an active Slack routing override — NOT a code-level disable; if the override lapses without a replacement, Leto auto-routes back to Artemis on any VIX≤16 Monday-Thursday with none of the CAS risks addressed (see §3.1). Overnight gap-through-stop risk (§3) remains unresolved, not on any accepted-risks list. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped 2026-08-05, confirmed working end-to-end in its first live production run 2026-08-06 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`; see §7.3). Backtest/live parity gap (accepted-risk §2.3) closed 2026-08-06 (commit `95a99b2`). **2026-08-06: Iris deployed as the sole live strategy**, force-routed regardless of VIX (static 1-lot first run, scaling planned) — see §9. Sensex's first expiry day under CAS (2026-08-06) produced a materially larger auction move than Nifty's, plus a dramatic options-premium collapse at settlement — see §4.8. External corroboration from three independent sources (@Am_Shai ×2, Zerodha Varsity) supports the thin-liquidity mechanism; says nothing about deliberate manipulation. Only 4 trading days of evidence — do not overstate any conclusion.**
+**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis kept out of rotation since 2026-08-05 via an active Slack routing override — NOT a code-level disable; if the override lapses without a replacement, Leto auto-routes back to Artemis on any VIX≤16 Monday-Thursday with none of the CAS risks addressed (see §3.1). Overnight gap-through-stop risk (§3) remains unresolved, not on any accepted-risks list. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped 2026-08-05, confirmed working end-to-end in its first live production run 2026-08-06 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`; see §7.3). Backtest/live parity gap (accepted-risk §2.3) closed 2026-08-06 (commit `95a99b2`). **2026-08-06: Iris deployed as the sole live strategy**, force-routed regardless of VIX (static 1-lot first run, scaling planned) — see §9. Sensex's first expiry day under CAS (2026-08-06) produced a materially larger auction move than Nifty's, plus a dramatic options-premium collapse at settlement — see §4.8. **2026-08-07 broke the multi-day overnight gap-up streak for both indices for the first time since CAS launched** (both gapped *down* the morning after the prior auction), while the auction session itself was the quietest yet at both the index and constituent level — see §4.9. External corroboration from three independent sources (@Am_Shai ×2, Zerodha Varsity) supports the thin-liquidity mechanism; says nothing about deliberate manipulation. Only 5 trading days of evidence — do not overstate any conclusion.**
 
 ---
 
@@ -74,19 +74,23 @@ User corrected the framing used throughout this document and earlier chat turns:
 | Aug 5 | Sensex | +0.10% | First clearly positive Sensex reading |
 | Aug 6 | Nifty | +0.03% | Fourth straight positive day, smallest yet — non-expiry day for Nifty |
 | Aug 6 | Sensex | +0.21% | **Sensex's own first expiry day under CAS — largest Sensex move of the 4 days, breaking its own flat pattern** |
+| Aug 7 | Nifty | +0.06% | Streak of shrinking magnitude broke — ticked up from Aug 6, though still small |
+| Aug 7 | Sensex | +0.01% | Smallest Sensex move of all 5 days, including day one |
 
-Nifty's shrinking-magnitude pattern held through a 4th day (0.82% → 0.62% → 0.22% → 0.03%) — @Am_Shai's 2026-08-05 follow-up post (§5.1) independently reported nearly identical numbers and offered a mechanism: growing market awareness causing shorts to close earlier (from ~14:30) and funds to pre-position ahead of the close, diluting each day's surprise. Self-reported that he called this on day one, not independently verified, but the mechanism is plausible.
+Nifty's shrinking-magnitude pattern held through 4 days (0.82% → 0.62% → 0.22% → 0.03%) but **broke on day 5** — Aug 7 ticked back up to +0.06%, still tiny in absolute terms but no longer monotonically decaying. @Am_Shai's 2026-08-05 follow-up post (§5.1) independently reported nearly identical numbers through day 4 and offered a mechanism: growing market awareness causing shorts to close earlier (from ~14:30) and funds to pre-position ahead of the close, diluting each day's surprise. Self-reported that he called this on day one, not independently verified, but the mechanism is plausible — the day-5 uptick doesn't necessarily contradict it (still an order of magnitude below the day-1/2 moves), but it does mean "shrinking every day" was too strong a claim.
 
-**Sensex broke the opposite way on its own expiry day.** Rather than continuing the flat/muted pattern of Aug 3-5, Sensex's Aug 6 auction move (+0.21%) was its largest yet — about 6.6x Nifty's same-day move. See §4.8 for the full picture (this was foreshadowed by the entire morning's rolling-ATM IV climb, not a surprise at the close).
+**Sensex broke the opposite way on its own expiry day, then reverted to its quietest reading yet.** Aug 6's auction move (+0.21%) was Sensex's largest of the period — about 6.6x Nifty's same-day move (§4.8, foreshadowed by the entire morning's rolling-ATM IV climb, not a surprise at the close). Aug 7 (a non-expiry day) reverted sharply, to its smallest move of the whole 5-day sample (+0.01%) — consistent with the elevated Aug 6 reading being expiry-specific rather than a new baseline.
 
 ### 4.2 Next-day gap-fade pattern (`cas_gap_fade_tracking.csv`)
 
-Both indices consistently open near the day's high (reflecting the prior day's auction print) and drift lower the rest of the session:
+Through Aug 5, both indices consistently opened near the day's high (reflecting the prior day's auction print) and drifted lower the rest of the session:
 
 | | Aug 4 open→low | Aug 5 open→low | Aug 4 open→close | Aug 5 open→close |
 |---|---|---|---|---|
 | Nifty | −1.12% | −0.69% | −0.36% | −0.18% |
 | Sensex | −1.16% | −0.97% | −0.89% | −0.60% |
+
+**This pattern doesn't apply to Aug 6→7 the same way, because Aug 7 didn't open near a high — see §4.9.** The open→low/open→close framing assumed a gap-up open; Aug 7 opened *down* instead, so these two columns aren't directly comparable to the Aug 4/5 rows. Full detail in §4.9.
 
 ### 4.3 Futures vs. cash auction print (own data, ad-hoc AngelOne pull)
 
@@ -137,6 +141,33 @@ Pre-CAS baseline (last 3 pre-CAS Thursday expiries, same time-of-day) was ~17.5%
 **Contrast at the constituent level (via `cas_market_watch/2026-08-06.csv`, §7.3's tracker, first live production data)**: checked HDFCBANK, RELIANCE, ICICIBANK's own IEP (indicative equilibrium price) trajectories through their NSE auctions today. All three were remarkably **stable** — IEP barely moved from first read to settlement (e.g. HDFCBANK 735.0→734.3→734.3, final 734.3), even though the underlying imbalance quantity (`iiqAtEP`) swung wildly. This is a real contrast to the Sensex option's own gyrations — suggests the intra-window instability is concentrated in the derivatives layer (leverage, thin option-specific order flow), not present in how NSE resolves the underlying stock auctions themselves, at least on a day when Nifty's own move was small (+0.03%).
 
 **Net read**: Sensex's first CAS expiry day showed the same qualitative risk Nifty's Aug 4 expiry did — options pricing in real uncertainty ahead of a settlement, then collapsing/resolving sharply — but with earlier IV buildup, a different mechanical signature at settlement (vega collapse vs. directional flip), and no corresponding chaos in the underlying constituent auctions. Two clean expiry-day data points now exist (one per index), not yet enough to call this a stable pattern, but both point the same direction.
+
+### 4.9 2026-08-07 — first overnight gap reversal since CAS launched
+
+Own data (`cas_auction_tracking.csv`, `cas_gap_fade_tracking.csv`, `cas_market_watch/2026-08-07.csv`, `india_vix_daily.csv`), all local files already synced — no ad-hoc AngelOne calls (Iris was live all day; see §8's standing operating rule).
+
+**The overnight-gap-up pattern broke for the first time since Aug 3.** Computing each day's actual gap (that day's regular 9:15 open vs. the *prior* day's CAS terminal close, not the prior day's own open):
+
+| Prior day's auction close → next open | Gap |
+|---|---|
+| Aug 3 Nifty close → Aug 4 open | −0.28% |
+| Aug 4 Nifty close → Aug 5 open | +0.22% |
+| Aug 5 Nifty close → Aug 6 open | +0.07% |
+| **Aug 6 Nifty close → Aug 7 open** | **−0.39%** |
+| Aug 3 Sensex close → Aug 4 open | +0.63% |
+| Aug 4 Sensex close → Aug 5 open | +0.80% |
+| Aug 5 Sensex close → Aug 6 open | +0.26% |
+| **Aug 6 Sensex close → Aug 7 open** | **−0.56%** |
+
+Sensex had run three straight overnight gap-ups (+0.63%, +0.80%, +0.26%); Aug 7 reversed that into its sharpest overnight gap of the whole period, in the opposite direction. Nifty's gap also flipped negative, its largest gap-down since the very first CAS day.
+
+**No VIX signal accompanies it.** `india_vix_daily.csv`: 11.76 → 12.19 → 12.06 → 12.16 → 12.16 (Aug 3-7), completely flat through Aug 7, open equals close on the day itself. Rules out a fear-driven move as the explanation — reads as an ordinary price pullback, not a risk event.
+
+**Both indices partially recovered intraday rather than extending the drop**: Nifty open→close +0.13%, Sensex open→close −0.02% (near flat) — the day didn't continue falling after the gap-down open, it stabilized.
+
+**The auction session itself, and the underlying constituent auctions, were unusually quiet** (`cas_market_watch/2026-08-07.csv`, first full day this file was captured via the newly-fixed `datasync` — see §7.3 correction below): 83 polls, all 208 symbols present throughout, clean. Settlement `perChange` (vs. each stock's own 15:15 reference price) across all 208 names: mean +0.07%, std 0.34%, range −1.01% (FORTIS) to +1.10% (PETRONET) — an ordinary, contained spread. Worst intra-auction IEP swing was IDFCFIRSTB at 2.5% and ASIANPAINT at 2.0%, well short of the kind of instability seen in the Sensex 78800 straddle on its own expiry day (§4.8) — expected, since Aug 7 wasn't an index-options expiry day for either underlying.
+
+**Net read**: Aug 7 is the cleanest evidence yet that the "consistent one-directional lift" framing in the top status line needs a caveat — it held for the first 4 days, but day 5 broke it on both the auction-move axis (§4.1) and the overnight-gap axis, on a day where the auction itself was unremarkable at every level checked. Doesn't resolve the manipulation-vs-structural question either way; if anything, a quiet auction session producing a large *reversal* gap the next morning suggests the overnight gap and the auction-session mechanics may be more independent of each other than the first 4 days made them look. Needs more days before drawing a real conclusion — still only 5 trading days total.
 
 ---
 
@@ -198,7 +229,9 @@ Split into testable-now vs. not-yet, per the standard applied throughout: enumer
 ```
 12 15 * * 1-5 cd /home/parijnan/scripts/algo-trading-lab/data_pipeline && /home/parijnan/anaconda3/bin/python nse_cas_market_watch.py >> ../logs/nse_cas_market_watch_$(date +\%Y\%m\%d).log 2>&1
 ```
-**First live run confirmed clean, 2026-08-06** — also Sensex's own first expiry-day CAS test (§5.2). 83 polls (15:15:15 to 15:35:50), all 208 symbols present on every single poll, no drops. Status transitions from `Open` to `Closed` per-symbol as each stock's own auction resolved, matching expected mechanics. See §4.8 for what it captured.
+**First live run confirmed clean, 2026-08-06** — also Sensex's own first expiry-day CAS test (§5.2). 83 polls (15:15:15 to 15:35:50), all 208 symbols present on every single poll, no drops. Status transitions from `Open` to `Closed` per-symbol as each stock's own auction resolved, matching expected mechanics. See §4.8 for what it captured. **Second clean run, 2026-08-07** — same shape (83 polls, 208/208 symbols), see §4.9.
+
+**`datasync` gap found and fixed, 2026-08-07**: `~/.local/bin/datasync` (outside this repo, not version-controlled) syncs `indices/`, `sensex/`, and the two CAS tracker CSVs from delos, but never had a line for `cas_market_watch/` — the Aug 6 file only reached the local machine because the user copied it over by hand. Fixed by adding an `rsync` line for the directory, same pattern as the existing entries. Going forward this should sync automatically; no repo commit involved since the script lives outside `algo-trading-lab`.
 
 ### 7.4 Rate-limiting note
 
@@ -229,8 +262,8 @@ With Artemis's re-enable blocked on two open questions (§3, §3.1) and Athena c
 
 When resuming this investigation, check in this order:
 
-1. ~~Does `cas_market_watch/2026-08-06.csv` exist with a full run's worth of polls?~~ **DONE 2026-08-06** — confirmed, 83 polls, all 208 symbols, clean (§7.3). Check subsequent days' files exist too as the cron keeps running.
-2. How many days has `cas_auction_tracking.csv` / `cas_gap_fade_tracking.csv` accumulated since 2026-08-06? Nifty's shrinking-magnitude pattern held through 4 days (§4.1) — is it still shrinking, or has it bottomed out / reversed? Sensex broke its flat pattern on its own expiry day (§4.1, §4.8) — does that hold on the next Sensex expiry (2026-08-13), or was it a one-off?
+1. ~~Does `cas_market_watch/2026-08-06.csv` exist with a full run's worth of polls?~~ **DONE 2026-08-06**, confirmed again 2026-08-07 (§7.3) — both clean. Note: `datasync` didn't pull this directory until fixed 2026-08-07 (§7.3) — if a gap ever reappears, check whether the fix survived or the sync script changed again.
+2. ~~How many days has `cas_auction_tracking.csv` / `cas_gap_fade_tracking.csv` accumulated since 2026-08-06?~~ **Checked through 2026-08-07 (§4.1, §4.9)** — Nifty's shrinking-magnitude streak broke on day 5 (ticked up from 0.03% to 0.06%); Sensex reverted from its expiry-day spike to its quietest reading yet (+0.01%); and the overnight gap-up streak broke on both indices for the first time (§4.9). Keep watching: does Nifty's move stay small/noisy from here, or was Aug 7 a blip? Does Sensex's flat/quiet baseline hold until its next expiry (2026-08-13)?
 3. ~~Did the Aug-4-expiry Nifty options and Aug-6-expiry Sensex options land?~~ **DONE 2026-08-06** — both landed and analyzed in depth (§4.8). Next: does the next Nifty expiry (2026-08-11) and next Sensex expiry (2026-08-13) show the same shape (early IV climb for Sensex, late sharp ramp for Nifty), or was this week idiosyncratic?
 4. Has any SEBI/exchange response emerged regarding the reference-price settlement fix proposed in §5.1?
 5. Is the overnight gap-through-stop risk (§3) still unresolved / not on any accepted-risks list? Don't assume a decision was made without being told.
