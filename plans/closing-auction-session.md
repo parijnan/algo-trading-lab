@@ -1,6 +1,6 @@
 # Plan: Closing Auction Session (CAS) — Adaptation & Investigation
 
-**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis kept out of rotation since 2026-08-05 via an active Slack routing override — NOT a code-level disable; if the override lapses without a replacement, Leto auto-routes back to Artemis on any VIX≤16 Monday-Thursday with none of the CAS risks addressed (see §3.1). Overnight gap-through-stop risk (§3) remains unresolved, not on any accepted-risks list. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped 2026-08-05, confirmed working end-to-end in its first live production run 2026-08-06 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`; see §7.3). Backtest/live parity gap (accepted-risk §2.3) closed 2026-08-06 (commit `95a99b2`). **2026-08-06: Iris deployed as the sole live strategy**, force-routed regardless of VIX (static 1-lot first run, scaling planned) — see §9. Sensex's first expiry day under CAS (2026-08-06) produced a materially larger auction move than Nifty's, plus a dramatic options-premium collapse at settlement — see §4.8. **2026-08-07 broke the multi-day overnight gap-up streak for both indices for the first time since CAS launched** (both gapped *down* the morning after the prior auction), while the auction session itself was the quietest yet at both the index and constituent level — see §4.9. External corroboration from three independent sources (@Am_Shai ×3, Zerodha Varsity) supports the thin-liquidity mechanism, including an independent NSE-vs-BSE "separate market regime" conclusion (§5.3) reached from different data than ours; says nothing about deliberate manipulation. Only 5 trading days of evidence — do not overstate any conclusion.**
+**Status: System adaptation COMPLETE and live (2026-08-04, commits `4422d0e`, `660a7fa`). Artemis kept out of rotation since 2026-08-05 via an active Slack routing override — NOT a code-level disable; if the override lapses without a replacement, Leto auto-routes back to Artemis on any VIX≤16 Monday-Thursday with none of the CAS risks addressed (see §3.1). Overnight gap-through-stop risk (§3) remains unresolved, not on any accepted-risks list. Tracking infrastructure (auction-move log, gap-fade log, live NSE Market Watch poller) shipped 2026-08-05, confirmed working end-to-end in its first live production run 2026-08-06 (commits `2172018`, `b67b445`, `5dbc312`, `97af765`; see §7.3). Backtest/live parity gap (accepted-risk §2.3) closed 2026-08-06 (commit `95a99b2`). **2026-08-06: Iris deployed as the sole live strategy**, force-routed regardless of VIX (static 1-lot first run, scaling planned) — see §9. Sensex's first expiry day under CAS (2026-08-06) produced a materially larger auction move than Nifty's, plus a dramatic options-premium collapse at settlement — see §4.8. **2026-08-07 broke the multi-day overnight gap-up streak for both indices for the first time since CAS launched** (both gapped *down* the morning after the prior auction), while the auction session itself was the quietest yet at both the index and constituent level — see §4.9. External corroboration from three independent sources (@Am_Shai ×3, Zerodha Varsity) supports the thin-liquidity mechanism, including an independent NSE-vs-BSE "separate market regime" conclusion (§5.3) reached from different data than ours; says nothing about deliberate manipulation. Only 5 trading days of evidence — do not overstate any conclusion. **§10 (2026-08-07): comprehensive Artemis risk report — Artemis's real CAS exposure is the Sensex overnight gap, not the Nifty auction print most of this file documents; the Aug 5 incident is now reconstructed exactly from code (`index_sl` breached by 455 points at the open) and traced to the adjustment-leg mechanism specifically, not a general entry risk. VIX closed 12.16 today, inside Artemis's routing band — only the active override keeps it out.**
 
 ---
 
@@ -281,3 +281,80 @@ When resuming this investigation, check in this order:
 7. **New**: how is Iris actually performing live (§9)? Still at static 1 lot, or has sizing been scaled up? Any gap-through or expiry-adjacent incidents that would test the CAS-immunity argument in practice, not just in backtest/code-review?
 8. **New**: does the "market learned from Nifty's Aug 4 event and priced Sensex's Aug 6 expiry in earlier" read (§4.8) hold up on Sensex's *next* expiry (2026-08-13) — i.e. does IV now climb early for Sensex expiries generally, or was Aug 6 specifically anticipatory because it was the first one?
 9. **New (§5.3)**: check whether any Nifty/Sensex index-rebalance date falls in the near term, and whether month-end (Aug 31) shows different CAS liquidity behaviour than the ordinary sessions measured so far (@Am_Shai flagged this as a distinct watch category — plausibly more genuine two-sided closing demand on those days, which could look different from the pattern in §4.1/§4.9). No tracking exists for this yet — would need the NSE/BSE index-rebalance calendar, which hasn't been sourced.
+10. **New (§10)**: comprehensive Artemis risk report added 2026-08-07 — re-read before any Artemis re-enable decision, and before treating the overnight-gap risk (§3, item 5 above) as resolved either way.
+
+---
+
+## 10. Artemis risk report — negative and positive implications (2026-08-07)
+
+Requested deep-dive, consolidating everything measured so far (§1-9) specifically against Artemis's actual exposure, not the investigation in general. Trading strategy is risk management at its core, so this treats "is Artemis safe to re-enable" as the central question and works through both directions of evidence. **No recommendation is made — the user has said this is still being worked through, and this report's job is to lay out the evidence, not decide.**
+
+### 10.0 Framing correction: Artemis's exposure is Sensex, not Nifty
+
+Most of the alarming evidence gathered so far (§4.3's futures/cash divergence, the "manipulation theory" in §3, the bulk of external corroboration in §5) is about **Nifty's** auction print. Artemis trades **Sensex only** (`artemis_configs.py`: `instrument = SENSEX`). None of the Nifty-specific auction-print distortion is Artemis's exposure, and it would be a mistake to import that alarm wholesale into a Sensex risk assessment.
+
+Flip to the axis that *does* apply to Artemis — the overnight gap (§4.9) — and Sensex is not the calmer index, it's the more volatile one: three of Sensex's four overnight gaps exceed 0.6% in magnitude, against Nifty's largest at 0.39%. **Artemis's real CAS exposure is the overnight gap on Sensex, not the closing-auction print itself.** Everything below is organized around that.
+
+### 10.1 Live-exposure status — this is not academic
+
+As of today (2026-08-07), VIX closed at 12.16 — inside Artemis's routing band (`VIX ≤ 16`). Per §3.1, **the only thing keeping Artemis out of rotation is the active Slack manual override**, currently forcing Iris. If that override lapses on any Monday-Thursday with VIX ≤ 16, Leto auto-routes straight back to Artemis with the `index_sl_offset` unchanged at its current value and every risk below fully live. This report describes a configuration one lapsed override away from being active, not a hypothetical.
+
+### 10.2 Negative implications — the risks
+
+**10.2.1 Quantified: the SL buffer is smaller than the observed overnight-gap distribution.**
+
+`artemis_configs.py` / `trade_settings.csv`: `index_sl_offset = 200` Sensex points. At Sensex trading near 78,500, that's **≈0.255%**. Compare against all four measured CAS-era Sensex overnight gaps (`cas_gap_fade_tracking.csv`, computed in this session):
+
+| Transition | Sensex overnight gap |
+|---|---|
+| Aug 3 close → Aug 4 open | +0.628% |
+| Aug 4 close → Aug 5 open | +0.799% |
+| Aug 5 close → Aug 6 open | +0.256% |
+| Aug 6 close → Aug 7 open | −0.556% |
+
+All four exceed the 0.255% buffer in magnitude; three do so by 2-3x. **This does not mean every gap blows the stop** — `index_sl` is set relative to `sell_strike ± 200`, not relative to the prior close, and Artemis's own `min_gap = 1000` points (≈1.27%) means a freshly-entered strike starts well outside gap range. The correct claim is narrower: *once drift or an adjustment has brought the tested strike close to spot, the residual buffer to `index_sl` is smaller than a typical CAS-era overnight gap.* The next two points give the empirical proof.
+
+**10.2.2 Existence proof, verified against `credit_spread.py` and the actual trade record — not a reconstruction from memory.**
+
+Read `credit_spread.py::_set_sl()` directly: for a **CE** spread, `index_sl = sell_strike − index_sl_offset` (a pre-strike buffer on the danger side, meant to exit before the option goes ITM). `ce_trade_params.csv` records the actual Aug 5 incident spread: `sell_strike = 78800`, so `index_sl = 78800 − 200 = 78600`. `cas_gap_fade_tracking.csv`'s Aug 5 row: Sensex `day_open = 79055.38`.
+
+**79055.38 is 455.38 points past the 78600 stop at the opening print alone** — more than double the offset itself. This is a harder number than the 55-point estimate first floated for this incident; the gap didn't graze the stop, it blew through it by over 2x the buffer's own width, before the market had traded a single tick that day.
+
+**10.2.3 Sharper causal finding: the leg that got hit was the adjustment leg, entered close to the money by design — not a fresh far-OTM entry.**
+
+`ce_trade_params.csv`'s `entry` timestamp (2026-08-04 13:32:38.774693) is within one second of the `pe_trade_params.csv` exit timestamp (13:32:38.030227) — this CE leg was the iron condor's own "exit tested side, reinforce the other" transform, not an original entry. Its `index_entry = 78718.24` against `sell_strike = 78800` means it was entered only **81.76 points (≈0.10%) OTM** — a small fraction of the strategy's normal `min_gap = 1000` points (≈1.27%) used for fresh entries. **Adjustment/reinforcement legs are entered structurally closer to the money than initial entries, by design** (that's how the transform captures the active side) — which means they carry a thinner `index_sl` buffer from the moment they're opened, before any further drift. Combined with 10.2.1's finding that the buffer itself is smaller than a typical CAS-era gap, the reinforcement mechanism is where this risk concentrates, not the strategy's initial entries generally.
+
+**10.2.4 The stop firing doesn't just cap losses at a bad level — it locks in the worst level of the day.**
+
+Same Aug 5 row: `day_open = 79055.38` (where the stop breach happened), `day_low = 78285.74`, `day_close = 78581.00` — the index closed **474 points below the opening print that triggered the exit**, after touching a low 770 points below it. For a market-neutral short-premium book, a gap that partially or fully mean-reverts intraday is not a tail risk, it's close to the modal shape measured so far (§4.2's fade table: Sensex opens near the day's high and drifts lower on both days measured, −0.97% to −1.16% open→low). **CAS converts an ordinary gap-and-fade into a forced loss**, because the stop is mandatory and unwinds at the open, while the potential recovery later in the day is not available to a position that's already been closed.
+
+**10.2.5 `option_sl` is comparatively better-insulated, but not immune.**
+
+`option_sl` is set as a *multiple* of entry premium (`sl_0_dte = 1.33` through `sl_4_dte = 2.66`, from `trade_settings.csv`), not a fixed point offset. Elevated CAS-era IV (§4.8: Sensex IV climbed from ~39% to ~55%+ intraday on its own expiry day) inflates option premiums, which widens `option_sl` in absolute points automatically — a self-scaling mitigant `index_sl` doesn't have. It's still a fixed multiple of a *pre-gap* entry premium, though, so a large enough gap can still exceed it; the Aug 5 CE's `option_sl` was 288.94 (2x the 144.47 entry, at 2 DTE) against a strike that finished the day 255+ points ITM at the open alone, so intrinsic value alone made a breach here near-certain — consistent with the memory record that both `index_sl` and `option_sl` were breached that morning.
+
+**10.2.6 Distributional caveat, applies to all of the above.**
+
+n=4 for Sensex overnight gaps, n=1 for a fully reconstructed incident. Three of four gaps exceeding the buffer is suggestive, not conclusive — a longer run could show the distribution settling closer to (or further from) the 0.255% buffer. Keep the structural-thinness-vs-deliberate-manipulation distinction (§4.7) separate from this section entirely: this is a liquidity/volatility-regime risk, not a claim about anyone's intent, and it would exist even if the manipulation-theory investigation resolves in the "purely structural" direction.
+
+### 10.3 Positive implications — what's been de-risked or never was a Sensex problem
+
+1. **`evaluate_expiry_day_close()` removes the §4.8 exposure entirely.** The Sensex 78800 straddle collapsed 505.95 → 154.65 inside the closing-auction window on its own expiry day — Artemis is force-flat by 15:15 on expiry day, before that collapse happens. Shipped and code-verified (§2), and the backtest/live parity gap on this exact mechanism closed 2026-08-06 (`95a99b2`), so any future SL-tuning work won't be contaminated by a stale backtest assumption.
+2. **Sensex's auction-move magnitude, while noisy, doesn't show a runaway trend.** Aug 6's expiry-day spike (+0.21%) reverted to the smallest reading of the whole sample on Aug 7 (+0.01%) — see §4.1, §4.9. If the market-awareness mechanism @Am_Shai describes (§5.1, §5.3) is real, the *auction-print* distortion may be self-limiting even if the *overnight-gap* risk (§10.2) is not.
+3. **No multi-day dislocation to fight or get caught by.** §4.5: convergence is instant, not gradual — a bad print doesn't compound over multiple sessions.
+4. **Sensex's own index is comparatively inert to its constituents' real auction prices.** §4.4/§4.6: the Sensex index calculation appears to rest on `ClsPric` (stale/no-trade reference), not the live-clearing `SttlmPric` — the same finding that makes Sensex's *auction print* look muted also means the print Artemis's `index_sl` reads intraday is less reactive to real constituent-level moves than Nifty's. Cuts both ways: less noise, but also less signal if a real move is happening.
+5. **`option_sl` self-scales with entry premium** (10.2.5) — CAS-era IV elevation widens the absolute-point buffer automatically, unlike `index_sl`'s fixed 200-point offset.
+
+### 10.4 Net picture
+
+Two things are true at once, and neither cancels the other: the acute expiry-day risk (§4.8) that motivated pulling Artemis was real and is now structurally mitigated (10.3.1); a *different*, still-unaddressed risk — the ordinary-day overnight gap hitting a thin `index_sl` buffer, worst on adjustment legs (10.2.1-10.2.4) — caused the actual Aug 5 loss and remains exactly as present today as it was then. **These are not the same risk, and closing the first one doesn't touch the second.** The open question this file has carried since §3 stands: is the current `index_sl_offset` sized for a pre-CAS world, and is that still an acceptable gap given what's now measured about CAS-era overnight moves.
+
+### 10.5 Mitigation options — enumerated, not recommended
+
+Per standing instruction, ELM is not on this list — it's SEBI-regulatory, not a risk-management lever. These are the levers that are: `index_sl` and `option_sl` only.
+
+- **Widen `index_sl_offset`, sized to the observed gap distribution** (e.g., toward the ~0.6-0.8% range seen in 3 of 4 gaps, not the current 0.255%). Tradeoff: a wider stop caps losses later, i.e., accepts a larger loss before exiting — the buffer and the loss size are the same knob.
+- **Size adjustment/reinforcement legs differently from initial entries** — e.g., a wider `index_sl_offset` or reduced lot count specifically for legs entered inside the normal `min_gap`, since 10.2.3 shows that's structurally where the thin-buffer risk concentrates. More surgical than a blanket widen, but adds a new code path/parameter to `credit_spread.py`'s adjustment logic.
+- **Reduce overnight position sizing generally** on Sensex during the CAS era, independent of any SL change — caps the loss-per-gap without touching the SL logic itself.
+- **A rule against carrying Sensex positions through a CAS-affected close** (i.e., force-flatten before every close, not just expiry day) — removes the overnight-gap exposure entirely, but is a structural change to Artemis's identity as an overnight-carry theta strategy, not a parameter tweak; loses the overnight decay that's presumably central to its edge.
+
+No verdict given; this is the menu the data supports, not a choice among it.
