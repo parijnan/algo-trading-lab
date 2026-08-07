@@ -10,11 +10,13 @@ Includes:
 """
 import sys
 import json
+import subprocess
 import threading
 import time
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from iris_logger_setup import get_logger
 from iris_configs import (
@@ -22,6 +24,8 @@ from iris_configs import (
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     SEED_DAYS, NIFTY_TOKEN, INDEX_EXCHANGE, MARKET_OPEN,
     ITM_DEPTH_STEPS, STRIKE_STEP, ORDER_TIMEOUT_SEC, LTP_POLL_LIMIT,
+    NIFTY_INDEX_CSV, CAS_TRUNCATE_TIME, TAIL_LINES_PER_DAY,
+    IRIS_5M_SERIES_FILE, IRIS_15M_SERIES_FILE, CANDLE_POLL_LIMIT,
 )
 
 try:
@@ -117,6 +121,25 @@ def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame
     return r
 
 
+# Candle-fetch rate limiter — self-healing per-second bucket, same pattern as
+# _check_ltp_limit below, sized off CANDLE_POLL_LIMIT (matches Apollo/Athena's
+# CANDLE_POLL_LIMIT and the root README's documented "Candles=3" cap). Defined
+# here (not next to _check_ltp_limit) since fetch_candles is its only caller.
+_candle_counter = {'count': 0, 'limit': CANDLE_POLL_LIMIT, 'last_reset': 0.0}
+
+def _check_candle_limit():
+    now = time.time()
+    if now - _candle_counter['last_reset'] > 1.0:
+        _candle_counter['count'] = 0
+        _candle_counter['last_reset'] = now
+    if _candle_counter['count'] >= _candle_counter['limit']:
+        time.sleep(1.1)
+        _candle_counter['count'] = 0
+        _candle_counter['last_reset'] = time.time()
+        return
+    _candle_counter['count'] += 1
+
+
 def fetch_candles(obj, token: str, interval: str, from_dt: datetime,
                   to_dt: datetime) -> list:
     """Fetch candles from Angel One API. Returns raw rows list."""
@@ -129,6 +152,7 @@ def fetch_candles(obj, token: str, interval: str, from_dt: datetime,
     }
     for attempt in range(3):
         try:
+            _check_candle_limit()
             resp = obj.getCandleData(params)
             data = resp.get('data', [])
             if data:
@@ -171,42 +195,179 @@ def _resample_to_15m(df_5m: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(candles_15).reset_index(drop=True)
 
 
-def seed_st(obj, now: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _resample_1m_to_5m(df_1m: pd.DataFrame) -> pd.DataFrame:
     """
-    Single FIVE_MINUTE fetch over SEED_DAYS calendar days (~975 bars, under API 1000-record limit).
-    Weekends and holidays are naturally absent — no special handling needed.
-    Resamples to 15-min anchored at 09:15 for the regime ST.
-    Returns (df_5m_with_st, df_15m_with_st).
+    Resample 1-min OHLCV to 5-min, anchored at MARKET_OPEN, day-by-day — same
+    fixed-clock-time-bucket approach as _resample_to_15m, one level down.
+    Each day's buckets stop at CAS_TRUNCATE_TIME (15:29) — the reconstructed
+    series never extends into data_pipeline's own 15:30-15:39 flat extension,
+    which exists there for a different consumer (derivatives-session
+    alignment) and must not leak into what Iris computes ST on (§8).
     """
-    from_dt = now - timedelta(days=SEED_DAYS)
-    raw     = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE', from_dt, now)
+    market_open_time = pd.Timestamp(MARKET_OPEN).time()
+    candles_5 = []
+
+    for day, day_df in df_1m.groupby(df_1m['time_stamp'].dt.date):
+        anchor     = pd.Timestamp(f'{day} {MARKET_OPEN}')
+        day_cutoff = pd.Timestamp(f'{day} {CAS_TRUNCATE_TIME}')
+        while anchor <= day_cutoff:
+            window_end = anchor + timedelta(minutes=ENTRY_TF_MIN) - timedelta(minutes=1)
+            window = day_df[
+                (day_df['time_stamp'] >= anchor) &
+                (day_df['time_stamp'] <= window_end)
+            ]
+            if not window.empty:
+                candles_5.append({
+                    'time_stamp': anchor,
+                    'open':       window['open'].iloc[0],
+                    'high':       window['high'].max(),
+                    'low':        window['low'].min(),
+                    'close':      window['close'].iloc[-1],
+                    'volume':     window['volume'].sum(),
+                })
+            anchor += timedelta(minutes=ENTRY_TF_MIN)
+
+    if not candles_5:
+        return pd.DataFrame()
+    return pd.DataFrame(candles_5).reset_index(drop=True)
+
+
+def _find_5m_gaps(df_5m: pd.DataFrame) -> list:
+    """
+    1m→5m→15m is only equivalent to resampling 1m→15m directly if no 5m
+    bucket that should exist is silently missing within a day. Checked
+    explicitly rather than assumed (§8) — returns a list of (day, missing
+    timestamps) for any day whose 5m series isn't a contiguous run from its
+    first to its last bucket.
+    """
+    gaps = []
+    for day, day_df in df_5m.groupby(df_5m['time_stamp'].dt.date):
+        ts = day_df['time_stamp'].sort_values()
+        expected = pd.date_range(ts.iloc[0], ts.iloc[-1], freq=f'{ENTRY_TF_MIN}min')
+        missing = sorted(set(expected) - set(ts))
+        if missing:
+            gaps.append((day, missing))
+    return gaps
+
+
+def _tail_read_nifty_csv(now: datetime, n_days: int) -> pd.DataFrame:
+    """
+    Tail-based read of nifty.csv (data_pipeline's output — already gap-filled
+    and CAS terminal-candle-corrected) for the last n_days calendar days of
+    1-min OHLC, IST-naive timestamps. Avoids a full multi-year file read
+    (measured 68x speedup vs. reading the whole file; see
+    plans/iris-signal-pipeline-hardening.md §8).
+    """
+    tail_n = TAIL_LINES_PER_DAY * (n_days + 5)   # headroom margin
+    header = subprocess.run(['head', '-1', str(NIFTY_INDEX_CSV)],
+                            capture_output=True, text=True).stdout
+    tail   = subprocess.run(['tail', f'-n{tail_n}', str(NIFTY_INDEX_CSV)],
+                            capture_output=True, text=True).stdout
+    df = pd.read_csv(StringIO(header + tail))
+    df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=True) \
+                          .dt.tz_convert('Asia/Kolkata').dt.tz_localize(None)
+    cutoff = pd.Timestamp(now).normalize() - timedelta(days=n_days)
+    df = df[df['time_stamp'] >= cutoff]
+    return df.sort_values('time_stamp').reset_index(drop=True)
+
+
+def _build_past_days_5m(now: datetime) -> pd.DataFrame:
+    """
+    Path A (§8): 5-min OHLC series for every day strictly before today,
+    reconstructed from nifty.csv's already-corrected 1-min data.
+    data_pipeline's fill_missing_candles/extend_to_day_close have already
+    done all gap-filling and CAS terminal-candle reconstruction — this only
+    truncates each day at CAS_TRUNCATE_TIME (15:29) and resamples to 5m.
+    A seeding-time-only concern: never applies to today (see §8 for why).
+    """
+    raw_1m = _tail_read_nifty_csv(now, SEED_DAYS)
+    today  = pd.Timestamp(now).date()
+    raw_1m = raw_1m[raw_1m['time_stamp'].dt.date < today]
+    if raw_1m.empty:
+        return pd.DataFrame()
+
+    market_open_time = pd.Timestamp(MARKET_OPEN).time()
+    cutoff_time      = pd.Timestamp(f'2000-01-01 {CAS_TRUNCATE_TIME}').time()
+    raw_1m = raw_1m[(raw_1m['time_stamp'].dt.time >= market_open_time) &
+                     (raw_1m['time_stamp'].dt.time <= cutoff_time)]
+
+    return _resample_1m_to_5m(raw_1m)
+
+
+def _build_today_5m(obj, now: datetime) -> pd.DataFrame:
+    """
+    Path B (§8): today's elapsed 5-min OHLC, always via a live FIVE_MINUTE
+    poll from market open to now — never via the 1-min reconstruction, which
+    applies only to past, fully-closed days. Empty if today hasn't reached
+    its first completed 5-min bar yet (fresh 09:15 start).
+    """
+    today   = pd.Timestamp(now).date()
+    from_dt = datetime.combine(today, datetime.strptime(MARKET_OPEN, '%H:%M').time())
+    if now <= from_dt:
+        return pd.DataFrame()
+
+    raw = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE', from_dt, now)
     if not raw:
-        logger.error('seed_st: no candle data returned — cannot seed ST')
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame()
 
     df = _candles_to_df(raw)
-
-    # Filter to market hours — drops overnight/weekend noise
-    market_open_time = pd.Timestamp(MARKET_OPEN).time()
-    df = df[df['time_stamp'].dt.time >= market_open_time].copy()
+    df = df[df['time_stamp'].dt.date == today]
 
     # Drop incomplete current bar (still forming)
     minutes_into_bar = now.minute % ENTRY_TF_MIN
     current_bar_open = now.replace(minute=now.minute - minutes_into_bar,
                                    second=0, microsecond=0)
-    df = df[df['time_stamp'] < current_bar_open].copy()
+    df = df[df['time_stamp'] < current_bar_open]
 
-    # Cap at 975 bars (13 × 75) — defensive guard against API returning more
-    if len(df) > 975:
-        df = df.iloc[-975:]
+    return df.sort_values('time_stamp').reset_index(drop=True)
 
+
+def persist_series(df_5m: pd.DataFrame, df_15m: pd.DataFrame) -> None:
+    """
+    Write OHLC + computed ST/trend/flip to disk for inspection and Slack
+    reporting (§3/§7). Read-for-humans only — on any restart the series is
+    always rebuilt fresh via seed_st, never resumed from these files, since
+    the Supertrend ratchet path is history-dependent and resuming mid-stream
+    would silently diverge from a from-scratch computation (confirmed via
+    the flip-bar drift investigation, plans/iris-signal-pipeline-hardening.md §8).
+    """
+    try:
+        df_5m.to_csv(IRIS_5M_SERIES_FILE, index=False)
+        df_15m.to_csv(IRIS_15M_SERIES_FILE, index=False)
+    except Exception as e:
+        logger.warning(f'persist_series: failed to write cache CSVs: {e}')
+
+
+def seed_st(obj, now: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Path A (past days, from disk, 1-min reconstruction) + Path B (today's
+    elapsed portion, live 5-min poll) combined into one 5-min series, with
+    the 15-min regime resampled from that same 5-min series — one resample
+    code path across the yesterday/today seam (§8).
+    Returns (df_5m_with_st, df_15m_with_st).
+    """
+    past_5m  = _build_past_days_5m(now)
+    today_5m = _build_today_5m(obj, now)
+
+    if past_5m.empty and today_5m.empty:
+        logger.error('seed_st: no candle data available (disk or API) — cannot seed ST')
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = pd.concat([past_5m, today_5m], ignore_index=True)
+    df = df.drop_duplicates(subset=['time_stamp'], keep='last')
     df = df.sort_values('time_stamp').reset_index(drop=True)
+
+    gaps = _find_5m_gaps(df)
+    if gaps:
+        logger.error(f'seed_st: gap(s) in reconstructed 5m series, refusing to seed: {gaps}')
+        return pd.DataFrame(), pd.DataFrame()
 
     df_5m  = compute_st(df, ST_PERIOD, ST_MULTIPLIER)
     df_15m = compute_st(_resample_to_15m(df), ST_PERIOD, ST_MULTIPLIER)
 
     logger.info(
-        f'Seeded: {len(df_5m)} 5-min bars, {len(df_15m)} 15-min bars  |  '
+        f'Seeded: {len(df_5m)} 5-min bars ({len(past_5m)} past + {len(today_5m)} today), '
+        f'{len(df_15m)} 15-min bars  |  '
         f'5m: trend={df_5m.iloc[-1]["trend"]} ST={df_5m.iloc[-1]["supertrend"]:.2f}  '
         f'15m: trend={df_15m.iloc[-1]["trend"]} ST={df_15m.iloc[-1]["supertrend"]:.2f}'
     )
@@ -222,6 +383,7 @@ def seed_st(obj, now: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
                 f'close={last["close"]:.2f}  ST={last["supertrend"]:.2f}'
             )
 
+    persist_series(df_5m, df_15m)
     return df_5m, df_15m
 
 

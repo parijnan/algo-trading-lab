@@ -5,7 +5,7 @@ Part of the **Algo Trading Lab** project.
 
 Iris monitors for high-conviction directional signals (ST_FAST: 5-min supertrend flip aligned with 15-min regime) and auto-enters a long ITM-150 Nifty option on signal. Unlike Artemis/Athena/Apollo, Iris owns its own Angel One session — it is not launched by Leto.
 
-**Status: Paper mode (DRY_RUN=True). Set to False only after paper parity confirmed.**
+**Status: Live (`DRY_RUN=False`). Paper parity confirmed.**
 
 ---
 
@@ -38,7 +38,7 @@ graph TD
     KillOld --> Login[Angel One login + scrip master download]
     Login --> Setup[_setup]
 
-    Setup --> Seed[Seed ST_FAST:\nFIVE_MINUTE history × 13 days\nresample → 15m regime]
+    Setup --> Seed[Seed ST_FAST:\nPath A — past days from nifty.csv\n1-min CAS-corrected, resample → 5m → 15m\nPath B — today's elapsed, live FIVE_MINUTE poll\nassert no 5m gap, persist to CSV]
     Seed --> Feed[Start SharedFeed WebSocket\nsubscribe Nifty index token]
     Feed --> OrderWS[Start OrderFillWatcher\nlive only — skipped in DRY_RUN]
     OrderWS --> Watching[status = watching\nFlag file created]
@@ -60,13 +60,20 @@ graph TD
     BarCheck -- No --> Sleep[sleep 0.5s in_trade\n1.0s watching]
     Sleep --> Loop
 
-    BarCheck -- Yes --> FetchCandle[Fetch 5m candle from API]
-    FetchCandle --> UpdateST[Update 5m ST\ndetect flip]
+    BarCheck -- Yes --> RetryGate{Retry cooldown\nelapsed?}
+    RetryGate -- No --> Sleep
+    RetryGate -- Yes --> FetchCandle[Fetch 5m candle from API]
+    FetchCandle -- Fail --> RetryCount{Retries\nexhausted? 5x, 10s apart}
+    RetryCount -- No --> ScheduleRetry[Schedule next retry\nnon-blocking] --> Sleep
+    RetryCount -- Yes --> MarkMissed[Append to missed-candle queue\nadvance to next bar] --> Sleep
+    FetchCandle -- Success --> Recover[Recover any pending missed candles\nmerge chronologically into df_5m]
+    Recover --> UpdateST[Update 5m ST\ndetect flip]
     UpdateST --> Regime{15m boundary?}
-    Regime -- Yes --> UpdateRegime[Update 15m regime ST]
-    Regime -- No --> EntryCheck
+    Regime -- Yes --> UpdateRegime[Resample 15m regime from df_5m\nno separate API call]
+    Regime -- No --> Persist[Persist df_5m/df_15m to CSV]
+    UpdateRegime --> Persist
 
-    UpdateRegime --> EntryCheck{watching AND\nflip detected?}
+    Persist --> EntryCheck{watching AND\nflip detected?}
     EntryCheck -- No --> InTradeFlip{in_trade AND\nflip against position?}
     InTradeFlip -- Yes --> ExitFlip[_execute_exit: trend_flip]
     ExitFlip --> Sleep
@@ -91,7 +98,12 @@ graph TD
 - **Regime filter**: 15-min supertrend must align with flip direction
 - On a bullish flip in a bearish 15-min regime: signal skipped
 - On a bearish flip in a bullish 15-min regime: signal skipped
-- Seed at startup: single `FIVE_MINUTE` call over 13 calendar days (~975 bars); resampled to 15m for regime
+- Seed at startup — two paths, combined into one 5-min series:
+  - **Path A** (past, fully-closed days): read `data_pipeline/data/indices/nifty.csv` (already CAS gap-filled/terminal-candle-corrected), truncate each day at 15:29, resample 1m → 5m → 15m from disk — no API calls, no rate-limit exposure
+  - **Path B** (today's elapsed portion): live `FIVE_MINUTE` poll from market open to now, same as before — never the 1-min reconstruction, which applies only to past days
+  - Combined series is asserted gap-free before being trusted (refuses to seed rather than compute ST over a hole); persisted to `data/iris_5m_series.csv` / `data/iris_15m_series.csv` after every update — for inspection/restart-recovery visibility only, never resumed from on restart (ST is always recomputed fresh from OHLC; see `plans/iris-signal-pipeline-hardening.md` §8)
+- Live 15-min regime is resampled from the running 5-min series at each 15-min boundary — no separate `FIFTEEN_MINUTE` API call
+- Candle-fetch resilience (§1 of the same plan): proactive client-side rate limit (`CANDLE_POLL_LIMIT=3`/sec), then a non-blocking outer retry (5 attempts, 10s apart — tracked via a "next retry due" timestamp so the in-trade exit-monitoring loop keeps polling every 0.5-1s throughout, never freezing on a stuck fetch). A bar that exhausts all retries goes into a persistent missed-candle queue, retried every subsequent loop iteration and merged into the ST history in correct chronological order once recovered.
 
 ---
 
@@ -177,7 +189,7 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 
 | Parameter | Value | Notes |
 |---|---|---|
-| `DRY_RUN` | `True` | **Must be manually set to False for live trading** |
+| `DRY_RUN` | `False` | Live trading — paper parity was confirmed before flipping this |
 | `LOT_SIZE` | 65 | Nifty standard lot |
 | `LOT_COUNT` | 1 | Start small; increase after live validation |
 | `ITM_DEPTH_STEPS` | 3 | 3 × 50 = 150 pts ITM |
@@ -188,7 +200,10 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 | `MARKET_CLOSE` | 15:30 | Auto-shutdown time |
 | `TRADE_UPDATE_SEC` | 10 | Slack update cadence while in_trade |
 | `ORDER_TIMEOUT_SEC` | 30 | WS fast path + REST fallback timeout |
-| `SEED_DAYS` | 13 | Calendar days of history for ST seed |
+| `SEED_DAYS` | 13 | Calendar days of history for Path A's disk-based seed (past days) |
+| `CANDLE_POLL_LIMIT` | 3 | Max `getCandleData` calls/sec (client-side, matches broker-wide cap) |
+| `CANDLE_FETCH_RETRIES` | 5 | Extra retries after a candle fetch fails, before marking it missed |
+| `CANDLE_FETCH_RETRY_INTERVAL` | 10 | Seconds between retries (non-blocking) |
 
 ---
 
@@ -208,7 +223,7 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 ls iris_production/data/user_credentials.csv   # api_key, client_id, password, totp_token, slack_token
 ls iris_production/data/holidays.csv           # market holiday list
 
-# Verify DRY_RUN=True before any run
+# Verify DRY_RUN before any run — should read False for live trading
 grep DRY_RUN iris_production/iris_configs.py
 
 # Start (from repo root)

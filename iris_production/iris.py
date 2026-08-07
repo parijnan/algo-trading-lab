@@ -31,11 +31,13 @@ from iris_configs import (
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, MARKET_CLOSE, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
     SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME, MAX_ENTRY_TIME,
+    CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL,
 )
 from iris_state import IrisState, save_state, load_state
 from iris_logger_setup import get_logger
 from iris_functions import (
     seed_st, compute_st, fetch_candles, _candles_to_df,
+    _resample_to_15m, persist_series,
     select_expiry, select_strike_and_token,
     place_order, get_fill_price, OrderFillWatcher,
     check_no_active_strategies, fetch_ltp_rest,
@@ -123,6 +125,13 @@ class Iris:
         self._df_5m        = None   # 5-min bar history with supertrend
         self._df_15m       = None   # 15-min bar history with supertrend
         self._regime_trend = None   # most recent 15-min trend (True=bull, False=bear)
+
+        # Candle-fetch retry/backoff (§1) — non-blocking: the run loop keeps
+        # ticking (in-trade exit checks, Slack commands) while a retry is
+        # pending; only a real API call is gated behind _next_candle_retry_at.
+        self._candle_retry_count   = 0
+        self._next_candle_retry_at = None   # datetime | None
+        self._missed_candle_ts_list = []    # bar-close timestamps still owed after exhausting retries
 
         # Exit signal handler
         signal.signal(signal.SIGINT,  self._handle_signal)
@@ -308,32 +317,82 @@ class Iris:
                         last_update_ts = time.time()
 
                 # ── 5-min bar close: update ST, check entry/flip ────────
+                # Retry/backoff (§1) is non-blocking: a failed fetch schedules
+                # _next_candle_retry_at and falls through to the loop's normal
+                # 0.5-1s sleep, so in-trade exit checks above keep running
+                # every tick instead of freezing for up to
+                # CANDLE_FETCH_RETRIES × CANDLE_FETCH_RETRY_INTERVAL seconds.
                 if now >= next_5m_close:
-                    candle = self._fetch_candle(next_5m_close, ENTRY_TF_MIN)
-                    if candle:
-                        flip, direction = self._update_5m_st(candle)
+                    ready_to_try = (self._next_candle_retry_at is None or
+                                    now >= self._next_candle_retry_at)
+                    if ready_to_try:
+                        candle = self._fetch_candle(next_5m_close, ENTRY_TF_MIN)
 
-                        # Update 15-min regime at each 15-min boundary
-                        if next_5m_close.minute % REGIME_TF_MIN == 0:
-                            self._update_15m_regime(next_5m_close)
+                        if candle:
+                            if self._candle_retry_count > 0:
+                                logger.info(f'Candle recovered on retry '
+                                            f'{self._candle_retry_count} for {next_5m_close:%H:%M}.')
+                                _slack(f'*Iris*: Candle data recovered on retry '
+                                       f'{self._candle_retry_count} for {next_5m_close:%H:%M}. '
+                                       f'Resuming normally.', SLACK_ERRORS_CHANNEL)
+                            self._candle_retry_count   = 0
+                            self._next_candle_retry_at = None
 
-                        if self.state.status == 'watching' and flip and direction:
-                            if self._regime_aligned(direction):
-                                if self._before_min_entry_time(now):
-                                    logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
-                                elif self._in_skip_window(now):
-                                    logger.info(f'Signal {direction} skipped — in skip window')
-                                elif self._after_max_entry_time(next_5m_close):
-                                    logger.info(f'Signal {direction} skipped — after MAX_ENTRY_TIME')
-                                else:
-                                    self._execute_entry(direction, now)
+                            self._recover_missed_5m_candles()
 
-                        elif self.state.status == 'in_trade' and flip:
-                            # Trend flip against open trade = exit
-                            if direction and direction != self.state.direction:
-                                self._execute_exit('trend_flip')
+                            flip, direction = self._update_5m_st(candle)
 
-                    next_5m_close += timedelta(minutes=ENTRY_TF_MIN)
+                            # Update 15-min regime at each 15-min boundary
+                            if next_5m_close.minute % REGIME_TF_MIN == 0:
+                                self._update_15m_regime(next_5m_close)
+
+                            persist_series(self._df_5m, self._df_15m)
+
+                            if self.state.status == 'watching' and flip and direction:
+                                if self._regime_aligned(direction):
+                                    if self._before_min_entry_time(now):
+                                        logger.info(f'Signal {direction} skipped — before MIN_ENTRY_TIME')
+                                    elif self._in_skip_window(now):
+                                        logger.info(f'Signal {direction} skipped — in skip window')
+                                    elif self._after_max_entry_time(next_5m_close):
+                                        logger.info(f'Signal {direction} skipped — after MAX_ENTRY_TIME')
+                                    else:
+                                        self._execute_entry(direction, now)
+
+                            elif self.state.status == 'in_trade' and flip:
+                                # Trend flip against open trade = exit
+                                if direction and direction != self.state.direction:
+                                    self._execute_exit('trend_flip')
+
+                            next_5m_close += timedelta(minutes=ENTRY_TF_MIN)
+
+                        else:
+                            self._candle_retry_count += 1
+                            if self._candle_retry_count > CANDLE_FETCH_RETRIES:
+                                logger.error(f'Candle unavailable for {next_5m_close:%H:%M} after '
+                                             f'{CANDLE_FETCH_RETRIES} retries. ST will be incomplete '
+                                             f'for this bar; will keep trying to recover it in the '
+                                             f'background before future bars.')
+                                _slack(f'🚨 *Iris*: Candle unavailable for {next_5m_close:%H:%M} '
+                                       f'after {CANDLE_FETCH_RETRIES} retries. ST incomplete for this '
+                                       f'bar — will keep retrying in the background.',
+                                       SLACK_ERRORS_CHANNEL)
+                                self._missed_candle_ts_list.append(next_5m_close)
+                                next_5m_close += timedelta(minutes=ENTRY_TF_MIN)
+                                self._candle_retry_count   = 0
+                                self._next_candle_retry_at = None
+                            else:
+                                logger.warning(f'Candle fetch failed for {next_5m_close:%H:%M} '
+                                               f'(attempt {self._candle_retry_count}/'
+                                               f'{1 + CANDLE_FETCH_RETRIES}) — retrying in '
+                                               f'{CANDLE_FETCH_RETRY_INTERVAL}s.')
+                                if self._candle_retry_count == 1:
+                                    _slack(f'⚠️ *Iris*: No candle data for {next_5m_close:%H:%M}. '
+                                           f'Retrying up to {CANDLE_FETCH_RETRIES}x '
+                                           f'({CANDLE_FETCH_RETRY_INTERVAL}s apart)...',
+                                           SLACK_ERRORS_CHANNEL)
+                                self._next_candle_retry_at = (
+                                    now + timedelta(seconds=CANDLE_FETCH_RETRY_INTERVAL))
 
                 sleep_secs = 0.5 if self.state.status == 'in_trade' else 1.0
                 time.sleep(sleep_secs)
@@ -375,10 +434,14 @@ class Iris:
         logger.debug(f'Expected candle {expected_open} not found in API response.')
         return None
 
-    def _update_5m_st(self, candle: dict) -> tuple[bool, str | None]:
+    def _merge_candle_5m(self, candle: dict) -> None:
         """
-        Append new 5-min candle to df_5m, recompute ST, detect flip.
-        Returns (flip_occurred, new_direction).
+        Insert a candle into df_5m at its correct chronological position and
+        recompute ST. Handles both the normal live-append case and
+        missed-candle recovery, where the candle can be older than the
+        series' current last row — compute_st assumes chronological order,
+        so a plain append-without-sort would silently corrupt the ST
+        computation for a late-recovered bar (§1).
         """
         new_row = pd.DataFrame([{
             'time_stamp': candle['time_stamp'],
@@ -386,10 +449,46 @@ class Iris:
             'low':   candle['low'],   'close': candle['close'],
             'volume': candle.get('volume', 0),
         }])
-        combined    = pd.concat([self._df_5m, new_row], ignore_index=True)
+        combined = pd.concat([self._df_5m, new_row], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
+        combined = combined.sort_values('time_stamp').reset_index(drop=True)
         self._df_5m = compute_st(combined, ST_PERIOD, ST_MULTIPLIER)
 
-        last = self._df_5m.iloc[-1]
+    def _recover_missed_5m_candles(self) -> None:
+        """
+        Attempt one fetch per pending missed bar, chronologically, before
+        processing the current live candle (§1) — mirrors Apollo's
+        _missed_candle_ts_list recovery pattern. Deliberately does not act on
+        a recovered bar's flip: a flip that fired several minutes ago is
+        stale by the time it's discovered, so only the live current-bar flip
+        (from _update_5m_st, called right after this) drives entries/exits.
+        """
+        if not self._missed_candle_ts_list:
+            return
+        recovered = []
+        for missed_ts in list(self._missed_candle_ts_list):
+            candle = self._fetch_candle(missed_ts, ENTRY_TF_MIN)
+            if candle:
+                logger.info(f'Recovered missed candle {missed_ts:%H:%M} — merging into history.')
+                _slack(f'*Iris*: Recovered missed candle {missed_ts:%H:%M}. '
+                       f'Merging into ST history before current bar.', SLACK_ERRORS_CHANNEL)
+                self._merge_candle_5m(candle)
+                recovered.append(missed_ts)
+            else:
+                logger.warning(f'Still no data for missed bar {missed_ts:%H:%M}.')
+        for ts in recovered:
+            self._missed_candle_ts_list.remove(ts)
+
+    def _update_5m_st(self, candle: dict) -> tuple[bool, str | None]:
+        """
+        Merge the new 5-min candle into df_5m, recompute ST, detect flip.
+        Returns (flip_occurred, new_direction) for THIS candle specifically.
+        """
+        self._merge_candle_5m(candle)
+        row = self._df_5m[self._df_5m['time_stamp'] == candle['time_stamp']]
+        if row.empty:
+            return False, None
+        last = row.iloc[-1]
         bar_ts = candle['time_stamp'].strftime('%H:%M')
 
         if pd.isna(last['trend']) or not last['trend_flip']:
@@ -405,17 +504,19 @@ class Iris:
         return True, direction
 
     def _update_15m_regime(self, close_ts: datetime) -> None:
-        candle = self._fetch_candle(close_ts, REGIME_TF_MIN)
-        if not candle:
+        """
+        Resample the 15-min regime from self._df_5m (Path B, §8) — no
+        separate FIFTEEN_MINUTE API call. Reuses the exact same resample
+        function seed_st uses, so there's one 5m→15m code path for the whole
+        session, not a live-loop one drifting from the seed-time one.
+        Always recomputes ST over the full resampled series rather than
+        incrementally appending — the Supertrend ratchet path is
+        history-dependent (see §8), so this must match seed_st's approach.
+        """
+        df_15m_raw = _resample_to_15m(self._df_5m)
+        if df_15m_raw.empty:
             return
-        new_row = pd.DataFrame([{
-            'time_stamp': candle['time_stamp'],
-            'open': candle['open'], 'high': candle['high'],
-            'low':  candle['low'],  'close': candle['close'],
-            'volume': candle.get('volume', 0),
-        }])
-        combined     = pd.concat([self._df_15m, new_row], ignore_index=True)
-        self._df_15m = compute_st(combined, ST_PERIOD, ST_MULTIPLIER)
+        self._df_15m = compute_st(df_15m_raw, ST_PERIOD, ST_MULTIPLIER)
         last = self._df_15m.iloc[-1]
         if not pd.isna(last['trend']):
             prev = self._regime_trend
