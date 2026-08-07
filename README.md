@@ -490,6 +490,7 @@ algo-trading-lab/
 │   ├── test_athena_strike_math.py  # Athena delta-based strike selection (OTM direction, wing ordering, accuracy)
 │   ├── test_strike_search.py       # Artemis binary search parity — _find_sell_strike vs _find_sell_strike_linear (12 tests)
 │   ├── test_cross_strategy_imports.py  # Regression: no shared filenames / import collisions across *_production dirs
+│   ├── test_iris_st_seeding.py     # Regression: Iris §8 Path A output vs. chart-validated reference (research/iris_st_verification/); skips if nifty.csv lacks the CAS-era window
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
 │   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype
