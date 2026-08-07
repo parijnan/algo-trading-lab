@@ -297,10 +297,19 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
       2. Correct the open of the bar that follows the gap.
     Gaps larger than MAX_FILL_MINUTES are left untouched (real halts, pre-open, etc.)
     UNLESS the bar following the gap lands inside the CAS auction window — those
-    gaps also get synthetic flat candles inserted, but the open of the terminal
-    bar is left alone: it's a genuine auction print, and forcing its open to the
-    pre-auction close would produce an invalid candle (open outside the
-    already-reported high/low range).
+    gaps also get synthetic flat candles inserted, and the terminal (auction
+    print) bar is reconstructed to match what the exchange's own chart shows,
+    not left as the flat, no-memory candle the raw API returns: open = the
+    carried-forward pre-auction close, close = the terminal print (unchanged —
+    it's already correct), high/low = max/min of the two so the candle is
+    always valid regardless of which direction the print moved
+    (verified against live AngelOne pulls and the actual chart display for
+    2026-08-06 and 2026-08-07 — see plans/iris-signal-pipeline-hardening.md §5).
+    An earlier version of this function deliberately left the terminal bar's
+    open untouched, reasoning that forcing it to the pre-auction close would
+    produce an invalid candle; that reasoning didn't hold up against what the
+    chart actually shows, and is the reason this function looked the way it
+    did before 2026-08-07.
     """
     if len(df) < 2:
         return df, 0, 0, []
@@ -309,6 +318,7 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
 
     synthetic_rows = []
     open_fixes: dict = {}
+    cas_terminal_fixes: dict = {}
     cas_gap_count = 0
     cas_auction_moves = []
 
@@ -340,12 +350,18 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
             open_fixes[i] = prev_close
         else:
             cas_gap_count += 1
+            terminal_close = df.loc[i, "close"]
+            cas_terminal_fixes[i] = {
+                "open": prev_close,
+                "high": max(prev_close, terminal_close),
+                "low":  min(prev_close, terminal_close),
+            }
             cas_auction_moves.append({
                 "date":              prev_ts.date(),
                 "pre_auction_time":  prev_ts.time(),
                 "pre_auction_close": prev_close,
                 "terminal_time":     term_time,
-                "terminal_close":    df.loc[i, "close"],
+                "terminal_close":    terminal_close,
             })
 
     if not synthetic_rows:
@@ -354,10 +370,16 @@ def fill_missing_candles(df: pd.DataFrame, display_name: str = "") -> tuple:
     label = f"[{display_name}] " if display_name else ""
     logger.info(f"{label}Inserting {len(synthetic_rows)} synthetic flat candle(s) "
                 f"({cas_gap_count} CAS auction gap(s)) and correcting "
-                f"{len(open_fixes)} bar open(s).")
+                f"{len(open_fixes)} bar open(s) plus "
+                f"{len(cas_terminal_fixes)} CAS terminal-print bar(s).")
 
     for idx, new_open in open_fixes.items():
         df.at[idx, "open"] = new_open
+
+    for idx, fixes in cas_terminal_fixes.items():
+        df.at[idx, "open"] = fixes["open"]
+        df.at[idx, "high"] = fixes["high"]
+        df.at[idx, "low"]  = fixes["low"]
 
     result = pd.concat([df, pd.DataFrame(synthetic_rows)], ignore_index=True)
     result.sort_values("time_stamp", inplace=True)
