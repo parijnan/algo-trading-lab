@@ -9,8 +9,8 @@ from traceback import format_exc
 from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
-from configs import slack_token, bot_token, bot_id, channel_id, SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL
-from logger_setup import get_logger
+from artemis_configs import slack_token, bot_token, bot_id, channel_id, SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL
+from artemis_logger_setup import get_logger
 
 logger = get_logger('artemis.functions')
 

@@ -21,7 +21,7 @@ from datetime import datetime, date, timedelta, time
 from time import sleep
 from SmartApi.smartExceptions import DataException, NetworkException
 
-from configs_live import (
+from athena_configs import (
     api_key, user_name,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
@@ -38,14 +38,14 @@ from configs_live import (
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
     TRADE_LOGS_DIR, RISK_FREE_RATE
 )
-from state import load_state, save_state, clear_trade_fields
-from functions import (
+from athena_state import load_state, save_state, clear_trade_fields
+from athena_functions import (
     slack_bot_sendtext, handle_exception,
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
     _increment_order, _reset_counters,
     OrderFillWatcher,
 )
-from logger_setup import get_logger
+from athena_logger_setup import get_logger
 from websocket_feed import SharedFeed, EXCHANGE_NSE_CM
 
 logger = get_logger(__name__)

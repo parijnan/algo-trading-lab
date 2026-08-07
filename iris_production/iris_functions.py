@@ -16,12 +16,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
-from logger_setup import get_logger
-from configs import (
+from iris_logger_setup import get_logger
+from iris_configs import (
     REPO_ROOT, LOT_SIZE, QTY_FREEZE, FO_EXCHANGE,
     ST_PERIOD, ST_MULTIPLIER, ENTRY_TF_MIN, REGIME_TF_MIN,
     SEED_DAYS, NIFTY_TOKEN, INDEX_EXCHANGE, MARKET_OPEN,
-    ITM_DEPTH_STEPS, STRIKE_STEP, ORDER_TIMEOUT_SEC,
+    ITM_DEPTH_STEPS, STRIKE_STEP, ORDER_TIMEOUT_SEC, LTP_POLL_LIMIT,
 )
 
 try:
@@ -406,6 +406,44 @@ def place_order(obj, transaction_type: str, symbol: str, token: str,
         return order_id
     except Exception as e:
         logger.error(f'Order placement failed: {e}')
+        return None
+
+
+# ---------------------------------------------------------------------------
+# REST-fallback rate limiter — LTP endpoint only (Iris has no RMS/order-book
+# polling like Artemis/Athena). Self-healing per-second bucket: mirrors
+# artemis_production/functions.py::_check_limit, sized off AngelOne's
+# documented LTP endpoint cap.
+# ---------------------------------------------------------------------------
+_ltp_counter = {'count': 0, 'limit': LTP_POLL_LIMIT, 'last_reset': 0.0}
+
+def _check_ltp_limit():
+    now = time.time()
+    if now - _ltp_counter['last_reset'] > 1.0:
+        _ltp_counter['count'] = 0
+        _ltp_counter['last_reset'] = now
+    if _ltp_counter['count'] >= _ltp_counter['limit']:
+        time.sleep(1.1)
+        _ltp_counter['count'] = 0
+        _ltp_counter['last_reset'] = time.time()
+        return
+    _ltp_counter['count'] += 1
+
+
+def fetch_ltp_rest(obj, exchange: str, symbol: str, token: str) -> float | None:
+    """
+    Single-attempt, rate-limited REST LTP fetch — used when the WS feed is
+    disconnected. Returns None on failure rather than blocking/retrying, so
+    callers in a monitoring loop (e.g. Iris._check_exit_conditions) keep their
+    normal cadence instead of stalling on a slow/failing REST call; the next
+    loop iteration tries again.
+    """
+    try:
+        _check_ltp_limit()
+        ltp = obj.ltpData(exchange, symbol, token)['data']['ltp']
+        return float(ltp) if ltp is not None else None
+    except Exception as e:
+        logger.error(f'REST ltpData fallback failed for {symbol}: {e}')
         return None
 
 

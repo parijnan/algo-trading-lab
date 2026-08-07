@@ -12,10 +12,15 @@ Athena is a market-neutral, theta-positive strategy designed for mid-regime VIX 
 
 ## Architecture
 - `athena_engine.py`: Main execution engine (Entry, Polling Loop, Exit).
-- `configs_live.py`: Strategy parameters, `QTY_FREEZE` limits, and `ORDER_TIMEOUT_SEC`.
-- `state.py`: Atomic state management (CSV-backed) to handle restarts.
-- `functions.py`: Slack/Telegram alerts and proactive rate limiting.
-- `logger_setup.py`: Dual console/file logging.
+- `athena_configs.py`: Strategy parameters, `QTY_FREEZE` limits, and `ORDER_TIMEOUT_SEC`.
+- `athena_state.py`: Atomic state management (CSV-backed) to handle restarts.
+- `athena_functions.py`: Slack/Telegram alerts and proactive rate limiting.
+- `athena_logger_setup.py`: Dual console/file logging.
+
+Renamed 2026-08-07 from unprefixed `configs_live.py`/`state.py`/`functions.py`/
+`logger_setup.py` — those names collide with identically-named files in
+`apollo_production/`, `artemis_production/`, and `iris_production/`. See
+`plans/strategy-module-naming-collision-fix.md`.
 
 ### Execution Flow (Hardened)
 
@@ -69,6 +74,6 @@ Athena runs a `SharedFeed` WebSocket daemon (`websocket_feed.py`) for real-time 
 - **Proactive Rate Limiting:** Client-side gatekeeper prevents the 11th order in a 1-second window, enforcing a 1.1s sleep *before* any violation.
 - **ID-Exclusion Ghost Recovery:** Maintains a session list of processed `orderid`s. On network or data failure, it reconciles the Order Book using documented fields, preventing double-fills across batches.
 - **Capital-Efficient Sequence:** Always places **MONTHLY BUY** orders first in the burst to establish the calendar spread and secure margin benefits before selling weekly legs. Finally buys the PE wing using generated credit.
-- **Dry Run Mode:** Set `DRY_RUN = True` in `configs_live.py` to test strike selection and logging without placing real orders.
+- **Dry Run Mode:** Set `DRY_RUN = True` in `athena_configs.py` to test strike selection and logging without placing real orders.
 - **Error Recovery:** State is persisted on every poll; the script automatically resumes tracking open positions if restarted. On restart with an active trade, all live leg tokens are re-subscribed to the WebSocket feed.
 - **Position Reconciliation on Restart:** On every in-trade restart, Athena calls `obj.position()` and compares all active leg quantities (including optional PE wing and emergency hedge) against state. Any mismatch generates a Slack alert to `#error-alerts`; no auto-correction is performed.

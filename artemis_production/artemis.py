@@ -10,8 +10,8 @@ Changes from original:
 """
 
 from iron_condor import IronCondor
-from configs import opening_time, closing_time
-from functions import handle_exception
+from artemis_configs import opening_time, closing_time
+from artemis_functions import handle_exception
 
 
 def run(obj, auth_token, instrument_df):

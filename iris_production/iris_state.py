@@ -2,7 +2,7 @@ import csv
 import os
 from dataclasses import dataclass, field, fields
 from typing import Optional
-from configs import STATE_FILE
+from iris_configs import STATE_FILE
 
 
 @dataclass

@@ -10,8 +10,9 @@ What this catches:
   - Negative DTE edge case: busday_count can return negative (expiry in the past)
     — the else branch returns sell_entry unmodified.
 
-Approach: 'configs', 'functions', and 'logger_setup' are injected into
-sys.modules before importing credit_spread, avoiding CSV reads and API calls.
+Approach: 'artemis_configs', 'artemis_functions', and 'artemis_logger_setup'
+are injected into sys.modules before importing credit_spread, avoiding CSV
+reads and API calls.
 CreditSpread instances are constructed via object.__new__ (no __init__ side
 effects) and attributes set manually.
 """
@@ -37,7 +38,7 @@ _SL_1 = 1.2
 _SL_0 = 1.0
 _INDEX_OFFSET = 500
 
-_m_conf = types.ModuleType('configs')
+_m_conf = types.ModuleType('artemis_configs')
 for _attr in (
     'contracts_df', 'strike_iteration_interval', 'hedge_points',
     'expected_option_premium', 'strike_values_iterator', 'qty_freeze',
@@ -59,20 +60,20 @@ _m_conf.SLACK_TRADE_ALERTS   = '#trade-alerts'
 _m_conf.SLACK_ERRORS_CHANNEL = '#error-alerts'
 _m_conf.LOG_LEVEL   = 'DEBUG'
 _m_conf.LOGS_DIR    = '/tmp'
-sys.modules['configs'] = _m_conf
+sys.modules['artemis_configs'] = _m_conf
 
-_m_log = types.ModuleType('logger_setup')
+_m_log = types.ModuleType('artemis_logger_setup')
 _m_log.get_logger = logging.getLogger
-sys.modules['logger_setup'] = _m_log
+sys.modules['artemis_logger_setup'] = _m_log
 
-_m_func = types.ModuleType('functions')
+_m_func = types.ModuleType('artemis_functions')
 for _name in (
     'slack_bot_sendtext', 'sleep', 'exists', 'handle_exception',
     'increment_poll_counter', 'increment_order_counter',
     'increment_order_book_poll', 'reset_counters',
 ):
     setattr(_m_func, _name, lambda *a, **kw: None)
-sys.modules['functions'] = _m_func
+sys.modules['artemis_functions'] = _m_func
 
 if ARTEMIS_DIR not in sys.path:
     sys.path.insert(0, ARTEMIS_DIR)

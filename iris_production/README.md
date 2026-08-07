@@ -14,10 +14,17 @@ Iris monitors for high-conviction directional signals (ST_FAST: 5-min supertrend
 | File | Purpose |
 |---|---|
 | `iris.py` | Entry point and main class — `main()` to start, `Iris.run()` for the loop |
-| `configs.py` | All tuneable parameters |
-| `state.py` | `IrisState` dataclass + CSV-backed `save_state` / `load_state` |
-| `functions.py` | SupertrendIndicator, candle fetch, strike/expiry selection, order placement, `OrderFillWatcher`, guardian check |
-| `logger_setup.py` | Rotating file logger (`logs/iris_YYYYMMDD.log`) |
+| `iris_configs.py` | All tuneable parameters |
+| `iris_state.py` | `IrisState` dataclass + CSV-backed `save_state` / `load_state` |
+| `iris_functions.py` | SupertrendIndicator, candle fetch, strike/expiry selection, order placement, `OrderFillWatcher`, guardian check, REST-fallback LTP fetch |
+| `iris_logger_setup.py` | Rotating file logger (`logs/iris_YYYYMMDD.log`) |
+
+Renamed 2026-08-07 from the unprefixed `configs.py`/`state.py`/`functions.py`/
+`logger_setup.py` — those names collide with identically-named files in
+`apollo_production/`, `athena_production/`, and `artemis_production/`, and
+Python's `sys.modules` caching means whichever strategy's file imports first in
+a process wins the name for every other strategy too. See
+`plans/strategy-module-naming-collision-fix.md`.
 
 ---
 
@@ -166,7 +173,7 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 
 ---
 
-## Key Parameters (`configs.py`)
+## Key Parameters (`iris_configs.py`)
 
 | Parameter | Value | Notes |
 |---|---|---|
@@ -202,7 +209,7 @@ ls iris_production/data/user_credentials.csv   # api_key, client_id, password, t
 ls iris_production/data/holidays.csv           # market holiday list
 
 # Verify DRY_RUN=True before any run
-grep DRY_RUN iris_production/configs.py
+grep DRY_RUN iris_production/iris_configs.py
 
 # Start (from repo root)
 python iris_production/iris.py

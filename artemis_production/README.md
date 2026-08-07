@@ -13,8 +13,14 @@ If the market trends and a side is tested, the strategy dynamically transforms i
 | `artemis.py` | Entry point — `run(obj, instrument_df)` called by Leto |
 | `iron_condor.py` | IronCondor class — trade lifecycle, monitoring, adjustment, archival |
 | `credit_spread.py` | CreditSpread class — individual PE/CE spread execution and SL logic; binary search strike selection |
-| `configs.py` | All parameters — loaded from `data/` files at import time |
-| `functions.py` | Slack messaging, Telegram fallback, exception handling |
+| `artemis_configs.py` | All parameters — loaded from `data/` files at import time |
+| `artemis_functions.py` | Slack messaging, Telegram fallback, exception handling |
+| `artemis_logger_setup.py` | Rotating file logger |
+
+Renamed 2026-08-07 from unprefixed `configs.py`/`functions.py`/`logger_setup.py`
+— those names collide with identically-named files in `apollo_production/`,
+`athena_production/`, and `iris_production/`. See
+`plans/strategy-module-naming-collision-fix.md`.
 
 ## Setup on delos
 
@@ -70,7 +76,7 @@ graph TD
 ```
 
 ### CAS-aware expiry-day close
-Since 3 Aug 2026, NSE/BSE run a Closing Auction Session: Sensex trading stops at 15:15 for a call auction, with the settlement price only discovered afterward and no continuous trading to react to it. To avoid carrying a still-open spread through that blind window, `evaluate_expiry_day_close()` force-closes any spread that is still net-open (`spread_status` not `closed`/`open`) at 15:15 on expiry day itself — distinct from the existing day-*before*-expiry ELM adjustment (`elm_time`, unaffected by CAS). The monitoring loop itself now runs to 15:40 (`closing_time` in `configs.py`), matching the extended derivatives session, but expiry-day exposure is deliberately cut off earlier at 15:15.
+Since 3 Aug 2026, NSE/BSE run a Closing Auction Session: Sensex trading stops at 15:15 for a call auction, with the settlement price only discovered afterward and no continuous trading to react to it. To avoid carrying a still-open spread through that blind window, `evaluate_expiry_day_close()` force-closes any spread that is still net-open (`spread_status` not `closed`/`open`) at 15:15 on expiry day itself — distinct from the existing day-*before*-expiry ELM adjustment (`elm_time`, unaffected by CAS). The monitoring loop itself now runs to 15:40 (`closing_time` in `artemis_configs.py`), matching the extended derivatives session, but expiry-day exposure is deliberately cut off earlier at 15:15.
 
 `iron_condor.set_session(obj, instrument_df)` propagates both to the PE and CE
 spread objects and handles lot sizing if `lot_calc = true` in `trade_settings.csv`.

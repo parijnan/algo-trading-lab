@@ -14,7 +14,7 @@ from traceback import format_exc
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
 
-from configs_live import (
+from athena_configs import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
     ORDER_LIMIT,

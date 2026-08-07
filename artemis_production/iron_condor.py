@@ -5,15 +5,15 @@ from credit_spread import CreditSpread
 from datetime import datetime, timedelta
 from math import floor
 from os.path import exists
-from functions import sleep, handle_exception, slack_bot_sendtext, reset_counters, increment_rms_poll, OrderFillWatcher
-from configs import (
+from artemis_functions import sleep, handle_exception, slack_bot_sendtext, reset_counters, increment_rms_poll, OrderFillWatcher
+from artemis_configs import (
     pd, lot_size, monitor_frequency, lot_calc, lot_capital,
     vix_threshold, entry_window_minutes, exchange_segment,
     instrument, underlying_token, REPO_ROOT,
     api_key, user_name, expiry_day_close_time,
     SLACK_TRADEBOT_CHANNEL, SLACK_TRADE_ALERTS, SLACK_TRADE_UPDATES, SLACK_ERRORS_CHANNEL,
 )
-from logger_setup import get_logger
+from artemis_logger_setup import get_logger
 from websocket_feed import SharedFeed, EXCHANGE_BSE_CM, EXCHANGE_BSE_FO
 
 logger = get_logger('artemis.iron_condor')

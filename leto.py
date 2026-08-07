@@ -400,7 +400,7 @@ def _route(obj, auth_token, instrument_df_nifty, instrument_df_sensex):
         force_athena = False
         try:
             if ATHENA_DIR not in sys.path: sys.path.insert(0, ATHENA_DIR)
-            from configs_live import FORCE_ENTRY as ATHENA_FORCE # type: ignore
+            from athena_configs import FORCE_ENTRY as ATHENA_FORCE # type: ignore
             force_athena = ATHENA_FORCE
         except Exception:
             pass

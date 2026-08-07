@@ -1,29 +1,20 @@
 """
-logger_setup.py — Artemis Production Logging Setup
+logger_setup.py — Athena Production Logging Setup
 Configures a logger that writes to both console and logs/debug.log.
-
-Import and call get_logger(__name__) in each module:
-    from logger_setup import get_logger
-    logger = get_logger(__name__)
-
-Log level is controlled by LOG_LEVEL in configs.py.
-    DEBUG — all variable values, every candle close, every LTP poll
-    INFO  — startup, entries, exits, errors only (production setting)
 """
 
 import os
 import logging
-from configs import LOG_LEVEL, LOGS_DIR
+from athena_configs import LOG_LEVEL, LOGS_DIR
 
 
 def get_logger(name: str) -> logging.Logger:
     """
     Return a logger configured with console and file handlers.
-    Multiple calls with the same name return the same logger instance
-    (Python logging module guarantees this) so handlers are not duplicated.
     """
     logger = logging.getLogger(name)
 
+    # Only configure if not already set up
     if logger.handlers:
         return logger
 
@@ -35,11 +26,13 @@ def get_logger(name: str) -> logging.Logger:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
     console_handler.setFormatter(fmt)
     logger.addHandler(console_handler)
 
+    # File handler — logs/debug.log
     os.makedirs(LOGS_DIR, exist_ok=True)
     debug_log_path = os.path.join(LOGS_DIR, 'debug.log')
     file_handler = logging.FileHandler(debug_log_path, mode='a', encoding='utf-8')
@@ -47,6 +40,7 @@ def get_logger(name: str) -> logging.Logger:
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
+    # Prevent propagation to root logger
     logger.propagate = False
 
     return logger

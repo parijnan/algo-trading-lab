@@ -10,9 +10,13 @@ What this catches:
   - A new field added to the dataclass without a matching cast in load_state()
   - Missing state file returning a clean idle state on restart
 
-Isolation: each strategy's state.py is loaded via importlib.util with a
-temporary 'configs_live' alias so Apollo and Athena modules never share
-sys.modules entries and tests can run in either order.
+Isolation: each strategy's state module is loaded via importlib.util with a
+temporary alias (matching whatever bare name that strategy's state module
+imports from) so Apollo and Athena modules never share sys.modules entries
+and tests can run in either order. Both strategies' files were renamed
+2026-08-07 (configs_live.py -> <strategy>_configs.py, state.py ->
+<strategy>_state.py) to fix a cross-strategy sys.modules collision — see
+plans/strategy-module-naming-collision-fix.md.
 """
 
 import os
@@ -28,29 +32,30 @@ APOLLO_DIR = os.path.join(REPO_ROOT, 'apollo_production')
 ATHENA_DIR = os.path.join(REPO_ROOT, 'athena_production')
 
 
-def _load_state_module(strategy_dir, prefix):
+def _load_state_module(strategy_dir, prefix, configs_filename, configs_import_name,
+                       state_filename):
     """
-    Load a strategy's state.py without polluting global sys.modules.
+    Load a strategy's state module without polluting global sys.modules.
 
-    state.py does `from configs_live import STATE_FILE`.  We temporarily
-    register the strategy's configs_live under the bare name 'configs_live'
-    so that from-import resolves correctly, then remove the alias immediately
-    after.  The loaded state module retains its own reference to STATE_FILE.
+    The state file does `from <configs_import_name> import STATE_FILE`. We
+    temporarily register the strategy's configs module under that bare name
+    so the from-import resolves correctly, then remove the alias immediately
+    after. The loaded state module retains its own reference to STATE_FILE.
     """
     configs_spec = importlib.util.spec_from_file_location(
-        f'{prefix}_configs_live',
-        os.path.join(strategy_dir, 'configs_live.py'))
+        f'{prefix}_{configs_import_name}',
+        os.path.join(strategy_dir, configs_filename))
     configs_mod = importlib.util.module_from_spec(configs_spec)
-    sys.modules['configs_live'] = configs_mod
+    sys.modules[configs_import_name] = configs_mod
     configs_spec.loader.exec_module(configs_mod)
 
     state_spec = importlib.util.spec_from_file_location(
         f'{prefix}_state',
-        os.path.join(strategy_dir, 'state.py'))
+        os.path.join(strategy_dir, state_filename))
     state_mod = importlib.util.module_from_spec(state_spec)
     state_spec.loader.exec_module(state_mod)
 
-    sys.modules.pop('configs_live', None)
+    sys.modules.pop(configs_import_name, None)
     return state_mod
 
 
@@ -62,7 +67,8 @@ class TestApolloStateRoundtrip(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.m   = _load_state_module(APOLLO_DIR, 'apollo')
+        self.m   = _load_state_module(APOLLO_DIR, 'apollo',
+                                      'apollo_configs.py', 'apollo_configs', 'apollo_state.py')
         self.m.STATE_FILE = os.path.join(self.tmp.name, 'apollo_state.csv')
 
     def tearDown(self):
@@ -180,7 +186,8 @@ class TestAthenaStateRoundtrip(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.m   = _load_state_module(ATHENA_DIR, 'athena')
+        self.m   = _load_state_module(ATHENA_DIR, 'athena',
+                                      'athena_configs.py', 'athena_configs', 'athena_state.py')
         self.m.STATE_FILE = os.path.join(self.tmp.name, 'athena_state.csv')
 
     def tearDown(self):

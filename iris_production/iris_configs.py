@@ -71,6 +71,7 @@ MARKET_OPEN       = '09:15'
 MARKET_CLOSE      = '15:30'
 TRADE_UPDATE_SEC  = 10              # Slack update cadence when in-trade (seconds)
 ORDER_TIMEOUT_SEC = 30              # seconds to wait for order fill (WS fast path + REST fallback)
+LTP_POLL_LIMIT    = 10              # max REST ltpData calls/sec when WS feed is disconnected (AngelOne cap)
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
 # Channels imported from leto_config at runtime to avoid hardcoding tokens here.

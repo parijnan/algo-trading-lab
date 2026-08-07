@@ -183,7 +183,7 @@ Four routing buttons and the sizing modal live together in one section:
 - **`🔵 Force Artemis`**: Routes unconditionally to Artemis regardless of VIX.
 - **`🟢 Force Athena`**: Routes unconditionally to Athena regardless of VIX.
 - **`🟣 Force Iris`**: Routes unconditionally to Iris regardless of VIX.
-- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Iris. Updates are written to a gitignored `data/sizing_override.json` inside each strategy directory; the strategy reads this at startup and overrides the defaults in `configs_live.py`.
+- **`⚙️ Manage Sizing`**: Opens a modal for surgical position sizing updates — toggle between Dynamic Auto-Sizing and Fixed Lots, and set the lot count for Artemis, Athena, or Iris. Updates are written to a gitignored `data/sizing_override.json` inside each strategy directory; the strategy reads this at startup and overrides the defaults in its own `<strategy>_configs.py`.
 
 The routing mode is persisted in `data/routing_state.json` (gitignored, defaults to `auto/artemis` if absent). `leto_config.py` reads from it on every `importlib.reload()`, so a change applied mid-session takes effect on the next Leto loop without a restart.
 
@@ -488,6 +488,7 @@ algo-trading-lab/
 │   ├── test_artemis_strike_math.py # Artemis DTE-based SL multiplier ladder and index SL offset (CE vs PE)
 │   ├── test_athena_strike_math.py  # Athena delta-based strike selection (OTM direction, wing ordering, accuracy)
 │   ├── test_strike_search.py       # Artemis binary search parity — _find_sell_strike vs _find_sell_strike_linear (12 tests)
+│   ├── test_cross_strategy_imports.py  # Regression: no shared filenames / import collisions across *_production dirs
 │   ├── analyze_broker_state.py     # Post-market margin and order book analysis
 │   ├── ws_tests.py                 # SmartWebSocketV2 (LTP feed) validation harness
 │   └── ws_order_test.py            # SmartWebSocketOrderUpdate (order events) prototype
@@ -500,8 +501,9 @@ algo-trading-lab/
 │   ├── artemis.py
 │   ├── iron_condor.py
 │   ├── credit_spread.py
-│   ├── configs.py
-│   ├── functions.py
+│   ├── artemis_configs.py
+│   ├── artemis_functions.py
+│   ├── artemis_logger_setup.py
 │   └── data/
 │       ├── contracts.csv
 │       ├── trade_settings.csv
@@ -529,12 +531,12 @@ algo-trading-lab/
 │       └── data/                   (generated — gitignored)
 ├── apollo_production/              # Live Nifty debit spread strategy
 │   ├── README.md
-│   ├── configs_live.py
+│   ├── apollo_configs.py
 │   ├── apollo.py
 │   ├── supertrend.py
-│   ├── state.py
-│   ├── functions.py
-│   ├── logger_setup.py
+│   ├── apollo_state.py
+│   ├── apollo_functions.py
+│   ├── apollo_logger_setup.py
 │   ├── technical_indicators.py
 │   ├── data/
 │   │   ├── user_credentials.csv    # symlink → ../data/user_credentials.csv
@@ -563,10 +565,10 @@ algo-trading-lab/
 ├── athena_production/              # Live Nifty double calendar condor strategy
 │   ├── README.md
 │   ├── athena_engine.py
-│   ├── configs_live.py
-│   ├── state.py
-│   ├── functions.py
-│   ├── logger_setup.py
+│   ├── athena_configs.py
+│   ├── athena_state.py
+│   ├── athena_functions.py
+│   ├── athena_logger_setup.py
 │   └── data/
 │       └── .gitkeep                # runtime data gitignored
 ├── athena_backtest/                # Athena double calendar backtesting
@@ -595,10 +597,10 @@ algo-trading-lab/
 ├── iris_production/                # Iris live paper/production trading
 │   ├── README.md                   # Execution flowchart, signal/exit tables, module docs
 │   ├── iris.py                     # Main strategy loop
-│   ├── configs.py                  # All tunable parameters (DRY_RUN, LOT_COUNT, exits)
-│   ├── state.py                    # IrisState dataclass + CSV persistence
-│   ├── functions.py                # ST helpers, strike selection, order placement, guardian check
-│   ├── logger_setup.py             # File + console logging
+│   ├── iris_configs.py             # All tunable parameters (DRY_RUN, LOT_COUNT, exits)
+│   ├── iris_state.py               # IrisState dataclass + CSV persistence
+│   ├── iris_functions.py           # ST helpers, strike selection, order placement, guardian check, REST-fallback LTP
+│   ├── iris_logger_setup.py        # File + console logging
 │   ├── tests/
 │   │   └── test_api.py             # API validation script — run before first paper session
 │   └── data/                       # Runtime data (state CSV, credentials — gitignored)

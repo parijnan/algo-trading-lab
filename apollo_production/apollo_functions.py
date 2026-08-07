@@ -14,13 +14,13 @@ from traceback import format_exc
 from datetime import datetime
 
 from SmartApi.smartWebSocketOrderUpdate import SmartWebSocketOrderUpdate
-from configs_live import (
+from apollo_configs import (
     slack_token, bot_token, bot_id, channel_id,
     SLACK_TRADEBOT_CHANNEL, SLACK_ERRORS_CHANNEL,
     ORDER_LIMIT,
     RMS_POLL_LIMIT, ORDER_BOOK_POLL_LIMIT, LTP_POLL_LIMIT, CANDLE_POLL_LIMIT
 )
-from logger_setup import get_logger
+from apollo_logger_setup import get_logger
 
 logger = get_logger('apollo.functions')
 

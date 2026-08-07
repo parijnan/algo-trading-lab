@@ -35,7 +35,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from apollo import Apollo                              # noqa: E402  (after sys.path setup)
-from configs_live import STRIKE_STEP, BUY_LEG_OFFSET, HEDGE_POINTS  # noqa: E402
+from apollo_configs import STRIKE_STEP, BUY_LEG_OFFSET, HEDGE_POINTS  # noqa: E402
 
 _EXPIRY = date(2026, 5, 29)
 

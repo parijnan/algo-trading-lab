@@ -33,9 +33,9 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from technical_indicators import SupertrendIndicator
-from logger_setup import get_logger
+from apollo_logger_setup import get_logger
 
-from configs_live import (
+from apollo_configs import (
     ST_15MIN_PERIOD, ST_15MIN_MULTIPLIER,
     ST_75MIN_PERIOD, ST_75MIN_MULTIPLIER,
     TF_HIGH,

@@ -31,7 +31,7 @@ from datetime import datetime, date, timedelta
 from time import sleep
 from SmartApi.smartExceptions import DataException, NetworkException
 
-from configs_live import (
+from apollo_configs import (
     api_key, user_name,
     NIFTY_INDEX_TOKEN,
     MARKET_OPEN, MARKET_CLOSE,
@@ -58,14 +58,14 @@ from configs_live import (
 )
 from websocket_feed import SharedFeed, NIFTY_TOKEN, VIX_TOKEN as FEED_VIX_TOKEN, EXCHANGE_NSE_CM
 from supertrend import SupertrendManager
-from state import load_state, save_state, clear_trade_fields
-from functions import (
+from apollo_state import load_state, save_state, clear_trade_fields
+from apollo_functions import (
     slack_bot_sendtext, handle_exception,
     _increment_rms_poll, _increment_order_book_poll, _increment_ltp_poll,
     _increment_candle_poll, _increment_order, _reset_counters,
     OrderFillWatcher,
 )
-from logger_setup import get_logger
+from apollo_logger_setup import get_logger
 
 
 logger = get_logger(__name__)

@@ -13,14 +13,19 @@ and design decisions.
 | File | Purpose |
 |---|---|
 | `apollo.py` | Entry point — `Apollo(obj, auth_token, instrument_df)` called by Leto |
-| `configs_live.py` | All parameters — strategy + live execution |
+| `apollo_configs.py` | All parameters — strategy + live execution |
 | `../websocket_feed.py` | Shared WebSocket LTP feed (`SharedFeed`) — used by all strategies |
 | `supertrend.py` | Supertrend seeding and incremental updates |
-| `state.py` | Atomic trade state persistence |
-| `functions.py` | Slack/Telegram messaging and exception handling |
-| `logger_setup.py` | Dual console + file logging (logs/debug.log), level from configs_live |
+| `apollo_state.py` | Atomic trade state persistence |
+| `apollo_functions.py` | Slack/Telegram messaging and exception handling |
+| `apollo_logger_setup.py` | Dual console + file logging (logs/debug.log), level from apollo_configs |
 | `technical_indicators.py` | SupertrendIndicator — copied from apollo_backtest/ |
 | `tests/ws_test.py` | WebSocket layer validation harness |
+
+Renamed 2026-08-07 from unprefixed `configs_live.py`/`state.py`/`functions.py`/
+`logger_setup.py` — those names collide with identically-named files in
+`athena_production/`, `artemis_production/`, and `iris_production/`. See
+`plans/strategy-module-naming-collision-fix.md`.
 
 ### Execution Flow
 
@@ -59,7 +64,7 @@ cd /home/parijnan/scripts/algo-trading-lab/apollo_production
 # Ensure data/ symlinks are in place:
 #   data/user_credentials.csv -> ../../data/user_credentials.csv
 #   data/holidays.csv         -> ../../data/holidays.csv
-# Verify configs_live.py — DRY_RUN = False for live
+# Verify apollo_configs.py — DRY_RUN = False for live
 # Apollo is launched via Leto — not run directly
 ```
 

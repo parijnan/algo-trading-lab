@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import date
-from configs import LOG_DIR
+from iris_configs import LOG_DIR
 
 def get_logger(name: str) -> logging.Logger:
     LOG_DIR.mkdir(exist_ok=True)

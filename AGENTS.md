@@ -90,10 +90,15 @@ Athena, and Iris.
 | Aphrodite | Nifty weekly | Intraday iron condor | (VIX < 11) | Shelved — premise removed by Apollo retirement |
 
 Each strategy has a `*_production/` (live) and `*_backtest/` directory. The
-production directory always contains: entry point, `configs.py` /
-`configs_live.py` (single source of truth for parameters), `functions.py`
-(Slack, order helpers, rate limiting), `state.py` or CSV state files in
-`data/`, and `logger_setup.py`.
+production directory always contains: entry point, `<strategy>_configs.py`
+(single source of truth for parameters), `<strategy>_functions.py` (Slack,
+order helpers, rate limiting), `<strategy>_state.py` or CSV state files in
+`data/`, and `<strategy>_logger_setup.py`. Strategy-prefixed since 2026-08-07
+— these were previously bare `configs.py`/`configs_live.py`/`functions.py`/
+`state.py`/`logger_setup.py`, identically named across all four directories,
+which collided via Python's `sys.modules` caching whenever `leto.py`'s
+re-routing loop imported more than one strategy's modules in the same
+process. See `plans/strategy-module-naming-collision-fix.md`.
 
 ---
 
@@ -231,6 +236,14 @@ rules an agent must follow:
 - **Module naming at repo root** — never name a repo-root Python file the same
   as a file inside a strategy directory (Python caches by module name in
   `sys.modules`). Hence `leto_config.py`, not `configs_live.py`, at root.
+- **Module naming across strategy directories** — the same collision applies
+  strategy-to-strategy, not just root-to-strategy: `leto.py`'s re-routing loop
+  can import more than one `*_production/` strategy's modules within a single
+  process. Hence `iris_configs.py`/`iris_functions.py`/`iris_state.py`/
+  `iris_logger_setup.py` (and the equivalent `athena_*`/`artemis_*`/`apollo_*`
+  names), never bare `configs.py`/`functions.py`/`state.py`/`logger_setup.py`
+  inside any `*_production/` directory. Fixed 2026-08-07 — see
+  `plans/strategy-module-naming-collision-fix.md`.
 - **ELM exits are SEBI-regulatory, not risk-management SLs.** Never include
   them in SL optimisation. Only `index_sl` and `option_sl` are tunable.
 - **State files** — only reconstruct fields that persist unchanged (booked PL,

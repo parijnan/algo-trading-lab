@@ -41,7 +41,7 @@ FO_SEG        = 'BFO'
 PEAK          = 500.0
 DECAY         = 200.0   # ltp(0)=500, ltp(300)≈111, ltp(600)≈25, ltp(1200)≈1.2
 
-_m_conf = types.ModuleType('configs')
+_m_conf = types.ModuleType('artemis_configs')
 for _attr in (
     'contracts_df', 'qty_freeze', 'lot_size', 'lot_count', 'lot_capital',
     'adjustment_distance', 'instrument', 'underlying_token', 'exchange_segment',
@@ -60,20 +60,20 @@ _m_conf.LOG_LEVEL                 = 'DEBUG'
 _m_conf.LOGS_DIR                  = '/tmp'
 _m_conf.lot_size                  = 15
 _m_conf.lot_count                 = 1
-sys.modules['configs'] = _m_conf
+sys.modules['artemis_configs'] = _m_conf
 
-_m_log = types.ModuleType('logger_setup')
+_m_log = types.ModuleType('artemis_logger_setup')
 _m_log.get_logger = logging.getLogger
-sys.modules['logger_setup'] = _m_log
+sys.modules['artemis_logger_setup'] = _m_log
 
-_m_func = types.ModuleType('functions')
+_m_func = types.ModuleType('artemis_functions')
 for _name in (
     'slack_bot_sendtext', 'sleep', 'exists', 'handle_exception',
     'increment_poll_counter', 'increment_order_counter',
     'increment_order_book_poll', 'reset_counters',
 ):
     setattr(_m_func, _name, lambda *a, **kw: None)
-sys.modules['functions'] = _m_func
+sys.modules['artemis_functions'] = _m_func
 
 if ARTEMIS_DIR not in sys.path:
     sys.path.insert(0, ARTEMIS_DIR)
@@ -83,17 +83,32 @@ if REPO_ROOT not in sys.path:
 from credit_spread import CreditSpread  # noqa: E402
 import credit_spread as _cs_module      # noqa: E402 — for per-test rebinding
 
-# credit_spread.py freezes these at import time via `from configs import ...`.
-# Our mock sets them to 0 (satisfying the import), but the cached module would
-# then contaminate test_artemis_strike_math.py which expects production values.
-# Rebind here so any subsequent test file that reuses the cached module sees
-# the correct values; these are irrelevant to strike-search correctness.
+# credit_spread.py freezes these at import time via `from artemis_configs
+# import ...`. Our mock sets them here, but `credit_spread` is cached as a
+# singleton across test files (this is a same-strategy, cross-test-file
+# contamination — renaming artemis_configs uniquely doesn't fix it, since both
+# this file and test_artemis_strike_math.py target that same name for the same
+# underlying module). Pytest collects alphabetically, so
+# test_artemis_strike_math.py's mock (which zeroes sl_*_dte, index_sl_offset,
+# strike_iteration_interval, and strike_values_iterator — irrelevant to *its*
+# SL-math tests) runs first and freezes those onto the cached credit_spread
+# module. Rebind here to the values this file actually needs.
+#
+# sl_*_dte / index_sl_offset: irrelevant to strike-search correctness, just
+# need any non-crashing value.
 _cs_module.sl_4_dte       = 2.0
 _cs_module.sl_3_dte       = 1.8
 _cs_module.sl_2_dte       = 1.5
 _cs_module.sl_1_dte       = 1.2
 _cs_module.sl_0_dte       = 1.0
 _cs_module.index_sl_offset = 500
+# strike_iteration_interval / strike_values_iterator: NOT irrelevant here —
+# these are the range() bounds/step _find_sell_strike_linear and
+# _find_sell_strike actually search over. Left un-rebound, they stay frozen at
+# 0 from test_artemis_strike_math.py's mock, producing
+# `ValueError: range() arg 3 must not be zero`.
+_cs_module.strike_iteration_interval = STRIKE_STEP
+_cs_module.strike_values_iterator    = INITIAL_RANGE
 
 
 # ---------------------------------------------------------------------------

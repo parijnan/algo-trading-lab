@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from configs import (
+from iris_configs import (
     DRY_RUN, DATA_DIR, FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE, HOLIDAYS_FILE,
     REPO_ROOT, LOT_COUNT, LOT_SIZE, LOT_CALC, CASH_PER_LOT_REQUIRED,
     NIFTY_TOKEN, VIX_TOKEN,
@@ -32,13 +32,13 @@ from configs import (
     MARKET_OPEN, MARKET_CLOSE, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
     SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME, MAX_ENTRY_TIME,
 )
-from state import IrisState, save_state, load_state
-from logger_setup import get_logger
-from functions import (
+from iris_state import IrisState, save_state, load_state
+from iris_logger_setup import get_logger
+from iris_functions import (
     seed_st, compute_st, fetch_candles, _candles_to_df,
     select_expiry, select_strike_and_token,
     place_order, get_fill_price, OrderFillWatcher,
-    check_no_active_strategies,
+    check_no_active_strategies, fetch_ltp_rest,
 )
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -525,11 +525,24 @@ class Iris:
     # Exit
     # -----------------------------------------------------------------------
 
+    def _get_ltp_ws(self, token: str, exchange: str, symbol: str) -> float | None:
+        """
+        Get LTP from the shared WS feed if connected; fall back to a single
+        rate-limited REST call if not. Mirrors
+        artemis_production/credit_spread.py::_get_ltp_ws — same pattern,
+        ported here since Iris had no REST fallback of its own.
+        """
+        if self.feed is not None and self.feed.is_connected():
+            ltp = self.feed.get_ltp(token)
+            if ltp is not None:
+                return ltp
+        return fetch_ltp_rest(self.obj, exchange, symbol, token)
+
     def _check_exit_conditions(self, now: datetime) -> None:
         if self.state.status != 'in_trade':
             return
 
-        ltp = self.feed.get_ltp(self.state.token or NIFTY_TOKEN)
+        ltp = self._get_ltp_ws(self.state.token or NIFTY_TOKEN, FO_EXCHANGE, self.state.symbol)
         if ltp:
             self.state.last_ltp = ltp
             save_state(self.state)
