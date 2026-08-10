@@ -204,7 +204,6 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 | `CANDLE_POLL_LIMIT` | 3 | Max `getCandleData` calls/sec (client-side, matches broker-wide cap) |
 | `CANDLE_FETCH_RETRIES` | 5 | Extra retries after a candle fetch fails, before marking it missed |
 | `CANDLE_FETCH_RETRY_INTERVAL` | 10 | Seconds between retries (non-blocking) |
-| `CANDLE_POLL_JITTER_MS` | 200 | Delay before the first poll at each 5-min boundary only, not retries — untested hypothesis that polling at the exact clock tick collides with other bots on the broker (2026-08-10) |
 
 ---
 

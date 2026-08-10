@@ -31,7 +31,7 @@ from iris_configs import (
     PROFIT_TARGET_PCT, STOP_LOSS_PCT, MAX_HOLD_MIN, EXIT_BY_TIME,
     MARKET_OPEN, MARKET_CLOSE, TRADE_UPDATE_SEC, INDEX_EXCHANGE, FO_EXCHANGE,
     SKIP_ENTRY_WINDOWS, MIN_ENTRY_TIME, MAX_ENTRY_TIME,
-    CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL, CANDLE_POLL_JITTER_MS,
+    CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL,
 )
 from iris_state import IrisState, save_state, load_state
 from iris_logger_setup import get_logger
@@ -397,14 +397,6 @@ class Iris:
                     ready_to_try = (self._next_candle_retry_at is None or
                                     now >= self._next_candle_retry_at)
                     if ready_to_try:
-                        # Jitter (untested hypothesis, 2026-08-10): a small delay
-                        # before the FIRST poll at this boundary only, to avoid
-                        # firing at the exact clock tick where every other bot on
-                        # the broker may also be polling. Not applied to retries
-                        # -- those are already offset by a second or more.
-                        if self._candle_retry_count == 0 and CANDLE_POLL_JITTER_MS > 0:
-                            time.sleep(CANDLE_POLL_JITTER_MS / 1000)
-
                         candle = self._fetch_candle(next_5m_close, ENTRY_TF_MIN)
 
                         if candle:
