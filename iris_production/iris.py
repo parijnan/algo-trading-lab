@@ -371,10 +371,14 @@ class Iris:
                 self._check_slack_commands()
                 now = datetime.now()
 
-                # ── Market-close auto-shutdown ──────────────────────────
+                # ── Operational cutoff auto-shutdown ────────────────────
+                # MARKET_CLOSE is Iris's own cutoff, not the real exchange
+                # close — set to just past EXIT_BY_TIME (see iris_configs.py)
+                # so Iris stops before the CAS auction gap rather than
+                # polling pointlessly into it.
                 if now.time() >= market_close:
-                    logger.info(f'Market closed ({MARKET_CLOSE}) — shutting down.')
-                    _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — market closed. Shutting down.',
+                    logger.info(f'Operational cutoff ({MARKET_CLOSE}) reached — shutting down.')
+                    _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — operational cutoff reached. Shutting down.',
                            SLACK_TRADEBOT_CHANNEL)
                     break
 

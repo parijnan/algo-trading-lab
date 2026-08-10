@@ -87,7 +87,17 @@ EXIT_BY_TIME      = '15:15'         # daily hard cutoff regardless of P&L
 
 # ── Session ───────────────────────────────────────────────────────────────────
 MARKET_OPEN       = '09:15'
-MARKET_CLOSE      = '15:30'
+# Iris's own operational cutoff -- deliberately NOT the real exchange close
+# (15:30, or 15:40 for derivatives under CAS). EXIT_BY_TIME=15:15 already
+# force-closes any position and MAX_ENTRY_TIME=15:00 means no trading
+# decision ever depends on data past 15:15 -- so there's nothing for Iris to
+# do in that window except poll pointlessly into the CAS auction gap (index
+# has no ticks ~15:15-15:28), which only produces retry/missed-candle noise
+# for zero benefit (see plans/iris-signal-pipeline-hardening.md, 2026-08-10
+# incident notes). 15:17 gives EXIT_BY_TIME's exit a 2-minute buffer to
+# complete (comfortably over ORDER_TIMEOUT_SEC=30's worst case) while
+# shutting down before the 15:20 boundary where the CAS gap first bites.
+MARKET_CLOSE      = '15:17'
 TRADE_UPDATE_SEC  = 10              # Slack update cadence when in-trade (seconds)
 ORDER_TIMEOUT_SEC = 30              # seconds to wait for order fill (WS fast path + REST fallback)
 LTP_POLL_LIMIT    = 10              # max REST ltpData calls/sec when WS feed is disconnected (AngelOne cap)

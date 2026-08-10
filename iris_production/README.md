@@ -48,7 +48,7 @@ graph TD
     Loop -- Exit --> Teardown[_teardown:\nexit open trade if any\nstop feed\nstatus = idle]
     Teardown --> End([Session terminated])
 
-    Loop -- Continue --> MarketClose{now >= 15:30?}
+    Loop -- Continue --> MarketClose{now >= 15:17\noperational cutoff?}
     MarketClose -- Yes --> Teardown
 
     MarketClose -- No --> InTrade{status == in_trade?}
@@ -138,7 +138,7 @@ All four are checked on every loop iteration while `status == in_trade`:
 | Trend flip | Opposite 5m ST flip | Nearly always a confirmed loss |
 | Max hold | 30 min elapsed since entry | Exits stale trades |
 | Time cutoff | now ≥ 15:15 | Daily hard cutoff |
-| Market close | now ≥ 15:30 | Auto-shutdown with Slack notification |
+| Operational cutoff | now ≥ 15:17 | Auto-shutdown with Slack notification — deliberately before the CAS auction gap (~15:15-15:28), not the real exchange close; see `MARKET_CLOSE` in `iris_configs.py` |
 
 ---
 
@@ -197,7 +197,7 @@ Iris refuses to start if Artemis, Athena, or Apollo has an open position. Angel 
 | `STOP_LOSS_PCT` | 0.25 | −25% on entry premium |
 | `MAX_HOLD_MIN` | 30 | Per-trade time cap |
 | `EXIT_BY_TIME` | 15:15 | Daily cutoff |
-| `MARKET_CLOSE` | 15:30 | Auto-shutdown time |
+| `MARKET_CLOSE` | 15:17 | Iris's own operational cutoff (not the real exchange close) — 2-min buffer past `EXIT_BY_TIME` to guarantee the time-cutoff exit completes before shutdown, and to stop before the CAS auction gap (~15:15-15:28) produces pointless retry noise |
 | `TRADE_UPDATE_SEC` | 10 | Slack update cadence while in_trade |
 | `ORDER_TIMEOUT_SEC` | 30 | WS fast path + REST fallback timeout |
 | `SEED_DAYS` | 13 | Calendar days of history for Path A's disk-based seed (past days) |
@@ -257,7 +257,7 @@ Calibrated from `iris_backtest/` (7.3 years, 1,172 trades):
 - [x] ST_FAST signal — implemented and seeded from API
 - [x] ITM-150 strike selection — implemented
 - [x] Four exit conditions — profit target, stop loss, trend flip, max hold
-- [x] Time cutoff (15:15) and market-close auto-shutdown (15:30)
+- [x] Time cutoff (15:15) and operational-cutoff auto-shutdown (15:17)
 - [x] OrderFillWatcher — WS fast path + REST fallback
 - [x] State persistence — atomic CSV write, mid-trade restart recovery
 - [x] Guardian check — blocks start if another strategy has an open position
