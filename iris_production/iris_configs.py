@@ -104,6 +104,17 @@ CANDLE_POLL_LIMIT = 3               # max getCandleData calls/sec (broker-wide c
 CANDLE_FETCH_RETRIES        = 5     # extra retries after the initial fetch fails
 CANDLE_FETCH_RETRY_INTERVAL = 10    # seconds between retries (checked non-blockingly)
 
+# Small delay before the FIRST candle poll at each 5-min boundary only (not
+# retries, which are already offset by a second or more). Untested hypothesis
+# (2026-08-10): 9 of ~13 cycles that day hit AngelOne's "exceeding access
+# rate" on a single request every 5 minutes, well under any documented limit
+# — possibly every algo bot on the broker polls at the exact clock boundary,
+# causing a synchronized server-side burst unrelated to this account's own
+# request rate. Cheap to test since candles are 5 minutes wide; a poll a
+# fraction of a second later is immaterial to signal timing. Start small and
+# adjust based on whether it actually reduces the hit rate.
+CANDLE_POLL_JITTER_MS = 200
+
 # ── Slack ─────────────────────────────────────────────────────────────────────
 # Channels imported from leto_config at runtime to avoid hardcoding tokens here.
 

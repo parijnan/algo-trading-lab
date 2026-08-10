@@ -333,6 +333,9 @@ iris_production/data/iris_active.flag
 iris_production/data/iris.pid
 iris_production/data/user_credentials.csv
 iris_production/data/holidays.csv
+iris_production/data/iris_5m_series.csv
+iris_production/data/iris_15m_series.csv
+iris_production/data/sizing_override.json
 iris_production/logs/*
 !iris_production/logs/.gitkeep
 
