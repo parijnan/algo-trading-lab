@@ -26,6 +26,7 @@ from iris_configs import (
     ITM_DEPTH_STEPS, STRIKE_STEP, ORDER_TIMEOUT_SEC, LTP_POLL_LIMIT,
     NIFTY_INDEX_CSV, CAS_TRUNCATE_TIME, TAIL_LINES_PER_DAY,
     IRIS_5M_SERIES_FILE, IRIS_15M_SERIES_FILE, CANDLE_POLL_LIMIT,
+    CANDLE_FETCH_RETRIES, CANDLE_FETCH_RETRY_INTERVAL,
 )
 
 try:
@@ -300,6 +301,17 @@ def _build_today_5m(obj, now: datetime) -> pd.DataFrame:
     poll from market open to now — never via the 1-min reconstruction, which
     applies only to past, fully-closed days. Empty if today hasn't reached
     its first completed 5-min bar yet (fresh 09:15 start).
+
+    Retries beyond fetch_candles' own inner 3-attempt/1s burst
+    (CANDLE_FETCH_RETRIES more, CANDLE_FETCH_RETRY_INTERVAL apart) — added
+    after a real incident (2026-08-10): a mid-session restart hit AngelOne's
+    rate limit on all 3 inner attempts, this function silently returned
+    empty, and Iris seeded with only the prior day's close (bearish) while
+    today's actual 5m trend had already flipped bullish 23 minutes earlier —
+    silently wrong for the ~2 minutes until the next live candle corrected
+    it. Blocking retry is acceptable here (unlike the live loop's
+    non-blocking design, §1) since this runs once at startup, before any
+    in-trade monitoring could be running.
     """
     today   = pd.Timestamp(now).date()
     from_dt = datetime.combine(today, datetime.strptime(MARKET_OPEN, '%H:%M').time())
@@ -307,7 +319,20 @@ def _build_today_5m(obj, now: datetime) -> pd.DataFrame:
         return pd.DataFrame()
 
     raw = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE', from_dt, now)
+    for attempt in range(CANDLE_FETCH_RETRIES):
+        if raw:
+            break
+        logger.warning(f'_build_today_5m: no data on attempt {attempt + 1}, retrying in '
+                        f'{CANDLE_FETCH_RETRY_INTERVAL}s ({CANDLE_FETCH_RETRIES - attempt} '
+                        f'attempt(s) left)...')
+        time.sleep(CANDLE_FETCH_RETRY_INTERVAL)
+        raw = fetch_candles(obj, NIFTY_TOKEN, 'FIVE_MINUTE', from_dt, now)
+
     if not raw:
+        logger.error(f"_build_today_5m: still no data for today's elapsed candles after "
+                      f'{1 + CANDLE_FETCH_RETRIES} attempts — seeding will proceed with '
+                      f'past-day data only; 5m/15m trend may be stale until the next live '
+                      f'candle merges in.')
         return pd.DataFrame()
 
     df = _candles_to_df(raw)

@@ -223,6 +223,26 @@ class Iris:
             logger.error('ST_FAST seed failed — cannot start.')
             return False
 
+        # Incident 2026-08-10: Path B (today's live poll) can fail all its
+        # retries and return nothing, leaving the seed with only past-day
+        # data — silently stale (5m/15m trend reflects yesterday's close,
+        # not today's actual state) rather than an outright seed failure.
+        # _build_today_5m now retries harder, but surface it loudly here too
+        # in case it still comes up empty, rather than let it pass unnoticed
+        # like it did that day.
+        today = now.date()
+        todays_5m_rows = self._df_5m[self._df_5m['time_stamp'].dt.date == today]
+        first_bar_close = datetime.combine(
+            today, datetime.strptime(MARKET_OPEN, '%H:%M').time()) + timedelta(minutes=ENTRY_TF_MIN)
+        if todays_5m_rows.empty and now >= first_bar_close:
+            logger.error(f'Seed has ZERO today candles despite market open since {MARKET_OPEN} — '
+                         f'5m/15m trend reflects only past days and may be stale until the next '
+                         f'live candle corrects it.')
+            _slack(f'🚨 *Iris*: Seeded with **no today candles** (past-day data only) — '
+                   f'5m/15m trend may be stale until the next live poll corrects it. '
+                   f'Likely cause: candle fetch was rate-limited at startup.',
+                   SLACK_ERRORS_CHANNEL)
+
         # Prime regime trend from 15-min seed
         valid_15m = self._df_15m[self._df_15m['trend'].notna()]
         if not valid_15m.empty:
