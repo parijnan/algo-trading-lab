@@ -92,3 +92,9 @@ data_pipeline/
 ```
 
 Note: Nifty downloads run on **Wednesday** nights (not Tuesday) — ICICI Direct does not update their servers immediately after expiry.
+
+## Local sync utility (`datasync`, outside this repo)
+
+`~/.local/bin/datasync` (personal script, not version-controlled, run manually on the local machine) rsyncs `data_pipeline/data/{indices,sensex,cas_auction_tracking.csv,cas_gap_fade_tracking.csv,cas_market_watch}/` from the VPS to local, then `rclone sync`s the local `data_pipeline/data/` tree to a Google Drive remote (`Work:Data`) as an off-machine backup.
+
+**2026-08-10: `Work` remote's rclone `client_id` reconfigured.** It was previously running on rclone's shared/default Google Drive `client_id`, which rclone's own tooling warned is being retired sometime in 2026. Created a dedicated Google Cloud project (`quant-grow.com` Workspace account), enabled the Drive API, configured an OAuth consent screen (External, with the account added as a test user), and generated a Desktop-app OAuth client. Re-ran `rclone config` on the `Work` remote with the new `client_id`/`client_secret`, replaced the old cached token, completed the browser OAuth flow, kept it as a non-Shared-Drive (`My Drive`) remote — matching the prior config. Confirmed fixed: `rclone config show Work` now shows the dedicated `client_id`, and `datasync` no longer prints the deprecation notice. No repo changes involved (config lives in `~/.config/rclone/rclone.conf`, outside `algo-trading-lab`) — this note exists here purely so the fix is discoverable if the sync ever breaks again.
