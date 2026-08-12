@@ -388,3 +388,6 @@ research/mtm_equity/data/
 
 # Iris VIX-threshold sweep — generated CSV output (Poseidon §8 fallback)
 research/iris_threshold/data/
+
+# CAS SmartAPI indicative-price check — raw live-market capture (never commit live test data)
+research/cas_smartapi_check/outputs/
