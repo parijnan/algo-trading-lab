@@ -382,6 +382,22 @@ class Iris:
                            SLACK_TRADEBOT_CHANNEL)
                     break
 
+                # ── Early shutdown: no active trade, no more possible entries ──
+                # MAX_ENTRY_TIME=15:00 means no NEW entry can fire once
+                # next_5m_close (the bar we're waiting on) is past it — that
+                # only becomes true once the last entry-eligible bar (14:55,
+                # closing at 15:00) has actually been fetched and evaluated,
+                # so this can't fire prematurely mid-retry on that bar. If
+                # nothing is open at that point, there's nothing left to do
+                # until MARKET_CLOSE (15:17) except poll pointlessly — stop
+                # now instead of waiting out the rest of the buffer.
+                if self.state.status != 'in_trade' and self._after_max_entry_time(next_5m_close):
+                    logger.info(f'No active trade and no more possible entries after {MAX_ENTRY_TIME} — '
+                                f'stopping early instead of waiting for the {MARKET_CLOSE} operational cutoff.')
+                    _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ *Iris* — no active trade, no more possible '
+                           f'entries today. Stopping early.', SLACK_TRADEBOT_CHANNEL)
+                    break
+
                 # ── In-trade: tight exit loop ───────────────────────────
                 if self.state.status == 'in_trade':
                     self._check_exit_conditions(now)

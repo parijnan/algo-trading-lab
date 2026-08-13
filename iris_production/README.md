@@ -51,7 +51,10 @@ graph TD
     Loop -- Continue --> MarketClose{now >= 15:17\noperational cutoff?}
     MarketClose -- Yes --> Teardown
 
-    MarketClose -- No --> InTrade{status == in_trade?}
+    MarketClose -- No --> EarlyStop{not in_trade AND\npast MAX_ENTRY_TIME 15:00?}
+    EarlyStop -- Yes --> Teardown
+
+    EarlyStop -- No --> InTrade{status == in_trade?}
     InTrade -- Yes --> CheckExit[_check_exit_conditions]
     CheckExit --> SlackUpdate[Slack update every 10s]
     SlackUpdate --> BarCheck
@@ -139,6 +142,7 @@ All four are checked on every loop iteration while `status == in_trade`:
 | Max hold | 30 min elapsed since entry | Exits stale trades |
 | Time cutoff | now ≥ 15:15 | Daily hard cutoff |
 | Operational cutoff | now ≥ 15:17 | Auto-shutdown with Slack notification — deliberately before the CAS auction gap (~15:15-15:28), not the real exchange close; see `MARKET_CLOSE` in `iris_configs.py` |
+| Early shutdown | not `in_trade` AND `next_5m_close` past `MAX_ENTRY_TIME` (15:00) | Auto-shutdown, often well before 15:17 — no new entry can fire once the last entry-eligible bar (14:55) has resolved, so with nothing open there's nothing left to do until close except poll pointlessly |
 
 ---
 
