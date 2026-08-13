@@ -151,19 +151,16 @@ def get_session_id(api_key: str, username: str, password: str, totp_key: str) ->
                     + urllib.parse.quote_plus(api_key))
         browser.implicitly_wait(5)
 
-        browser.find_element(By.XPATH,
-            '/html/body/form/div[2]/div/div/div[1]/div[2]/div/div[1]/input'
-        ).send_keys(username)
-        browser.find_element(By.XPATH,
-            '/html/body/form/div[2]/div/div/div[1]/div[2]/div/div[3]/div/input'
-        ).send_keys(password)
-        browser.find_element(By.XPATH,
-            '/html/body/form/div[2]/div/div/div[1]/div[2]/div/div[4]/div/input'
-        ).click()
+        # ICICI Direct changed this page's DOM structure around 2026-08-12,
+        # breaking the previous absolute-XPath selectors (a wrapper div was
+        # added/removed/reordered). Switched to element IDs, which are far
+        # more resilient to layout churn than positional XPath.
+        browser.find_element(By.ID, 'txtuid').send_keys(username)
+        browser.find_element(By.ID, 'txtPass').send_keys(password)
+        browser.find_element(By.ID, 'chkssTnc').click()
 
         final_button = WebDriverWait(browser, 10).until(
-            EC.element_to_be_clickable((By.XPATH,
-                '/html/body/form/div[2]/div/div/div[1]/div[2]/div/div[5]/input[1]'))
+            EC.element_to_be_clickable((By.ID, 'btnSubmit'))
         )
         browser.execute_script("arguments[0].scrollIntoView(true);", final_button)
         final_button.click()
@@ -180,6 +177,19 @@ def get_session_id(api_key: str, username: str, password: str, totp_key: str) ->
         session_id = browser.current_url.split('apisession=')[1][:8]
         logger.info(f"Session ID obtained: {session_id}")
         return session_id
+
+    except Exception:
+        # Same redesign may have broken the TOTP-page XPaths below (unverified —
+        # can't test that page without a live login). Dump state for diagnosis
+        # without needing to reproduce the failure blind next time.
+        try:
+            browser.save_screenshot('/tmp/icici_login_failure.png')
+            with open('/tmp/icici_login_failure.html', 'w') as f:
+                f.write(browser.page_source)
+            logger.error("Saved failure screenshot/HTML to /tmp/icici_login_failure.*")
+        except Exception:
+            pass
+        raise
 
     finally:
         browser.quit()   # always release Chrome, even on error
