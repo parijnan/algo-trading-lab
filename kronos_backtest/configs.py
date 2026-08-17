@@ -104,6 +104,61 @@ MAX_PRICE_STALENESS_MINUTES = 30.0
 STRIKE_SCAN_MAX_GAP     = 6
 
 # ---------------------------------------------------------------------------
+# Liquidity — a strike is only tradeable if it is actually trading
+#
+# A print inside the staleness bound says the strike traded once. It does not
+# say an order would fill. Liquidity is measured over a window ending at the
+# decision time: total volume, and how many distinct minutes traded (a
+# unit-free fill-probability proxy that does not depend on how the feed counts
+# contracts vs lots).
+#
+# Defaults are set below the measured 10th percentile at the target strikes
+# rather than at a round number, so the filter removes dead strikes without
+# quietly shrinking the sample. Measured at 35 DTE, 30-minute window: shorts
+# median ~17-23k volume and 26-29 traded minutes; wings median ~7k and 23-24
+# minutes, but a 10th percentile as low as 300 volume and one minute traded.
+# Phase 0 reports what each threshold costs — re-measure before changing them.
+# ---------------------------------------------------------------------------
+REQUIRE_LIQUIDITY           = True
+LIQUIDITY_LOOKBACK_MINUTES  = 30
+MIN_LIQUIDITY_VOLUME        = 250       # summed over the lookback window
+MIN_LIQUIDITY_BARS          = 3         # distinct minutes traded in the window
+MIN_OPEN_INTEREST           = 0         # 0 = off; OI is recorded either way
+
+# If the target-delta strike is not liquid, substitute a neighbour rather than
+# skip the trade. Direction errs toward safety on both legs: the short moves
+# OUTWARD (less risk, less credit), the wing moves INWARD (more protection,
+# more cost). Nearest-first alternation would sometimes widen the spread on
+# both legs at once, which is the one substitution that increases max loss.
+STRIKE_FALLBACK_STEPS       = 1         # strikes either side to try; 0 disables
+SHORT_FALLBACK_DIRECTION    = 'outward'
+WING_FALLBACK_DIRECTION     = 'inward'
+
+# ---------------------------------------------------------------------------
+# Concurrency — Kronos is a single-slot strategy
+#
+# Only one Kronos position may be open at a time: the previous trade must have
+# closed before the next opens. Capital efficiency, Pari's call 2026-08-17.
+#
+# This is not a neutral constraint bolted onto the exit comparison. Measured at
+# a 35 DTE entry, the next contract's scheduled entry falls on or before the
+# previous exit for 0% of pairs under E1, 65% under E2a/E2b and 100% under E3.
+# So the exit policy determines how much of the year capital is deployed, and
+# Phase 4 must compare return on deployed capital per unit time rather than
+# P&L per trade (§6 of the plan).
+#
+# On collision, defer: enter on the first trading day after the previous
+# position closes, provided enough runway remains. Skipping instead would drop
+# roughly half the E3 sample and answer a different question. Deferral is
+# resolved from the ACTUAL exit, not the scheduled one — an early profit-target
+# exit frees the slot sooner — so it is engine state and cannot live in
+# expiry_rules.py.
+# ---------------------------------------------------------------------------
+ALLOW_CONCURRENT_TRADES     = False
+ON_COLLISION                = 'defer'   # 'defer' | 'skip'
+DEFERRED_ENTRY_MIN_DTE      = 21        # below this there is too little runway; skip instead
+
+# ---------------------------------------------------------------------------
 # Exit — policy (Decision A, §4). Phase 4 compares these head-to-head.
 # ---------------------------------------------------------------------------
 #   'E1'  DTE exit          — close when DTE <= E1_EXIT_DTE
@@ -210,6 +265,7 @@ KNOWN_SHORT_COVERAGE    = {'2025-04-30': 40}
 FEASIBILITY_DTE_GRID        = [30, 35, 40, 45, 50, 60]
 FEASIBILITY_STALENESS_GRID  = [5.0, 30.0, 120.0, 1440.0, None]   # None = unbounded
 FEASIBILITY_WING_TARGETS    = [0.075, 0.05, 0.10]   # first entry is the configured target
+FEASIBILITY_VOLUME_GRID     = [0, 250, 500, 1000, 2000]   # 0 = no liquidity filter
 
 # Contracts where the chain cannot supply both legs simply produce no trade.
 # That is acceptable if it stays rare and regime-neutral; Phase 0 fails if the

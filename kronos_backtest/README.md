@@ -56,10 +56,42 @@ just about risk. Both-sides availability at a 30-minute staleness bound:
 | 60 | 76/87 | 43/87 | 19/87 |
 
 Entry moved from 45 to **35 DTE** and the wing from 0.05 to **0.075Δ**, giving
-82/87 fillable. The Phase 2 sweep is capped at 45 DTE for the same reason.
+82/87 fillable — **80/87 once the liquidity filter is applied**, still the best
+row at every volume floor up to 1000. Above that 30 DTE overtakes it. The Phase 2 sweep is capped at 45 DTE for the same reason.
 The binding constraint is the outer leg alone — moving the *short* closer to ATM
 widens the spread at no cost in availability, which is the Phase 3 lever if the
 0.15/0.075 band proves too thin on credit.
+
+## Single slot
+
+Kronos never holds two positions at once — the previous trade closes before the
+next opens (`ALLOW_CONCURRENT_TRADES = False`). This is not a neutral rule: at a
+35 DTE entry the next contract's scheduled entry lands on or before the previous
+scheduled exit for 0% of pairs under E1, 65% under E2a/E2b and 100% under E3. So
+the exit policy decides how much of the year the single slot is occupied, and
+Phase 4 compares **return on deployed capital per unit time**, not P&L per trade.
+
+On collision the engine defers to the first trading day after the previous
+position *actually* closes — an early profit-target exit frees the slot sooner —
+provided `DEFERRED_ENTRY_MIN_DTE` of runway remains. That depends on realised
+exits, so it is engine state: `phase0.py` reports scheduled collisions and
+cannot enforce anything. Enforcement is a Phase 1 requirement, along with
+recording `entry_dte_target` against `entry_dte_realised` so the Phase 2 sweep
+does not silently measure something other than its own axis.
+
+## Liquidity and strike substitution
+
+A print inside the staleness bound says a strike traded once, not that an order
+would fill. `loader.liquidity_stats()` measures volume and the count of distinct
+traded minutes over a window ending at the decision time; `is_liquid()` applies
+the config thresholds. If the target-delta strike fails the bar,
+`greeks.select_strike()` substitutes a neighbour one strike away and records the
+offset as `substituted`.
+
+Direction errs toward safety on both legs — the **short moves outward** (less
+risk, less credit), the **wing moves inward** (more protection, more cost).
+Nearest-first alternation was rejected: it can widen the spread on both legs at
+once, the one substitution that increases max loss.
 
 ## Two things that fail silently, and are therefore asserted
 

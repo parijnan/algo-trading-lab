@@ -14,9 +14,13 @@ import mibian
 
 from configs import (
     RISK_FREE_RATE, STRIKE_STEP, STRIKE_SCAN_WIDTH_PCT, MIN_OPTION_PRICE,
-    STRIKE_SCAN_MAX_GAP,
+    STRIKE_SCAN_MAX_GAP, STRIKE_FALLBACK_STEPS,
+    SHORT_FALLBACK_DIRECTION, WING_FALLBACK_DIRECTION,
 )
-from loader import load_option_data, get_option_price, get_option_price_with_age
+from loader import (
+    load_option_data, get_option_price, get_option_price_with_age,
+    liquidity_stats, is_liquid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,45 +98,109 @@ def scan_chain(spot: float, expiry, entry_ts, option_type: str,
             continue
 
         misses = 0
+        volume, bars, oi = liquidity_stats(opt_df_cache[key], entry_ts)
         out.append({
             'strike': strike,
             'price':  price,
             'age_min': age,
             'delta':  compute_delta(spot, strike, dte_days, price, option_type),
+            'volume': volume,
+            'bars':   bars,
+            'oi':     oi,
         })
 
     return out
 
 
+def _leg_cache(expiry, strike, option_type, opt_df_cache):
+    key = (expiry, strike, option_type)
+    if key not in opt_df_cache:
+        opt_df_cache[key] = load_option_data(expiry, strike, option_type)
+    return opt_df_cache[key]
+
+
+def _evaluate_strike(spot, expiry, entry_ts, option_type, strike,
+                     opt_df_cache, max_staleness):
+    """(price, delta, liquid, volume, bars, oi) for one strike, or None if unpriced."""
+    df = _leg_cache(expiry, strike, option_type, opt_df_cache)
+    price = get_option_price(df, entry_ts, 'open', max_staleness_minutes=max_staleness)
+    if price is None or price <= MIN_OPTION_PRICE:
+        return None
+    dte_days = max((expiry - entry_ts.date()).days, 0.5)
+    delta = compute_delta(spot, strike, dte_days, price, option_type)
+    if delta is None:
+        return None
+    volume, bars, oi = liquidity_stats(df, entry_ts)
+    return price, delta, is_liquid(volume, bars, oi), volume, bars, oi
+
+
+def _fallback_offsets(option_type: str, leg: str) -> list:
+    """
+    Strike offsets to try when the target strike is not liquid, in order.
+
+    Direction errs toward safety on both legs: a short that has to move goes
+    further OTM (less risk, less credit), a wing goes closer to the money (more
+    protection, more cost). The one substitution never made is the pair that
+    widens the spread on both legs at once.
+    """
+    if STRIKE_FALLBACK_STEPS <= 0:
+        return []
+    direction = SHORT_FALLBACK_DIRECTION if leg == 'short' else WING_FALLBACK_DIRECTION
+    otm_sign = 1 if option_type == 'ce' else -1          # OTM is up for CE, down for PE
+    sign = otm_sign if direction == 'outward' else -otm_sign
+    return [sign * STRIKE_STEP * i for i in range(1, STRIKE_FALLBACK_STEPS + 1)]
+
+
 def select_strike(spot: float, expiry, entry_ts, option_type: str,
                   target_delta: float, opt_df_cache: dict,
-                  max_staleness=-1) -> tuple:
+                  leg: str = 'short', max_staleness=-1) -> dict:
     """
-    First strike outward from ATM whose absolute delta is at or below
-    target_delta. Returns (strike, raw_price, delta) or (None, None, None).
-    Price is pre-slippage.
+    Pick a tradeable strike at the target delta.
+
+    Walks outward from ATM to the first strike at or below target_delta, then
+    checks that it is actually liquid — a print inside the staleness bound says
+    the strike traded once, not that an order would fill. If it is not liquid,
+    substitutes a neighbour per _fallback_offsets before giving up.
+
+    Returns a dict with strike, price (pre-slippage), delta, liquidity stats and
+    `substituted` (offset in strikes from the delta-target strike, 0 if none),
+    or None if no tradeable strike exists. `substituted` is recorded per trade
+    so Phase 1 can report how often the fallback fires.
     """
-    dte_days = max((expiry - entry_ts.date()).days, 0.5)
     misses = 0
-
     for strike in strike_candidates(spot, option_type):
-        key = (expiry, strike, option_type)
-        if key not in opt_df_cache:
-            opt_df_cache[key] = load_option_data(expiry, strike, option_type)
-
-        price = get_option_price(opt_df_cache[key], entry_ts, 'open',
-                                 max_staleness_minutes=max_staleness)
-        if price is None or price <= MIN_OPTION_PRICE:
+        ev = _evaluate_strike(spot, expiry, entry_ts, option_type, strike,
+                              opt_df_cache, max_staleness)
+        if ev is None:
             misses += 1
             if misses >= STRIKE_SCAN_MAX_GAP:
                 break
             continue
         misses = 0
-
-        delta = compute_delta(spot, strike, dte_days, price, option_type)
-        if delta is None:
+        price, delta, liquid, volume, bars, oi = ev
+        if delta > target_delta:
             continue
-        if delta <= target_delta:
-            return strike, price, delta
 
-    return None, None, None
+        # Target strike found. Take it if liquid, else try neighbours.
+        candidates = [(0, strike, price, delta, liquid, volume, bars, oi)]
+        if not liquid:
+            for offset in _fallback_offsets(option_type, leg):
+                alt = strike + offset
+                alt_ev = _evaluate_strike(spot, expiry, entry_ts, option_type, alt,
+                                          opt_df_cache, max_staleness)
+                if alt_ev is None:
+                    continue
+                a_price, a_delta, a_liquid, a_vol, a_bars, a_oi = alt_ev
+                if a_liquid:
+                    candidates.append((offset // STRIKE_STEP, alt, a_price, a_delta,
+                                       a_liquid, a_vol, a_bars, a_oi))
+                    break
+
+        chosen = next((c for c in candidates if c[4]), None)
+        if chosen is None:
+            return None
+        sub, k, px, d, liq, vol, bars_, oi_ = chosen
+        return {'strike': k, 'price': px, 'delta': d, 'liquid': liq,
+                'volume': vol, 'bars': bars_, 'oi': oi_, 'substituted': sub}
+
+    return None

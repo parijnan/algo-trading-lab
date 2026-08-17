@@ -95,6 +95,20 @@ The Nifty monthly chain is only quoted within a band around spot, and the band i
 
 The staleness bound is not what drives this. Relaxing it from 30 minutes to unbounded moves the 45 DTE / 0.05Δ figure from 51 to 52. Tightening it to 5 minutes moves it to 47. The chain is genuinely unquoted out there, not merely sparse — a fixed-width wing does no better (52/87 at short ± 500 points).
 
+**Adding the liquidity filter costs little, and does not move the choice.** The table above counts a strike as fillable if it has a print inside the staleness bound — which says it traded once, not that an order would fill. Requiring real liquidity (Decision D: volume over a 30-minute window ending at the decision time, across at least 3 distinct traded minutes), both sides, 0.075Δ wing:
+
+| Volume floor | 30 DTE | 35 DTE | 40 DTE | 45 DTE | 50 DTE | 60 DTE |
+|---|---:|---:|---:|---:|---:|---:|
+| none | 82 | 82 | 70 | 66 | 57 | 43 |
+| **≥250 (configured)** | 79 | **80** | 70 | 62 | 51 | 37 |
+| ≥500 | 79 | 80 | 69 | 61 | 49 | 35 |
+| ≥1000 | 79 | 78 | 69 | 60 | 48 | 30 |
+| ≥2000 | 77 | 74 | 68 | 54 | 41 | 25 |
+
+At the configured floor, 35 DTE goes from 82/87 to **80/87 (92%)** — still clear of the 90% gate, and still the best row. The Phase 2 fixed contract set drops from 60 to **55 of 87**. So the entry-DTE and wing choices stand.
+
+One thing to keep in view: 35 DTE's advantage over 30 is thin and erodes as the bar rises — at a ≥2000 floor, 30 DTE (77) overtakes 35 (74), because the extra five days of chain depth stop compensating for thinner trading. If live fills prove worse than the backtest assumes, 30 DTE is the fallback, not a wider wing.
+
 **Two defaults changed on this evidence**, both within §5's stated status as sweep starting points rather than settled values:
 
 - **Entry DTE 45 → 35.** 35 is where short-side availability peaks (87/87) and wing availability is at its joint best. Entry is a band, `DTE ∈ [30, 35]`, so real entries will scatter within it; both endpoints measure at 82/87 for the wing, so the whole band is covered rather than just the target.
@@ -104,7 +118,7 @@ The Phase 2 sweep is capped at **30–45 DTE** for the same reason. Including 50
 
 One consequence to carry into Phase 3: a 0.15Δ short against a 0.075Δ wing is a narrow band, so net credit per condor will be thin. The binding constraint is the **outer** leg alone — moving the short closer to ATM widens the spread at no cost in availability. If Phase 1 shows credit too thin to clear costs, widening via a 0.20–0.25Δ short is the lever to try before abandoning the structure, and it should be tried before concluding the strategy does not work.
 
-Five contracts remain unfillable at the chosen settings (2020-04-30, 2021-05-27, 2024-12-26, 2025-05-29, 2025-11-25). The engine must skip them rather than substitute a nearer strike — that skip path does not exist yet, because the engine does not, and it is a Phase 1 requirement. Phase 0 fails if the unfillable share ever exceeds 10%.
+Seven contracts remain unfillable at the chosen settings once the liquidity filter is on (five without it). The engine must skip them rather than substitute a nearer strike — that skip path does not exist yet, because the engine does not, and it is a Phase 1 requirement. Phase 0 fails if the unfillable share ever exceeds 10%.
 
 **Zero CAS-era monthly expiries exist.** The last Nifty monthly in the data is 2026-07-28, pre-CAS by cadence; CAS went live 2026-08-03; the first post-CAS Nifty monthly (~2026-08-25) has not occurred yet. Every number the backtest produces will be pre-CAS. Under an expiry-avoidant exit policy this matters much less than it otherwise would — the strategy never touches the mechanism the missing data would describe — but it is not zero, because IV behaviour in the 45→21 DTE window could still shift in a CAS regime.
 
@@ -141,6 +155,29 @@ Phases 1–3 still need a single baseline: **use E2b**, because it is the readin
 
 Either reading resolves against `data_pipeline/config/holidays.csv` (117 holidays, 2019 onward, covering the full backtest range) rather than by weekday arithmetic. Weekday logic would silently mishandle mid-week holidays.
 
+### Decision D — single slot, and liquidity-aware strike selection (Pari, 2026-08-17)
+
+**Kronos never holds two positions at once.** The previous trade must be closed before the next is opened. Capital efficiency: the strategy is sized against one pool, and a second concurrent condor would double the margin call on it for a return the backtest has no way to attribute.
+
+This is not a neutral constraint layered on top of the exit comparison — **it entangles with it.** Measured at a 35 DTE entry, the next contract's scheduled entry falls on or before the previous position's scheduled exit for:
+
+| Exit policy | Collisions | Median overlap | Scheduled hold-days as a share of the calendar |
+|---|---:|---:|---:|
+| E1 (21 DTE) | 0 / 86 | — | 46% (54% of the calendar idle between trades) |
+| E2b | 56 / 86 (65%) | 1 day | 96% |
+| E2a | 56 / 86 (65%) | 5 days | 107% — oversubscribed |
+| E3 (hold to expiry) | 86 / 86 (100%) | 7 days | 115% — oversubscribed |
+
+E1 leaves the slot empty for two to three weeks of every cycle; E3 cannot enter at its natural point at all. **So the exit policy no longer just sets P&L per trade — it sets how much of the year the capital is deployed.** §6's Phase 4 metric changes accordingly.
+
+**On collision, defer rather than skip**: enter on the first trading day after the previous position actually closes, provided at least `DEFERRED_ENTRY_MIN_DTE` (21) of runway remains, else skip that cycle. Deferral redeploys capital the moment it frees, which is the point of the rule; skipping would drop roughly half the E3 sample and answer a different question. Deferral resolves against the **actual** exit, not the scheduled one — a profit-target exit frees the slot early — so it is engine state and lives in the Phase 1 engine, not in `expiry_rules.py`. Phase 0 reports the scheduled collisions; it cannot enforce anything.
+
+Consequence for Phase 2: under deferral the realised entry DTE drifts below the swept value (median 28 under E3, 34 under E2b). Every trade records `entry_dte_target` and `entry_dte_realised`, and Phase 2 reports the realised distribution alongside each swept point — otherwise the sweep silently measures something other than its own axis.
+
+**Strike selection must clear a liquidity bar, with a one-strike fallback.** A print inside the staleness bound says a strike traded once; it does not say an order would fill. Liquidity is measured over a 30-minute window ending at the decision time — total volume, and the number of distinct minutes traded, which is unit-free and does not depend on whether the feed counts contracts or lots. If the target-delta strike does not clear the bar, substitute a neighbour one strike away before abandoning the trade.
+
+Substitution direction errs toward safety on both legs: **the short moves outward** (further OTM — less risk, less credit), **the wing moves inward** (closer to the money — more protection, more cost). Nearest-first alternation was rejected because it can widen the spread on both legs at once, which is the one substitution that increases max loss. Every substitution is recorded per trade so Phase 1 can report how often the fallback fires and whether results depend on it.
+
 ### Decision B — build in isolation; live routing deferred
 
 Kronos is developed standalone with no visibility into any other strategy. Live routing is a later conversation.
@@ -168,6 +205,8 @@ VIX **is still recorded per trade** as instrumentation — that is measurement, 
   - Loss exit at a multiple of credit received (start 2×).
   - Time exit per `EXIT_POLICY` (Decision A).
 - **ELM**: does not arise under E1 or E2 — both close before expiry day and before T−1. Under E3 it becomes mandatory and non-negotiable, and is never a tuning lever. This asymmetry is itself part of what Phase 4 measures: E3 must out-earn E1/E2 by enough to justify taking on a regulatory handling path the other two avoid entirely.
+- **Concurrency**: single slot, never two positions open (Decision D). On collision, defer to the first trading day after the previous exit if at least 21 DTE of runway remains, else skip the cycle.
+- **Liquidity**: a leg is only taken at a strike that traded at least `MIN_LIQUIDITY_VOLUME` over a 30-minute window ending at the decision time, across at least `MIN_LIQUIDITY_BARS` distinct minutes. If the target-delta strike fails, substitute one strike outward (short) or inward (wing). No substitution, no trade.
 - **CAS hard rules, under every exit policy**:
   - Never mark, value, or exit off option LTP between **15:16 and 15:29** (§5.3 — the Sensex 78,800 CE spiked to ~2× its 15:15 reference at 15:23 and crashed back by 15:29; that is derivatives-layer instability, not a real price).
   - No entries or exits inside the auction window at all.
@@ -179,7 +218,7 @@ VIX **is still recorded per trade** as instrumentation — that is measurement, 
 
 Repo conventions are binding: every parameter in `kronos_backtest/configs.py`, function-based (no classes) in the backtest layer, **one variable changed per experiment**. Reuse `athena_backtest`'s loader pattern — it already handles monthly-expiry legs and the same `data_pipeline/data/nifty/options/` layout — rather than writing a new loader.
 
-Universe: 87 Nifty monthly contracts, 2019-05-30 → 2026-07-28; 82 fillable at the chosen 35-DTE / 0.15Δ / 0.075Δ settings, with a 60-contract fixed set for the Phase 2 sweep (§3). This spans COVID (2020), the 2021–22 rate cycle, and the 2024–25 regime. A short-vega strategy will look very different across those, so year-by-year breakdown is mandatory, not optional — headline aggregates over a 2019-start sample would flatter or damn the strategy for regime reasons alone.
+Universe: 87 Nifty monthly contracts, 2019-05-30 → 2026-07-28; 80 fillable at the chosen 35-DTE / 0.15Δ / 0.075Δ settings with the liquidity filter on, and a 55-contract fixed set for the Phase 2 sweep (§3). This spans COVID (2020), the 2021–22 rate cycle, and the 2024–25 regime. A short-vega strategy will look very different across those, so year-by-year breakdown is mandatory, not optional — headline aggregates over a 2019-start sample would flatter or damn the strategy for regime reasons alone.
 
 | Phase | Question | Variable |
 |---|---|---|
@@ -188,13 +227,19 @@ Universe: 87 Nifty monthly contracts, 2019-05-30 → 2026-07-28; 82 fillable at 
 | 1b | Does daily-close management lose to intraday? | management cadence |
 | 2 | Best entry point on the curve — **fixed contract set** of 60 (§3) | entry DTE, 30–45 |
 | 3 | Best strike distance, and whether a wider band fixes thin credit | sold delta (wing is liquidity-capped) |
-| 4 | **Which exit policy wins** | `EXIT_POLICY` ∈ {E1, E2a, E2b, E3}, then E1's DTE sub-sweep |
+| 4 | **Which exit policy wins**, on return per unit of deployed capital-time | `EXIT_POLICY` ∈ {E1, E2a, E2b, E3}, then E1's DTE sub-sweep |
 | 5 | Where to take profit | profit target % |
 | 6 | Where to cut | loss multiple |
 
 **Phase 0 is built and passing** (`kronos_backtest/`, 25 checks, run 2026-08-17). It verifies the things that fail silently: holidays load as dates and the calendar helpers actually skip them; monthlies are identified by calendar rule rather than lead time; entry and all four exit dates are trading days, correctly ordered, with E2b flat over the final weekend and never inside ELM on T−1 across all 19 holiday-shifted windows; and the chain can actually supply the legs at entry. It found the §3 lead-time artifact, the §4 Wednesday-row error, and a price-staleness bug — the standard repo lookup falls back to the last print before the timestamp with no age bound, which for a far-OTM wing manufactures both an impossible fill and an IV backed out of a dead quote. `kronos_backtest/loader.py` bounds it; other backtests in the repo do not.
 
-Phase 4 is the decision phase. E2b is the baseline throughout Phases 1–3 so the earlier sweeps aren't conditioned on an exit policy that later loses; E1, E2a and E3 are then run against the Phase 2–3 winners. The comparison is not raw P&L — E3 carries an unquantifiable CAS tail (§5.2, no CAS-era monthly data) and an ELM handling requirement, so it needs a clear margin, not a nominal one, to be worth choosing.
+Phase 4 is the decision phase. E2b is the baseline throughout Phases 1–3 so the earlier sweeps aren't conditioned on an exit policy that later loses; E1, E2a and E3 are then run against the Phase 2–3 winners.
+
+**The Phase 4 metric is return on deployed capital per unit time, not P&L per trade.** Decision D's single-slot rule makes this mandatory rather than a refinement: E1 exits three weeks early and leaves the slot idle for 46% of the calendar, while E3 is oversubscribed and can only run at all by deferring every entry. A per-trade comparison would flatter E3 — which holds longest and captures most decay — while hiding that it forecloses the next cycle's entry. Report per-trade P&L alongside, but decide on the capital-time metric.
+
+Two further asymmetries stand outside any metric: E3 carries an unquantifiable CAS tail (§5.2, no CAS-era monthly data) and a mandatory ELM handling path that E1 and E2 avoid entirely. It needs a clear margin, not a nominal one, to be worth choosing.
+
+Phase 1 must therefore implement, from the start: the single-slot deferral against actual exits, `entry_dte_target` vs `entry_dte_realised` per trade, the liquidity filter with its substitution counter, and an explicit skip path for the five contracts the chain cannot fill (§3).
 
 Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. Worth noting for whenever that happens — `leto_backtest/` currently simulates a *routed* portfolio and would need extending to model a concurrently-held book.
 
@@ -212,20 +257,22 @@ Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. W
 
 5. **No VIX gate means 2020 and 2022 sit in the sample at full weight** (Decision C, deliberate). A short-premium strategy that survives them unconditioned is genuinely robust; one that only works with a VIX filter bolted on afterwards is curve-fitted. Resist adding the filter to rescue a bad result.
 
-6. **Deferred, not solved**: margin contention with the live book, and concurrency degrading live reliability (shared AngelOne rate limits are an existing known hazard). Neither is a backtest risk, but neither disappears — both return with Decision B.
+6. **The single-slot rule and the exit policy are entangled, and the entanglement is not a free parameter.** Decision D was taken for capital efficiency, but it silently converts Phase 4 from a P&L question into a scheduling one — E1's 46% deployment and E3's 115% oversubscription are properties of the calendar, not of the strategy's edge. A policy could win on capital-time purely by occupying the slot more, while earning less per unit of risk. Report per-trade P&L, deployment share and capital-time return together, and do not let one of the three carry the decision alone.
+
+7. **Deferred, not solved**: margin contention with the live book, and concurrency degrading live reliability (shared AngelOne rate limits are an existing known hazard). Neither is a backtest risk, but neither disappears — both return with Decision B.
 
 ---
 
 ## 8. When to call back
 
 - ~~**After Phase 0**~~ — **done 2026-08-17.** Identification and both E2 rules verified across all 87 contracts. Three corrections resulted: no 2020 coverage hole (§3), E2 divergence is 86% not 83% (§4), and entry DTE / wing delta moved to 35 / 0.075Δ on feasibility grounds (§3). Confirm those two default changes are acceptable before Phase 1 runs.
-- **After Phase 1**: kill-gate review — does the baseline clear costs? Be willing to stop.
+- **After Phase 1**: kill-gate review — does the baseline clear costs? Report per-trade P&L, deployment share and capital-time return together (§6), plus how often the liquidity substitution fired. Be willing to stop.
 - **After Phase 4**: exit-policy verdict. This is the substantive strategy decision.
 - **After Phase 6**: go/no-go on a production build, which reopens Decision B.
 - **Before any live wiring**: confirm the routing and override state at that time. Per §1 of the feeder, the current Iris force-route is a Slack override rather than a code change, and CLAUDE.md's "Artemis DISABLED" is documentation rather than a code state.
 
-Next concrete step: Phase 1 — the naive baseline over the 82 fillable contracts, and the kill-gate decision.
+Next concrete step: Phase 1 — the naive baseline over the fillable contracts, with single-slot deferral and the liquidity filter in from the start, and the kill-gate decision.
 
 ---
 
-*2026-08-10, revised 2026-08-17 by Phase 0. Instrument choice (§3) settled by audited data. Scope and exit policy (§4) settled by Pari. Structure and management parameters (§5) are starting points for the §6 sweeps; entry DTE and wing delta have already moved once, on measurement rather than preference.*
+*2026-08-10, revised 2026-08-17 by Phase 0 and by Decision D. Instrument choice (§3) settled by audited data. Scope and exit policy (§4) settled by Pari. Structure and management parameters (§5) are starting points for the §6 sweeps; entry DTE and wing delta have already moved once, on measurement rather than preference.*

@@ -31,7 +31,9 @@ from configs import (
     SHORT_DELTA_TARGET, WING_DELTA_TARGET, SWEEP_ENTRY_DTE, MIN_FEASIBLE_FRACTION,
     EXPECTED_MONTHLY_COUNT, MIN_LEAD_DAYS_EXPECTED, KNOWN_SHORT_COVERAGE,
     FEASIBILITY_DTE_GRID, FEASIBILITY_STALENESS_GRID, FEASIBILITY_WING_TARGETS,
-    MAX_PRICE_STALENESS_MINUTES, E2_TRADING_DAYS_BEFORE,
+    FEASIBILITY_VOLUME_GRID, MAX_PRICE_STALENESS_MINUTES, E2_TRADING_DAYS_BEFORE,
+    MIN_LIQUIDITY_VOLUME, MIN_LIQUIDITY_BARS, LIQUIDITY_LOOKBACK_MINUTES,
+    ALLOW_CONCURRENT_TRADES, ON_COLLISION, DEFERRED_ENTRY_MIN_DTE,
     PHASE0_REPORT_FILE, OUTPUT_DIR,
 )
 import loader
@@ -272,13 +274,20 @@ def check_calendar(rep: Report, cal: pd.DataFrame, holidays: set) -> None:
 # 4. Entry feasibility — can the structure actually be filled?
 # ---------------------------------------------------------------------------
 
-def _min_delta(chain: list, max_age) -> tuple:
-    """Lowest delta reachable using only prints no older than max_age."""
-    fresh = [c for c in chain
-             if c['delta'] is not None and (max_age is None or c['age_min'] <= max_age)]
-    if not fresh:
+def _min_delta(chain: list, max_age, min_volume: int = 0,
+               min_bars: int = 0) -> tuple:
+    """
+    Lowest delta reachable using only strikes that are both fresh enough and
+    liquid enough. min_volume=0 and min_bars=0 disable the liquidity floor.
+    """
+    ok = [c for c in chain
+          if c['delta'] is not None
+          and (max_age is None or c['age_min'] <= max_age)
+          and c['volume'] >= min_volume
+          and c['bars'] >= min_bars]
+    if not ok:
         return None, None
-    best = min(fresh, key=lambda c: c['delta'])
+    best = min(ok, key=lambda c: c['delta'])
     return best['delta'], best['strike']
 
 
@@ -326,6 +335,14 @@ def measure_feasibility(universe: pd.DataFrame, holidays: set,
                     d, k = _min_delta(chain, stale)
                     rec[f'{side}_min_delta_s{tag}'] = d
                     rec[f'{side}_min_strike_s{tag}'] = k
+                # Same measure with a liquidity floor, at the configured
+                # staleness bound. v0 is the no-filter column and must equal
+                # the s30 column — a cheap internal consistency check.
+                for vol in FEASIBILITY_VOLUME_GRID:
+                    bars = MIN_LIQUIDITY_BARS if vol else 0
+                    d, k = _min_delta(chain, MAX_PRICE_STALENESS_MINUTES, vol, bars)
+                    rec[f'{side}_min_delta_v{vol}'] = d
+                    rec[f'{side}_min_strike_v{vol}'] = k
             rows.append(rec)
 
     df = pd.DataFrame(rows)
@@ -373,6 +390,28 @@ def check_feasibility(rep: Report, feas: pd.DataFrame, n_contracts: int) -> None
         label = 'unbounded' if stale is None else f"{int(stale)} min"
         logger.info(f"       {label:>10}: " + "  ".join(cells))
 
+    vcol_ce = f'ce_min_delta_v{MIN_LIQUIDITY_VOLUME}'
+    vcol_pe = f'pe_min_delta_v{MIN_LIQUIDITY_VOLUME}'
+    if vcol_ce in feas.columns:
+        logger.info(f"     What the liquidity filter costs (both sides, "
+                    f"{WING_DELTA_TARGET} wing, {LIQUIDITY_LOOKBACK_MINUTES}-min window, "
+                    f"{MIN_LIQUIDITY_BARS}+ traded minutes):")
+        for vol in FEASIBILITY_VOLUME_GRID:
+            c, pcol = f'ce_min_delta_v{vol}', f'pe_min_delta_v{vol}'
+            if c not in feas.columns:
+                continue
+            cells = []
+            for dte, grp in feas.groupby('entry_dte_target'):
+                ok = grp[grp['spot'].notna()]
+                both = int(((ok[c] <= WING_DELTA_TARGET)
+                            & (ok[pcol] <= WING_DELTA_TARGET)).sum())
+                cells.append(f"{dte}DTE {both:>2}/{len(ok):<2}")
+            label = 'no filter' if vol == 0 else f"vol>={vol}"
+            marker = '  <-- configured' if vol == MIN_LIQUIDITY_VOLUME else ''
+            logger.info(f"       {label:>10}: " + "  ".join(cells) + marker)
+        # The liquidity-filtered columns are what the engine will actually see.
+        ce, pe = vcol_ce, vcol_pe
+
     ref_ok = feas[(feas['entry_dte_target'] == ENTRY_DTE_TARGET) & feas['spot'].notna()]
     fillable = ((ref_ok[ce] <= WING_DELTA_TARGET) & (ref_ok[pe] <= WING_DELTA_TARGET)
                 & (ref_ok[ce] <= SHORT_DELTA_TARGET) & (ref_ok[pe] <= SHORT_DELTA_TARGET))
@@ -408,6 +447,69 @@ def check_feasibility(rep: Report, feas: pd.DataFrame, n_contracts: int) -> None
 
 
 # ---------------------------------------------------------------------------
+# 5. Concurrency — does the next trade's entry land before the previous exit?
+# ---------------------------------------------------------------------------
+
+def check_concurrency(rep: Report, cal: pd.DataFrame) -> None:
+    """
+    Kronos is single-slot: the previous position must close before the next
+    opens. This reports how often the SCHEDULED calendar collides, per exit
+    policy. It cannot enforce anything — deferral resolves against the ACTUAL
+    exit, which depends on whether a profit target or loss exit fired first,
+    and that is engine state. Enforcement belongs in the Phase 1 engine.
+    """
+    logger.info("5. Concurrency — single-slot scheduling")
+    logger.info(f"     ALLOW_CONCURRENT_TRADES={ALLOW_CONCURRENT_TRADES}, "
+                f"ON_COLLISION={ON_COLLISION!r}, "
+                f"DEFERRED_ENTRY_MIN_DTE={DEFERRED_ENTRY_MIN_DTE}")
+
+    cal = cal.sort_values('expiry_date').reset_index(drop=True)
+    entry = pd.to_datetime(cal['entry_date'])
+    summary = {}
+
+    for pol in ('e1', 'e2b', 'e2a', 'e3'):
+        prev_exit = pd.to_datetime(cal[f'{pol}_exit']).shift(1)
+        gap = (entry - prev_exit).dt.days
+        collide = gap <= 0
+        n = int(collide.sum())
+        # Under deferral the position opens the day after the previous exit, so
+        # the realised DTE is what remains from there.
+        realised = (pd.to_datetime(cal['expiry_date'])
+                    - prev_exit.where(collide, entry)).dt.days.where(collide,
+                                                                     cal['entry_dte'])
+        too_late = int((realised < DEFERRED_ENTRY_MIN_DTE).sum())
+        summary[pol] = (n, gap, realised, too_late)
+        logger.info(f"       {pol.upper():>3}: collides on {n:>2}/{len(cal)-1} pairs "
+                    f"({n/(len(cal)-1):>4.0%})  overlap days median "
+                    f"{-gap[collide].median() if n else 0:>3.0f}  "
+                    f"deferred entry DTE median {realised.median():>4.0f}  "
+                    f"skipped for lack of runway: {too_late}")
+
+    # Scheduled hold-days summed over the calendar span. Above 100% means the
+    # schedule is not runnable single-slot at all and deferral must bite on
+    # every cycle; below 100% is idle capital between trades. Both are before
+    # deferral and before early exits, so treat them as the shape of the
+    # problem rather than as the realised deployment Phase 1 will report.
+    logger.info("     Scheduled hold-days as a share of the calendar span:")
+    span = (pd.to_datetime(cal['expiry_date']).max()
+            - pd.to_datetime(cal['entry_date']).min()).days
+    for pol in ('e1', 'e2b', 'e2a', 'e3'):
+        held = (pd.to_datetime(cal[f'{pol}_exit']) - entry).dt.days.clip(lower=0)
+        share = held.sum() / span
+        note = ('oversubscribed — deferral bites every cycle' if share > 1.0
+                else f'{1 - share:.0%} of the calendar idle between trades')
+        logger.info(f"       {pol.upper():>3}: {share:>4.0%}  ({note})")
+
+    rep.add(not ALLOW_CONCURRENT_TRADES,
+            "single-slot mode is on (ALLOW_CONCURRENT_TRADES is False)")
+    rep.add(ON_COLLISION in ('defer', 'skip'),
+            f"ON_COLLISION is a recognised mode", repr(ON_COLLISION))
+    logger.info("     Deployment share is the reason Phase 4 must compare return on")
+    logger.info("     deployed capital per unit time, not P&L per trade: the exit policy")
+    logger.info("     decides how much of the year the single slot is occupied.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -437,6 +539,9 @@ def run(refresh: bool = False) -> int:
 
     feas = measure_feasibility(universe, holidays, nifty_1m, vix_1m, refresh=refresh)
     check_feasibility(rep, feas, len(universe))
+    logger.info("")
+
+    check_concurrency(rep, cal)
     logger.info("")
 
     failures = rep.failures

@@ -19,6 +19,8 @@ from configs import (
     CONTRACT_LIST_FILE, HOLIDAYS_FILE, OUTPUT_DIR,
     BACKTEST_START_DATE, BACKTEST_END_DATE,
     REQUIRE_DOWNLOAD_STATUS, MAX_PRICE_STALENESS_MINUTES,
+    REQUIRE_LIQUIDITY, LIQUIDITY_LOOKBACK_MINUTES,
+    MIN_LIQUIDITY_VOLUME, MIN_LIQUIDITY_BARS, MIN_OPEN_INTEREST,
 )
 from expiry_rules import identify_monthly_expiries
 
@@ -270,6 +272,36 @@ def get_option_price(option_df: pd.DataFrame, timestamp: pd.Timestamp,
     if max_staleness_minutes is not None and age > max_staleness_minutes:
         return None
     return price
+
+
+def liquidity_stats(option_df: pd.DataFrame, timestamp: pd.Timestamp,
+                    lookback_minutes: float = None) -> tuple:
+    """
+    (volume, traded_bars, open_interest) over the window ending at timestamp.
+
+    traded_bars is the count of distinct minutes with a bar — since these files
+    are trade-derived, that is the number of minutes in which the strike
+    actually traded, and it is unit-free. Returns (0, 0, 0) when nothing traded.
+    """
+    if lookback_minutes is None:
+        lookback_minutes = LIQUIDITY_LOOKBACK_MINUTES
+    if option_df.empty:
+        return 0, 0, 0
+    window = option_df[(option_df['datetime'] > timestamp - pd.Timedelta(minutes=lookback_minutes))
+                       & (option_df['datetime'] <= timestamp)]
+    if window.empty:
+        return 0, 0, 0
+    oi = window['open_interest'].iloc[-1] if 'open_interest' in window.columns else 0
+    return int(window['volume'].sum()), len(window), int(oi if pd.notna(oi) else 0)
+
+
+def is_liquid(volume: int, bars: int, open_interest: int) -> bool:
+    """Config thresholds applied to liquidity_stats output."""
+    if not REQUIRE_LIQUIDITY:
+        return True
+    return (volume >= MIN_LIQUIDITY_VOLUME
+            and bars >= MIN_LIQUIDITY_BARS
+            and open_interest >= MIN_OPEN_INTEREST)
 
 
 def get_1min_value(indexed_df: pd.DataFrame, timestamp: pd.Timestamp,
