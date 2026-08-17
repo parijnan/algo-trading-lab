@@ -1,0 +1,79 @@
+# Kronos Backtest
+
+Monthly Nifty short-premium, expiry-avoidant. Design and rationale live in
+`plans/kronos-monthly-premium.md`; this directory is the code that tests it.
+
+Kronos sells a defined-risk iron condor on the Nifty **monthly** expiry roughly
+35 days out and closes it before expiry week. The thesis is in the exit, not the
+entry: expiry-day settlement risk under the Closing Auction Session is a
+per-expiry-*event* risk, and a monthly position that closes before expiry week
+meets it zero times a year.
+
+Built in isolation — no Leto routing, no VIX gate, no visibility into any other
+strategy (Decisions B and C of the plan). Nothing here may import from a
+strategy directory.
+
+## Layout
+
+| File | Contents |
+|---|---|
+| `configs.py` | Every parameter. Nothing else holds a tunable value. |
+| `loader.py` | Holidays, index series, the monthly contract universe, option bars. |
+| `expiry_rules.py` | Monthly identification by calendar rule; entry and exit date resolution. |
+| `greeks.py` | mibian IV/delta, chain scanning, target-delta strike selection. |
+| `phase0.py` | Phase 0 validation and the entry-feasibility measurement. |
+| `run.py` | Entry point. |
+| `data/` | Generated output — gitignored. |
+
+## Running
+
+```bash
+python kronos_backtest/run.py --phase 0            # validation, uses cached feasibility scan
+python kronos_backtest/run.py --phase 0 --refresh  # re-scan the option chains (several minutes)
+```
+
+Phase 0 writes `data/phase0_calendar.csv` (entry and all four exit dates per
+contract) and `data/phase0_feasibility.csv` (chain depth at each candidate entry
+DTE). `data/contract_data_start.csv` caches per-contract data coverage.
+
+Phases 1–6 are specified in §6 of the plan and are not implemented yet — Phase 1
+is a genuine kill gate and its result decides whether the rest gets built.
+
+## What Phase 0 changed
+
+Two of the plan's design defaults moved on Phase 0 evidence. The Nifty monthly
+chain is only quoted within a band around spot, and the band is narrower the
+further from expiry you look — so a wing target is a claim about liquidity, not
+just about risk. Both-sides availability at a 30-minute staleness bound:
+
+| Entry DTE | 0.15Δ short | 0.075Δ wing | 0.05Δ wing |
+|---:|---:|---:|---:|
+| 30 | 86/87 | 82/87 | 72/87 |
+| 35 | 87/87 | 82/87 | 68/87 |
+| 40 | 84/87 | 70/87 | 55/87 |
+| 45 | 82/87 | 66/87 | 51/87 |
+| 50 | 83/87 | 57/87 | 35/87 |
+| 60 | 76/87 | 43/87 | 19/87 |
+
+Entry moved from 45 to **35 DTE** and the wing from 0.05 to **0.075Δ**, giving
+82/87 fillable. The Phase 2 sweep is capped at 45 DTE for the same reason.
+The binding constraint is the outer leg alone — moving the *short* closer to ATM
+widens the spread at no cost in availability, which is the Phase 3 lever if the
+0.15/0.075 band proves too thin on credit.
+
+## Two things that fail silently, and are therefore asserted
+
+**Monthly contracts are identified by calendar rule** — the last expiry of each
+calendar month — never by a lead-time threshold. The original data audit filtered
+on lead time and, because it took the *latest* first-print across a contract's
+strike files rather than the earliest, concluded that six 2020 monthlies had no
+usable history. They all have 60+ days. Phase 0 asserts coverage rather than
+assuming it.
+
+**Prices carry an age.** The option files are trade-derived: a minute with no
+trade produces no bar, so a naive "last price before now" lookup can return a
+print from days earlier. Harmless for a 0.15-delta short, ruinous for a far-OTM
+wing, where it manufactures both a fill that could not happen and an IV backed
+out of a dead quote. `get_option_price` enforces
+`MAX_PRICE_STALENESS_MINUTES`; `get_option_price_with_age` exposes the age for
+measurement.

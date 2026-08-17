@@ -2,7 +2,9 @@
 
 **Codename: Kronos** (Titan of time — the strategy's entire thesis is which slice of the decay curve it harvests, and which one it deliberately refuses).
 
-**Status: Design settled for a standalone backtest.** Scope decisions taken by Pari on 2026-08-10 (§4): build in isolation, no VIX gating, exit policy compared across arms rather than chosen. Live routing and capital allocation are explicitly deferred, not pending. No code exists yet — next step is `kronos_backtest/`.
+**Status: Phase 0 built and run (2026-08-17); §3 and §4 corrected by its findings.** `kronos_backtest/` now holds `configs.py`, the loader, the calendar rules and Phase 0 validation. Phases 1–6 are not built.
+
+**Design settled for a standalone backtest.** Scope decisions taken by Pari on 2026-08-10 (§4): build in isolation, no VIX gating, exit policy compared across arms rather than chosen. Live routing and capital allocation are explicitly deferred, not pending. No code exists yet — next step is `kronos_backtest/`.
 
 **Brief**: `plans/monthly-option-selling-feeder.md`. CAS investigation detail: `plans/closing-auction-session.md`. Where the feeder and CLAUDE.md disagree on Athena's exit paths, this plan uses the feeder's code-verified version.
 
@@ -51,7 +53,7 @@ Measured directly against `data_pipeline/data/` on this machine (2026-08-10):
 
 | | Monthly contracts | Range | Typical lead time | Schema |
 |---|---|---|---|---|
-| **Nifty** (`nifty/options/`) | **87** | 2019-05-30 → 2026-07-28 | ~89 days (but see below) | 1-min OHLC + `volume` + `open_interest` |
+| **Nifty** (`nifty/options/`) | **87** | 2019-05-30 → 2026-07-28 | 40–92 days, median 90 | 1-min OHLC + `volume` + `open_interest` |
 | **Sensex** (`sensex/`) | 23 | 2024-10-31 → 2026-08-06 | **14–27 days** | 1-min OHLC + `volume` only |
 
 Supporting series: `indices/nifty.csv` and `indices/india_vix.csv`, 1-min, 696k rows each, 2019-01-28 → 2026-08-07. Both cover the full Nifty option history with room to spare.
@@ -62,25 +64,47 @@ CAS reinforces the choice rather than driving it: §5.1's overnight-gap-through-
 
 **Nifty only. Not close.**
 
-### Usable universe shrinks with entry DTE — and 2020 is the hole
+### Corrected 2026-08-17: there is no 2020 coverage hole
 
-Lead time is *not* uniform at ~89 days. Measured per contract, the universe available for a given entry DTE is:
+An earlier revision of this section reported that lead time degrades sharply with entry DTE — 57 of 87 contracts usable at 60 DTE, 74 at 45 — and that six 2020 monthlies, including the COVID-crash contract 2020-03-26, had too little history to use at any entry DTE. **That was a measurement artifact and both claims are withdrawn.** The audit behind them took the *latest* first-print across a contract's strike files rather than the earliest. Strikes are listed progressively as spot moves, so a strike created during the crash itself — `6150pe.csv` in the 2020-03-26 directory, first printing on expiry day — made a contract with 90 days of history look like it had none.
 
-| Entry DTE | Contracts with enough history |
-|---|---|
-| 60 | 57 / 87 |
-| 50 | 73 / 87 |
-| **45** | **74 / 87** |
-| 40 | 78 / 87 |
-| 30 | 81 / 87 |
+Measured correctly, by the earliest print anywhere in a contract's strike files (`kronos_backtest/loader.contract_data_start`, asserted in Phase 0): **coverage runs 40 to 92 days, median 90.** Exactly one contract falls short of 60 days — **2025-04-30, at 40 days**, which cannot be entered above 40 DTE. All twelve 2020 monthlies carry 87–90 days. The COVID regime is fully present in the sample.
 
-Six contracts are unusable even at 30 DTE — **2020-03-26** (lead −1 day), **2020-05-28**, **2020-07-30** (lead 2), **2020-08-27**, **2020-09-24**, **2020-11-26**. Every one is in 2020. The COVID crash and its aftermath — precisely the regime that would dominate a short-vega strategy's drawdown, and the one Decision C's no-gating stance most needs tested — is the worst-covered part of the sample. This materially weakens any claim of regime robustness and is carried as risk §7.2.
+Two things follow. The Phase 2 sample-composition concern largely dissolves: at any entry DTE from 30 to 60 the universe is 86 or 87 contracts, not 57 to 81, so the fixed-contract-set requirement below is now a cheap formality rather than a constraint that would distort the sweep. And risk §7.2's strongest claim — that the regime which matters most is missing from the evidence — is withdrawn.
 
-**Methodological consequence for Phase 2**: the entry-DTE sweep cannot simply run each DTE over whatever contracts support it. Comparing 60 DTE on 57 contracts against 30 DTE on 81 is confounded by sample composition, not a controlled test. The sweep must run over a **fixed contract set** — the intersection across all DTEs tested — with the full-universe result reported separately. This follows directly from the repo's one-variable-per-experiment rule.
+What does vary with entry DTE is something the old measure could not see at all: whether the strikes the structure needs are *quoted* at entry. That is measured in "Entry feasibility" below, and it is the real constraint.
 
-Monthly contracts must be identified by **calendar rule** (last expiry of the month, trailing incomplete month excluded), *not* by a lead-time threshold. A lead-time filter would silently discard ~30 genuine monthlies that merely have short data history, including most of 2020 — the exact contracts whose absence matters most.
+**Methodological consequence for Phase 2 (unchanged in principle)**: the entry-DTE sweep must still run over a fixed contract set — the intersection across all DTEs tested — with the full-universe result reported separately, per the repo's one-variable-per-experiment rule. It simply costs almost nothing now.
 
-Even so, Nifty's lead time supports a real 30–60 DTE sweep. Sensex could not support that sweep even if everything else were equal.
+Monthly contracts must be identified by **calendar rule** (last expiry of the month, trailing incomplete month excluded), *not* by a lead-time threshold. This was always the right rule and the artifact above is exactly why: a lead-time filter would have discarded genuine monthlies for a defect in how their history was measured. Identification and usability are kept in separate functions in `expiry_rules.py` and `loader.py` so the two cannot be confused again.
+
+### Entry feasibility — the real constraint, and it moved two design defaults
+
+The measure that matters is not how far back a contract's data reaches but whether the strikes the structure needs are *quoted at the moment of entry*. Measured across all 87 monthlies at six candidate entry DTEs, both sides, counting a strike as fillable only if it has a print no more than 30 minutes old (`kronos_backtest/phase0.py`, output in `data/phase0_feasibility.csv`):
+
+| Entry DTE | 0.15Δ short | 0.075Δ wing | 0.05Δ wing |
+|---:|---:|---:|---:|
+| 30 | 86 / 87 | 82 / 87 | 72 / 87 |
+| **35** | **87 / 87** | **82 / 87** | 68 / 87 |
+| 40 | 84 / 87 | 70 / 87 | 55 / 87 |
+| 45 | 82 / 87 | 66 / 87 | 51 / 87 |
+| 50 | 83 / 87 | 57 / 87 | 35 / 87 |
+| 60 | 76 / 87 | 43 / 87 | 19 / 87 |
+
+The Nifty monthly chain is only quoted within a band around spot, and the band is narrower the further from expiry you look. **At the 45 DTE / 0.05Δ wing combination §5 originally specified, the condor is constructible for 51 of 87 contracts — 59%.** That is not a tuning inefficiency; it is the structure being unbuildable for two-fifths of the sample. The failures are roughly symmetric between the CE and PE sides and scattered across years rather than clustered in a regime.
+
+The staleness bound is not what drives this. Relaxing it from 30 minutes to unbounded moves the 45 DTE / 0.05Δ figure from 51 to 52. Tightening it to 5 minutes moves it to 47. The chain is genuinely unquoted out there, not merely sparse — a fixed-width wing does no better (52/87 at short ± 500 points).
+
+**Two defaults changed on this evidence**, both within §5's stated status as sweep starting points rather than settled values:
+
+- **Entry DTE 45 → 35.** 35 is where short-side availability peaks (87/87) and wing availability is at its joint best. Entry is a band, `DTE ∈ [30, 35]`, so real entries will scatter within it; both endpoints measure at 82/87 for the wing, so the whole band is covered rather than just the target.
+- **Wing delta 0.05 → 0.075.** At 35 DTE this takes the structure from 68/87 to 82/87 (94%).
+
+The Phase 2 sweep is capped at **30–45 DTE** for the same reason. Including 50 and 60 would collapse the fixed contract set from 60 to 29, and the sweep would then be measuring how deep the chain is quoted rather than where the decay curve pays best.
+
+One consequence to carry into Phase 3: a 0.15Δ short against a 0.075Δ wing is a narrow band, so net credit per condor will be thin. The binding constraint is the **outer** leg alone — moving the short closer to ATM widens the spread at no cost in availability. If Phase 1 shows credit too thin to clear costs, widening via a 0.20–0.25Δ short is the lever to try before abandoning the structure, and it should be tried before concluding the strategy does not work.
+
+Five contracts remain unfillable at the chosen settings (2020-04-30, 2021-05-27, 2024-12-26, 2025-05-29, 2025-11-25). The engine must skip them rather than substitute a nearer strike — that skip path does not exist yet, because the engine does not, and it is a Phase 1 requirement. Phase 0 fails if the unfillable share ever exceeds 10%.
 
 **Zero CAS-era monthly expiries exist.** The last Nifty monthly in the data is 2026-07-28, pre-CAS by cadence; CAS went live 2026-08-03; the first post-CAS Nifty monthly (~2026-08-25) has not occurred yet. Every number the backtest produces will be pre-CAS. Under an expiry-avoidant exit policy this matters much less than it otherwise would — the strategy never touches the mechanism the missing data would describe — but it is not zero, because IV behaviour in the 45→21 DTE window could still shift in a CAS regime.
 
@@ -100,14 +124,16 @@ Three policies, implemented as a single `EXIT_POLICY` config axis and swept head
 
 **E2 has two readings, and they diverge across most of the sample.** Pari gave two worked cases: Tuesday expiry → exit the preceding **Friday**; expiry shifted to Monday → exit the preceding **Thursday**. Both are satisfied by "exit exactly 2 trading days before expiry" (E2a) — but that is an induction from two examples in the current Tuesday-expiry regime, and the backtest is mostly not in that regime:
 
-| Expiry weekday | Contracts | E2a (T−2 trading days) | E2b (last trading day before the final weekend) |
-|---|---|---|---|
-| **Thursday** | **72 / 87 (83%)** | Tuesday of expiry week — **holds the final weekend** | preceding Friday (T−4) |
-| Tuesday | 10 | Friday ✓ | Friday ✓ |
-| Wednesday | 4 | Friday ✓ | Friday ✓ |
-| Monday | 1 | Thursday ✓ | Thursday ✓ |
+| Expiry weekday | Contracts | E2a (T−2 trading days) | E2b (composite, below) | Diverge? |
+|---|---|---|---|---|
+| **Thursday** | **72** | Tuesday of expiry week — **holds the final weekend** | preceding Friday (T−4) | yes, 71 of 72 |
+| Wednesday | 4 | Monday of expiry week — **holds the final weekend** | preceding Friday (T−3) | yes, 4 of 4 |
+| Tuesday | 10 | Friday ✓ | Friday ✓ | no |
+| Monday | 1 | Thursday ✓ | Thursday ✓ | no |
 
-For 83% of the sample the two readings **disagree**, and E2a contradicts the stated rationale there — it would hold short through exactly the weekend the rule exists to avoid. E2b matches the rationale everywhere, but costs two extra days of decay in the Thursday era. They coincide for every Tuesday and Monday expiry, so **live behaviour is identical either way** — this is purely a backtest-interpretation issue.
+Measured in Phase 0: the two readings **disagree on 75 of 87 contracts (86%)**. (An earlier revision said 72/83% — it had the Wednesday row wrong, assuming E2a lands on Friday there when T−2 trading days from a Wednesday is the Monday of expiry week. The single Thursday exception is 2022-10-27, where the Diwali cluster collapses both readings onto Friday 21 October.) Wherever they disagree, E2a contradicts the stated rationale — it holds short through exactly the weekend the rule exists to avoid. E2b matches the rationale everywhere but costs two to four extra days of decay. They coincide for every Tuesday and Monday expiry, so under the current Tuesday-expiry regime **live behaviour is identical either way** — this is purely a backtest-interpretation issue.
+
+**E2b is a composite**, not simply "the last trading day before the final weekend". Read literally, that phrase gives Friday for a Monday expiry, which would leave the position open on T−1 and therefore exposed to ELM — the other half of Pari's rationale. E2b is implemented as **the earlier of (last trading day before the weekend immediately preceding expiry) and (T−2 trading days)**. The weekend term binds for Thursday and Wednesday expiries; the T−2 term binds for the Monday expiry, producing Thursday as Pari's second worked case requires.
 
 **Resolved: run both as sub-arms.** Implemented as a `configs.py` parameter, `EXIT_OFFSET_MODE` ∈ {`trading_days` (E2a), `avoid_final_weekend` (E2b)} — a date function, not a second code path, so the cost is negligible. Both are compared in Phase 4.
 
@@ -135,8 +161,8 @@ VIX **is still recorded per trade** as instrumentation — that is measurement, 
 
 - **Instrument**: Nifty monthly expiry, NFO. Lot size 65. Fixed notional sizing for the backtest — real allocation is deferred with Decision B.
 - **Structure**: **defined-risk iron condor** — short CE and PE with long wings — not a naked strangle. An undefined-risk short strangle carried for three weeks produces a P&L distribution whose tail an 87-contract sample cannot characterise; defined risk keeps the backtest's worst case bounded and knowable, which matters more than the extra credit. It also keeps margin efficient for whenever allocation is revisited.
-- **Entry**: DTE-based, not day-of-week — enter when the front monthly reaches DTE ∈ [40, 50]. Time-of-day fixed at 10:30, matching Athena's convention and avoiding the open's noise. No VIX condition (Decision C).
-- **Strike selection**: target delta, computed with `mibian` as the rest of the repo does. Starting point ~0.15 delta short, ~0.05 long wings — both are Phase 3 sweep parameters, not settled values.
+- **Entry**: DTE-based, not day-of-week — enter when the front monthly reaches DTE ∈ [30, 35]. Time-of-day fixed at 10:30, matching Athena's convention and avoiding the open's noise. No VIX condition (Decision C). *Revised from [40, 50] by the Phase 0 feasibility measurement in §3 — at 45 DTE the chain will not supply a wing on both sides for two-fifths of the sample.*
+- **Strike selection**: target delta, computed with `mibian` as the rest of the repo does. Starting point ~0.15 delta short, ~0.075 long wings — both are Phase 3 sweep parameters, not settled values. *Wing revised from 0.05 by §3; the short is unconstrained by liquidity and is the lever for widening the band if credit proves thin.*
 - **Management** — all parameters, all swept in §6, none of them folklore to be trusted:
   - Profit target as a fraction of credit received (start 50%).
   - Loss exit at a multiple of credit received (start 2×).
@@ -153,20 +179,20 @@ VIX **is still recorded per trade** as instrumentation — that is measurement, 
 
 Repo conventions are binding: every parameter in `kronos_backtest/configs.py`, function-based (no classes) in the backtest layer, **one variable changed per experiment**. Reuse `athena_backtest`'s loader pattern — it already handles monthly-expiry legs and the same `data_pipeline/data/nifty/options/` layout — rather than writing a new loader.
 
-Universe: 87 Nifty monthly contracts, 2019-05-30 → 2026-07-28; 74 usable at a 45-DTE entry (§3). This spans COVID (2020), the 2021–22 rate cycle, and the 2024–25 regime. A short-vega strategy will look very different across those, so year-by-year breakdown is mandatory, not optional — headline aggregates over a 2019-start sample would flatter or damn the strategy for regime reasons alone.
+Universe: 87 Nifty monthly contracts, 2019-05-30 → 2026-07-28; 82 fillable at the chosen 35-DTE / 0.15Δ / 0.075Δ settings, with a 60-contract fixed set for the Phase 2 sweep (§3). This spans COVID (2020), the 2021–22 rate cycle, and the 2024–25 regime. A short-vega strategy will look very different across those, so year-by-year breakdown is mandatory, not optional — headline aggregates over a 2019-start sample would flatter or damn the strategy for regime reasons alone.
 
 | Phase | Question | Variable |
 |---|---|---|
 | 0 | Loader, delta computation, monthly identification, and both E2 date rules correct? | — (validation) |
-| 1 | Does a naive baseline clear costs at all? **Kill gate.** | fixed 45 DTE, 0.15Δ, 50% target, E2b |
+| 1 | Does a naive baseline clear costs at all? **Kill gate.** | fixed 35 DTE, 0.15Δ / 0.075Δ, 50% target, E2b |
 | 1b | Does daily-close management lose to intraday? | management cadence |
-| 2 | Best entry point on the curve — **fixed contract set** (§3) | entry DTE, 30–60 |
-| 3 | Best strike distance | sold delta |
+| 2 | Best entry point on the curve — **fixed contract set** of 60 (§3) | entry DTE, 30–45 |
+| 3 | Best strike distance, and whether a wider band fixes thin credit | sold delta (wing is liquidity-capped) |
 | 4 | **Which exit policy wins** | `EXIT_POLICY` ∈ {E1, E2a, E2b, E3}, then E1's DTE sub-sweep |
 | 5 | Where to take profit | profit target % |
 | 6 | Where to cut | loss multiple |
 
-Phase 0 must explicitly verify two things that fail silently if wrong: monthly contracts identified by calendar rule rather than lead time (§3), and both `EXIT_OFFSET_MODE` readings producing the correct date for every expiry weekday present in the sample, including holiday-shifted ones.
+**Phase 0 is built and passing** (`kronos_backtest/`, 25 checks, run 2026-08-17). It verifies the things that fail silently: holidays load as dates and the calendar helpers actually skip them; monthlies are identified by calendar rule rather than lead time; entry and all four exit dates are trading days, correctly ordered, with E2b flat over the final weekend and never inside ELM on T−1 across all 19 holiday-shifted windows; and the chain can actually supply the legs at entry. It found the §3 lead-time artifact, the §4 Wednesday-row error, and a price-staleness bug — the standard repo lookup falls back to the last print before the timestamp with no age bound, which for a far-OTM wing manufactures both an impossible fill and an IV backed out of a dead quote. `kronos_backtest/loader.py` bounds it; other backtests in the repo do not.
 
 Phase 4 is the decision phase. E2b is the baseline throughout Phases 1–3 so the earlier sweeps aren't conditioned on an exit policy that later loses; E1, E2a and E3 are then run against the Phase 2–3 winners. The comparison is not raw P&L — E3 carries an unquantifiable CAS tail (§5.2, no CAS-era monthly data) and an ELM handling requirement, so it needs a clear margin, not a nominal one, to be worth choosing.
 
@@ -178,7 +204,7 @@ Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. W
 
 1. **Pre-CAS calibration, permanently.** §3. E1 and E2 mitigate it structurally by never reaching the auction; E3 does not, and cannot be measured for it.
 
-2. **Small sample, and the worst-covered year is the one that matters most.** 87 contracts sounds like a lot; it is ~12 observations a year over ~7 years, which is *small* for characterising tail behaviour in a short-premium strategy — and only 74 are usable at a 45-DTE entry. Worse, **all six contracts with too little history to use at any entry DTE are in 2020** (§3), including the COVID-crash monthly itself (2020-03-26, lead −1 day, no usable pre-expiry history at all). The regime that would dominate a short-vega drawdown is close to absent from the evidence. Report year-by-year, treat any full-span Sharpe or Calmar with suspicion, and do not claim regime robustness on this sample — the evidence for the case that matters most simply isn't there.
+2. **Small sample — but no coverage hole.** 87 contracts sounds like a lot; it is ~12 observations a year over ~7 years, which is *small* for characterising tail behaviour in a short-premium strategy. Report year-by-year and treat any full-span Sharpe or Calmar with suspicion. The stronger version of this risk in the earlier revision — that 2020, the regime a short-vega drawdown would be dominated by, was nearly absent from the evidence — **is withdrawn**: it rested on the lead-time artifact corrected in §3. All twelve 2020 monthlies are in the sample with 87–90 days of coverage each. Only 2025-04-30 (40 days) is coverage-limited, and only above 40 DTE.
 
 3. **The whole thing may not clear costs.** Real possibility that the slower part of the decay curve, after slippage on four legs, is not worth trading at all. Phase 1 is a kill gate, not a formality — be willing to stop there.
 
@@ -192,14 +218,14 @@ Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. W
 
 ## 8. When to call back
 
-- **After Phase 0**: confirm monthly identification and both E2 date rules resolve correctly for all 87 contracts, including holiday-shifted and non-Thursday expiries. Cheap to check, expensive to get wrong silently.
+- ~~**After Phase 0**~~ — **done 2026-08-17.** Identification and both E2 rules verified across all 87 contracts. Three corrections resulted: no 2020 coverage hole (§3), E2 divergence is 86% not 83% (§4), and entry DTE / wing delta moved to 35 / 0.075Δ on feasibility grounds (§3). Confirm those two default changes are acceptable before Phase 1 runs.
 - **After Phase 1**: kill-gate review — does the baseline clear costs? Be willing to stop.
 - **After Phase 4**: exit-policy verdict. This is the substantive strategy decision.
 - **After Phase 6**: go/no-go on a production build, which reopens Decision B.
 - **Before any live wiring**: confirm the routing and override state at that time. Per §1 of the feeder, the current Iris force-route is a Slack override rather than a code change, and CLAUDE.md's "Artemis DISABLED" is documentation rather than a code state.
 
-Next concrete step: build `kronos_backtest/` — `configs.py`, loader adapted from `athena_backtest`'s monthly-leg handling, and Phase 0 validation.
+Next concrete step: Phase 1 — the naive baseline over the 82 fillable contracts, and the kill-gate decision.
 
 ---
 
-*2026-08-10. Instrument choice (§3) settled by audited data. Scope and exit policy (§4) settled by Pari. Structure and management parameters (§5) are starting points for the §6 sweeps.*
+*2026-08-10, revised 2026-08-17 by Phase 0. Instrument choice (§3) settled by audited data. Scope and exit policy (§4) settled by Pari. Structure and management parameters (§5) are starting points for the §6 sweeps; entry DTE and wing delta have already moved once, on measurement rather than preference.*
