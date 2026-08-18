@@ -4,8 +4,8 @@ Entry point for the Kronos backtest.
 Usage:
     python kronos_backtest/run.py --phase 0
 
-Phases are defined in plans/kronos-monthly-premium.md §6. Only Phase 0
-(validation) is implemented; the engine comes after its results are reviewed.
+Phases are defined in plans/kronos-monthly-premium.md §6. Phase 0 (validation)
+and Phase 1 (naive baseline, the kill gate) are implemented.
 """
 
 import sys
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def main() -> int:
     parser = argparse.ArgumentParser(description='Kronos backtest')
     parser.add_argument('--phase', default='0',
-                        help='Backtest phase to run (only 0 is implemented)')
+                        help='Backtest phase to run: 0 (validation) or 1 (baseline)')
     parser.add_argument('--refresh', action='store_true',
                         help='Re-scan the Phase 0 feasibility cache (several minutes)')
     args = parser.parse_args()
@@ -32,6 +32,21 @@ def main() -> int:
         logger.info('Kronos — Phase 0 validation')
         logger.info('=' * 72)
         return 1 if phase0.run(refresh=args.refresh) else 0
+
+    if args.phase == '1':
+        import loader, engine, analysis
+        logger.info('Kronos — Phase 1 baseline')
+        logger.info('=' * 72)
+        holidays = loader.load_holidays()
+        nifty_1m, vix_1m = loader.load_index_data()
+        universe, _ = loader.load_monthly_universe(holidays)
+        logger.info('')
+        trades, skips = engine.run_backtest(universe, holidays, nifty_1m, vix_1m)
+        engine.save_trades(trades, skips)
+        result = analysis.summarise(trades, skips, len(universe))
+        logger.info('')
+        logger.info(f'Trades written: {engine.TRADE_SUMMARY_FILE}')
+        return 0 if result.get('verdict') == 'PASS' else 1
 
     logger.error(f"Phase {args.phase} is not implemented yet. "
                  f"See plans/kronos-monthly-premium.md §6.")

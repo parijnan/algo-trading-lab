@@ -22,6 +22,8 @@ strategy directory.
 | `expiry_rules.py` | Monthly identification by calendar rule; entry and exit date resolution. |
 | `greeks.py` | mibian IV/delta, chain scanning, target-delta strike selection. |
 | `phase0.py` | Phase 0 validation and the entry-feasibility measurement. |
+| `engine.py` | Phase 1 simulation: entry, marking, management, single-slot loop. |
+| `analysis.py` | Phase 1 reporting and the kill-gate verdict. |
 | `run.py` | Entry point. |
 | `data/` | Generated output — gitignored. |
 
@@ -30,14 +32,22 @@ strategy directory.
 ```bash
 python kronos_backtest/run.py --phase 0            # validation, uses cached feasibility scan
 python kronos_backtest/run.py --phase 0 --refresh  # re-scan the option chains (several minutes)
+python kronos_backtest/run.py --phase 1            # baseline backtest and kill-gate verdict
 ```
 
 Phase 0 writes `data/phase0_calendar.csv` (entry and all four exit dates per
 contract) and `data/phase0_feasibility.csv` (chain depth at each candidate entry
 DTE). `data/contract_data_start.csv` caches per-contract data coverage.
 
-Phases 1–6 are specified in §6 of the plan and are not implemented yet — Phase 1
-is a genuine kill gate and its result decides whether the rest gets built.
+**Phase 1 was run on 2026-08-17 and FAILED the kill gate.** Rs 12,084 over 77
+trades on one lot across seven years, breaking even at 1.30 points of per-leg
+slippage — the sign of the result is set by execution quality, not by the decay
+curve. Full write-up in §9 of the plan. Phases 2–6 are not implemented and
+should not be until that decision is taken.
+
+The kill-gate thresholds live in `configs.py` as `KILL_GATE_*` and were written
+there **before** the first run, which is what makes the verdict worth anything.
+Do not move them to fit a result.
 
 ## What Phase 0 changed
 

@@ -33,6 +33,7 @@ OUTPUT_DIR          = os.path.join(os.path.dirname(__file__), "data")
 PHASE0_REPORT_FILE  = os.path.join(OUTPUT_DIR, "phase0_calendar.csv")
 TRADE_LOGS_DIR      = os.path.join(OUTPUT_DIR, "trade_logs")
 TRADE_SUMMARY_FILE  = os.path.join(OUTPUT_DIR, "trade_summary.csv")
+SKIP_SUMMARY_FILE   = os.path.join(OUTPUT_DIR, "skipped_contracts.csv")
 
 # ---------------------------------------------------------------------------
 # Universe
@@ -239,6 +240,35 @@ SWEEP_LOSS_MULTIPLE     = [1.5, 2.0, 2.5, 3.0]              # Phase 6
 # contracts against 30 DTE on 82 is a sample-composition difference, not a
 # controlled test (§3). The full-universe result is reported alongside.
 PHASE2_FIXED_CONTRACT_SET = True
+
+# ---------------------------------------------------------------------------
+# Phase 1 — the kill gate
+#
+# Written down BEFORE the first run, so the gate is not retrofitted around
+# whatever number comes out. Phase 1 asks one question — does a naive baseline
+# clear costs at all — and the plan says be willing to stop. These are what
+# "clear costs" means:
+#
+#   1. Median trade P&L positive after all eight slippage applications. A
+#      positive mean with a negative median is a short-premium strategy paying
+#      out in small wins and dying on tails; that is not an edge.
+#   2. Gross P&L must exceed the total slippage bill by this multiple. Clearing
+#      zero is not enough — a result that only survives optimistic fills is a
+#      bet on execution quality, not on the decay curve.
+#   3. Annualised return on deployed capital positive (Decision D's metric).
+#   4. No single year may contribute more than this share of cumulative P&L.
+#      One good year carrying seven is not a strategy.
+#
+# Failing any of these is a stop-and-report, not a cue to start tuning.
+# ---------------------------------------------------------------------------
+KILL_GATE_MEDIAN_PL_POSITIVE   = True
+KILL_GATE_MIN_EDGE_OVER_COSTS  = 2.0    # gross P&L / total slippage cost
+KILL_GATE_MIN_ANNUAL_RETURN    = 0.0    # on deployed capital
+KILL_GATE_MAX_YEAR_SHARE       = 0.60   # of cumulative P&L
+
+# Trading-day length, for building the intraday minute grid.
+MARKET_OPEN             = '09:15'
+MARKET_CLOSE            = '15:30'
 
 # ---------------------------------------------------------------------------
 # Phase 0 — expectations and measurement grids

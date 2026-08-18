@@ -57,13 +57,27 @@ def atm_strike(spot: float) -> int:
     return int(round(spot / STRIKE_STEP) * STRIKE_STEP)
 
 
-def strike_candidates(spot: float, option_type: str):
-    """Strikes from ATM outward — up for CE, down for PE."""
+def otm_sign(option_type: str) -> int:
+    """+1 if further OTM means a higher strike (CE), -1 if lower (PE)."""
+    return 1 if option_type == 'ce' else -1
+
+
+def is_further_otm(strike: int, reference: int, option_type: str) -> bool:
+    """True if `strike` is strictly further out of the money than `reference`."""
+    return (strike - reference) * otm_sign(option_type) > 0
+
+
+def strike_candidates(spot: float, option_type: str, start_strike: int = None):
+    """
+    Strikes from ATM outward — up for CE, down for PE. `start_strike` begins the
+    scan further out instead, which is how the wing is kept beyond the short.
+    """
     atm   = atm_strike(spot)
     width = int(round(spot * STRIKE_SCAN_WIDTH_PCT / STRIKE_STEP)) * STRIKE_STEP
-    if option_type == 'ce':
-        return range(atm, atm + width + STRIKE_STEP, STRIKE_STEP)
-    return range(atm, atm - width - STRIKE_STEP, -STRIKE_STEP)
+    sign  = otm_sign(option_type)
+    end   = atm + sign * (width + STRIKE_STEP)
+    begin = atm if start_strike is None else start_strike
+    return range(begin, end, sign * STRIKE_STEP)
 
 
 def scan_chain(spot: float, expiry, entry_ts, option_type: str,
@@ -153,7 +167,8 @@ def _fallback_offsets(option_type: str, leg: str) -> list:
 
 def select_strike(spot: float, expiry, entry_ts, option_type: str,
                   target_delta: float, opt_df_cache: dict,
-                  leg: str = 'short', max_staleness=-1) -> dict:
+                  leg: str = 'short', max_staleness=-1,
+                  start_strike: int = None, bound_strike: int = None) -> dict:
     """
     Pick a tradeable strike at the target delta.
 
@@ -162,13 +177,19 @@ def select_strike(spot: float, expiry, entry_ts, option_type: str,
     the strike traded once, not that an order would fill. If it is not liquid,
     substitutes a neighbour per _fallback_offsets before giving up.
 
+    `start_strike` begins the scan beyond ATM; `bound_strike` forbids any result
+    at or inside it. Together they keep a wing strictly further OTM than its
+    short, including after an inward liquidity substitution — otherwise a coarse
+    chain could return the same strike for both legs and book a zero-width
+    spread with no risk and no credit.
+
     Returns a dict with strike, price (pre-slippage), delta, liquidity stats and
     `substituted` (offset in strikes from the delta-target strike, 0 if none),
     or None if no tradeable strike exists. `substituted` is recorded per trade
     so Phase 1 can report how often the fallback fires.
     """
     misses = 0
-    for strike in strike_candidates(spot, option_type):
+    for strike in strike_candidates(spot, option_type, start_strike):
         ev = _evaluate_strike(spot, expiry, entry_ts, option_type, strike,
                               opt_df_cache, max_staleness)
         if ev is None:
@@ -191,13 +212,20 @@ def select_strike(spot: float, expiry, entry_ts, option_type: str,
                 if alt_ev is None:
                     continue
                 a_price, a_delta, a_liquid, a_vol, a_bars, a_oi = alt_ev
+                if bound_strike is not None and not is_further_otm(
+                        alt, bound_strike, option_type):
+                    continue
                 if a_liquid:
-                    candidates.append((offset // STRIKE_STEP, alt, a_price, a_delta,
+                    candidates.append((offset * otm_sign(option_type) // STRIKE_STEP,
+                                       alt, a_price, a_delta,
                                        a_liquid, a_vol, a_bars, a_oi))
                     break
 
         chosen = next((c for c in candidates if c[4]), None)
         if chosen is None:
+            return None
+        if bound_strike is not None and not is_further_otm(
+                chosen[1], bound_strike, option_type):
             return None
         sub, k, px, d, liq, vol, bars_, oi_ = chosen
         return {'strike': k, 'price': px, 'delta': d, 'liquid': liq,

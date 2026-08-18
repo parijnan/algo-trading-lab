@@ -2,7 +2,7 @@
 
 **Codename: Kronos** (Titan of time — the strategy's entire thesis is which slice of the decay curve it harvests, and which one it deliberately refuses).
 
-**Status: Phase 0 built and run (2026-08-17); §3 and §4 corrected by its findings.** `kronos_backtest/` now holds `configs.py`, the loader, the calendar rules and Phase 0 validation. Phases 1–6 are not built.
+**Status: Phase 1 run 2026-08-17 — kill gate FAILED (§9).** `kronos_backtest/` holds the loader, calendar rules, greeks, Phase 0 validation and the Phase 1 engine. Phases 2–6 are not built and should not be until the §9 decision is taken.
 
 **Design settled for a standalone backtest.** Scope decisions taken by Pari on 2026-08-10 (§4): build in isolation, no VIX gating, exit policy compared across arms rather than chosen. Live routing and capital allocation are explicitly deferred, not pending. No code exists yet — next step is `kronos_backtest/`.
 
@@ -245,6 +245,67 @@ Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. W
 
 ---
 
+## 9. Phase 1 result — 2026-08-17
+
+Run at the settled baseline: 35 DTE entry, 0.15Δ short, 0.075Δ wing, 50%-of-credit profit target, 2× loss exit, E2b time exit, single slot, liquidity filter on, one lot. Kill-gate thresholds were written into `configs.py` before the run.
+
+**77 of 87 contracts traded.** Ten skipped, all for want of a liquid leg — five CE wings, two PE wings, two CE shorts, one PE short. All seven contracts Phase 0 predicted unfillable were among them, plus three more: 2020-05-28, 2022-04-28 and 2025-04-30.
+
+**Phase 0's feasibility figure is an upper bound, and now we know by how much.** It asked whether *any* liquid strike at or below the target delta exists in the chain; the engine asks whether the *first* strike at or below the target delta — or its one-step neighbour — is liquid. The second is the real test, because that is the strike the strategy actually wants. So the honest fillable count at 35 DTE is 77/87 (89%), not 80/87 (92%). Still above the 90% gate on Phase 0's measure and just below it on the engine's; either way it is not what killed the strategy. Worth carrying forward: any future feasibility scan should use the engine's selection path rather than a min-delta scan.
+
+| | |
+|---|---|
+| Total P&L, 1 lot | **Rs 12,084** over seven years |
+| Median trade | Rs 1,534 |
+| Mean trade | Rs 157 |
+| Win rate | 61/77 = 79% |
+| Best / worst trade | Rs 4,732 / **Rs −12,564** |
+| Median credit | 61 points on a 500-point width |
+| Median capital at risk | Rs 28,096 |
+| Deployment | 49% of the calendar |
+| Capital reserved (one position's defined risk) | Rs 56,810 |
+| Annualised return **while deployed** | 12.5% |
+| Annualised return **on committed capital** | **3.0%** |
+
+**Two returns, and the second is the one that counts.** 12.5% is what the structure earns during the 49% of the calendar it is actually on. But margin is reserved for the whole span whether or not a position is open — single slot means one position's defined risk, Rs 56,810, sits committed throughout. On that basis the strategy returns **3.0% annualised**, below a fixed deposit. Decision D's single-slot rule is a statement about idle time, so this is the number Phase 4 must compare policies on; `while_deployed` would reward a policy for sitting out.
+
+**The cost structure is the story.** Gross P&L before slippage is Rs 52,124 — Rs 677 a trade. At the configured one point per leg, the eight applications of a four-leg round trip take Rs 520 of that, leaving Rs 157. The strategy breaks even at **1.30 points of per-leg slippage**:
+
+| Slippage | Total P&L | Per trade |
+|---:|---:|---:|
+| 0.00 | Rs 52,124 | Rs 677 |
+| 0.50 | Rs 32,104 | Rs 417 |
+| **1.00 (configured)** | **Rs 12,084** | **Rs 157** |
+| 1.50 | Rs −7,936 | Rs −103 |
+| 2.00 | Rs −27,956 | Rs −363 |
+
+The result's sign is decided by execution quality, not by the decay curve. That is the finding.
+
+**Kill gate:**
+
+| Criterion | Result | |
+|---|---|---|
+| Median trade P&L positive | Rs 1,534 | PASS |
+| Gross P&L ≥ 2× the slippage bill | 1.30× | **FAIL** |
+| Annualised return on committed capital positive | 3.0% | PASS (barely) |
+| No year contributes more than 60% of P&L | 150% | **FAIL** |
+
+The year concentration is not a rounding artifact: 2025 alone made Rs 18,128, more than the entire cumulative total, because 2020 (−12,324) and 2023 (−8,733) were negative. Seven of eight years are individually small relative to the noise.
+
+**Three observations that should inform whatever comes next**, none of them acted on:
+
+1. **The losses are not a volatility story.** Median entry VIX at the thirteen loss exits was 13.9 against 15.2 across all trades — the stops fired in *calm* markets, on directional drift, not on vol spikes. The usual short-premium intuition does not describe this failure mode, and a VIX gate would not have helped (which is also Decision C working as intended).
+
+2. **The engine behaved correctly.** No trade exceeded its defined risk; profit exits landed at the target less the exit slippage (Rs 1,740 realised against a Rs 2,009 trigger); loss exits landed just past the stop. Only 1.6% of minutes were excluded as stale marks, so the loss exit was genuinely tested.
+
+3. **The gate it passed, it barely passed.** A positive return on committed capital was set as the bar, and 3.0% clears it arithmetically. It should not be read as a pass in substance — that is below cash, for a strategy carrying a Rs 12,564 worst trade against Rs 56,810 of reserved margin. The threshold was set at zero before the run and it stays at zero; the honest reading is that three of four criteria are unsatisfying and two are outright failures.
+
+4. **Deferral cost almost nothing.** One entry of 77 was deferred, against the 65% scheduled collision rate — because 60 of 77 trades exited early on the profit target and freed the slot. The single-slot rule is close to free under E2b, which is worth knowing before Phase 4 compares it against E1 and E3.
+
+**The one pre-registered remedy.** §3 recorded, before any P&L existed, that a 0.15Δ/0.075Δ band would be thin on credit and that widening it via a **closer short (0.20–0.25Δ)** is the lever to try before abandoning the structure — the liquidity constraint binds on the outer leg alone, so the short can move without costing availability. A 61-point credit against a 500-point width is exactly the thinness that was predicted. Running that test is not tuning a failed result; it was named in advance. But it is the *only* pre-registered move, and if it does not clear the gate the honest answer is that monthly short premium on Nifty does not survive four-leg execution costs.
+
+---
+
 ## 7. Risks and failure modes
 
 1. **Pre-CAS calibration, permanently.** §3. E1 and E2 mitigate it structurally by never reaching the auction; E3 does not, and cannot be measured for it.
@@ -266,12 +327,12 @@ Deferred with Decision B: portfolio-interaction analysis via `leto_backtest/`. W
 ## 8. When to call back
 
 - ~~**After Phase 0**~~ — **done 2026-08-17.** Identification and both E2 rules verified across all 87 contracts. Three corrections resulted: no 2020 coverage hole (§3), E2 divergence is 86% not 83% (§4), and entry DTE / wing delta moved to 35 / 0.075Δ on feasibility grounds (§3). Confirm those two default changes are acceptable before Phase 1 runs.
-- **After Phase 1**: kill-gate review — does the baseline clear costs? Report per-trade P&L, deployment share and capital-time return together (§6), plus how often the liquidity substitution fired. Be willing to stop.
+- ~~**After Phase 1**~~ — **run 2026-08-17. VERDICT: FAIL.** See §9. The baseline earns Rs 12,084 over 77 trades on one lot, breaks even at 1.30 points of per-leg slippage, and 2025 alone out-earns the whole seven-year sample. Two of the four pre-registered kill-gate criteria are not met. Pari's call whether the one pre-registered remedy in §3 (a wider band via a closer short) is worth running before stopping.
 - **After Phase 4**: exit-policy verdict. This is the substantive strategy decision.
 - **After Phase 6**: go/no-go on a production build, which reopens Decision B.
 - **Before any live wiring**: confirm the routing and override state at that time. Per §1 of the feeder, the current Iris force-route is a Slack override rather than a code change, and CLAUDE.md's "Artemis DISABLED" is documentation rather than a code state.
 
-Next concrete step: Phase 1 — the naive baseline over the fillable contracts, with single-slot deferral and the liquidity filter in from the start, and the kill-gate decision.
+Next concrete step: Pari's call — run the §3 pre-registered wider-band test (0.20–0.25Δ short), or stop.
 
 ---
 
