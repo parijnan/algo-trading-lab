@@ -2,7 +2,7 @@
 
 **Codename: Kronos** (Titan of time — the strategy's entire thesis is which slice of the decay curve it harvests, and which one it deliberately refuses).
 
-**Status: Phase 1 run 2026-08-17 — kill gate FAILED (§9).** `kronos_backtest/` holds the loader, calendar rules, greeks, Phase 0 validation and the Phase 1 engine. Phases 2–6 are not built and should not be until the §9 decision is taken.
+**Status: Phase 1 run 2026-08-17 — kill gate FAILED (§9). Pivoting to active management, 2026-08-18 (§10) — evolving in place, not a new strategy.** `kronos_backtest/` holds the loader, calendar rules, greeks, Phase 0 validation and the static-condor Phase 1 engine. The decision tree and its own kill gate (§10) are design-complete and not yet built.
 
 **Design settled for a standalone backtest.** Scope decisions taken by Pari on 2026-08-10 (§4): build in isolation, no VIX gating, exit policy compared across arms rather than chosen. Live routing and capital allocation are explicitly deferred, not pending. No code exists yet — next step is `kronos_backtest/`.
 
@@ -303,6 +303,138 @@ The year concentration is not a rounding artifact: 2025 alone made Rs 18,128, mo
 4. **Deferral cost almost nothing.** One entry of 77 was deferred, against the 65% scheduled collision rate — because 60 of 77 trades exited early on the profit target and freed the slot. The single-slot rule is close to free under E2b, which is worth knowing before Phase 4 compares it against E1 and E3.
 
 **The one pre-registered remedy.** §3 recorded, before any P&L existed, that a 0.15Δ/0.075Δ band would be thin on credit and that widening it via a **closer short (0.20–0.25Δ)** is the lever to try before abandoning the structure — the liquidity constraint binds on the outer leg alone, so the short can move without costing availability. A 61-point credit against a 500-point width is exactly the thinness that was predicted. Running that test is not tuning a failed result; it was named in advance. But it is the *only* pre-registered move, and if it does not clear the gate the honest answer is that monthly short premium on Nifty does not survive four-leg execution costs.
+
+---
+
+## 10. Decision E — active management, 2026-08-18
+
+Phase 1's static condor failed its kill gate (§9). Pari's read: the failure mode was
+undefended directional drift, not the monthly-cadence thesis — losses fired at *below*-average
+VIX, i.e. calm-market trend, exactly what management could catch. Rather than retire Kronos,
+Pari chose to **evolve it in place**: same codename, same directory, same data/loader/liquidity/
+single-slot/E2b infrastructure (all of it survives the pivot unchanged), but the static condor
+becomes one branch of an actively-managed decision tree targeting **2-3% net per month**.
+
+### 10.1 What the tree may route on, and what it may not
+
+`plans/vix-router-research.md` closed one axis permanently: VIX-*direction* forecasting from
+VIX's own history is a clean null in both the Athena band (16-25) and the Artemis band (<16).
+The tree must not switch structures on a volatility-direction call — that door is shut. It
+routes instead on two validated, already-built signals, neither of them requiring new research:
+
+- **Containment** — `research/range_detection/range_detector_pa.py::compute_pa_ranges()`.
+  Price-action range detection, gate passed 2026-05-26 (`plans/range-detection-research.md`
+  §7). Per-bar: established vs transient, and a `direction` field (`up`/`down`/`initial`) set
+  by the breakout that created the current range.
+- **Trend** — `apollo_backtest/technical_indicators.py::SupertrendIndicator`, the same
+  indicator live-validated in Iris and Apollo, run on two timeframes (15m and 75m, Apollo's
+  convention) and combined the way `apollo_production/apollo.py::_resolve_direction` already
+  does: agreement across both timeframes is a real trend signal, disagreement is not.
+
+This was `plans/range-vega-strategy.md` (Ares)'s containment axis, never built because Ares's
+*other* axis (the VIX router) failed its own gate. Kronos's tree inherits the surviving half.
+
+### 10.2 The state table
+
+Four states, mutually exclusive and total by construction — the decision order below always
+lands on exactly one:
+
+| # | Condition | State | Structure | Sizing |
+|---|---|---|---|---|
+| 1 | No established range; Supertrend 15m+75m agree | **TRENDING** | Directional debit spread, trend direction | Standard |
+| 2 | No established range; Supertrend timeframes disagree | **CONFLICTED** | Stand aside, or a small defensive calendar | Minimum |
+| 3 | Established range; range `direction` agrees with Supertrend | **RANGE ALIGNED** | Asymmetric credit condor — closer strike, more size on the agreeing side (Ares's asymmetric-skew idea, §3.3 of that plan) | Largest |
+| 4 | Established range; no clear bias, or bias disagrees with Supertrend | **RANGE NEUTRAL** | Symmetric iron condor, range-anchored strikes | Standard |
+
+**Reinforcement is budgeted, not open-ended.** One additional credit spread on the same side,
+available only from RANGE ALIGNED, only if the range reconfirms mid-cycle (extends without
+breaking). Capped by `MAX_ADJUSTMENTS_PER_CYCLE = 1` as the default — a config axis, swept
+like any other parameter, never hand-waved.
+
+**Exit is fast on a state change**, not slow. A range key-level break, or a Supertrend flip
+against an open TRENDING position, closes immediately — Ares's slow-in/fast-out pattern (§3.5
+of that plan): react to the level the moment it breaks, do not wait for a new episode to
+reconfirm. The existing E2b time exit remains the outer bound for any position still open on
+schedule; it does not change.
+
+### 10.3 Sizing — swept, not assumed
+
+Kronos's credit-to-width ratio (~12%: 61 points of credit on a 500-point width) caps the
+return on committed capital near 1.2%/cycle at zero cost, even before slippage. Reaching 2-3%
+needs that ratio to roughly double. Pari's call (2026-08-18): **sweep `SHORT_DELTA_TARGET` and
+`WING_DELTA_TARGET` jointly** rather than pre-committing to one lever — measure whether the gap
+closes by moving the short closer, the wing tighter, or both, before fixing a value. **Defined
+risk is preserved** — no undefined-risk variant is in scope; that door was examined and left
+closed (§5 of this plan, the original reasoning for defined risk over a naked strangle still
+holds: an uncharacterisable tail on an 87-contract sample is not something 2-3%/month is worth
+buying with).
+
+### 10.4 The fill budget is a first-class constraint
+
+Kronos broke even at 1.30 points of per-leg slippage on 8 fills (one entry, one exit, four
+legs). A tree that adjusts is structurally more cost-exposed than the thing that just failed on
+costs: every reinforcement or fast exit is 2-4 more fills. `MAX_ADJUSTMENTS_PER_CYCLE` and a
+per-adjustment fill count belong in `configs.py` from the start, and the Phase 1-equivalent
+report must print realised fills per cycle and the implied breakeven slippage next to the
+headline P&L, exactly as the slippage-sensitivity ladder was added to the original Phase 1
+report (§9) rather than left implicit.
+
+### 10.5 Build order
+
+Signal validation before engine changes — the same discipline Phase 0 applied to calendar
+rules, applied here to the state machine:
+
+1. **Signal annotation layer** (`kronos_backtest/regime_signal.py`): compute the four-state
+   series over the full history, pure annotation, no trading. Verify state coverage (no state
+   silently empty or dominant), transition frequency (bounds the realistic adjustment/fill
+   count before any cost number is trusted), and that CONFLICTED is genuinely rare rather than
+   the default outcome.
+2. **Engine**: asymmetric and symmetric condor structures, directional debit spread, the
+   defensive calendar fallback, the reinforcement path, fast-exit-on-state-change. Reuses
+   `open_position`'s liquidity/substitution machinery per leg; the four structures differ in
+   which legs get selected and at what deltas, not in how a single leg is found.
+3. **New kill gate**, written into `configs.py` before that run, stated in monthly-return terms
+   consistent with the 2-3% target — not retrofitted after seeing a number, per §9's discipline.
+
+### 10.6 Signal validation result — 2026-08-18
+
+`regime_signal.py` built and run over the full Nifty history (1,872 daily bars, 2019-01-28 to
+2026-08-17). The first result showed the raw daily state changing on 45% of days, median run
+length 1-2 days regardless of state — roughly nine state changes per notional monthly cycle,
+incompatible with a 3-4 week hold and well past any workable fill budget. Pari's call: fix it
+with a confirmation window (§10 revision below) rather than a slower indicator or weekly-only
+re-evaluation, to keep Apollo's live-validated Supertrend settings untouched.
+
+**The fix decouples the two axes rather than confirming the combined label.** Confirming the
+raw four-way state as one blob was tried first and made RANGE_ALIGNED — the state carrying the
+largest sizing, the one meant to help close the 2-3%/month gap — collapse to 16 episodes in
+seven years (3.3% of days, median 3-day runs): the range side of the state is already
+persistent by construction (`compute_pa_ranges` requires `REGIME_MIN_RANGE_BARS` bars before
+calling a range established), so re-confirming the whole label mostly re-filtered on the
+already-stable range axis and measured how rarely the noisier trend axis happened to agree with
+it for `REGIME_CONFIRMATION_DAYS` straight raw days. Confirming the **trend axis alone**
+(`REGIME_CONFIRMATION_DAYS = 3`) and combining it with the range state as-is fixed this:
+
+| State | Share of days | Episodes | Median run |
+|---|---:|---:|---:|
+| TRENDING | 52.2% | 109 | 7 days |
+| RANGE_ALIGNED | 30.2% | 93 | 5 days |
+| RANGE_NEUTRAL | 17.3% | 42 | 6 days |
+| CONFLICTED | 0.2% | 1 | 4 days |
+
+Transitions dropped from 45% of days to 13% (~2/month) — consistent with a handful of regime
+shifts per cycle rather than daily churn, and RANGE_ALIGNED now has 93 episodes to sweep sizing
+against. CONFLICTED going nearly extinct is not a bug: once a trend is confirmed, the sticky
+carry-forward absorbs brief day-to-day disagreement, so genuine multi-day indecision turns out
+to be rare. That is the stand-aside branch — losing it does not touch the return target, unlike
+RANGE_ALIGNED's near-collapse in the first attempt, which would have.
+
+Raw `state` is left untouched and is what the fast-exit trigger reacts to same-day, per §10.2 —
+only the entry/reinforcement-facing classification is smoothed.
+
+Next concrete step: build the engine — asymmetric/symmetric condor, directional debit spread,
+defensive calendar, the reinforcement path, fast-exit-on-raw-state-change — against
+`confirmed_state` for entries and `state` for exits.
 
 ---
 

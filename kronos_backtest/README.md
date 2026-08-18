@@ -22,8 +22,9 @@ strategy directory.
 | `expiry_rules.py` | Monthly identification by calendar rule; entry and exit date resolution. |
 | `greeks.py` | mibian IV/delta, chain scanning, target-delta strike selection. |
 | `phase0.py` | Phase 0 validation and the entry-feasibility measurement. |
-| `engine.py` | Phase 1 simulation: entry, marking, management, single-slot loop. |
+| `engine.py` | Phase 1 simulation (static condor): entry, marking, management, single-slot loop. |
 | `analysis.py` | Phase 1 reporting and the kill-gate verdict. |
+| `regime_signal.py` | Decision E: containment + trend state series, confirmation-window smoothing. |
 | `run.py` | Entry point. |
 | `data/` | Generated output — gitignored. |
 
@@ -32,18 +33,27 @@ strategy directory.
 ```bash
 python kronos_backtest/run.py --phase 0            # validation, uses cached feasibility scan
 python kronos_backtest/run.py --phase 0 --refresh  # re-scan the option chains (several minutes)
-python kronos_backtest/run.py --phase 1            # baseline backtest and kill-gate verdict
+python kronos_backtest/run.py --phase 1            # baseline backtest and kill-gate verdict (FAILED)
+python kronos_backtest/run.py --phase signal        # regime signal build + validation report
+python kronos_backtest/run.py --phase signal --refresh  # rebuild the signal cache
 ```
 
 Phase 0 writes `data/phase0_calendar.csv` (entry and all four exit dates per
 contract) and `data/phase0_feasibility.csv` (chain depth at each candidate entry
 DTE). `data/contract_data_start.csv` caches per-contract data coverage.
 
-**Phase 1 was run on 2026-08-17 and FAILED the kill gate.** Rs 12,084 over 77
+**Phase 1 ran on 2026-08-17 and FAILED the kill gate.** Rs 12,084 over 77
 trades on one lot across seven years, breaking even at 1.30 points of per-leg
-slippage — the sign of the result is set by execution quality, not by the decay
-curve. Full write-up in §9 of the plan. Phases 2–6 are not implemented and
-should not be until that decision is taken.
+slippage. Full write-up in §9 of the plan.
+
+**Pivoting to active management, 2026-08-18 (Decision E, plan §10).** Kronos
+evolves in place — same codename, same infrastructure — into a decision tree
+targeting 2-3% net/month: containment (`research/range_detection`, gate
+passed) and trend (Apollo/Iris's live Supertrend) route between four states,
+each with its own structure and sizing. The static condor's failure mode
+(undefended directional drift, losses at *below*-average VIX) is exactly what
+this targets. The regime signal is built and validated (`regime_signal.py`,
+§10.6); the engine is not yet built.
 
 The kill-gate thresholds live in `configs.py` as `KILL_GATE_*` and were written
 there **before** the first run, which is what makes the verdict worth anything.

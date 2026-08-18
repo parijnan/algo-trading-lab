@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def main() -> int:
     parser = argparse.ArgumentParser(description='Kronos backtest')
     parser.add_argument('--phase', default='0',
-                        help='Backtest phase to run: 0 (validation) or 1 (baseline)')
+                        help="Backtest phase to run: 0 (validation), 1 (baseline), or 'signal' (regime signal annotation)")
     parser.add_argument('--refresh', action='store_true',
                         help='Re-scan the Phase 0 feasibility cache (several minutes)')
     args = parser.parse_args()
@@ -32,6 +32,13 @@ def main() -> int:
         logger.info('Kronos — Phase 0 validation')
         logger.info('=' * 72)
         return 1 if phase0.run(refresh=args.refresh) else 0
+
+    if args.phase == 'signal':
+        import regime_signal
+        logger.info('Kronos — regime signal annotation (Decision E, plan \u00a710)')
+        logger.info('=' * 72)
+        regime_signal.run(refresh=args.refresh)
+        return 0
 
     if args.phase == '1':
         import loader, engine, analysis

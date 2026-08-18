@@ -242,6 +242,27 @@ SWEEP_LOSS_MULTIPLE     = [1.5, 2.0, 2.5, 3.0]              # Phase 6
 PHASE2_FIXED_CONTRACT_SET = True
 
 # ---------------------------------------------------------------------------
+# Decision E (2026-08-18) — regime signal for the active-management tree
+#
+# Containment axis: research/range_detection/range_detector_pa.py, gate passed
+# 2026-05-26. Trend axis: apollo_backtest/technical_indicators.SupertrendIndicator,
+# the same indicator live-validated in Iris and Apollo, at Apollo's own settings.
+# ---------------------------------------------------------------------------
+REGIME_MIN_RANGE_BARS   = 5      # compute_pa_ranges: bars before a range counts established
+REGIME_BREAKOUT_CONFIRM = 1      # one confirmation close before a new range setter commits
+REGIME_ST_PERIOD        = 10     # SupertrendIndicator — Apollo's live setting
+REGIME_ST_MULTIPLIER    = 3.0    # SupertrendIndicator — Apollo's live setting
+
+# The raw daily state flips too fast for a 3-4 week hold: median run length was
+# 1-2 days unconfirmed, ~9 changes per notional monthly cycle (measured
+# 2026-08-18). Confirming the TREND axis alone (not the combined 4-way label —
+# that double-penalises the already-persistent range axis, see regime_signal.py
+# confirm()) brought median run length to 5-7 days at this setting. Raw `state`
+# is left untouched for the fast-exit trigger, which must keep reacting
+# same-day to a genuine key-level break or trend flip.
+REGIME_CONFIRMATION_DAYS = 3
+
+# ---------------------------------------------------------------------------
 # Phase 1 — the kill gate
 #
 # Written down BEFORE the first run, so the gate is not retrofitted around
