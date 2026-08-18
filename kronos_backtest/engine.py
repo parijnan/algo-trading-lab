@@ -232,15 +232,24 @@ def realised_pl(position: dict, fills: dict) -> float:
 # Main loop
 # ---------------------------------------------------------------------------
 
-def run_backtest(universe, holidays, nifty_1m, vix_1m) -> tuple:
+def run_backtest(universe, holidays, nifty_1m, vix_1m, run=None) -> tuple:
     """
     Sequential over contracts, because the slot is single and the next entry
     depends on when the previous position actually closed.
-    Returns (trades_df, skips_df).
+
+    `run` is an optional run_tracking.RunContext — when given, per-contract
+    mark logs are written under its own directory instead of the shared
+    TRADE_LOGS_DIR, so two runs can never overwrite each other's output.
+
+    Returns (trades_df, skips_df, legs_df). legs_df is normalised, one row per
+    leg per trade — useful for analysis that a wide per-trade row can't express
+    cleanly (e.g. "how often did the substituted leg end up the one tested").
     """
-    trades, skips = [], []
+    trades, skips, legs = [], [], []
     slot_free_date = None
     minute_grid = nifty_1m.index
+    trade_id = 0
+    logs_dir = run.trade_logs_dir if run is not None else TRADE_LOGS_DIR
 
     for expiry in universe['expiry_date']:
         target_entry = er.entry_date_for(expiry, holidays, ENTRY_DTE_TARGET, ENTRY_DTE_MIN)
@@ -307,8 +316,18 @@ def run_backtest(universe, holidays, nifty_1m, vix_1m) -> tuple:
         held = frame.loc[:fill_ts]
         width = spread_width(position)
         capital_at_risk = (width - credit) * LOT_SIZE
+        trade_id += 1
+        n_fills = 8   # 4 legs x (entry + exit); no adjustments in the static condor
+
+        # Days-in-window MAE/MFE (max adverse/favourable excursion) — how far
+        # the position ran against or in favour of the eventual exit, useful
+        # for judging whether the profit target / stop are set well.
+        valid_pl = held.loc[ok.loc[held.index], 'pl']
+        mfe = round(valid_pl.max(), 2) if len(valid_pl) else None
+        mae = round(valid_pl.min(), 2) if len(valid_pl) else None
 
         trades.append({
+            'trade_id': trade_id,
             'expiry_date': expiry,
             'entry_date': entry_date, 'entry_ts': entry_ts,
             'entry_dte_target': ENTRY_DTE_TARGET,
@@ -326,36 +345,82 @@ def run_backtest(universe, holidays, nifty_1m, vix_1m) -> tuple:
             'pe_wing_strike':  position[('pe', 'wing')]['strike'],
             'ce_short_delta': round(position[('ce', 'short')]['delta'], 4),
             'pe_short_delta': round(position[('pe', 'short')]['delta'], 4),
+            'ce_wing_delta':  round(position[('ce', 'wing')]['delta'], 4),
+            'pe_wing_delta':  round(position[('pe', 'wing')]['delta'], 4),
             'substitutions': sum(abs(position[k]['substituted']) for k in position),
             'credit_points': round(credit, 2),
             'width_points': width,
             'max_loss_points': round(width - credit, 2),
             'pl_points': round(pl_points, 2),
             'pl_rs': round(pl_points * LOT_SIZE, 2),
+            'pl_pct_of_credit': round(pl_points / credit, 4) if credit else None,
+            'pl_pct_of_capital_at_risk': round((pl_points * LOT_SIZE) / capital_at_risk, 4)
+                                         if capital_at_risk else None,
             'capital_at_risk_rs': round(capital_at_risk, 2),
-            'slippage_cost_points': round(8 * SLIPPAGE_POINTS, 2),
-            'slippage_cost_rs': round(8 * SLIPPAGE_POINTS * LOT_SIZE, 2),
-            'peak_pl_points': round(held.loc[ok.loc[held.index], 'pl'].max(), 2)
-                              if ok.loc[held.index].any() else None,
-            'trough_pl_points': round(held.loc[ok.loc[held.index], 'pl'].min(), 2)
-                                if ok.loc[held.index].any() else None,
+            'n_fills': n_fills,
+            'slippage_cost_points': round(n_fills * SLIPPAGE_POINTS, 2),
+            'slippage_cost_rs': round(n_fills * SLIPPAGE_POINTS * LOT_SIZE, 2),
+            'mfe_points': mfe,
+            'mae_points': mae,
+            'peak_pl_points': mfe,
+            'trough_pl_points': mae,
             'minutes_in_window': len(held),
             'minutes_stale_skipped': int((~ok.loc[held.index]).sum()),
         })
 
+        for (option_type, kind) in LEGS:
+            leg = position[(option_type, kind)]
+            entry_action = leg_action(kind, 'entry')
+            exit_action = leg_action(kind, 'exit')
+            legs.append({
+                'trade_id': trade_id,
+                'expiry_date': expiry,
+                'leg_role': kind,
+                'option_type': option_type,
+                'strike': leg['strike'],
+                'delta_at_entry': round(leg['delta'], 4),
+                'entry_action': entry_action,
+                'entry_price_raw': leg['price'],
+                'entry_fill': leg['entry_fill'],
+                'exit_action': exit_action,
+                'exit_fill': fills[(option_type, kind)],
+                'substituted_strikes': leg['substituted'],
+                'entry_volume': leg.get('volume'),
+                'entry_bars_traded': leg.get('bars'),
+                'entry_open_interest': leg.get('oi'),
+                'pl_points_leg': round(
+                    (leg['entry_fill'] - fills[(option_type, kind)]) if kind == 'short'
+                    else (fills[(option_type, kind)] - leg['entry_fill']), 2),
+            })
+
         slot_free_date = fill_ts.date()
-        _save_trade_log(expiry, frame.loc[:fill_ts])
+        _save_trade_log(expiry, frame.loc[:fill_ts], logs_dir)
 
-    return pd.DataFrame(trades), pd.DataFrame(skips)
+    trades_df = pd.DataFrame(trades)
+    skips_df  = pd.DataFrame(skips)
+    legs_df   = pd.DataFrame(legs)
+    if run is not None:
+        if not legs_df.empty:
+            legs_df.to_csv(run.legs_log_path, index=False)
+        if not skips_df.empty:
+            skips_df.to_csv(run.skip_log_path, index=False)
+    return trades_df, skips_df, legs_df
 
 
-def _save_trade_log(expiry, frame) -> None:
-    os.makedirs(TRADE_LOGS_DIR, exist_ok=True)
-    frame.to_csv(os.path.join(TRADE_LOGS_DIR, f"{expiry:%Y-%m-%d}.csv"))
+def _save_trade_log(expiry, frame, logs_dir) -> None:
+    os.makedirs(logs_dir, exist_ok=True)
+    frame.to_csv(os.path.join(logs_dir, f"{expiry:%Y-%m-%d}.csv"))
 
 
-def save_trades(trades: pd.DataFrame, skips: pd.DataFrame = None) -> None:
-    os.makedirs(os.path.dirname(TRADE_SUMMARY_FILE), exist_ok=True)
-    trades.to_csv(TRADE_SUMMARY_FILE, index=False)
+def save_trades(trades: pd.DataFrame, skips: pd.DataFrame = None, run=None) -> None:
+    """
+    Writes to `run`'s own directory when a RunContext is given (the normal
+    path for a tracked run), else to the shared legacy path — kept only so
+    ad-hoc/exploratory calls without a run still work.
+    """
+    trade_path = run.trade_log_path if run is not None else TRADE_SUMMARY_FILE
+    skip_path  = run.skip_log_path  if run is not None else SKIP_SUMMARY_FILE
+    os.makedirs(os.path.dirname(trade_path), exist_ok=True)
+    trades.to_csv(trade_path, index=False)
     if skips is not None and not skips.empty:
-        skips.to_csv(SKIP_SUMMARY_FILE, index=False)
+        skips.to_csv(skip_path, index=False)

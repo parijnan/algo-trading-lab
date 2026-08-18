@@ -66,8 +66,20 @@ def _capital_returns(trades: pd.DataFrame) -> dict:
     }
 
 
-def summarise(trades: pd.DataFrame, skips: pd.DataFrame, universe_size: int) -> dict:
-    logger.info("Kronos Phase 1 — naive baseline")
+def summarise(trades: pd.DataFrame, skips: pd.DataFrame, universe_size: int, run=None) -> dict:
+    """
+    `run` is an optional run_tracking.RunContext. When given, every line this
+    function logs is mirrored to run.run_summary_txt (the human-readable
+    per-run summary), and the headline metrics are written to
+    run.run_summary_json and appended to the run registry via run.finish().
+    """
+    file_handler = None
+    if run is not None:
+        file_handler = logging.FileHandler(run.run_summary_txt, mode='w')
+        file_handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(file_handler)
+
+    logger.info(f"Kronos Phase 1 — naive baseline" + (f"  [run {run.slug}]" if run else ""))
     logger.info(f"  entry {ENTRY_DTE_TARGET} DTE | short {SHORT_DELTA_TARGET} / "
                 f"wing {WING_DELTA_TARGET} | target {PROFIT_TARGET_PCT_CREDIT:.0%} of credit | "
                 f"loss {LOSS_MULTIPLE_CREDIT}x | exit {EXIT_POLICY}/{EXIT_OFFSET_MODE} | "
@@ -82,7 +94,11 @@ def summarise(trades: pd.DataFrame, skips: pd.DataFrame, universe_size: int) -> 
             logger.info(f"      {reason:<28} {n:>3}")
     if trades.empty:
         logger.info("  No trades — nothing to evaluate.")
-        return {'verdict': 'NO TRADES'}
+        result = {'verdict': 'NO TRADES'}
+        if run is not None:
+            run.finish(result)
+            logger.removeHandler(file_handler)
+        return result
 
     total_pl   = trades['pl_rs'].sum()
     median_pl  = trades['pl_rs'].median()
@@ -168,7 +184,26 @@ def summarise(trades: pd.DataFrame, skips: pd.DataFrame, universe_size: int) -> 
                 if pd.notna(top_share) else "      best-year share not meaningful (P&L <= 0)")
     logger.info("")
 
-    return _verdict(median_pl, edge_ratio, annual_ret, top_share, total_pl)
+    result = _verdict(median_pl, edge_ratio, annual_ret, top_share, total_pl)
+    result['n_trades'] = len(trades)
+    result['n_skipped'] = len(skips)
+
+    if run is not None:
+        headline = {
+            'total_pl_rs': result['total_pl'], 'median_trade_pl_rs': result['median_pl'],
+            'n_trades': result['n_trades'], 'n_skipped': result['n_skipped'],
+            'win_rate': round(wins / len(trades), 4),
+            'annual_return_committed_pct': round(result['annual_return'] * 100, 2),
+            'monthly_return_pct': round(result['annual_return'] / 12 * 100, 2),
+            'gross_over_cost_ratio': round(result['edge_ratio'], 3),
+            'top_year_share_pct': round(result['top_year_share'] * 100, 1)
+                                  if pd.notna(result['top_year_share']) else '',
+            'verdict': result['verdict'],
+        }
+        run.finish(headline)
+        logger.removeHandler(file_handler)
+
+    return result
 
 
 def _verdict(median_pl, edge_ratio, annual_ret, top_share, total_pl) -> dict:

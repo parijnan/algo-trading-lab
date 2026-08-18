@@ -25,6 +25,9 @@ def main() -> int:
                         help="Backtest phase to run: 0 (validation), 1 (baseline), or 'signal' (regime signal annotation)")
     parser.add_argument('--refresh', action='store_true',
                         help='Re-scan the Phase 0 feasibility cache (several minutes)')
+    parser.add_argument('--label', default=None,
+                        help='Run label for tracked phases (1, sizing sweeps). '
+                             'Required for any run whose output should be numbered and kept.')
     args = parser.parse_args()
 
     if args.phase == '0':
@@ -41,18 +44,21 @@ def main() -> int:
         return 0
 
     if args.phase == '1':
-        import loader, engine, analysis
-        logger.info('Kronos — Phase 1 baseline')
+        import loader, engine, analysis, run_tracking
+        if not args.label:
+            parser.error("--label is required for --phase 1 (e.g. --label baseline_35dte)")
+        run = run_tracking.RunContext.start(args.label, phase='phase1_static_condor')
+        logger.info(f'Kronos — Phase 1 baseline  [run {run.slug}]')
         logger.info('=' * 72)
         holidays = loader.load_holidays()
         nifty_1m, vix_1m = loader.load_index_data()
         universe, _ = loader.load_monthly_universe(holidays)
         logger.info('')
-        trades, skips = engine.run_backtest(universe, holidays, nifty_1m, vix_1m)
-        engine.save_trades(trades, skips)
-        result = analysis.summarise(trades, skips, len(universe))
+        trades, skips, legs = engine.run_backtest(universe, holidays, nifty_1m, vix_1m, run=run)
+        engine.save_trades(trades, skips, run=run)
+        result = analysis.summarise(trades, skips, len(universe), run=run)
         logger.info('')
-        logger.info(f'Trades written: {engine.TRADE_SUMMARY_FILE}')
+        logger.info(f'Run output: {run.dir}')
         return 0 if result.get('verdict') == 'PASS' else 1
 
     logger.error(f"Phase {args.phase} is not implemented yet. "
