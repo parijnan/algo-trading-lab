@@ -1,6 +1,6 @@
 # Data Pipeline
 
-Automated pipeline to download and maintain historical 1-minute OHLCV data for Sensex and Nifty options contracts, index data for Sensex, Nifty, and India VIX, and daily OHLC for Nifty and VIX.
+Automated pipeline to download and maintain historical 1-minute OHLCV data for Sensex and Nifty options contracts, index data for Sensex, Nifty, and India VIX, daily OHLC for Nifty and VIX, and front-month MCX commodity futures.
 
 For full details on design decisions, API behaviour, deployment, and file formats see the [root README](../README.md).
 
@@ -9,6 +9,7 @@ For full details on design decisions, API behaviour, deployment, and file format
 | Script | Description | Runs on | Schedule |
 |--------|-------------|---------|----------|
 | `data_downloader_angelone.py` | Downloads Sensex options, all 1-min indices, and daily Nifty + VIX OHLC via AngelOne | VPS (`delos`) | Weekdays 15:45 IST |
+| `data_downloader_mcx.py` | Downloads/updates 1-min OHLCV for the current front-month futures contract on every enabled MCX underlying, via AngelOne (SmartAPI) | Manual (not yet scheduled) | Manual |
 | `nse_cas_market_watch.py` | Polls NSE's live Closing Auction Session Market Watch feed (indicative equilibrium price, imbalance, final auction print) every 15s through the 15:14-15:36 window, one row per poll per symbol | VPS (`delos`) | Weekdays 15:12 IST |
 | `data_downloader_icicidirect.py` | Downloads Nifty options via ICICI Direct/Breeze | Laptop | Wednesdays 23:30 IST |
 | `run_angelone_downloader.sh` | Wrapper: git pull → run AngelOne downloader → git push if config changed | VPS (`delos`) | Weekdays 15:45 IST |
@@ -42,12 +43,24 @@ The script polls every 15s from 15:14 to 15:36 and appends one row per (poll, sy
 ### CAS Gap-Fade Tracking
 `log_gap_fade_tracking()` (called from `update_index`, same Nifty/Sensex-only gate) pairs each new CAS-era day's own open/low/high/close against the *prior* trading day's auction move logged in `cas_auction_tracking.csv`, appending one row per date/index to `data/cas_gap_fade_tracking.csv`. This is a research log testing whether a large one-directional auction move tends to fade the next session (open near the prior close, drift lower) — it does not drive any trading decision. Also derived entirely from data already fetched; CSV only, no Slack notification.
 
+### MCX Futures Downloader
+`data_downloader_mcx.py` downloads 1-min OHLCV for the current **front-month** futures contract (nearest un-expired expiry) on every underlying enabled in `config/mcx_underlyings.csv`, via AngelOne SmartAPI (`exchange="MCX"`). ICICI Direct/Breeze does not support MCX at all — confirmed against its own docs and an open, unanswered GitHub issue on the Breeze SDK repo asking for it (`Idirect-Tech/Breeze-Python-SDK#122`) — so this pipeline exists only on the AngelOne side.
+
+Two things make this different from the Sensex/Nifty options downloader:
+- **No expired-contract history.** SmartAPI does not serve historical data for expired F&O contracts (confirmed via the SmartAPI forum), so there is no way to backfill past MCX contracts. This pipeline is a forward-collection tool: each run refreshes the scrip master, picks whichever contract is currently front-month per underlying, and backfills/updates *that* contract's data from its own listing date (up to `LOOKBACK_DAYS`, currently 200) forward. There is no analogue of `config/options_list_sensex.csv`'s pre-known expiry list, because expired contracts can't be fetched anyway.
+- **Automatic roll detection.** `data/mcx_contract_tracking.csv` records which contract (symbol/token) was front-month for each underlying on the last run. When a contract expires and the exchange's own front-month rolls to the next one, the script picks that up automatically (it always re-derives front-month from the live scrip master) and posts a `#data-alerts` Slack notification listing every underlying that rolled. The old contract's CSV file is left as-is; a new file starts under the new expiry date.
+
+A first backfill (28 underlyings × up to 200 days) took about 20 minutes end-to-end under the shared AngelOne rate limits and pulled ~1.8M rows. Two underlyings (`COTTONOIL`, `STEELREBAR`) returned zero data across the full lookback — both are known thin/illiquid MCX contracts (small lot sizes, coarse tick sizes), not a script fault; their folders exist but stay empty until the exchange sees a trade.
+
+Not yet wired into cron — MCX's non-agri session runs to 23:30/23:55 IST, well past the equities downloader's 15:45 slot, so it needs its own schedule (something after MCX close, e.g. ~23:59, or the next morning before market open) rather than reusing `run_angelone_downloader.sh`'s timing.
+
 ## Directory Structure
 
 ```
 data_pipeline/
 ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
 ├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
+├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min)
 ├── run_angelone_downloader.sh      # VPS cron wrapper for AngelOne downloader
 ├── run_icicidirect_downloader.sh   # Laptop cron wrapper for ICICI Direct downloader
 ├── nifty_daily_index.py            # Backup: daily Nifty OHLC via ICICI Breeze
@@ -56,11 +69,14 @@ data_pipeline/
 ├── README.md
 ├── config/
 │   ├── options_list_sensex.csv     # Sensex expiry list and download status
-│   └── options_list_nf.csv         # Nifty expiry list and download status
+│   ├── options_list_nf.csv         # Nifty expiry list and download status
+│   └── mcx_underlyings.csv         # MCX underlyings to track (name, enabled)
 └── data/                           # Not tracked by git — lives on each machine
     ├── user_credentials_angel.csv
     ├── user_credentials_icici.csv
-    ├── instrument_master.csv       # Auto-refreshed daily from AngelOne
+    ├── instrument_master.csv       # Auto-refreshed daily from AngelOne (BFO/Sensex)
+    ├── mcx_instrument_master.csv   # Auto-refreshed from AngelOne (MCX FUTCOM)
+    ├── mcx_contract_tracking.csv   # Last-seen front-month contract per underlying (roll detection)
     ├── indices/
     │   ├── sensex.csv              # 1-min Sensex index
     │   ├── nifty.csv               # 1-min Nifty index (last traded price)
@@ -74,9 +90,12 @@ data_pipeline/
     │   └── YYYY-MM-DD.csv
     ├── sensex/                     # Sensex options — one folder per expiry
     │   └── YYYY-MM-DD/
-    └── nifty/
-        └── options/                # Nifty options — one folder per expiry
-            └── YYYY-MM-DD/
+    ├── nifty/
+    │   └── options/                # Nifty options — one folder per expiry
+    │       └── YYYY-MM-DD/
+    └── mcx/                        # MCX futures — one folder per underlying
+        └── <NAME>/
+            └── YYYY-MM-DD_futures.csv   # front-month contract, named by its expiry
 ```
 
 ## Crontab Entries
