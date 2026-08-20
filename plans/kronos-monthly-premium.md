@@ -330,9 +330,13 @@ Four states, mutually exclusive and total by construction — the decision order
 | 3 | Established range; range `direction` agrees with Supertrend | **RANGE ALIGNED** | Asymmetric credit condor — closer strike, more size on the agreeing side (Ares's asymmetric-skew idea, §3.3 of that plan) | Largest |
 | 4 | Established range; no clear bias, or bias disagrees with Supertrend | **RANGE NEUTRAL** | Symmetric iron condor, range-anchored strikes | Standard |
 
-**Reinforcement is budgeted, not open-ended.** One additional credit spread on the same side, available only from RANGE ALIGNED, only if the range reconfirms mid-cycle (extends without breaking). Capped by `MAX_ADJUSTMENTS_PER_CYCLE = 1` as the default — a config axis, swept like any other parameter, never hand-waved.
+**Reinforcement is budgeted, not open-ended.** One additional credit spread on the same side, available only from RANGE ALIGNED, only if the range reconfirms mid-cycle (extends without breaking). This is a risk-adding action — it grows an already-largest-sized position — so it stays capped low by default: `MAX_REINFORCEMENTS_PER_CYCLE`.
 
 **Exit is fast on a state change**, not slow. A range key-level break, or a Supertrend flip against an open TRENDING position, closes immediately — Ares's slow-in/fast-out pattern (§3.5 of that plan): react to the level the moment it breaks, do not wait for a new episode to reconfirm. The existing E2b time exit remains the outer bound for any position still open on schedule; it does not change.
+
+**Restructure — closing and re-entering under the newly confirmed state — is a separate action from reinforcement, and needs its own budget.** As first written, this paragraph specified only the fast exit above; it never said what happens next. Left unspecified, the tree would sit in cash for the rest of the cycle after the first fast exit, which is not what "ride out the market for 3-4 weeks" (Pari's original framing, §10 preamble) means. Correction, 2026-08-18 — Pari flagged that a single combined `MAX_ADJUSTMENTS_PER_CYCLE = 1` default was too thin for genuine active management, and re-checking it against §10.6's own measured transition rate confirmed the same thing: the confirmed state changes ~2-3 times per notional cycle, so a cap of 1 would already be exhausted by the *first* regime shift most cycles see, leaving the other one or two unactioned regardless of what the cap was defending against. Unlike reinforcement, a restructure usually *reduces* risk — it takes off a structure the market has moved past and puts on one suited to the new state, rather than adding size to an existing one — so there is no risk-management reason to hold it to the same low number. It gets its own counter, `MAX_RESTRUCTURES_PER_CYCLE`, and the tree re-enters (structure and sizing chosen the normal way, from `confirmed_state`) after any fast exit that still leaves runway before the scheduled E2b exit, up to that cap.
+
+Neither counter has a philosophically "correct" default yet — per Pari's call, both are ordinary `configs.py` sweep axes like everything else in §11.4, compared run-to-run with the trade/legs logs, not fixed by argument. §10.4 below covers the cost side of raising either one.
 
 ### 10.3 Sizing — swept, not assumed
 
@@ -340,7 +344,7 @@ Kronos's credit-to-width ratio (~12%: 61 points of credit on a 500-point width) 
 
 ### 10.4 The fill budget is a first-class constraint
 
-Kronos broke even at 1.30 points of per-leg slippage on 8 fills (one entry, one exit, four legs). A tree that adjusts is structurally more cost-exposed than the thing that just failed on costs: every reinforcement or fast exit is 2-4 more fills. `MAX_ADJUSTMENTS_PER_CYCLE` and a per-adjustment fill count belong in `configs.py` from the start, and the Phase 1-equivalent report must print realised fills per cycle and the implied breakeven slippage next to the headline P&L, exactly as the slippage-sensitivity ladder was added to the original Phase 1 report (§9) rather than left implicit.
+Kronos broke even at 1.30 points of per-leg slippage on 8 fills (one entry, one exit, four legs). A tree that adjusts is structurally more cost-exposed than the thing that just failed on costs: a reinforcement adds ~2-4 fills (one more spread's round trip), a restructure adds ~4-8 (closing the old structure and opening the new one) — comparable to a meaningful fraction of the entire static condor's fill budget, per restructure. `MAX_REINFORCEMENTS_PER_CYCLE`, `MAX_RESTRUCTURES_PER_CYCLE`, and a per-action fill count belong in `configs.py` from the start, and the Phase 1-equivalent report must print realised fills per cycle and the implied breakeven slippage next to the headline P&L, exactly as the slippage-sensitivity ladder was added to the original Phase 1 report (§9) rather than left implicit. The 3-day confirmation window (§10.6) is the primary defense against reacting to noise — it already cut raw daily churn from 45% of days to 13% — so neither cap needs to also do that job; they exist to bound the fill count, and to compare against each other and against "uncapped" as ordinary swept configs once the engine and its logs exist.
 
 ### 10.5 Build order
 
@@ -447,8 +451,9 @@ Every tunable value, current state and planned state, tagged the same way §5's 
 
 | Parameter | Purpose | Tag |
 |---|---|---|
-| `MAX_ADJUSTMENTS_PER_CYCLE` | Reinforcement budget (§10.2) | structural |
-| `ADJUSTMENT_FILL_COUNT` | Fills charged per reinforcement event, for the cost report (§10.4) | tunable |
+| `MAX_REINFORCEMENTS_PER_CYCLE` | Reinforcement budget — same-side, same-structure, RANGE ALIGNED only; risk-adding, so held low by default (§10.2) | swept |
+| `MAX_RESTRUCTURES_PER_CYCLE` | Restructure budget — close-and-reenter under the newly confirmed state after a fast exit; risk-reducing, so not held to the reinforcement cap (§10.2, corrected 2026-08-18) | swept |
+| `REINFORCEMENT_FILL_COUNT`, `RESTRUCTURE_FILL_COUNT` | Fills charged per reinforcement / per restructure, for the cost report (§10.4) | tunable |
 | `RANGE_ALIGNED_SKEW_RATIO` | How much closer/bigger the agreeing side's strike/size is (§10.2, §3.3 of Ares) | swept |
 | `RANGE_ANCHOR_OFFSET` | Distance from the range key level to the anchored strike | swept |
 | `TRENDING_DEBIT_LONG_DELTA` | Long leg delta for the directional debit spread | swept |
