@@ -228,11 +228,12 @@ def get_nifty_open_value(breeze, expiry_date: str, end_date: str) -> int:
 
 
 def download_option(breeze, start_date: str, end_date: str, expiry_date: str,
-                    right: str, strike: int, filepath: str):
+                    right: str, strike: int, filepath: str) -> bool:
     """
     Download 1-minute option data for a single strike/right and save to CSV.
     Retries indefinitely on failure (preserving original behaviour).
-    Empty files (no data rows) are deleted after saving.
+    Strikes with no trade data are skipped (no file written).
+    Returns True if a file was saved, False if the strike had no data.
     """
     while True:
         _rate_limiter.wait()
@@ -251,10 +252,10 @@ def download_option(breeze, start_date: str, end_date: str, expiry_date: str,
             df = pd.DataFrame.from_dict(result['Success'])
             if df.empty:
                 logger.debug(f"  No data for {os.path.basename(filepath)} – skipping")
-                return
+                return False
             df.to_csv(filepath, index=False)
             logger.info(f"  Saved {len(df)} rows → {os.path.basename(filepath)}")
-            return
+            return True
         except Exception as e:
             logger.warning(f"  Retrying {os.path.basename(filepath)}: {e}")
             continue
@@ -286,21 +287,24 @@ def download_expiry(breeze, contracts_list_df: pd.DataFrame, i: int):
     all_strikes   = strikes_above + strikes_below
 
     total   = len(all_strikes) * 2   # CE + PE per strike
-    done    = 0
+    done    = 0    # strikes attempted
+    saved   = 0    # strikes with data actually written to disk
 
     for strike in all_strikes:
         for right, suffix in [("call", "ce"), ("put", "pe")]:
             filepath = os.path.join(expiry_dir, f"{strike}{suffix}.csv")
             logger.info(f"  → {strike}{suffix.upper()}")
-            download_option(breeze, start_date, end_date,
-                            expiry_date, right, strike, filepath)
+            if download_option(breeze, start_date, end_date,
+                               expiry_date, right, strike, filepath):
+                saved += 1
             done += 1
-            logger.info(f"  Progress: {done}/{total} contracts")
+            logger.info(f"  Progress: {done}/{total} strikes attempted ({saved} saved)")
 
-    logger.info(f"Expiry {expiry_str} complete – {done} contracts downloaded.")
+    logger.info(f"Expiry {expiry_str} complete – {saved}/{total} strikes had data and were saved "
+                f"({done - saved} skipped, no trades).")
     slack_bot_sendtext(
         f"💻 Nifty options download complete – expiry {expiry_str} "
-        f"({done} contracts, ~{_rate_limiter.daily_count} API calls used today)",
+        f"({saved}/{total} strikes saved, ~{_rate_limiter.daily_count} API calls used today)",
         SLACK_DATA_CHANNEL
     )
 
