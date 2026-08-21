@@ -36,7 +36,10 @@ VIX_TOKEN         = "99926017"
 # ---------------------------------------------------------------------------
 # Angel One scrip master
 # ---------------------------------------------------------------------------
-SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+SCRIP_MASTER_URL           = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+SCRIP_MASTER_TIMEOUT       = 60   # seconds — socket timeout per attempt
+SCRIP_MASTER_RETRIES       = 5
+SCRIP_MASTER_RETRY_INTERVAL = 30  # seconds between attempts
 
 # ---------------------------------------------------------------------------
 # Slack channels — shared by Leto and standalone strategies (Iris)

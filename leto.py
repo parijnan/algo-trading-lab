@@ -28,6 +28,8 @@ from io import StringIO
 from datetime import datetime, time
 from traceback import format_exc
 from urllib.request import urlopen
+from urllib.error import URLError
+from http.client import IncompleteRead
 from pyotp import TOTP
 from time import sleep
 from requests import post
@@ -76,7 +78,8 @@ from leto_config import (                           # noqa: E402
     MARKET_OPEN, MARKET_CLOSE,
     VIX_ARTEMIS_MAX, VIX_ATHENA_MAX,
     NIFTY_INDEX_TOKEN, VIX_TOKEN,
-    SCRIP_MASTER_URL,
+    SCRIP_MASTER_URL, SCRIP_MASTER_TIMEOUT,
+    SCRIP_MASTER_RETRIES, SCRIP_MASTER_RETRY_INTERVAL,
     SLACK_CHANNEL, SLACK_ERRORS_CHANNEL,
 )
 
@@ -216,7 +219,20 @@ def _check_market(obj):
 def _download_scrip_master():
     """Download Angel One scrip master and return filtered DataFrames."""
     logger.info("Downloading scrip master...")
-    scrip_df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
+    raw = None
+    for attempt in range(1, SCRIP_MASTER_RETRIES + 1):
+        try:
+            raw = urlopen(SCRIP_MASTER_URL, timeout=SCRIP_MASTER_TIMEOUT).read().decode()
+            break
+        except (IncompleteRead, URLError, TimeoutError, OSError) as e:
+            logger.warning(
+                f"Scrip master download failed on attempt {attempt}/{SCRIP_MASTER_RETRIES}: {e}")
+            if attempt < SCRIP_MASTER_RETRIES:
+                sleep(SCRIP_MASTER_RETRY_INTERVAL)
+    if raw is None:
+        raise RuntimeError(
+            f"Scrip master download failed after {SCRIP_MASTER_RETRIES} attempts.")
+    scrip_df = pd.read_json(StringIO(raw))
     logger.info(f"Scrip master downloaded: {len(scrip_df):,} rows.")
 
     instrument_df_nifty = scrip_df[
