@@ -310,7 +310,16 @@ def _recompute_pl(spread: dict):
         spread['pl'] = (spread['booked_pl']
                         + spread['buy_ltp']  - spread['buy_entry']
                         + spread['sell_entry'] - spread['sell_ltp'])
-    if spread['add_buy_entry'] is not None and spread['add_buy_ltp'] is not None:
+    # Only mark-to-market the additional leg while it's still actually open —
+    # mirrors live monitor_spread(), which gates this on spread_status in
+    # ('adjusted_additional', 'active_additional'). Once the additional lots
+    # are closed (e.g. by an ELM exit), additional_lots is set to 0 but
+    # add_buy_entry/add_buy_ltp are never cleared, so without this check
+    # add_pl kept being recomputed from stale entry prices against the
+    # still-moving base spread's sell_ltp indefinitely.
+    if (spread['additional_lots'] > 0
+            and spread['add_buy_entry'] is not None
+            and spread['add_buy_ltp'] is not None):
         add_ltp = spread['add_buy_ltp'] if spread['add_buy_ltp'] is not None else spread['add_buy_entry']
         spread['add_pl'] = (spread['add_booked_pl']
                             + add_ltp - spread['add_buy_entry']
@@ -504,11 +513,19 @@ def adjust_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
 
 def reenter_spread(spread: dict, spot: float, exec_ts: pd.Timestamp,
                    expiry_ts: pd.Timestamp, dte: int, lots: int,
-                   vix_band: str, cutoff_time: pd.Timestamp):
+                   vix_band: str, cutoff_time: pd.Timestamp,
+                   elm_time: pd.Timestamp):
     """
     Re-enter a spread that was previously closed (other side triggered SL first).
-    Mirrors live initialize_spread() re-entry path.
+    Mirrors live initialize_spread() re-entry path — including its elm_time gate:
+    no fresh spread (base or re-entry) may be initialized at or after elm_time
+    (the day before expiry, 15:15). Live logs "Spread wont be initialized after
+    ELM cutoff time" and leaves the side flat; we mirror that here.
     """
+    if exec_ts >= elm_time:
+        logger.info(f"  [{spread['type'].upper()}] Past ELM — no re-entry")
+        return
+
     prior_base_pl = spread['pl']
     prior_add_pl  = spread['add_pl']
 
@@ -1099,7 +1116,8 @@ def run_backtest():
                     if ce['status'] == 'closed':
                         # CE was already closed — re-enter it with rolled strike
                         reenter_spread(ce, spot, sl_exec_ts, expiry_ts,
-                                       current_dte, lots, vix_band, cutoff_time)
+                                       current_dte, lots, vix_band, cutoff_time,
+                                       elm_time)
                     elif ce['status'] in ('active', 'adjusted',
                                           'adjusted_additional', 'active_additional',
                                           'adjusted_elm', 'active_additional_elm',
@@ -1130,7 +1148,8 @@ def run_backtest():
                     if pe['status'] == 'closed':
                         # PE was already closed — re-enter it with rolled strike
                         reenter_spread(pe, spot, sl_exec_ts, expiry_ts,
-                                       current_dte, lots, vix_band, cutoff_time)
+                                       current_dte, lots, vix_band, cutoff_time,
+                                       elm_time)
                     elif pe['status'] in ('active', 'adjusted',
                                           'adjusted_additional', 'active_additional',
                                           'adjusted_elm', 'active_additional_elm',
