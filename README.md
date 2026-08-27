@@ -365,6 +365,8 @@ all findings go through a dedicated backtest before any strategy wiring.
 | [`research/mtm_equity/`](./research/mtm_equity/) | Portfolio-level MTM equity curve diagnostic (Step 0 of Poseidon plan). Reconstructs 1-min mark-to-market equity across all 347 routed trades (2020–2026) from per-strategy trade logs. Compares true intraday drawdown (₹18,986) to the realized-P&L drawdown (₹14,537) — a 1.3× gap. Includes stress-window replays (2020 COVID, 2022 rate-hike, 2024 election vol). See [`research/mtm_equity/README.md`](./research/mtm_equity/README.md). | Complete — Step 0 gate: weak hidden risk (1.3×) |
 | [`research/iris_threshold/`](./research/iris_threshold/) | Sweep of `ROUTING_VIX_HIGH` (Iris's activation floor) — tests the Poseidon plan's §8 "cheaper fix" fallback. Rejected: the threshold is shared with Athena's ceiling, so lowering it cannibalizes Athena's most profitable VIX band (20–25) faster than Iris recoups it — book total P&L falls monotonically (₹3,22,733 → ₹2,76,951 at threshold 18), and the targeted 2020 COVID window gets worse, not better (+₹6,877 → +₹708 at threshold 22). See [`research/iris_threshold/README.md`](./research/iris_threshold/README.md). | Complete — rejected, no cheap fix exists |
 | [`iris_backtest/`](./iris_backtest/) | Track A + B research for Iris. Track A: 8 signal candidates on 7 years of Nifty 1-min — ST_FAST selected. Track B: ITM-150 options fill sim, 4-condition strategy backtest, per-trade logs, time-of-day analysis. Calibrated: stop 25%, target 10%, max hold 30 min, skip 10:45–11:30, last entry 15:00, daily cutoff 15:15 (exit at bar open). 1,172 trades · WR 59.3% · Avg ₹234/lot · Median ₹480/lot. | Complete |
+| [`research/crudeoilm_st15_pivots/`](./research/crudeoilm_st15_pivots/) | Prep computation for Prometheus Phase 2: ST_15 (Supertrend on the 15-min timeframe) and daily classic floor-trader pivot levels (PP/R1-3/S1-3) over the full CRUDEOILM series — computed before any Phase 2 strategy code was written. | Complete — superseded as a live input by `prometheus_backtest/phase2/data_loader_p2.py`, which recomputes the same thing from raw data |
+| [`research/prometheus_p2_single_lot/`](./research/prometheus_p2_single_lot/) | Side-project comparison: Prometheus Phase 2 trading only 1 lot (1% target, 1.8% SL, identical entry/EOD/trend-flip rules) instead of the production 2-lot scale-out. Standalone engine cross-validated byte-for-byte against the two-lot backtest's own lot1 column before being trusted. 217 trades · WR 62.2% · ₹18,664 total P&L · Calmar 2.44 — confirms lot 2 captures upside a single 1% exit structurally can't reach (2-lot P&L is ~2.46× single-lot's, not ~2×). | Complete — decision: keep 2 lots |
 
 Active research plans (forward-looking — not yet wired to production):
 - [`plans/greek-analysis.md`](./plans/greek-analysis.md) — Greek-based diagnostic and predictive
@@ -383,6 +385,11 @@ Active research plans (forward-looking — not yet wired to production):
 - [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Ares*: proposed range-anchored,
   vega-adaptive strategy unifying both axes.
 - [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
+- [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) — production
+  architecture for Prometheus Phase 2 (MCX CRUDEOILM): Supertrend seeding via a maintained
+  running CSV, market-order execution with order-update-WebSocket fill tracking, Iris-style
+  non-blocking candle retry/backoff, state file + crash recovery, Slack routing. Standalone
+  cron entry, not routed through Leto. Design only — nothing built yet.
 - [`plans/trend-overlay-strategy.md`](./plans/trend-overlay-strategy.md) — *Poseidon*: proposed
   continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
   before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
@@ -420,6 +427,27 @@ blocks some entries.
 
 Data cutoffs: Artemis Sensex → 2026-06-29 · Athena → 2026-06-08 · Iris → 2026-05-15.
 Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy backtest refresh.
+
+---
+
+## Prometheus — MCX Crude Oil (Backtest, Not Yet Live)
+
+Intraday trend-following strategy for MCX crude oil futures — genuinely independent of the
+Nifty/Sensex VIX-routed strategies above: different exchange (MCX vs. NSE/BSE), different
+underlying (crude oil futures vs. index options), no VIX dependency. **Not routed by Leto.**
+See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md) for full detail on
+both design phases and the calibration journey.
+
+| | |
+|---|---|
+| Instrument | CRUDEOILM futures (primary calibration target), CRUDEOIL cross-validation |
+| Signal | ST_15 — single-timeframe 15-min Supertrend flip |
+| Entry | 2 lots (independent legs), market order at next-bar open after signal confirms |
+| Lot 1 exit | 1.0% target |
+| Lot 2 exit | 2.3% flat target (cross-validated to beat a pivot-based target once thresholds are expressed as %) |
+| Stop loss | 1.8% of entry — single shared stop protecting whichever lot(s) remain open |
+| Backtest | 217 trades · WR 56.2% · ₹45,961 total P&L (150 trading days) · Calmar 3.08 (unitless) / 5.38 (annualized, ₹1L capital basis) |
+| Status | **Backtest complete, cross-validated on CRUDEOIL. Production not yet built** — see [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) |
 
 ---
 
@@ -477,6 +505,7 @@ algo-trading-lab/
 │   ├── manual-routing-strike-search.md   # [IMPLEMENTED] Manual routing override + binary search strike selection
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
+│   ├── prometheus-phase2-production.md   # [DESIGN ONLY] Prometheus Phase 2 production architecture — standalone, not Leto-routed
 │   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
@@ -632,6 +661,27 @@ algo-trading-lab/
 │   └── data/                       # Generated outputs (gitignored except .gitkeep)
 │       ├── .gitkeep
 │       └── trade_logs/             # Per-trade minute-by-minute option price logs
+├── prometheus_backtest/            # Prometheus — MCX CRUDEOILM intraday trend-following (backtest only)
+│   ├── README.md                   # Full design + calibration journey for both phases
+│   ├── configs.py                  # Phase 1 (v1) — dual-timeframe, superseded, retained for reference
+│   ├── data_loader.py
+│   ├── backtest.py
+│   ├── analysis.py
+│   ├── run.py
+│   ├── sweep.py
+│   ├── trade_paths.py
+│   ├── data/                       (generated — gitignored)
+│   ├── data_sweep/                 (generated — gitignored)
+│   └── phase2/                     # Phase 2 — two-lot scale-out (active, calibrated & cross-validated)
+│       ├── configs_p2.py           # Sole parameter source — THRESHOLD_MODE='pct', SL_PCT=1.8, TARGET1_PCT=1.0, TARGET2_MODE='flat_pct'
+│       ├── data_loader_p2.py
+│       ├── backtest_p2.py          # Two-lot state machine
+│       ├── trade_paths_p2.py       # Per-trade logs: lot1/lot2/total running P&L + MAE/MFE
+│       ├── analysis_p2.py
+│       ├── run_p2.py
+│       ├── sweep_p2.py
+│       ├── data/                   (generated — gitignored)
+│       └── data_sweep/             (generated — gitignored)
 ├── research/                       # Exploratory research modules (not used by production code)
 │   ├── oi_analysis/                # OI feature extractor + signal quality map (Nifty, 2019–2026)
 │   │   ├── README.md               # Full design, methodology, and findings (NotebookLM source)
@@ -677,11 +727,17 @@ algo-trading-lab/
 │   │   ├── run.py                  # Entry point — builds curve, runs validation gates
 │   │   ├── replay.py               # Stress-window replays (COVID, rate-hike, election vol)
 │   │   └── data/                   # Generated outputs (gitignored)
-│   └── iris_threshold/             # Iris VIX-activation threshold sweep (Poseidon §8 fallback)
-│       ├── README.md               # Methodology + findings — rejected, no cheap fix
-│       ├── sweep_configs.py        # Threshold list, paths, COVID window dates
-│       ├── run_sweep.py            # Entry point — monkeypatches ROUTING_VIX_HIGH, reruns simulation
-│       └── data/                   # Generated outputs (gitignored)
+│   ├── iris_threshold/             # Iris VIX-activation threshold sweep (Poseidon §8 fallback)
+│   │   ├── README.md               # Methodology + findings — rejected, no cheap fix
+│   │   ├── sweep_configs.py        # Threshold list, paths, COVID window dates
+│   │   ├── run_sweep.py            # Entry point — monkeypatches ROUTING_VIX_HIGH, reruns simulation
+│   │   └── data/                   # Generated outputs (gitignored)
+│   ├── crudeoilm_st15_pivots/       # Prometheus prep: ST_15 + daily pivot levels over full CRUDEOILM series
+│   │   ├── compute_levels.py
+│   │   └── outputs/                 # crudeoilm_st15.csv, crudeoilm_daily_pivots.csv (gitignored)
+│   └── prometheus_p2_single_lot/    # Prometheus side project: 1-lot vs 2-lot comparison
+│       ├── single_lot_backtest.py   # Standalone engine, cross-validated against Phase 2's lot1 column
+│       └── single_lot_trades.csv   # Generated — gitignored
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
     ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)

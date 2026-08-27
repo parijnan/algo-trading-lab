@@ -394,3 +394,13 @@ research/cas_smartapi_check/outputs/
 
 # Kronos backtest — generated output
 kronos_backtest/data/
+
+# Prometheus backtest — generated output
+prometheus_backtest/data/
+prometheus_backtest/data_sweep/
+prometheus_backtest/phase2/data/
+prometheus_backtest/phase2/data_sweep/
+
+# Prometheus prep research — generated output
+research/crudeoilm_st15_pivots/outputs/
+research/prometheus_p2_single_lot/single_lot_trades.csv
