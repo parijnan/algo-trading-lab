@@ -306,9 +306,22 @@ def download_futures_contract(obj, name: str, token: str, expiry_date: datetime)
         existing = pd.read_csv(filepath, parse_dates=["time_stamp"])
         existing["time_stamp"] = pd.to_datetime(existing["time_stamp"],
                                                  utc=False, errors="coerce")
-        last_ts    = existing["time_stamp"].max()
-        fetch_from = (last_ts + timedelta(days=1)).replace(
-                         hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        last_ts = existing["time_stamp"].max()
+        # Re-request from the START of last_ts's own day, not the day after.
+        # fetch_candle_chunk() only supports day-granularity requests (its
+        # from_str/to_str always use MARKET_OPEN/MARKET_CLOSE, ignoring any
+        # time-of-day on the datetime passed in) — so if last_ts's day was
+        # only partially downloaded (e.g. this function last ran mid-session,
+        # or a run was interrupted), jumping to day+1 permanently skips the
+        # rest of that day with no re-fetch ever attempted again. Re-fetching
+        # last_ts's whole day is redundant for the already-saved portion, but
+        # harmless: the merge below dedupes on time_stamp, so only genuinely
+        # missing rows from that day actually get added. Confirmed live
+        # 2026-08-28: a mid-session gap-fill on 2026-08-27 left this function
+        # (before this fix) unable to backfill the rest of that day — the
+        # next attempt jumped straight to 2026-08-28 and the broker rejected
+        # the from-date as being in the future.
+        fetch_from = last_ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     else:
         fetch_from = datetime.now() - timedelta(days=LOOKBACK_DAYS)
 

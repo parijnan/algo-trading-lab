@@ -54,6 +54,14 @@ A first backfill (28 underlyings × up to 200 days) took about 20 minutes end-to
 
 Not yet wired into cron — MCX's non-agri session runs to 23:30/23:55 IST, well past the equities downloader's 15:45 slot, so it needs its own schedule (something after MCX close, e.g. ~23:59, or the next morning before market open) rather than reusing `run_angelone_downloader.sh`'s timing.
 
+**`download_futures_contract()`'s incremental resume was bugged until 2026-08-28**: it computed `fetch_from = last_ts + 1 day` unconditionally, which is only correct when the prior day was already fully downloaded. Any run that left a day partially downloaded (ad-hoc manual pull mid-session, an interrupted run) caused the *next* run to jump straight past the rest of that day and never revisit it — silently and permanently, since nothing flags a mid-day cutoff as abnormal. Fixed to re-request from the start of `last_ts`'s own day instead; the redundant re-fetch of already-saved rows is harmless (deduped on `time_stamp` before saving).
+
+Two known gap days from before the fix, confirmed **permanently unrecoverable** (AngelOne only retains an expired contract's historical data for ~1-2 weeks post-expiry, and both windows have long since lapsed):
+- **CRUDEOILM, 2026-02-01, ~17:00 onward** — 1 trade in `prometheus_backtest/`'s (superseded) v1 baseline was force-closed early by this gap being misread as that day's actual session end; the current recommended Phase 2 config has zero trades touching this day.
+- **CRUDEOILM, 2026-08-18, ~16:48 onward** — no trade in either backtest touches this day; zero impact on any reported result.
+
+Neither is fixable at this point — noted here so a future gap-check doesn't waste time trying to backfill them, and so anyone reading old commentary that called 2026-02-01 "a half day" (an early, incorrect guess) knows it was actually this data gap.
+
 ## Directory Structure
 
 ```
