@@ -10,6 +10,7 @@ For full details on design decisions, API behaviour, deployment, and file format
 |--------|-------------|---------|----------|
 | `data_downloader_angelone.py` | Downloads Sensex options, all 1-min indices, and daily Nifty + VIX OHLC via AngelOne | VPS (`delos`) | Weekdays 15:45 IST |
 | `data_downloader_mcx.py` | Downloads/updates 1-min OHLCV for the current front-month futures contract on every enabled MCX underlying, via AngelOne (SmartAPI) | Manual (not yet scheduled) | Manual |
+| `mcx_live_downloader.py` | Live 1-min CRUDEOILM polling (boundary-aligned, zero-buffer, resilient retry/backoff) plus a parallel WebSocket SNAP_QUOTE feed, from NSE close through MCX close. Doubles as an AB1021 rate-limit diagnostic probe. | Manual (evening, ad hoc) | Manual |
 | `nse_cas_market_watch.py` | Polls NSE's live Closing Auction Session Market Watch feed (indicative equilibrium price, imbalance, final auction print) every 15s through the 15:14-15:36 window, one row per poll per symbol | VPS (`delos`) | Weekdays 15:12 IST |
 | `data_downloader_icicidirect.py` | Downloads Nifty options via ICICI Direct/Breeze | Laptop | Wednesdays 23:30 IST |
 | `run_angelone_downloader.sh` | Wrapper: git pull → run AngelOne downloader → git push if config changed | VPS (`delos`) | Weekdays 15:45 IST |
@@ -62,13 +63,31 @@ Two known gap days from before the fix, confirmed **permanently unrecoverable** 
 
 Neither is fixable at this point — noted here so a future gap-check doesn't waste time trying to backfill them, and so anyone reading old commentary that called 2026-02-01 "a half day" (an early, incorrect guess) knows it was actually this data gap.
 
+### MCX Live Downloader (Post-NSE-Close)
+`mcx_live_downloader.py` is a separate, ad hoc script (not the overnight `data_downloader_mcx.py`) that polls CRUDEOILM live from NSE close (15:30) through MCX close, for two purposes:
+1. **Genuinely useful live data.** Writes into the same front-month contract file `data_downloader_mcx.py` maintains (`data/mcx/CRUDEOILM/<expiry>_futures.csv`), via the same dedup-on-timestamp merge — the "maintained running CSV" idea from `plans/prometheus-phase2-production.md` §1, kept current live rather than only overnight.
+2. **A diagnostic probe for the ongoing AngelOne AB1021 false-positive rate-limit investigation.** Logs every single `getCandleData` attempt (not just each cycle's final outcome) to `data/ab1021_probe_log.csv`, to test whether the AB1021 hit rate differs between NSE-open hours and MCX-only hours.
+
+Resilience is ported directly from Iris's hardened candle-fetch pattern (`plans/iris-signal-pipeline-hardening.md`): an inner 3-attempt/1s burst per fetch, and a non-blocking outer pending-recovery queue that retries missed windows every subsequent cycle rather than blocking the poll loop.
+
+**Boundary-aligned, zero-buffer polling.** The REST fetch fires as close to each 1-minute candle's close as possible (e.g. the 16:01 candle is fetched right at 16:02), re-deriving the sleep target from wall-clock time every cycle so there's no accumulated drift across a multi-hour run. `CANDLE_CLOSE_BUFFER_SEC = 0` deliberately — no artificial safety margin, matching how Iris runs live: fire at the boundary and let retry/backoff absorb whatever doesn't succeed on the first try, rather than backing off in advance of a problem that may not occur.
+
+**Parallel WebSocket SNAP_QUOTE feed.** A second, independent resilience test runs alongside the REST loop: a background-thread WebSocket subscription in SNAP_QUOTE mode (best-5 bid/ask, not the SDK's separate 20-level DEPTH mode), logging every tick — LTP, average traded price, buy/sell totals, and all five bid/ask levels — to `data/mcx_snapquote_log.csv` for liquidity/slippage analysis. Reconnect-with-backoff is ported from `websocket_feed.py`'s `SharedFeed` (`WS_RECONNECT_BACKOFF_SEC = [5, 10, 20, 40, 60]`, dedicated reconnect-worker thread, never blocking the on_error/on_close callback itself). One thing worth flagging for future readers: the installed SDK's own SNAP_QUOTE parser (`smartWebSocketV2.py`'s `_parse_data`) *looks* buggy on a read — it appears to assign the inner best-5 parser's "sell" list to the outer `best_5_buy_data` key and vice versa. Live-verified before trusting it rather than "fixing" a suspected bug blind: the delivered `best_5_buy_data`'s top price is genuinely below `best_5_sell_data`'s (correct bid<ask ordering) — the labels are correct as delivered despite how the source reads, so don't re-swap them.
+
+**Logging gotcha found and fixed (2026-08-28):** this script's own `logging.basicConfig(...)` call was a silent no-op — `data_downloader_mcx` (imported above it) calls its own `logging.basicConfig()` first, which claims the root logger, and stdlib `basicConfig()` does nothing once handlers already exist. The dedicated `mcx_live_downloader_YYYYMMDD.log` file (written directly under `data_pipeline/`, not `data/`) stayed empty all run despite console output looking normal. Fixed with `force=True` on the later call, which replaces the existing handlers with this script's own StreamHandler + FileHandler pair.
+
+Usage: `python data_pipeline/mcx_live_downloader.py [--max-cycles N]` (the flag is a smoke-test override, not for normal use). Not cron-scheduled — started manually in the evening after confirming no live strategy is trading (shared AngelOne session/rate-limit budget).
+
 ## Directory Structure
 
 ```
 data_pipeline/
 ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
 ├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
-├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min)
+├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min), overnight backfill/update
+├── mcx_live_downloader.py          # AngelOne: live 1-min CRUDEOILM (NSE close -> MCX close) + parallel WS
+│                                   #   SNAP_QUOTE feed; also an AB1021 rate-limit diagnostic probe
+├── mcx_live_downloader_YYYYMMDD.log # Dated log, one per run day (gitignored)
 ├── run_angelone_downloader.sh      # VPS cron wrapper for AngelOne downloader
 ├── run_icicidirect_downloader.sh   # Laptop cron wrapper for ICICI Direct downloader
 ├── nifty_daily_index.py            # Backup: daily Nifty OHLC via ICICI Breeze
@@ -85,6 +104,8 @@ data_pipeline/
     ├── instrument_master.csv       # Auto-refreshed daily from AngelOne (BFO/Sensex)
     ├── mcx_instrument_master.csv   # Auto-refreshed from AngelOne (MCX FUTCOM)
     ├── mcx_contract_tracking.csv   # Last-seen front-month contract per underlying (roll detection)
+    ├── ab1021_probe_log.csv        # mcx_live_downloader.py: per-getCandleData-call diagnostic log
+    ├── mcx_snapquote_log.csv       # mcx_live_downloader.py: WS SNAP_QUOTE ticks (best-5 bid/ask + LTP)
     ├── indices/
     │   ├── sensex.csv              # 1-min Sensex index
     │   ├── nifty.csv               # 1-min Nifty index (last traded price)

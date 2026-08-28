@@ -742,6 +742,9 @@ algo-trading-lab/
     ├── README.md
     ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
     ├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
+    ├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min), overnight backfill/update
+    ├── mcx_live_downloader.py          # AngelOne: live 1-min CRUDEOILM polling + parallel WS SNAP_QUOTE feed,
+    │                                   #   NSE-close through MCX-close; also an AB1021 rate-limit diagnostic probe
     ├── run_angelone_downloader.sh      # VPS cron wrapper
     ├── run_icicidirect_downloader.sh   # Laptop cron wrapper
     ├── nifty_daily_index.py            # Backup: daily Nifty via ICICI Breeze
@@ -749,10 +752,16 @@ algo-trading-lab/
     ├── delete_empty_files.py
     ├── config/
     │   ├── options_list_sensex.csv
-    │   └── options_list_nf.csv
+    │   ├── options_list_nf.csv
+    │   └── mcx_underlyings.csv         # MCX underlyings to track (name, enabled)
     └── data/                       (excluded from git — raw market data)
         ├── indices/
         ├── sensex/
-        └── nifty/
-            └── options/
+        ├── nifty/
+        │   └── options/
+        ├── mcx/                    # Front-month futures, one folder per underlying
+        │   └── <NAME>/
+        │       └── YYYY-MM-DD_futures.csv
+        ├── ab1021_probe_log.csv    # mcx_live_downloader.py: per-call diagnostic log
+        └── mcx_snapquote_log.csv   # mcx_live_downloader.py: WS SNAP_QUOTE ticks (best-5 bid/ask + LTP)
 ```

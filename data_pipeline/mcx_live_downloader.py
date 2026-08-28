@@ -36,6 +36,25 @@ past MCX's actual close is itself useful data for the investigation
 (confirms whether AB1021 rate drops once every exchange is done for the
 day). SESSION_END_TIME is a fixed, generous buffer instead.
 
+Third purpose, added 2026-08-28: a parallel WebSocket SNAP_QUOTE (mode 3)
+subscription, run as a background thread alongside the REST polling loop —
+same session window, own connection-resilience test (backoff/reconnect
+pattern ported from websocket_feed.py's SharedFeed, since the WS side of
+the AB1021 investigation is a genuinely different question: does a
+*persistent* connection degrade the same way repeated REST calls do?).
+Logs every tick's best-5 bid/ask levels (SNAP_QUOTE, not the SDK's DEPTH
+mode/4 — that's a different, 20-level book with its own 50-token quota;
+"5 best bids and asks" is SNAP_QUOTE) to data/mcx_snapquote_log.csv, for
+liquidity/slippage analysis. One thing worth flagging: the installed SDK's
+own SNAP_QUOTE parser (smartWebSocketV2.py's _parse_data) looks buggy on a
+read — it assigns the inner best-5 parser's "sell" list to the outer
+parsed_data["best_5_buy_data"] key and vice versa. Live-verified before
+trusting it rather than "fixing" a suspected bug blind: the final output's
+best_5_buy_data top price IS genuinely below best_5_sell_data's (correct
+bid<ask ordering) — so despite how the code reads, don't re-swap these
+fields; two things are very likely canceling out internally, and the
+labels are correct as delivered.
+
 Usage: python data_pipeline/mcx_live_downloader.py [--max-cycles N]
 Intended to be cron-started at/after 15:30 IST; runs until SESSION_END_TIME.
 --max-cycles is a smoke-test override, not for normal use.
@@ -45,11 +64,13 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 
 import pandas as pd
 from SmartApi import SmartConnect
+from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from pyotp import TOTP
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +84,25 @@ NSE_CLOSE_TIME = '15:30'
 SESSION_END_TIME = '23:55'   # generous buffer past the latest observed MCX close (23:45)
 
 PROBE_LOG_FILE = os.path.join(dl.DATA_DIR, 'ab1021_probe_log.csv')
+SNAPQUOTE_LOG_FILE = os.path.join(dl.DATA_DIR, 'mcx_snapquote_log.csv')
+
+MCX_FO = 5
+SNAP_QUOTE_MODE = 3
+WS_RECONNECT_BACKOFF_SEC = [5, 10, 20, 40, 60]   # matches websocket_feed.py's SharedFeed
+WS_MAX_RECONNECT_ATTEMPTS = 5
+
+# Deliberately 0 — fire the fetch exactly at the boundary, no artificial
+# delay. Matches how Iris actually runs live: no buffer, no pre-emptive
+# safety margin, just fire and let resilient retry/backoff (the inner
+# 3-attempt/1s burst + outer pending-recovery queue) absorb whatever
+# doesn't succeed on the first try. This is also the point for the AB1021
+# investigation right now — testing the limits means polling as close to
+# the boundary as possible, not backing off in advance of a problem that
+# may not even occur. Iris's own CANDLE_POLL_JITTER_MS experiment (tried
+# and reverted per plans/iris-signal-pipeline-hardening.md) went the other
+# direction — testing a suspected inter-bot-collision theory by adding
+# delay — and was abandoned before yielding a conclusion either way.
+CANDLE_CLOSE_BUFFER_SEC = 0
 
 # Dated log file, matching Leto's logs/leto_YYYYMMDD.log naming convention.
 # Written directly under data_pipeline/ — already covered by the existing
@@ -76,6 +116,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(), logging.FileHandler(_LOG_FILE)],
+    force=True,   # data_downloader_mcx (imported above) calls its own basicConfig()
+                  # first, which silently claims the root logger — plain basicConfig()
+                  # is a no-op once handlers exist, so without force=True this dedicated
+                  # FileHandler never gets attached and the file stays empty all run.
 )
 logger = logging.getLogger(__name__)
 
@@ -89,6 +133,28 @@ def _mins_since_nse_close(ts: datetime) -> float:
 def _log_probe_row(row: dict):
     write_header = not os.path.exists(PROBE_LOG_FILE)
     pd.DataFrame([row]).to_csv(PROBE_LOG_FILE, mode='a', header=write_header, index=False)
+
+
+def _sleep_until_next_boundary(buffer_sec: float = CANDLE_CLOSE_BUFFER_SEC) -> datetime:
+    """
+    Sleep until buffer_sec after the next whole-minute clock boundary and
+    return that boundary (the instant the just-finished candle closed —
+    e.g. returns 16:02:00 when woken to fetch the 16:01 candle).
+
+    Re-derives the target from the actual current wall-clock time on every
+    call rather than sleeping a fixed offset from the previous cycle's
+    start — immune to drift. The old approach (`time.sleep(60 - elapsed)`
+    at the end of each loop) accumulates whatever the previous cycle's own
+    processing time was, so the fetch time slowly walks away from :00
+    across a long unattended run instead of staying pinned to it.
+    """
+    now = datetime.now()
+    boundary = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    target = boundary + timedelta(seconds=buffer_sec)
+    sleep_for = (target - datetime.now()).total_seconds()
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+    return boundary
 
 
 def _fetch_one_minute_window(obj, token: str, from_dt: datetime, to_dt: datetime):
@@ -164,6 +230,191 @@ def _fetch_one_minute_window(obj, token: str, from_dt: datetime, to_dt: datetime
     return None  # inner burst exhausted
 
 
+def _log_snapquote_tick(message: dict):
+    """
+    Flatten one SNAP_QUOTE tick (best-5 buy/sell levels + LTP context) into
+    a single CSV row. Prices arrive as broker-scaled integers (raw/100),
+    same convention as SharedFeed._on_data's last_traded_price handling.
+    """
+    row = {
+        'tick_ts': datetime.now(),
+        'symbol': SYMBOL,
+        'exchange_ts': message.get('exchange_timestamp'),
+        'sequence_number': message.get('sequence_number'),
+        'ltp': _scale(message.get('last_traded_price')),
+        'avg_traded_price': _scale(message.get('average_traded_price')),
+        'total_buy_qty': message.get('total_buy_quantity'),
+        'total_sell_qty': message.get('total_sell_quantity'),
+        'volume_for_day': message.get('volume_trade_for_the_day'),
+    }
+    bids = message.get('best_5_buy_data') or []
+    asks = message.get('best_5_sell_data') or []
+    for i in range(5):
+        b = bids[i] if i < len(bids) else {}
+        a = asks[i] if i < len(asks) else {}
+        row[f'bid{i + 1}_price']  = _scale(b.get('price'))
+        row[f'bid{i + 1}_qty']    = b.get('quantity')
+        row[f'bid{i + 1}_orders'] = b.get('no of orders')
+        row[f'ask{i + 1}_price']  = _scale(a.get('price'))
+        row[f'ask{i + 1}_qty']    = a.get('quantity')
+        row[f'ask{i + 1}_orders'] = a.get('no of orders')
+
+    write_header = not os.path.exists(SNAPQUOTE_LOG_FILE)
+    pd.DataFrame([row]).to_csv(SNAPQUOTE_LOG_FILE, mode='a', header=write_header, index=False)
+
+
+def _scale(raw):
+    return None if raw is None else raw / 100.0
+
+
+class SnapQuoteLogger:
+    """
+    Background WS thread: subscribes CRUDEOILM in SNAP_QUOTE mode (best-5
+    bid/ask), logs every tick to SNAPQUOTE_LOG_FILE, and exercises its own
+    connection-resilience test in parallel with the REST poller's. Reconnect
+    logic ported directly from websocket_feed.py's SharedFeed
+    (_trigger_reconnect / _reconnect_worker) — a dedicated worker thread
+    with exponential backoff (WS_RECONNECT_BACKOFF_SEC), not a blocking
+    sleep inside the on_error/on_close callback itself.
+    """
+
+    def __init__(self, auth_token, api_key, client_code, feed_token, token):
+        self._auth_token  = auth_token
+        self._api_key     = api_key
+        self._client_code = client_code
+        self._feed_token  = feed_token
+        self._token       = token
+
+        self._sws              = None
+        self._ws_thread        = None
+        self._reconnect_thread = None
+        self._stop_requested   = False
+        self._connected        = False
+        self._lock              = threading.Lock()
+        self.tick_count         = 0
+        self.reconnect_count    = 0
+
+    def start(self):
+        self._sws = self._build_socket()
+        self._ws_thread = threading.Thread(target=self._sws.connect, name='snapquote-ws', daemon=True)
+        self._ws_thread.start()
+
+        deadline = time.time() + 10
+        while not self.is_connected() and time.time() < deadline:
+            time.sleep(0.1)
+        if not self.is_connected():
+            logger.warning('SnapQuote WS did not connect within 10s of start — '
+                            'reconnect worker will keep retrying in the background.')
+            self._trigger_reconnect()
+        else:
+            logger.info('SnapQuote WS connected and subscribed.')
+
+    def stop(self):
+        self._stop_requested = True
+        if self._ws_thread is None:
+            return
+        try:
+            if self._sws.wsapp and self._sws.wsapp.sock:
+                self._sws.wsapp.sock.close()
+        except Exception:
+            pass
+        try:
+            self._sws.close_connection()
+        except Exception:
+            pass
+        self._ws_thread.join(timeout=5)
+
+    def is_connected(self):
+        with self._lock:
+            return self._connected
+
+    def _build_socket(self):
+        sws = SmartWebSocketV2(self._auth_token, self._api_key, self._client_code,
+                                self._feed_token, max_retry_attempt=0)
+        sws.on_open  = self._on_open
+        sws.on_data  = self._on_data
+        sws.on_error = self._on_error
+        sws.on_close = self._on_close
+        return sws
+
+    def _on_open(self, wsapp):
+        with self._lock:
+            self._connected = True
+        try:
+            self._sws.subscribe('snapquote_probe', SNAP_QUOTE_MODE,
+                                 [{'exchangeType': MCX_FO, 'tokens': [self._token]}])
+            logger.info(f'SnapQuote WS: subscribed {SYMBOL} (token {self._token}, mode SNAP_QUOTE).')
+        except Exception as e:
+            logger.warning(f'SnapQuote WS: subscribe call failed: {e}')
+
+    def _on_data(self, wsapp, message):
+        self.tick_count += 1
+        try:
+            _log_snapquote_tick(message)
+        except Exception as e:
+            logger.warning(f'SnapQuote WS: tick logging failed: {e}')
+
+    def _on_error(self, wsapp, error):
+        with self._lock:
+            self._connected = False
+        logger.warning(f'SnapQuote WS error: {error}')
+        if not self._stop_requested:
+            self._trigger_reconnect()
+
+    def _on_close(self, wsapp):
+        with self._lock:
+            self._connected = False
+        logger.warning('SnapQuote WS closed.')
+        if not self._stop_requested:
+            self._trigger_reconnect()
+
+    def _trigger_reconnect(self):
+        with self._lock:
+            if self._reconnect_thread and self._reconnect_thread.is_alive():
+                return
+            t = threading.Thread(target=self._reconnect_worker, name='snapquote-ws-reconnect', daemon=True)
+            self._reconnect_thread = t
+        t.start()
+
+    def _reconnect_worker(self):
+        for attempt in range(WS_MAX_RECONNECT_ATTEMPTS):
+            delay = WS_RECONNECT_BACKOFF_SEC[min(attempt, len(WS_RECONNECT_BACKOFF_SEC) - 1)]
+            logger.warning(f'SnapQuote WS: reconnect attempt {attempt + 1}/{WS_MAX_RECONNECT_ATTEMPTS} in {delay}s.')
+
+            end = time.time() + delay
+            while time.time() < end:
+                if self._stop_requested:
+                    return
+                time.sleep(0.5)
+            if self._stop_requested:
+                return
+
+            try:
+                new_sws = self._build_socket()
+                new_thread = threading.Thread(target=new_sws.connect, name='snapquote-ws', daemon=True)
+                with self._lock:
+                    self._sws = new_sws
+                    self._ws_thread = new_thread
+                new_thread.start()
+
+                deadline = time.time() + 10
+                while not self.is_connected() and time.time() < deadline:
+                    if self._stop_requested:
+                        return
+                    time.sleep(0.1)
+
+                if self.is_connected():
+                    self.reconnect_count += 1
+                    logger.info(f'SnapQuote WS reconnected after {attempt + 1} attempt(s) '
+                                f'(total reconnects this run: {self.reconnect_count}).')
+                    return
+            except Exception as e:
+                logger.warning(f'SnapQuote WS: reconnect attempt {attempt + 1} failed: {e}')
+
+        logger.error('SnapQuote WS: reconnect attempts exhausted, giving up. '
+                      'REST poller continues independently.')
+
+
 def _merge_and_save(filepath: str, new_df: pd.DataFrame) -> int:
     if new_df is None or new_df.empty:
         return 0
@@ -196,10 +447,13 @@ def main():
     user_credentials_df = pd.read_csv(os.path.join(dl.DATA_DIR, 'user_credentials_angel.csv'))
     dl.user_credentials_df = user_credentials_df
 
-    obj = SmartConnect(api_key=user_credentials_df.iloc[0].loc['api_key'])
+    api_key     = user_credentials_df.iloc[0].loc['api_key']
+    client_code = user_credentials_df.iloc[0].loc['user_name']
+    obj = SmartConnect(api_key=api_key)
     totp = TOTP(user_credentials_df.iloc[0].loc['qr_code']).now()
-    obj.generateSession(user_credentials_df.iloc[0].loc['user_name'],
-                         str(user_credentials_df.iloc[0].loc['password']), totp)
+    resp = obj.generateSession(client_code, str(user_credentials_df.iloc[0].loc['password']), totp)
+    auth_token = resp['data']['jwtToken']
+    feed_token = obj.getfeedToken()
     logger.info(f'Authenticated. Polling {SYMBOL} every {POLL_INTERVAL_SEC}s until {SESSION_END_TIME}'
                 + (f' (max {args.max_cycles} cycles)' if args.max_cycles else '') + f'. Log file: {_LOG_FILE}')
 
@@ -211,6 +465,9 @@ def main():
     filepath = dl.get_futures_filepath(SYMBOL, expiry_date)
     logger.info(f'Front-month: {row["symbol"]} (token {token}), writing to {filepath}')
 
+    snapquote_logger = SnapQuoteLogger(auth_token, api_key, client_code, feed_token, token)
+    snapquote_logger.start()
+
     h, m = SESSION_END_TIME.split(':')
     session_end = datetime.now().replace(hour=int(h), minute=int(m), second=0, microsecond=0)
 
@@ -220,7 +477,18 @@ def main():
     run_start = datetime.now()
 
     while datetime.now() < session_end:
+        # Block here until CANDLE_CLOSE_BUFFER_SEC after the next
+        # whole-minute boundary — this is what makes the fetch fire right
+        # after each 1-min candle closes (e.g. the 16:01 candle at 16:02),
+        # rather than at a drifting offset determined by whenever the
+        # script happened to start. Re-derived from wall-clock time every
+        # cycle, so no accumulated drift across a long run.
+        boundary = _sleep_until_next_boundary()
+        if datetime.now() >= session_end:
+            break  # boundary sleep carried us past session end — don't fire an extra cycle
+
         cycle_start = datetime.now()
+        fire_delay_ms = (cycle_start - boundary).total_seconds() * 1000
         cycle_new_rows = 0
 
         # Recover any pending windows first — never abandoned, retried every cycle.
@@ -248,15 +516,17 @@ def main():
             pending_recovery.append((win_from, win_to))
 
         cycles += 1
+        logger.info(f'Cycle {cycles} fired {fire_delay_ms:.0f}ms after the '
+                    f'{boundary.strftime("%H:%M:%S")} boundary')
         logger.info(f'Cycle {cycles} done: +{cycle_new_rows} row(s) this cycle, '
                     f'{total_new_rows} total, {len(pending_recovery)} pending recovery')
 
         if args.max_cycles and cycles >= args.max_cycles:
             logger.info(f'--max-cycles={args.max_cycles} reached, stopping (smoke-test mode).')
             break
-
-        elapsed = (datetime.now() - cycle_start).total_seconds()
-        time.sleep(max(0, POLL_INTERVAL_SEC - elapsed))
+        # No sleep here — pacing is entirely owned by _sleep_until_next_boundary()
+        # at the top of the loop, which re-derives the target from wall-clock
+        # time every cycle rather than accumulating this cycle's own runtime.
 
     total_ab1021 = 0
     total_other_errors = 0
@@ -271,6 +541,11 @@ def main():
                 f'Still pending recovery: {len(pending_recovery)}.')
     if pending_recovery:
         logger.warning(f'{len(pending_recovery)} window(s) never recovered by session end: {pending_recovery}')
+
+    logger.info(f'SnapQuote WS: {snapquote_logger.tick_count} tick(s) logged, '
+                f'{snapquote_logger.reconnect_count} reconnect(s), '
+                f'connected at shutdown: {snapquote_logger.is_connected()}.')
+    snapquote_logger.stop()
 
     try:
         obj.terminateSession(user_credentials_df.iloc[0].loc['user_name'])
