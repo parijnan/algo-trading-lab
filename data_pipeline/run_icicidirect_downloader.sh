@@ -35,7 +35,7 @@ send_slack() {
 # ---------------------------------------------------------------------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') Pulling latest from GitHub..." >> "$LOG"
 cd "$REPO_DIR"
-git pull >> "$LOG" 2>&1
+git pull --autostash >> "$LOG" 2>&1
 if [ $? -ne 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: git pull failed." >> "$LOG"
     send_slack "🚨 *Data Downloader* – git pull failed. Check cron.log on laptop."
