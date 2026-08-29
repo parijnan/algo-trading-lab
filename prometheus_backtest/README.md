@@ -12,7 +12,10 @@ build is planned but not yet implemented (see [`plans/prometheus-phase2-producti
   one file per contract, stitched across expiry rolls by `load_futures_1min()`. No
   back-adjustment needed: the strategy is pure intraday, so no position ever spans a roll —
   each day's bars belong to whichever contract was genuinely front-month that day.
-- Current coverage: 2026-01-30 to 2026-08-27 (150 trading days).
+- Current coverage: 2026-01-30 to 2026-08-28 (151 full trading days). 2026-08-28's daytime
+  bars (09:00–15:15) were backfilled by `data_downloader_mcx.py` on 2026-08-29, joining
+  seamlessly with the evening session `mcx_live_downloader.py` had already captured live
+  (15:16–23:29) — verified gapless (0 missing minutes, 0 duplicate timestamps) before rerunning.
 - Lot sizes and tick size looked up live from `data_pipeline/data/mcx_instrument_master.csv`,
   never hardcoded: CRUDEOILM = 10 barrels/lot, CRUDEOIL = 100 barrels/lot. The instrument
   master's `tick_size=100` field is in Angel One's paise-scaled convention — actual tick is
@@ -93,16 +96,18 @@ to be.
 both CRUDEOILM and CRUDEOIL): `THRESHOLD_MODE='pct'`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`,
 `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3`.
 
-**Current result** (217 trades, 2026-01-30–2026-08-27): 56.2% win rate, ₹45,961 total P&L,
-−₹14,943 max drawdown, Calmar 3.08 (same unitless definition as v1 — not annualized).
+**Current result** (219 trades, 2026-01-30–2026-08-28): 55.7% win rate, ₹44,693 total P&L,
+−₹14,943 max drawdown, Calmar 2.99 (same unitless definition as v1 — not annualized). The two
+newest trades (2026-08-28, both MCX-evening-only entries at 18:30 and 22:15) were both losers,
+net −₹2,360 — pulled the total down from the prior ₹47,053 snapshot.
 
 **On a ₹1,00,000 allocated-capital basis** (the user's own sizing call, accounting for ~₹25k
-margin/lot × 2 lots plus a drawdown buffer): 45.96% return on capital over the backtest's
-0.571-year window, **80.45% annualized** (simple/linear annualization, appropriate since the
+margin/lot × 2 lots plus a drawdown buffer): 44.69% return on capital over the backtest's
+0.575-year window, **77.73% annualized** (simple/linear annualization, appropriate since the
 strategy trades a fixed 2-lot size rather than compounding with account growth — not a
 compounded CAGR), max drawdown −14.94% of capital, and a properly-annualized Calmar
-(annualized return % ÷ max DD%) of **5.38**. Lowest account value reached: ₹92,540
-(−7.46% from start), 2026-02-17.
+(annualized return % ÷ max DD%) of **5.20**. Lowest account value reached: ₹92,540
+(−7.46% from start), 2026-02-17 — unchanged, the Aug-28 losses didn't deepen the worst drawdown.
 
 ### Calibration journey — why the config landed where it did
 

@@ -446,7 +446,7 @@ both design phases and the calibration journey.
 | Lot 1 exit | 1.0% target |
 | Lot 2 exit | 2.3% flat target (cross-validated to beat a pivot-based target once thresholds are expressed as %) |
 | Stop loss | 1.8% of entry — single shared stop protecting whichever lot(s) remain open |
-| Backtest | 217 trades · WR 56.2% · ₹45,961 total P&L (150 trading days) · Calmar 3.08 (unitless) / 5.38 (annualized, ₹1L capital basis) |
+| Backtest | 219 trades · WR 55.7% · ₹44,693 total P&L (151 trading days) · Calmar 2.99 (unitless) / 5.20 (annualized, ₹1L capital basis) |
 | Status | **Backtest complete, cross-validated on CRUDEOIL. Production not yet built** — see [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) |
 
 ---
