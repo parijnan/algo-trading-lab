@@ -339,6 +339,21 @@ iris_production/data/sizing_override.json
 iris_production/logs/*
 !iris_production/logs/.gitkeep
 
+# Prometheus production — runtime data and logs
+prometheus_production/data/prometheus_state.csv
+prometheus_production/data/prometheus_active.flag
+prometheus_production/data/prometheus.pid
+prometheus_production/data/prometheus_command.flag
+prometheus_production/data/user_credentials.csv
+prometheus_production/data/prometheus_trades.csv
+prometheus_production/data/trade_counter.txt
+prometheus_production/data/prometheus_15m_series.csv
+prometheus_production/data/trade_logs/
+prometheus_production/data/sizing_override.json
+prometheus_production/data/instrument_override.json
+prometheus_production/logs/*
+!prometheus_production/logs/.gitkeep
+
 # VIX-15 research — generated output (never commit live test data)
 athena_backtest/data_vix15/
 artemis_backtest/data_vix15/

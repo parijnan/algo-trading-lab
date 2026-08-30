@@ -19,16 +19,25 @@ CREDS_FILE = os.path.join(DATA_DIR, "user_credentials.csv")
 
 # Sizing override paths (gitignored JSON files, one per strategy)
 SIZING_OVERRIDE_PATHS = {
-    'Artemis': os.path.join(BASE_DIR, 'artemis_production', 'data', 'sizing_override.json'),
-    'Athena':  os.path.join(BASE_DIR, 'athena_production',  'data', 'sizing_override.json'),
-    'Iris':    os.path.join(BASE_DIR, 'iris_production',    'data', 'sizing_override.json'),
+    'Artemis':    os.path.join(BASE_DIR, 'artemis_production',    'data', 'sizing_override.json'),
+    'Athena':     os.path.join(BASE_DIR, 'athena_production',     'data', 'sizing_override.json'),
+    'Iris':       os.path.join(BASE_DIR, 'iris_production',       'data', 'sizing_override.json'),
+    'Prometheus': os.path.join(BASE_DIR, 'prometheus_production', 'data', 'sizing_override.json'),
 }
 ROUTING_STATE_FILE = os.path.join(DATA_DIR, "routing_state.json")
 
 # Strategy State File Paths
-ATHENA_STATE  = os.path.join(BASE_DIR, "athena_production",  "data", "athena_state.csv")
-IRIS_STATE    = os.path.join(BASE_DIR, "iris_production",    "data", "iris_state.csv")
-ARTEMIS_DATA  = os.path.join(BASE_DIR, "artemis_production", "data")
+ATHENA_STATE     = os.path.join(BASE_DIR, "athena_production",     "data", "athena_state.csv")
+IRIS_STATE       = os.path.join(BASE_DIR, "iris_production",       "data", "iris_state.csv")
+ARTEMIS_DATA     = os.path.join(BASE_DIR, "artemis_production",    "data")
+PROMETHEUS_STATE = os.path.join(BASE_DIR, "prometheus_production", "data", "prometheus_state.csv")
+
+# Prometheus's own circuit breaker — deliberately separate from FLAG_FILE
+# (plan §0/§5: Prometheus isn't Leto-routed, no VIX/regime coupling with the
+# NSE/BSE strategies; an operator managing one side shouldn't accidentally
+# also kill the other).
+PROMETHEUS_COMMAND_FLAG = os.path.join(BASE_DIR, "prometheus_production", "data", "prometheus_command.flag")
+PROMETHEUS_INSTRUMENT_OVERRIDE = os.path.join(BASE_DIR, "prometheus_production", "data", "instrument_override.json")
 
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -72,7 +81,9 @@ def write_route_override(mode, strategy):
 
 
 def write_sizing_override(strategy, lot_calc, lot_count):
-    """Write lot_calc and lot_count to data/sizing_override.json for the given strategy."""
+    """Write lot_calc and lot_count to data/sizing_override.json for the given strategy.
+    For Prometheus, prometheus_configs.py reads these same two JSON keys into
+    DYNAMIC_SIZING/STATIC_UNITS (plan §5/§6) — no separate write path needed."""
     try:
         path = SIZING_OVERRIDE_PATHS[strategy]
         with open(path, 'w') as f:
@@ -81,6 +92,21 @@ def write_sizing_override(strategy, lot_calc, lot_count):
         return True
     except Exception as e:
         logger.error(f"Failed to write sizing override for {strategy}: {e}")
+        return False
+
+
+def write_instrument_override(symbol, margin_per_unit):
+    """Write symbol + margin_per_unit together to Prometheus's
+    instrument_override.json (plan §5/§6) — coupled deliberately: CRUDEOILM
+    and CRUDEOIL differ 10x in lot size, so switching one without the other
+    invites trading the wrong contract at the wrong size."""
+    try:
+        with open(PROMETHEUS_INSTRUMENT_OVERRIDE, 'w') as f:
+            json.dump({'symbol': symbol, 'margin_per_unit': margin_per_unit}, f)
+        logger.info(f"Instrument override set: symbol={symbol}, margin_per_unit={margin_per_unit}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write instrument override: {e}")
         return False
 
 # ---------------------------------------------------------------------------
@@ -155,6 +181,58 @@ CONTROL_PANEL_BLOCKS = [
                 "text": {"type": "plain_text", "text": "🚀 Start Leto"},
                 "style": "primary",
                 "action_id": "btn_start_leto"
+            }
+        ]
+    },
+    {
+        "type": "divider"
+    },
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Prometheus (MCX):*\nSeparate circuit breaker — standalone cron, not Leto-routed, so this does NOT affect Artemis/Athena/Apollo/Iris and vice versa."}
+    },
+    {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⚠️ Exit Prometheus"},
+                "style": "danger",
+                "action_id": "btn_prometheus_exit",
+                "confirm": {
+                    "title": {"type": "plain_text", "text": "Are you sure?"},
+                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position and halt it."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Exit Prometheus"},
+                    "deny": {"type": "plain_text", "text": "Cancel"}
+                }
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🚨 Kill Prometheus"},
+                "style": "danger",
+                "action_id": "btn_prometheus_kill",
+                "confirm": {
+                    "title": {"type": "plain_text", "text": "Are you sure?"},
+                    "text": {"type": "plain_text", "text": "This will drop control immediately. Any Prometheus position remains OPEN for manual management."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Kill Prometheus"},
+                    "deny": {"type": "plain_text", "text": "Cancel"}
+                }
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⏸️ Disable Prometheus"},
+                "action_id": "btn_prometheus_disable"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "✅ Clear Prometheus Flag"},
+                "style": "primary",
+                "action_id": "btn_prometheus_clear"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🛢️ Switch Instrument"},
+                "action_id": "btn_prometheus_instrument"
             }
         ]
     },
@@ -318,8 +396,9 @@ def reset_all_states():
     results = []
 
     for label, path, col in [
-        ("Athena", ATHENA_STATE, "status"),
-        ("Iris",   IRIS_STATE,   "status"),
+        ("Athena",     ATHENA_STATE,     "status"),
+        ("Iris",       IRIS_STATE,       "status"),
+        ("Prometheus", PROMETHEUS_STATE, "status"),
     ]:
         if not os.path.exists(path):
             results.append(f"{label}: not found (skipped)")
@@ -391,6 +470,48 @@ def handle_clear(ack, body, say):
         say(channel=_CH, text=f"✅ *CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
     else:
         say(channel=_CH, text="No active circuit breaker flag found.")
+
+def write_prometheus_flag(command, user_id):
+    try:
+        with open(PROMETHEUS_COMMAND_FLAG, "w") as f:
+            f.write(command)
+        logger.info(f"Prometheus command '{command}' written by <@{user_id}>.")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write Prometheus command flag: {e}")
+        return False
+
+@app.action("btn_prometheus_exit")
+def handle_prometheus_exit(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_prometheus_flag("EXIT", user_id):
+        say(channel=_CH, text=f"⚠️ *PROMETHEUS EXIT INITIATED* by <@{user_id}>. Liquidating and halting...")
+
+@app.action("btn_prometheus_kill")
+def handle_prometheus_kill(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_prometheus_flag("KILL", user_id):
+        say(channel=_CH, text=f"🚨 *PROMETHEUS KILL SWITCH* engaged by <@{user_id}>. Control dropped. Position remains OPEN.")
+
+@app.action("btn_prometheus_disable")
+def handle_prometheus_disable(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if write_prometheus_flag("DISABLE", user_id):
+        say(channel=_CH, text=f"⏸️ *PROMETHEUS DISABLED* by <@{user_id}>. Future runs paused.")
+
+@app.action("btn_prometheus_clear")
+def handle_prometheus_clear(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    if os.path.exists(PROMETHEUS_COMMAND_FLAG):
+        os.remove(PROMETHEUS_COMMAND_FLAG)
+        logger.info(f"Prometheus flag cleared by <@{user_id}>.")
+        say(channel=_CH, text=f"✅ *PROMETHEUS CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
+    else:
+        say(channel=_CH, text="No active Prometheus circuit breaker flag found.")
 
 @app.action("btn_start_leto")
 def handle_start(ack, body, say):
@@ -625,6 +746,52 @@ def handle_athena_adjust_submission(ack, body, view, say):
 # Position Sizing Modal
 # ---------------------------------------------------------------------------
 
+def _pos_sizing_blocks(lots_label):
+    """Build the modal's blocks with block_lots' label parameterized —
+    Prometheus counts in 'Units' (1 unit = 2 lots, plan §6), the other three
+    in 'Lot Count'. Shared by btn_pos_sizing (opens with the default label)
+    and the label-swap handler below (rebuilds on strategy change)."""
+    return [
+        {
+            "type": "input",
+            "block_id": "block_strategy",
+            "label": {"type": "plain_text", "text": "Strategy"},
+            "element": {
+                "type": "static_select",
+                "action_id": "select_strategy",
+                "options": [
+                    {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
+                    {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
+                    {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"},
+                    {"text": {"type": "plain_text", "text": "Prometheus (Crude Oil)"}, "value": "Prometheus"}
+                ]
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "block_mode",
+            "label": {"type": "plain_text", "text": "Sizing Mode"},
+            "element": {
+                "type": "radio_buttons",
+                "action_id": "radio_mode",
+                "options": [
+                    {"text": {"type": "plain_text", "text": "Dynamic Auto-Sizing"}, "value": "dynamic"},
+                    {"text": {"type": "plain_text", "text": "Fixed Lots"}, "value": "fixed"}
+                ]
+            }
+        },
+        {
+            "type": "input",
+            "block_id": "block_lots",
+            "label": {"type": "plain_text", "text": lots_label},
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "input_lots",
+                "placeholder": {"type": "plain_text", "text": "e.g. 41"}
+            }
+        }
+    ]
+
 @app.action("btn_pos_sizing")
 def handle_pos_sizing_btn(ack, body, client):
     ack()
@@ -636,45 +803,28 @@ def handle_pos_sizing_btn(ack, body, client):
             "title": {"type": "plain_text", "text": "Position Sizing"},
             "submit": {"type": "plain_text", "text": "Apply Changes"},
             "close": {"type": "plain_text", "text": "Cancel"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "block_strategy",
-                    "label": {"type": "plain_text", "text": "Strategy"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "select_strategy",
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
-                            {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
-                            {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"}
-                        ]
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "block_mode",
-                    "label": {"type": "plain_text", "text": "Sizing Mode"},
-                    "element": {
-                        "type": "radio_buttons",
-                        "action_id": "radio_mode",
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "Dynamic Auto-Sizing"}, "value": "dynamic"},
-                            {"text": {"type": "plain_text", "text": "Fixed Lots"}, "value": "fixed"}
-                        ]
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "block_lots",
-                    "label": {"type": "plain_text", "text": "Lot Count"},
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "input_lots",
-                        "placeholder": {"type": "plain_text", "text": "e.g. 41"}
-                    }
-                }
-            ]
+            "blocks": _pos_sizing_blocks("Lot Count"),
+        }
+    )
+
+@app.action("select_strategy")
+def handle_pos_sizing_strategy_select(ack, body, client):
+    """Swap the block_lots label between 'Lot Count' and 'Units' as the
+    strategy dropdown changes — a static field is wrong 1-of-4 times once
+    Prometheus is an option (plan §5)."""
+    ack()
+    selected = body["actions"][0]["selected_option"]["value"]
+    lots_label = "Units (1 unit = 2 lots)" if selected == "Prometheus" else "Lot Count"
+    client.views_update(
+        view_id=body["view"]["id"],
+        hash=body["view"]["hash"],
+        view={
+            "type": "modal",
+            "callback_id": "view_pos_sizing",
+            "title": {"type": "plain_text", "text": "Position Sizing"},
+            "submit": {"type": "plain_text", "text": "Apply Changes"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": _pos_sizing_blocks(lots_label),
         }
     )
 
@@ -685,17 +835,18 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     mode = view["state"]["values"]["block_mode"]["radio_mode"]["selected_option"]["value"]
     lots_str = view["state"]["values"]["block_lots"]["input_lots"]["value"]
     user_id = body["user"]["id"]
+    unit_label = "unit(s)" if strategy == "Prometheus" else "lot(s)"
 
-    # Validate Lot Count
+    # Validate Lot Count / Units
     try:
         lots = int(lots_str)
         if lots <= 0: raise ValueError
     except ValueError:
-        ack(response_action="errors", errors={"block_lots": "Please enter a positive integer for lot count."})
+        ack(response_action="errors", errors={"block_lots": f"Please enter a positive integer for {unit_label}."})
         return
 
     ack()
-    
+
     lot_calc = (mode == "dynamic")
     success = False
 
@@ -703,12 +854,85 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
 
     if success:
         mode_text = "Dynamic Auto-Sizing" if lot_calc else "Fixed Lots"
-        msg = f"✅ *Position Sizing Updated* by <@{user_id}>\n*Strategy:* {strategy}\n*Mode:* {mode_text}\n*Lots:* {lots}"
+        msg = f"✅ *Position Sizing Updated* by <@{user_id}>\n*Strategy:* {strategy}\n*Mode:* {mode_text}\n*{unit_label.capitalize()}:* {lots}"
         client.chat_postMessage(channel=_CH, text=msg)
-        logger.info(f"Position sizing updated for {strategy} by <@{user_id}>: Mode={mode_text}, Lots={lots}")
+        logger.info(f"Position sizing updated for {strategy} by <@{user_id}>: Mode={mode_text}, {unit_label}={lots}")
     else:
         err_msg = f"❌ *Error*: Failed to update configuration for {strategy}. Check daemon logs on VPS."
         client.chat_postMessage(channel=_CH_ERRORS, text=err_msg)
+
+# ---------------------------------------------------------------------------
+# Prometheus Instrument Switch Modal (plan §5/§6) — instrument and
+# margin-per-unit submitted together, deliberately coupled: CRUDEOILM and
+# CRUDEOIL differ 10x in lot size (10 vs 100 barrels), so a margin figure
+# sane for one is wrong by roughly an order of magnitude for the other.
+# ---------------------------------------------------------------------------
+
+@app.action("btn_prometheus_instrument")
+def handle_prometheus_instrument_btn(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "view_prometheus_instrument",
+            "title": {"type": "plain_text", "text": "Prometheus Instrument"},
+            "submit": {"type": "plain_text", "text": "Apply Changes"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "Switching instrument requires a matching margin-per-unit figure — the two are submitted together so Prometheus never trades one contract sized for the other."}
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_instrument",
+                    "label": {"type": "plain_text", "text": "Instrument"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "select_instrument",
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "CRUDEOILM"}, "value": "CRUDEOILM"},
+                            {"text": {"type": "plain_text", "text": "CRUDEOIL"}, "value": "CRUDEOIL"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "block_margin",
+                    "label": {"type": "plain_text", "text": "Margin per Unit (Rs)"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "input_margin",
+                        "placeholder": {"type": "plain_text", "text": "e.g. 100000"}
+                    }
+                }
+            ]
+        }
+    )
+
+@app.view("view_prometheus_instrument")
+def handle_prometheus_instrument_submission(ack, body, view, say, client):
+    symbol = view["state"]["values"]["block_instrument"]["select_instrument"]["selected_option"]["value"]
+    margin_str = view["state"]["values"]["block_margin"]["input_margin"]["value"]
+    user_id = body["user"]["id"]
+
+    try:
+        margin = float(margin_str)
+        if margin <= 0: raise ValueError
+    except ValueError:
+        ack(response_action="errors", errors={"block_margin": "Please enter a positive number for margin per unit."})
+        return
+
+    ack()
+    if write_instrument_override(symbol, margin):
+        msg = (f"🛢️ *Prometheus Instrument Updated* by <@{user_id}>\n"
+              f"*Instrument:* {symbol}\n*Margin per Unit:* Rs.{margin:,.0f}\n"
+              f"_Takes effect on Prometheus's next session start._")
+        client.chat_postMessage(channel=_CH, text=msg)
+        logger.info(f"Prometheus instrument updated by <@{user_id}>: symbol={symbol}, margin={margin}")
+    else:
+        client.chat_postMessage(channel=_CH_ERRORS, text="❌ *Error*: Failed to update Prometheus instrument override. Check daemon logs on VPS.")
 
 # ---------------------------------------------------------------------------
 # Initializer

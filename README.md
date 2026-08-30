@@ -430,24 +430,31 @@ Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy 
 
 ---
 
-## Prometheus — MCX Crude Oil (Backtest, Not Yet Live)
+## Prometheus — MCX Crude Oil (Production Built, Not Yet Live)
 
 Intraday trend-following strategy for MCX crude oil futures — genuinely independent of the
 Nifty/Sensex VIX-routed strategies above: different exchange (MCX vs. NSE/BSE), different
-underlying (crude oil futures vs. index options), no VIX dependency. **Not routed by Leto.**
-See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md) for full detail on
-both design phases and the calibration journey.
+underlying (crude oil futures vs. index options), no VIX dependency. **Not routed by Leto —
+`prometheus_production/prometheus.py` is its own standalone cron entry**, with its own login
+session, guardian check (mutually exclusive with Apollo/Athena/Artemis/Iris — shared broker
+rate-limit budget), and circuit breaker (`prometheus_command.flag`, separate from the shared
+`SLACK_COMMAND.flag`). See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)
+for the backtest design/calibration journey and
+[`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) for the
+production architecture.
 
 | | |
 |---|---|
-| Instrument | CRUDEOILM futures (primary calibration target), CRUDEOIL cross-validation |
+| Instrument | CRUDEOILM futures (primary, go-live default), CRUDEOIL — switchable live via Slack (`btn_prometheus_instrument`) |
 | Signal | ST_15 — single-timeframe 15-min Supertrend flip |
-| Entry | 2 lots (independent legs), market order at next-bar open after signal confirms |
+| Entry | 2 lots (independent legs) per unit, market order off live LTP after signal confirms |
 | Lot 1 exit | 1.0% target |
 | Lot 2 exit | 2.3% flat target (cross-validated to beat a pivot-based target once thresholds are expressed as %) |
 | Stop loss | 1.8% of entry — single shared stop protecting whichever lot(s) remain open |
+| Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
+| Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
 | Backtest | 219 trades · WR 55.7% · ₹44,693 total P&L (151 trading days) · Calmar 2.99 (unitless) / 5.20 (annualized, ₹1L capital basis) |
-| Status | **Backtest complete, cross-validated on CRUDEOIL. Production not yet built** — see [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) |
+| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built (`prometheus_production/`), `DRY_RUN=True` by default — not yet live-tested.** Order-update WebSocket unverified for MCX (Rollout step 2). |
 
 ---
 
@@ -682,6 +689,13 @@ algo-trading-lab/
 │       ├── sweep_p2.py
 │       ├── data/                   (generated — gitignored)
 │       └── data_sweep/             (generated — gitignored)
+├── prometheus_production/          # Prometheus live paper/production trading — standalone, not Leto-routed
+│   ├── prometheus.py               # Main strategy loop — own login/session/teardown, own cron entry
+│   ├── prometheus_configs.py       # All tunable parameters (DRY_RUN, SYMBOL, sizing, session times)
+│   ├── prometheus_state.py         # PrometheusState dataclass + CSV persistence (2-lot schema)
+│   ├── prometheus_functions.py     # Effective-contract resolution, ST seeding, resilient poller, order placement, guardian check
+│   ├── prometheus_logger_setup.py  # File + console logging
+│   └── data/                       # Runtime data (state CSV, trade logs, credentials — gitignored)
 ├── research/                       # Exploratory research modules (not used by production code)
 │   ├── oi_analysis/                # OI feature extractor + signal quality map (Nifty, 2019–2026)
 │   │   ├── README.md               # Full design, methodology, and findings (NotebookLM source)

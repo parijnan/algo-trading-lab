@@ -52,6 +52,14 @@ CHUNK_DAYS   = 2     # days per API call (matches equities downloader's sizing)
 # the wasted call.
 LOOKBACK_DAYS = 200
 
+# How fresh a file's last candle must be, relative to when this post-market
+# script runs, to be considered "already kept current by a live process"
+# and skipped (plans/prometheus-phase2-production.md §1). Generous enough to
+# cover the gap between MCX's variable close (23:30-23:55, DST-dependent)
+# and whenever this script's own cron actually fires, without needing to
+# import Prometheus's CLOSING_TIME config here (no cross-module coupling).
+LIVE_FEED_FRESHNESS_MIN = 60
+
 # Rate limit parameters (broker limits: 3/sec, 180/min, 5000/hour)
 RATE_LIMIT_PER_SEC  = 2
 RATE_LIMIT_PER_MIN  = 180
@@ -294,6 +302,31 @@ def get_futures_filepath(name: str, expiry_date: datetime) -> str:
     return os.path.join(contract_dir, filename)
 
 
+def _already_up_to_date(filepath: str) -> bool:
+    """
+    Skip check (plans/prometheus-phase2-production.md §1): if a live process
+    (mcx_live_downloader.py or Prometheus's own 1-min poller) has already
+    kept this contract's file current up to shortly before now, there is
+    nothing meaningful left for this post-market run to backfill.
+    Instrument-agnostic by construction — no underlying name is checked, so
+    it naturally skips whichever instrument is currently live-fed and picks
+    up any others (including one that WAS live-fed but no longer is, e.g.
+    after a §6 instrument switch away from it).
+    """
+    if not os.path.exists(filepath):
+        return False
+    try:
+        existing = pd.read_csv(filepath, usecols=["time_stamp"], parse_dates=["time_stamp"])
+        if existing.empty:
+            return False
+        last_ts = pd.to_datetime(existing["time_stamp"], utc=False, errors="coerce").max()
+        if last_ts.tzinfo is not None:
+            last_ts = last_ts.tz_localize(None)
+    except Exception:
+        return False
+    return (datetime.now() - last_ts) <= timedelta(minutes=LIVE_FEED_FRESHNESS_MIN)
+
+
 def download_futures_contract(obj, name: str, token: str, expiry_date: datetime) -> int:
     """
     Download 1-minute candle data for a single front-month futures contract,
@@ -301,6 +334,12 @@ def download_futures_contract(obj, name: str, token: str, expiry_date: datetime)
     Returns the number of new rows added.
     """
     filepath = get_futures_filepath(name, expiry_date)
+
+    if _already_up_to_date(filepath):
+        logger.info(f"[{name}] {filepath} already current (last candle within "
+                    f"{LIVE_FEED_FRESHNESS_MIN} min of now) — skipping, a live "
+                    f"process is already keeping it up to date.")
+        return 0
 
     if os.path.exists(filepath):
         existing = pd.read_csv(filepath, parse_dates=["time_stamp"])

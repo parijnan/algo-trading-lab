@@ -725,6 +725,10 @@ def check_no_active_strategies() -> tuple[bool, str]:
         ('Athena',     REPO_ROOT / 'athena_production/data/athena_state.csv',           'status'),
         ('Artemis PE', REPO_ROOT / 'artemis_production/data/pe_trade_params.csv',       'spread_status'),
         ('Artemis CE', REPO_ROOT / 'artemis_production/data/ce_trade_params.csv',       'spread_status'),
+        # Prometheus (MCX) isn't Leto-routed and shares no VIX/regime coupling
+        # with Iris, but it IS the same Angel One account/rate-limit budget —
+        # plans/prometheus-phase2-production.md §0's explicit action item.
+        ('Prometheus', REPO_ROOT / 'prometheus_production/data/prometheus_state.csv',  'status'),
     ]
     for name, path, col in checks:
         if not path.exists():
