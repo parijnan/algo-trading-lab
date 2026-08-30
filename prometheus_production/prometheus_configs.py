@@ -26,7 +26,10 @@ TRADE_LOGS_DIR  = DATA_DIR / 'trade_logs'
 FLAG_PATH    = DATA_DIR / 'prometheus_active.flag'
 PID_FILE     = DATA_DIR / 'prometheus.pid'
 STATE_FILE   = DATA_DIR / 'prometheus_state.csv'
-CREDS_FILE   = DATA_DIR / 'user_credentials.csv'
+CREDS_FILE   = REPO_ROOT / 'data' / 'user_credentials.csv'   # shared root file (Leto/Apollo/Artemis
+                                                              # convention — user_name/qr_code columns,
+                                                              # already present on both local and Delos,
+                                                              # not a per-strategy copy like Iris's own
 TRADES_FILE  = DATA_DIR / 'prometheus_trades.csv'
 COUNTER_FILE = DATA_DIR / 'trade_counter.txt'
 SERIES_15M_FILE = DATA_DIR / 'prometheus_15m_series.csv'

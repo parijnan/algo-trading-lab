@@ -791,10 +791,10 @@ def _login() -> tuple:
     creds = pd.read_csv(CREDS_FILE)
     row = creds.iloc[0]
     api_key = str(row['api_key'])
-    client_code = str(row['client_id'])
+    client_code = str(row['user_name'])
 
     obj = SmartConnect(api_key=api_key)
-    totp = pyotp.TOTP(str(row['totp_token'])).now()
+    totp = pyotp.TOTP(str(row['qr_code'])).now()
     resp = obj.generateSession(client_code, str(row['password']), totp)
     if not resp.get('status'):
         raise RuntimeError(f'Angel One login failed: {resp}')
@@ -848,7 +848,7 @@ def main():
         PID_FILE.unlink(missing_ok=True)
         if obj is not None:
             try:
-                obj.terminateSession(str(pd.read_csv(CREDS_FILE).iloc[0]['client_id']))
+                obj.terminateSession(str(pd.read_csv(CREDS_FILE).iloc[0]['user_name']))
             except Exception:
                 pass
         logger.info('Session terminated.')
