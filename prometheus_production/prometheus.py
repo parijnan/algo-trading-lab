@@ -42,7 +42,7 @@ from prometheus_functions import (
     resolve_thresholds, resolve_target2,
     place_order, get_fill_price_and_qty, OrderFillWatcher, fetch_ltp_rest,
     load_trade_counter, save_trade_counter, append_trade_log_row, append_cumulative_trade,
-    check_no_active_strategies,
+    check_no_active_strategies, mcx_fully_closed_today,
 )
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -807,6 +807,16 @@ def _login() -> tuple:
 def main():
     DATA_DIR.mkdir(exist_ok=True)
     (DATA_DIR / 'trade_logs').mkdir(exist_ok=True)
+
+    # §0: Prometheus's own daily gate against mcx_holidays.csv — distinct
+    # from Leto's NSE/BSE check, and checked before login (a local-file
+    # check needs no broker session) so a holiday costs nothing beyond
+    # this one read.
+    closed, reason = mcx_fully_closed_today()
+    if closed:
+        logger.info(f'MCX closed today ({reason}) — not starting.')
+        print(f'MCX is closed today ({reason}). Not starting Prometheus.')
+        sys.exit(0)
 
     if COMMAND_FLAG_PATH.exists() and COMMAND_FLAG_PATH.read_text().strip() == 'DISABLE':
         logger.info('Prometheus DISABLE flag set — not starting.')

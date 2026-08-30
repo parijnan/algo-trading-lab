@@ -151,6 +151,37 @@ def _load_mcx_holidays() -> pd.DataFrame:
     return df
 
 
+def mcx_fully_closed_today(today: date = None) -> tuple:
+    """
+    §0's "Prometheus's own startup/daily gate" — distinct from Leto's
+    NSE/BSE holiday check (data/holidays.csv), and distinct from
+    _count_trading_days_inclusive's roll-day counting above (that's about
+    which contract to trade once running; this is about whether to start
+    running at all today). Weekends always count as closed even if
+    mcx_holidays.csv has no row for the date (it only lists actual
+    holidays, not every Saturday/Sunday).
+
+    A day only counts as "fully closed" if BOTH sessions are closed — same
+    rule as the roll-day counter, for the same reason (2026-01-01: morning
+    open, evening closed, is a genuine trading day, not a day to skip).
+
+    Returns (fully_closed, reason_or_None).
+    """
+    today = today or date.today()
+    if today.weekday() >= 5:
+        return True, 'weekend'
+    holidays_df = _load_mcx_holidays()
+    if holidays_df.empty:
+        return False, None
+    row = holidays_df[holidays_df['date'] == today]
+    if row.empty:
+        return False, None
+    row = row.iloc[0]
+    if bool(row['morning_session_closed']) and bool(row['evening_session_closed']):
+        return True, str(row.get('holiday_name', 'MCX holiday'))
+    return False, None
+
+
 def _count_trading_days_inclusive(start_date: date, end_date: date,
                                   holidays_df: pd.DataFrame) -> int:
     """
