@@ -347,19 +347,33 @@ def _tail_read_contract_csv(filepath: str, now: datetime, n_days: int) -> pd.Dat
     return df.sort_values('time_stamp').reset_index(drop=True)
 
 
-def _resample_1m_to_15m(df_1m: pd.DataFrame) -> pd.DataFrame:
+def _resample_1m_to_15m(df_1m: pd.DataFrame, now: datetime = None) -> pd.DataFrame:
     """
     Resample 1-min OHLCV to 15-min, anchored at SESSION_START_TIME (09:00),
     day-by-day — same fixed-clock-time-bucket approach as
     iris_functions.py's _resample_to_15m/_resample_1m_to_5m, one level up.
     Each day's buckets stop at CLOSING_TIME (variable, DST-dependent).
+
+    A window is only included once it has genuinely finished elapsing by
+    `now` (defaults to datetime.now()) -- not merely "has some data in it".
+    Without this, seeding mid-way through an in-progress 15-min window (a
+    restart, not a fresh 09:00 start) would build a "complete" bar from
+    whatever partial minutes happen to exist so far, feed that into
+    compute_st, and shift the ST value away from what a chart (which
+    correctly excludes the still-forming candle) shows. Confirmed live
+    2026-08-31: a 12:13:49 restart produced ST=8105.67 from a bar built on
+    only ~13 of the 12:00-12:15 window's 15 minutes, vs. the chart's
+    correct (unchanged) 8102.33.
     """
+    now = now or datetime.now()
     candles_15 = []
     for day, day_df in df_1m.groupby(df_1m['time_stamp'].dt.date):
         anchor     = pd.Timestamp(f'{day} {SESSION_START_TIME}')
         day_cutoff = pd.Timestamp(f'{day} {CLOSING_TIME}')
         while anchor <= day_cutoff:
             window_end = anchor + timedelta(minutes=15) - timedelta(minutes=1)
+            if anchor + timedelta(minutes=15) > now:
+                break   # this window (and every later one today) hasn't finished elapsing yet
             window = day_df[(day_df['time_stamp'] >= anchor) & (day_df['time_stamp'] <= window_end)]
             if not window.empty:
                 candles_15.append({
@@ -419,7 +433,7 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
         logger.error('seed_st15: no 1-min history available on disk after backfill.')
         return pd.DataFrame()
 
-    df_15m_raw = _resample_1m_to_15m(raw_1m)
+    df_15m_raw = _resample_1m_to_15m(raw_1m, now)
     if df_15m_raw.empty:
         logger.error('seed_st15: resample produced no 15-min bars.')
         return pd.DataFrame()
