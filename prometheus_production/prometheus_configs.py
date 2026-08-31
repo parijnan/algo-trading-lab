@@ -75,11 +75,16 @@ MCX_FO_WS_EXCHANGE_TYPE = 5   # websocket_feed.py exchange_type int for MCX F&O
                               # (matches mcx_live_downloader.py's MCX_FO=5, live-verified)
 
 # ── Kill switch ───────────────────────────────────────────────────────────────
-DRY_RUN = False    # live as of 2026-08-31, STATIC_UNITS=1 (2 lots), specifically to verify the
-                    # order-update WebSocket for MCX (Rollout step 2). Rollout step 3 (formal
-                    # backtest/live parity diff) was NOT done -- decision made on the strength of
-                    # ~2.5hrs of clean DRY_RUN seed/signal/state behavior against real ticks
-                    # instead. Revert to True to go back to paper mode.
+DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a trend-flip exit
+                    # order failed at the broker (orderid=None) with no guard against it, and the
+                    # code fabricated a fill from LTP -- both lots marked closed internally while
+                    # the real 2-lot long stayed open and unmonitored for ~28min until caught
+                    # manually. Fixed in commit 8b7bc5b (three-layer confirmation check: never
+                    # mark a lot closed without a genuine fill; propagate that through rule 7's
+                    # re-entry gate and _teardown()). Went live earlier that same day (STATIC_UNITS=1)
+                    # specifically to verify the order-update WebSocket for MCX -- that part
+                    # worked (four real fills resolved via WS all day). Only flip back to False
+                    # after the fix above has held up under a fresh DRY_RUN pass.
 
 # ── Session ───────────────────────────────────────────────────────────────────
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
