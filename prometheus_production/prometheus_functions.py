@@ -322,6 +322,53 @@ def backfill_contract_if_needed(obj, contract: dict, seed_days: int = SEED_DAYS)
     logger.info(f"Backfill complete: {total_new} new row(s) added to {filepath}")
 
 
+def backfill_recent_gap_if_needed(obj, contract: dict, now: datetime) -> None:
+    """
+    Closes the gap that forms between a contract file's last on-disk row
+    and `now` after any downtime longer than the live poller's own 5-min
+    lookback window (win_from = win_to - 5min, prometheus.py's run loop)
+    can absorb on its own once polling resumes.
+
+    backfill_contract_if_needed (above) does NOT catch this: it only checks
+    whether the file's OLDEST timestamp goes back far enough for SEED_DAYS
+    of history, never whether there's a RECENT interior/tail gap. Confirmed
+    live 2026-08-31: a ~10-minute gap between a Kill Switch and the next
+    restart left minutes 12:03-12:08 permanently missing -- the restart's
+    first poll only reached back 5 minutes (to 12:09), and nothing else
+    ever revisited the rest of the gap. Reuses the same
+    date_range_chunks/fetch_candle_chunk mechanism as
+    backfill_contract_if_needed (day-granularity, dedup-safe on merge) --
+    consistent with how this repo already backfills, not a new code path.
+    """
+    import os
+    filepath = contract['filepath']
+    if not os.path.exists(filepath):
+        return   # backfill_contract_if_needed handles "no file at all"
+
+    existing = pd.read_csv(filepath, parse_dates=['time_stamp'])
+    if existing.empty:
+        return
+    existing['time_stamp'] = pd.to_datetime(existing['time_stamp'], utc=False, errors='coerce')
+    last_ts = existing['time_stamp'].max()
+    if last_ts.tzinfo is not None:
+        last_ts = last_ts.tz_localize(None)
+
+    gap_start = last_ts + timedelta(minutes=1)
+    gap_end   = now - timedelta(minutes=5)   # leave the last 5 min to the live poller itself
+    if gap_start >= gap_end:
+        return   # no gap large enough to matter
+
+    logger.warning(f"Recent-gap backfill: {contract['symbol']} last on-disk row is "
+                   f"{last_ts} ({(now - last_ts).total_seconds() / 60:.0f} min old) — "
+                   f"fetching {gap_start} -> {gap_end} before seeding.")
+    total_new = 0
+    for chunk_start, chunk_end in dl.date_range_chunks(gap_start, gap_end):
+        chunk_df = dl.fetch_candle_chunk(obj, contract['token'], chunk_start, chunk_end)
+        if not chunk_df.empty:
+            total_new += _merge_and_save(filepath, chunk_df)
+    logger.info(f"Recent-gap backfill complete: {total_new} new row(s) added to {filepath}")
+
+
 def _tail_read_contract_csv(filepath: str, now: datetime, n_days: int) -> pd.DataFrame:
     """
     Tail-based read of the current effective contract's own file — same
@@ -428,6 +475,7 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
     or missing data, rather than seeding silently stale.
     """
     backfill_contract_if_needed(obj, contract)
+    backfill_recent_gap_if_needed(obj, contract, now)
     raw_1m = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
     if raw_1m.empty:
         logger.error('seed_st15: no 1-min history available on disk after backfill.')
