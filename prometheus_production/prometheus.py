@@ -296,15 +296,34 @@ class Prometheus:
 
     def _teardown(self) -> None:
         tag = _tag(self._contract['symbol_root']) if self._contract else '*Prometheus*'
+        exit_confirmed = True
         if self.state.status == 'in_trade':
             logger.warning('Teardown with open position — exiting.')
-            self._execute_exit_all('shutdown')
+            exit_confirmed = self._execute_exit_all('shutdown')
 
         if self.feed:
             try:
                 self.feed.stop()
             except Exception:
                 pass
+
+        if not exit_confirmed:
+            # Do NOT force status='idle' over a position we couldn't confirm
+            # closed -- this is the single most dangerous moment for that to
+            # happen, since once this process exits, literally nothing is
+            # left monitoring it until a human notices or a future restart's
+            # own resume-in-trade logic picks it up. Leave state as-is
+            # (still 'in_trade', accurate lot statuses) and alert loudly
+            # rather than silently paper over it with a clean-looking
+            # "stopped" message (2026-08-31 incident).
+            save_state(self.state)
+            logger.critical('Teardown could NOT confirm the position closed — '
+                            'leaving state as in_trade. Check the broker terminal manually.')
+            _slack(f'\U0001f6a8 {tag}: STOPPED WITHOUT CONFIRMING THE POSITION CLOSED. '
+                  f'State left as in_trade so a restart resumes monitoring it — '
+                  f'check the broker terminal manually NOW.', SLACK_ERRORS_CHANNEL)
+            self._send_session_report()
+            return
 
         self.state.status = 'idle'
         save_state(self.state)
@@ -565,9 +584,17 @@ class Prometheus:
             if flip and direction_now != self.state.direction:
                 # Rule 7: this flip closes the remaining lot(s) AND is itself
                 # the entry for the opposite direction — same-moment resolution.
-                self._execute_exit_all('trend_flip')
-                if now_after_min_entry() and signal_allowed:
+                # Only fire the re-entry if the exit was genuinely confirmed
+                # closed -- firing a fresh opposite-direction entry while the
+                # exit itself failed to confirm would mean attempting to hold
+                # both directions against a position with an unknown real
+                # state (the exact incident this whole confirmation chain
+                # was added to prevent, 2026-08-31).
+                closed = self._execute_exit_all('trend_flip')
+                if closed and now_after_min_entry() and signal_allowed:
                     self._execute_entry(direction_now, window_start, bar['close'])
+                elif not closed:
+                    logger.critical('Rule 7 re-entry SKIPPED — trend-flip exit did not confirm closed.')
             return
 
         # status == 'watching' — fresh entry detection
@@ -710,18 +737,48 @@ class Prometheus:
         if self.state.status == 'in_trade' and self.state.lot1_status != 'open' and self.state.lot2_status != 'open':
             self._finalize_trade()
 
-    def _execute_exit_lot(self, lot_num: int, reason: str, ltp: float) -> None:
+    def _execute_exit_lot(self, lot_num: int, reason: str, ltp: float) -> bool:
+        """
+        Returns True only if the exit is genuinely confirmed (real orderid,
+        real fill, filled > 0). On any failure, lot{n}_status is left
+        untouched (still 'open') and NOTHING about this lot is marked
+        closed -- no fabricated fill price, no P&L, no Slack success
+        message. This is a deliberate, hard invariant, added after a real
+        incident (2026-08-31): the previous code placed an order that
+        failed (orderid=None), then silently used the current LTP as a fake
+        "fill price" when fill resolution predictably timed out, marking
+        both lots closed and returning to 'watching' -- while the real
+        position stayed fully open at the broker, completely unmonitored,
+        for ~28 minutes until caught manually. Returning False here instead
+        leaves lot_status=='open', so the NEXT tick's exit-condition check
+        (every 0.5-1s) retries automatically -- no separate retry loop
+        needed, and no lie enters the state file or trade log.
+        """
         lots = self.state.lot1_lots if lot_num == 1 else self.state.lot2_lots
         if not lots:
-            return
+            return True   # nothing to exit -- vacuously done, not a failure
         tag = _tag(self._contract['symbol_root'])
         order_id = place_order(self.obj, 'SELL' if self.state.direction == 'bullish' else 'BUY',
                                self.state.symbol, self.state.token, lots, DRY_RUN)
+        if not order_id:
+            logger.critical(f'Lot{lot_num} exit order FAILED to place ({reason}) — '
+                            f'position may still be OPEN at the broker.')
+            _slack(f'\U0001f6a8 {tag}: Lot{lot_num} exit order FAILED to place ({reason}). '
+                  f'Position may still be OPEN at the broker — will keep retrying automatically, '
+                  f'but check the broker terminal manually now.', SLACK_ERRORS_CHANNEL)
+            return False
+
         fill_price, filled = get_fill_price_and_qty(
             self.obj, self.order_watcher, order_id, self.state.symbol, self.state.token,
             lots, DRY_RUN, self.feed)
-        if fill_price is None:
-            fill_price = ltp
+        if fill_price is None or filled == 0:
+            logger.critical(f'Lot{lot_num} exit order placed (orderid={order_id}, {reason}) but fill '
+                            f'could NOT be confirmed (WS and REST both exhausted) — position status '
+                            f'unknown, may still be open.')
+            _slack(f'\U0001f6a8 {tag}: Lot{lot_num} exit order placed (orderid={order_id}) but fill '
+                  f'unconfirmed — position status UNKNOWN. Check the broker terminal manually now; '
+                  f'will keep retrying automatically.', SLACK_ERRORS_CHANNEL)
+            return False
 
         entry = self.state.entry_price
         pnl_pts = (fill_price - entry) if self.state.direction == 'bullish' else (entry - fill_price)
@@ -758,19 +815,36 @@ class Prometheus:
 
         if self.state.lot1_status != 'open' and self.state.lot2_status != 'open':
             self._finalize_trade()
+        return True
 
-    def _execute_exit_all(self, reason: str) -> None:
-        """EOD / stop_loss / trend_flip / slack_exit / shutdown — closes
-        whichever lot(s) remain open, at the SAME reason."""
+    def _execute_exit_all(self, reason: str) -> bool:
+        """
+        EOD / stop_loss / trend_flip / slack_exit / shutdown — closes
+        whichever lot(s) remain open, at the SAME reason. Returns True only
+        if the position ended up fully closed (status back to 'watching').
+        Callers that chain an action after this — specifically rule 7's
+        same-tick trend-flip re-entry in _handle_new_15m_bar — MUST check
+        this before proceeding: firing a fresh entry in the opposite
+        direction while the exit itself failed to confirm would mean
+        attempting to hold both directions at once against a position we
+        already don't have a confirmed read on.
+        """
         if self.state.status != 'in_trade':
-            return
+            return True   # already flat -- vacuously true, not a failure
         ltp = self._get_ltp() or self.state.last_known_ltp or self.state.entry_price
         if self.state.lot1_status == 'open':
             self._execute_exit_lot(1, reason, ltp)
         if self.state.status == 'in_trade' and self.state.lot2_status == 'open':
             self._execute_exit_lot(2, reason, ltp)
-        if self.state.status == 'in_trade':
-            self._finalize_trade()
+        # No separate finalize call here -- _execute_exit_lot already
+        # finalizes internally with the correct guard (both lot statuses
+        # genuinely non-open). A second, looser "if still in_trade, finalize
+        # anyway" check here was the exact same class of bug this whole fix
+        # addresses: it force-closed the trade whenever status was still
+        # 'in_trade' regardless of WHY (including both lots having just
+        # failed to exit), the same blind trust in appearances that caused
+        # the 2026-08-31 incident.
+        return self.state.status != 'in_trade'
 
     def _finalize_trade(self) -> None:
         tag = _tag(self._contract['symbol_root'])
