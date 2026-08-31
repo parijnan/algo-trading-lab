@@ -32,7 +32,7 @@ from prometheus_configs import (
     REPO_ROOT, SYMBOL, LOT_SIZE, LOTS_PER_LEG, MCX_FO_WS_EXCHANGE_TYPE,
     MIN_ENTRY_TIME, LAST_ENTRY_TIME, EOD_SQUAREOFF_TIME,
     SESSION_END_TIME, ST_PERIOD, ST_MULTIPLIER,
-    DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC,
+    DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -310,6 +310,86 @@ class Prometheus:
         save_state(self.state)
         logger.info('Prometheus stopped.')
         _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ {tag} stopped.', SLACK_TRADEBOT_CHANNEL)
+        self._send_session_report()
+
+    def _send_session_report(self) -> None:
+        """
+        End-of-session Slack report — mirrors leto.py's _send_session_report
+        style (divider lines, per-trade blocks, bold session total,
+        #tradebot-updates) but reads prometheus_trades.csv (the cumulative
+        tracker) for today's date rather than a single in-memory summary
+        dict: unlike Leto's once-daily routed strategies, Prometheus can
+        have several trades in one session (confirmed 2026-08-31: 2 trades
+        in a single day), so a Leto-style "one outcome per strategy" shape
+        doesn't fit -- this lists every trade plus a session total, and
+        falls back to reporting a still-open position (§4's force-exit-at-
+        teardown should normally have already closed it by the time this
+        runs, so this branch is a defensive fallback, not the normal path).
+        Wrapped so a reporting failure never masks the actual teardown.
+        """
+        try:
+            tag_root = self._contract['symbol_root'] if self._contract else SYMBOL
+            day_str = datetime.now().strftime('%a %d %b %Y')
+            lines = [f'\U0001f4ca *Prometheus [{tag_root}] — Session Report*  |  {day_str}', '']
+            lines.append('━' * 37)
+
+            today = datetime.now().date()
+            trades_today = pd.DataFrame()
+            if TRADES_FILE.exists():
+                all_trades = pd.read_csv(TRADES_FILE, parse_dates=['entry_ts'])
+                if not all_trades.empty:
+                    trades_today = all_trades[all_trades['entry_ts'].dt.date == today]
+
+            total_rs = 0.0
+            traded = not trades_today.empty or self.state.status == 'in_trade'
+
+            if not traded:
+                lines.append('  ↳ No trade today')
+                lines.append('')
+            else:
+                for _, t in trades_today.iterrows():
+                    direction = str(t['direction']).capitalize()
+                    entry_ts_str = pd.Timestamp(t['entry_ts']).strftime('%H:%M')
+                    entry_price = t['entry_price']
+                    exit_candidates = [pd.Timestamp(v) for v in
+                                       (t.get('lot1_exit_ts'), t.get('lot2_exit_ts')) if pd.notna(v)]
+                    exit_ts_str = max(exit_candidates).strftime('%H:%M') if exit_candidates else '—'
+                    exit_reason = t.get('lot2_exit_reason') or t.get('lot1_exit_reason') or '?'
+                    exit_str = str(exit_reason).replace('_', ' ').title()
+                    pnl_pts = t.get('total_pnl_points') or 0
+                    pnl_rs = t.get('total_pnl_rs') or 0
+                    total_rs += pnl_rs
+
+                    lines.append(f"*Trade #{int(t['trade_id'])}*  ·  {direction}  |  Units: {int(t['units'])}")
+                    lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry_price:.2f}   "
+                                 f"Exit: {exit_ts_str}  ·  {exit_str}")
+                    lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*")
+                    lines.append('')
+
+                if self.state.status == 'in_trade':
+                    direction = (self.state.direction or '?').capitalize()
+                    entry_ts_str = (datetime.fromisoformat(self.state.entry_ts).strftime('%H:%M')
+                                    if self.state.entry_ts else '?')
+                    entry = self.state.entry_price or 0
+                    ltp = self.state.last_known_ltp or entry
+                    pnl_pts = (ltp - entry) if self.state.direction == 'bullish' else (entry - ltp)
+                    lots_open = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
+                               ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
+                    pnl_rs = pnl_pts * lots_open * LOT_SIZE
+                    total_rs += pnl_rs
+
+                    lines.append(f"*Open Position*  ·  {direction}  |  Units: {self.state.units}")
+                    lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry:.2f}   Still open at session end")
+                    lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*  _(unrealised)_")
+                    lines.append('')
+
+            lines.append('━' * 37)
+            lines.append(f'*Session Total  :  {total_rs:+,.0f} Rs*')
+            lines.append('━' * 37)
+
+            _slack('\n'.join(lines), SLACK_TRADEBOT_CHANNEL)
+        except Exception as e:
+            logger.error(f'_send_session_report failed: {e}')
 
     # -----------------------------------------------------------------------
     # Main loop
