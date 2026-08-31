@@ -196,6 +196,12 @@ CONTROL_PANEL_BLOCKS = [
         "elements": [
             {
                 "type": "button",
+                "text": {"type": "plain_text", "text": "🚀 Start Prometheus"},
+                "style": "primary",
+                "action_id": "btn_prometheus_start"
+            },
+            {
+                "type": "button",
                 "text": {"type": "plain_text", "text": "⚠️ Exit Prometheus"},
                 "style": "danger",
                 "action_id": "btn_prometheus_exit",
@@ -512,6 +518,48 @@ def handle_prometheus_clear(ack, body, say):
         say(channel=_CH, text=f"✅ *PROMETHEUS CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
     else:
         say(channel=_CH, text="No active Prometheus circuit breaker flag found.")
+
+@app.action("btn_prometheus_start")
+def handle_prometheus_start(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+
+    # Check for blocking flag
+    if os.path.exists(PROMETHEUS_COMMAND_FLAG):
+        with open(PROMETHEUS_COMMAND_FLAG, "r") as f:
+            cmd = f.read().strip()
+        if cmd in ["EXIT", "KILL", "DISABLE"]:
+            say(channel=_CH, text=f"❌ Cannot start Prometheus. Persistent flag *{cmd}* is active. Clear it first.")
+            return
+
+    # Check if Prometheus is already running
+    try:
+        pgrep = subprocess.run(["pgrep", "-f", "python.*prometheus_production/prometheus.py"],
+                               capture_output=True, text=True)
+        if pgrep.stdout.strip():
+            say(channel=_CH, text="❌ Prometheus is already running. Duplicate process prevented.")
+            return
+    except Exception as e:
+        logger.error(f"pgrep failed: {e}")
+
+    # Launch Prometheus
+    try:
+        timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        log_name = os.path.join(BASE_DIR, "prometheus_production", "logs", f"prometheus_manual_{timestamp}.log")
+        with open(log_name, "w") as log_f:
+            subprocess.Popen(
+                [sys.executable, "prometheus_production/prometheus.py"],
+                stdout=log_f,
+                stderr=log_f,
+                start_new_session=True,
+                cwd=BASE_DIR
+            )
+        say(channel=_CH, text=f"🚀 *PROMETHEUS STARTED* manually by <@{user_id}>. Log: `{os.path.basename(log_name)}`")
+        logger.info(f"Prometheus manually started by <@{user_id}>.")
+    except Exception as e:
+        err_msg = f"Failed to start Prometheus: {e}"
+        logger.error(err_msg)
+        say(channel=_CH_ERRORS, text=f"🚨 {err_msg}")
 
 @app.action("btn_start_leto")
 def handle_start(ack, body, say):
