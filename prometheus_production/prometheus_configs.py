@@ -12,8 +12,8 @@ convention exactly (CLAUDE.md "Module naming", plan §0): production must
 never silently follow future backtest experimentation.
 
 DRY_RUN = True  → log intended orders, place nothing; use feed LTP as fill price.
-          False → live orders. Only flip after paper parity is confirmed
-          (plan Rollout steps 3-4).
+          False → live orders. See the DRY_RUN assignment below for the
+          actual decision record of when/why this was flipped.
 """
 from pathlib import Path
 
@@ -75,7 +75,11 @@ MCX_FO_WS_EXCHANGE_TYPE = 5   # websocket_feed.py exchange_type int for MCX F&O
                               # (matches mcx_live_downloader.py's MCX_FO=5, live-verified)
 
 # ── Kill switch ───────────────────────────────────────────────────────────────
-DRY_RUN = True     # flip to False only after Rollout steps 2-4 (plan) are complete
+DRY_RUN = False    # live as of 2026-08-31, STATIC_UNITS=1 (2 lots), specifically to verify the
+                    # order-update WebSocket for MCX (Rollout step 2). Rollout step 3 (formal
+                    # backtest/live parity diff) was NOT done -- decision made on the strength of
+                    # ~2.5hrs of clean DRY_RUN seed/signal/state behavior against real ticks
+                    # instead. Revert to True to go back to paper mode.
 
 # ── Session ───────────────────────────────────────────────────────────────────
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
