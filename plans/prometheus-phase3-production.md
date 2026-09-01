@@ -112,9 +112,33 @@ Either way, **this needs deciding before building the trade log, not discovered 
 
 ---
 
-## 8. Open decisions — summary
+## 9. Reporting: realised, unrealised, and total P&L in trade updates
+
+**Requirement (Phase 3 only — Phase 2 keeps its current reporting unchanged):** every periodic trade update and the "still open at session end" line in the session report must show realised P&L, unrealised P&L, and their total, not unrealised alone.
+
+**Why Phase 2 doesn't need this and Phase 3 does:** in Phase 2 a position is open for at most one session, so the brief window where lot1 is booked and lot2 is still running is transitional — the trade finishes and its true total lands in the session report within the same day regardless. In Phase 3 a position can run for days to weeks (§2), so "lot1 booked, lot2 still open" isn't a brief transitional state — it's the normal shape of a trade for most of its life. Reporting only the open lot's mark-to-market during that whole stretch hides the majority of what's actually locked in.
+
+**This is also a real, currently-existing gap, not just a missing feature — worth fixing precisely because of what it's currently silently dropping:**
+
+- `_send_trade_update()` (`prometheus.py:941-956`) computes P&L only from `lots_open` — whichever of lot1/lot2 still has `status == 'open'`. Once a lot books, its P&L disappears from every subsequent update; there's no realised term at all.
+- `_send_session_report()`'s "still open" fallback block (`prometheus.py:414-429`) has the same shape: it computes one `pnl_pts`/`pnl_rs` off `lots_open` only, and labels the whole thing `_(unrealised)_`. A trade that has lot1 already booked and lot2 still running never gets appended to `prometheus_trades.csv` — `_finalize_trade()` only fires once *both* lots are closed (`prometheus.py:763-764`) — so `trades_today` never picks up lot1's locked-in P&L either. **The already-realised portion of a still-open trade is currently invisible in both places it could show up**, and `total_rs` (the session-report grand total) silently understates by exactly that amount whenever a trade is mid-way through its scale-out at report time.
+
+**Fix, both call sites**: compute per-lot realised P&L from whichever of `lot1_exit_price`/`lot2_exit_price` is populated (lot status not in `{'open', 'never_opened'}`) against `entry_price`, direction-signed, times that lot's filled quantity — this is already exactly what `_finalize_trade()` computes per lot, just needed earlier and un-conditioned on both lots being closed. Compute unrealised P&L the same way the current code does, but only over lots still `status == 'open'`. Report all three:
+
+```
+Realised   : <sum of booked lots' pnl>
+Unrealised : <mark-to-market of still-open lots at current LTP>
+Total      : <realised + unrealised>
+```
+
+**Interacts with §7's open trade-log-schema decision**: if a rollover flattens and reopens a trade (two-linked-rows option), does "realised" for the new leg start back at zero, or carry forward the old leg's already-booked P&L as one continuous running total? Resolve this alongside §7, not independently — the two decisions should produce a single consistent answer for what "realised" means across a roll.
+
+---
+
+## 10. Open decisions — summary
 
 1. §4 — missed-rollover recovery: roll immediately at open vs. refuse-and-alert. (Leaning: roll immediately, loudly alerted.)
 2. §6 — SL/target recalibration method: the proposed historical-basis method, reset-to-now, or flatten-and-don't-reopen. Blocked on the two empirical checks named there.
 3. §7 — rolled-trade log schema: two linked rows vs. one row with rollover columns.
 4. Whether `TENDER_ROLL_TRADING_DAYS=5` itself (inherited from Phase 2, not independently re-verified here) is actually where MCX's tender margin kicks in — worth confirming once, since everything else in §3 is built on top of it being correct.
+5. §9 — whether "realised" resets to zero on a rollover's flatten-and-reopen leg, or carries the prior leg's booked P&L forward as one continuous total. Tied to the §7 schema choice — resolve together.
