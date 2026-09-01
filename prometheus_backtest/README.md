@@ -2,9 +2,11 @@
 
 Intraday trend-following strategy for MCX crude oil futures (CRUDEOILM primary, CRUDEOIL
 cross-validation), built on Supertrend flip signals. Named for the fire-bringer, fitting for
-a crude oil / energy strategy, per the repo's Greek-mythology naming convention. Two design
-phases live here — v1 (superseded) and Phase 2 (active) — both backtest-only; production
-build is planned but not yet implemented (see [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md)).
+a crude oil / energy strategy, per the repo's Greek-mythology naming convention. Three design
+phases live here — v1 (superseded), Phase 2 (active, session-bound 2-lot scale-out), and
+Phase 3 (in progress, positional 2-lot scale-out — decision pending between two calibrated
+multiplier candidates, see below) — all backtest-only; production build (based on Phase 2) is
+planned but not yet implemented (see [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md)).
 
 ## Data
 
@@ -12,10 +14,13 @@ build is planned but not yet implemented (see [`plans/prometheus-phase2-producti
   one file per contract, stitched across expiry rolls by `load_futures_1min()`. No
   back-adjustment needed: the strategy is pure intraday, so no position ever spans a roll —
   each day's bars belong to whichever contract was genuinely front-month that day.
-- Current coverage: 2026-01-30 to 2026-08-28 (151 full trading days). 2026-08-28's daytime
-  bars (09:00–15:15) were backfilled by `data_downloader_mcx.py` on 2026-08-29, joining
-  seamlessly with the evening session `mcx_live_downloader.py` had already captured live
-  (15:16–23:29) — verified gapless (0 missing minutes, 0 duplicate timestamps) before rerunning.
+- Current coverage: 2026-01-30 to 2026-09-01 16:17 IST (152 trading days, the most recent a
+  partial in-progress session — refreshed 2026-09-01, confirmed against
+  `load_futures_1min()`'s own front-month-resolved max timestamp before trusting it, not just
+  a raw file's last row). 2026-08-28's daytime bars (09:00–15:15) were backfilled by
+  `data_downloader_mcx.py` on 2026-08-29, joining seamlessly with the evening session
+  `mcx_live_downloader.py` had already captured live (15:16–23:29) — verified gapless (0
+  missing minutes, 0 duplicate timestamps) before rerunning.
 - Lot sizes and tick size looked up live from `data_pipeline/data/mcx_instrument_master.csv`,
   never hardcoded: CRUDEOILM = 10 barrels/lot, CRUDEOIL = 100 barrels/lot. The instrument
   master's `tick_size=100` field is in Angel One's paise-scaled convention — actual tick is
@@ -96,18 +101,19 @@ to be.
 both CRUDEOILM and CRUDEOIL): `THRESHOLD_MODE='pct'`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`,
 `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3`.
 
-**Current result** (219 trades, 2026-01-30–2026-08-28): 55.7% win rate, ₹44,693 total P&L,
-−₹14,943 max drawdown, Calmar 2.99 (same unitless definition as v1 — not annualized). The two
-newest trades (2026-08-28, both MCX-evening-only entries at 18:30 and 22:15) were both losers,
-net −₹2,360 — pulled the total down from the prior ₹47,053 snapshot.
+**Current result** (221 trades, 2026-01-30–2026-09-01, refreshed through the latest candle):
+55.2% win rate, ₹42,453 total P&L, −₹14,943 max drawdown, Calmar 2.84 (same unitless
+definition as v1 — not annualized). Max drawdown is unchanged from the prior ₹44,693/219-trade
+snapshot — the two new trades didn't deepen the worst episode, just diluted the total P&L and
+win rate slightly.
 
 **On a ₹1,00,000 allocated-capital basis** (the user's own sizing call, accounting for ~₹25k
-margin/lot × 2 lots plus a drawdown buffer): 44.69% return on capital over the backtest's
-0.575-year window, **77.73% annualized** (simple/linear annualization, appropriate since the
+margin/lot × 2 lots plus a drawdown buffer): 42.45% return on capital over the backtest's
+0.586-year window, **72.51% annualized** (simple/linear annualization, appropriate since the
 strategy trades a fixed 2-lot size rather than compounding with account growth — not a
 compounded CAGR), max drawdown −14.94% of capital, and a properly-annualized Calmar
-(annualized return % ÷ max DD%) of **5.20**. Lowest account value reached: ₹92,540
-(−7.46% from start), 2026-02-17 — unchanged, the Aug-28 losses didn't deepen the worst drawdown.
+(annualized return % ÷ max DD%) of **4.85**. Lowest account value reached: ₹92,540
+(−7.46% from start), 2026-02-17 — unchanged across every refresh so far.
 
 ### Calibration journey — why the config landed where it did
 
@@ -167,17 +173,191 @@ compounded CAGR), max drawdown −14.94% of capital, and a properly-annualized C
   candle polling, state file / crash recovery, Slack reporting). Not yet implemented.
 - `TARGET1_PCT` joint-combined tests beyond the 1.0%/1.75% grid already run.
 
+## Phase 3 — positional 2-lot scale-out (decision pending)
+
+Folder: `prometheus_backtest/phase3/`.
+
+**Motivation** (user, 2026-09-01): `ST_PERIOD=10`/`ST_MULTIPLIER=3.0` was never actually
+calibrated for Prometheus — `configs_p2.py`'s own docstring says "same day-1 starting values
+as Iris/Prometheus v1, not yet calibrated for this design specifically", and `sweep_p2.py`
+computes the Supertrend series once, before its sweep loop, so every Phase 2 calibration pass
+held the entry signal itself fixed and never questioned it. Crude's cleaner trending character
+(vs. Nifty/Sensex, which 10,3 actually *was* tuned for, via Iris) is a real, testable reason to
+suspect a different multiplier suits it better.
+
+**Design, deliberately decoupled in two stages:**
+1. **Raw signal-quality sweep first** (`backtest_p3.py`, `sweep_p3.py`) — no SL, no profit
+   target, no EOD square-off. The only exit is the opposite Supertrend flip; a position can
+   hold overnight, across multiple days, even across a contract roll. 1 lot, no scale-out.
+   Every trade gets a minute-by-minute log (`trade_paths_p3.py`) tracking running MAE/MFE and
+   unrealised P&L — not to pick a winner by P&L alone (there's no SL/target yet to optimise
+   against), but as the raw material the *next* stage calibrates against without re-running the
+   backtest.
+2. **Exit calibration second** (`exit_calib_p3.py`), reusing those per-trade 1-minute logs
+   directly rather than reloading raw price data — same staged, one-variable-at-a-time
+   methodology as `sweep_p2.py` (SL grid → target1 grid → target2 grid, each stage pinning the
+   previous stage's Calmar-selected winner), but at 1-minute fill granularity (finer than Phase
+   2's native 15-minute bars, since that's what the logs are) and explicitly run against
+   **every** multiplier tested, not just the best-Calmar one — see the overfitting discussion
+   below for why.
+
+Positional design (no EOD square-off, no entry-time gate) carries through the exit-calibration
+stage unchanged — calibrating SL/target on top of Phase 3's already-decided entry/holding
+design, not reinstating Phase 2's session structure.
+
+**Files:**
+- `configs_p3.py` — signal parameters (`ST_PERIOD`, `ST_MULTIPLIER_GRID`), paths
+- `backtest_p3.py` — raw signal-following state machine (trend_flip-only exit)
+- `trade_paths_p3.py` — per-trade 1-minute MAE/MFE/unrealised-P&L logs (the actual calibration
+  substrate for stage 2)
+- `sweep_p3.py` — runs the raw backtest across the multiplier grid, saves
+  `data_sweep/mult_<X.X>/{trade_summary.csv,trade_logs/}` and `data_sweep/sweep_p3_summary.csv`
+- `exit_calib_p3.py` — staged SL/target1/target2 calibration against the saved logs; saves
+  `data_sweep/exit_calib_p3_detail.csv` (every grid point tried) and
+  `data_sweep/exit_calib_p3_winners.csv` (one row per multiplier)
+- `bespoke_2lot_p3.py` — full per-trade detail (entry/exit price, reason, P&L per lot) for a
+  specific *already-chosen* bespoke combo, schema-matched to `trade_summary_p2.csv` for direct
+  comparison; saves `data_sweep/mult_<X.X>/bespoke_trade_summary.csv` — for manually inspecting
+  individual trades, not for calibration itself
+
+**Raw signal-quality sweep results** (`ST_PERIOD=10`, no SL/target/EOD, refreshed through the
+latest candle):
+
+| Multiplier | Trades | Win % | Total P&L | Max DD | Calmar |
+|---|---|---|---|---|---|
+| 2.0 | 375 | 41.6% | ₹145,600 | −₹19,740 | 7.38 |
+| 2.5 | 285 | 41.8% | ₹122,670 | −₹16,600 | 7.39 |
+| 3.0 | 229 | 39.3% | ₹66,950 | −₹19,680 | 3.40 |
+| 3.5 | 194 | 38.1% | ₹43,650 | −₹20,190 | 2.16 |
+| 4.0 | 158 | 38.6% | ₹29,550 | −₹18,850 | 1.57 |
+| 4.5 | 128 | 39.8% | ₹55,010 | −₹32,500 | 1.69 |
+| 5.0 | 114 | 39.5% | ₹36,090 | −₹28,910 | 1.25 |
+| 5.5 | 97 | 40.2% | ₹29,540 | −₹32,340 | 0.91 |
+
+Raw Calmar climbs steadily as the multiplier drops from 5.5 to 2.5 (0.91 → 7.39) — on its own,
+that's the signature of an under-explored grid edge, not a found optimum (the lowest multiplier
+tested looking best is exactly what you'd see if the real peak sits below the grid, or if the
+tightest setting is just chasing noise). Extending one step further to 2.0 broke that pattern:
+Calmar essentially flattened (7.38 vs 7.39) instead of continuing to climb — a reassuring
+single data point, not proof, but it argues against 2.5 being purely a boundary artifact.
+
+**Exit calibration winners, all multipliers** (SL/target1/target2 grids: 1.0–3.5% / 0.5–2.0% /
+1.5–6.0%, Calmar-selected at each stage):
+
+| Multiplier | SL% | T1% | T2% | Calmar | Total P&L | Max DD |
+|---|---|---|---|---|---|---|
+| 2.0 | 2.2 | 2.0 | 5.0 | 10.07 | ₹163,451 | −₹16,235 |
+| 2.5 | 1.0 | 1.25 | 4.0 | 9.50 | ₹103,420 | −₹10,886 |
+| 3.0 | 1.8 | 0.75 | 6.0 | 5.19 | ₹82,700 | −₹15,937 |
+| 3.5 | 1.8 | 1.75 | 6.0 | 3.04 | ₹59,106 | −₹19,427 |
+| 4.0 | 2.6 | 1.75 | 3.0 | 3.21 | ₹52,247 | −₹16,272 |
+| 4.5 | 1.8 | 1.0 | 2.5 | 5.66 | ₹46,137 | −₹8,156 |
+| 5.0 | 1.0 | 1.0 | 5.0 | 8.82 | ₹65,655 | −₹7,446 |
+| 5.5 | 1.0 | 1.0 | 5.0 | 10.50 | ₹67,162 | −₹6,394 |
+
+(Calmar/max-DD here use the per-trade, lot1+lot2-combined equity series that `exit_calib_p3.py`
+itself computes; the two candidate write-ups below use a slightly more precise per-lot-*exit*
+equity series instead — see the artifact note under Supporting analysis for why the two differ
+by a small amount.)
+
+**These winners don't agree with each other, and that matters.** SL ranges 1.0–2.6%, target1
+0.75–2.0%, target2 2.5–6.0% across the grid — nothing close to Phase 2's experience of one
+combo (1.8/1.0/2.3) cross-validating cleanly across two instruments. A robustness check (fixed
+SL/T1/T2 combos applied *unchanged* across every multiplier, rather than each getting its own
+bespoke tuning) found SL 1.8/T1 1.0/T2 3.0 as the most robust single choice — min-Calmar 1.80
+across the grid vs. 0.20 for a combo built around 2.5's own bespoke values — but that check
+predates both the 2026-09-01 data refresh and multiplier 2.0's existence, so treat it as
+directional, not current; it hasn't been re-run since.
+
+**Two calibrated candidates under active consideration** (2026-09-01, decision pending):
+
+| Metric | Mult 2.0 (SL 2.2/T1 2.0/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
+|---|---|---|
+| Total trades | 375 | 285 |
+| Win % | 44.27% | 48.07% |
+| Total P&L | ₹163,451 | ₹103,420 |
+| Avg win / avg loss | ₹3,173 / −₹1,738 | ₹2,268 / −₹1,401 |
+| Max win / max loss | ₹9,376 / −₹6,320 | ₹7,835 / −₹2,160 |
+| Max drawdown | −₹16,624 | −₹11,219 |
+| Calmar | 9.83 | 9.22 |
+
+Both re-run against the 2026-09-01 refreshed data. Both shown at 1 unit (2 lots) as traded —
+no capital normalisation.
+
+**Open caveats on both candidates, not yet resolved:**
+1. **Mult 2.0's `TARGET1_PCT` landed on the edge of its own grid** (0.5%–2.0% tested), with
+   Calmar still climbing at the top of that range (5.62 → 6.21 → 7.40 → 7.52 → **8.48** at
+   0.5%/1.0%/1.25%/1.75%/2.0%) — the same edge-of-grid problem flagged for multiplier
+   selection itself, one level down. The grid needs widening past 2.0% before 2.0's combo can
+   be trusted as a genuine optimum rather than a cut-off.
+2. **The two candidates are structurally different strategies, not the same mechanism at
+   different scale.** Exit-reason mix (lot1 / lot2, of trades reaching each outcome):
+
+   | | Mult 2.0 lot 1 | Mult 2.0 lot 2 | Mult 2.5 lot 1 | Mult 2.5 lot 2 |
+   |---|---|---|---|---|
+   | trend_flip | 205 (54.7%) | 293 (78.1%) | 40 (14.0%) | 106 (37.2%) |
+   | target | 142 (37.9%) | 47 (12.5%) | 135 (47.4%) | 48 (16.8%) |
+   | stop_loss | 28 (7.5%) | 35 (9.3%) | 110 (38.6%) | 131 (46.0%) |
+
+   At 2.5, the tight 1.0% SL does most of the work (largest single exit-reason bucket for both
+   lots). At 2.0, the wide 2.2% SL barely intervenes — most trades just ride to the raw
+   trend_flip exit. **That trend_flip bucket is not benign for mult 2.0's lot 1**: 205 trades,
+   only 15.1% win rate, −₹120,600 in aggregate — the single biggest loss center in the whole
+   2.0 system, bigger than the SL bucket itself (−₹53,812). The SL is correctly sized to catch
+   *extreme* individual losers (mean −₹1,922/trade vs. trend_flip's −₹588), but the real drag on
+   2.0's lot 1 is a large population of trades that never reach either target and bleed out
+   slowly — a signal-quality issue, not something a different SL fixes. Lot 2's trend_flip, by
+   contrast, is genuinely closer to breakeven (−₹133 avg, 36.5% win rate) — the "let it play
+   out" framing holds there, just not for lot 1.
+3. **No CRUDEOIL cross-validation yet.** Phase 2 wasn't trusted until every major finding
+   replicated on the full-size contract; Phase 3's multiplier and exit choices are CRUDEOILM-only
+   so far.
+4. **No transaction costs modeled** (same convention as v1/Phase 2) — mult 2.0 has the highest
+   trade count of any candidate (375 vs. 2.5's 285), making it the most cost-exposed once
+   slippage/brokerage are added.
+5. **In-sample selection throughout** — both the multiplier grid and every exit-parameter grid
+   were selected on the same window they're evaluated against; no train/test split or
+   walk-forward check has been run.
+
+### Supporting analysis
+
+- **Multiplier sensitivity (MAE/MFE/P&L distributions, equity curve, drawdown)** — published
+  artifact (private): `https://claude.ai/code/artifact/1ce085fa-bb85-4b92-b777-81cdde674268`.
+- **Scale-out vs. raw, Phase 2 vs. Phase 3, and mult 2.0 vs. 2.5** (equity curves, drawdown
+  curves, full per-trade comparison tables, all three as separate sections on one page) —
+  published artifact (private): `https://claude.ai/code/artifact/624f0f27-8c12-4d5a-9e3a-9f050b34e087`.
+  This is where the per-lot-exit-event equity/Calmar numbers quoted in the two-candidate table
+  above come from — a finer-grained cash-flow series than `exit_calib_p3.py`'s own per-trade
+  summary, so its max-DD figures read a little deeper (e.g. mult 2.5: −₹11,219 here vs. −₹10,886
+  in `exit_calib_p3_winners.csv`) because it can see a dip that opens and closes entirely
+  between one trade's lot 1 exit and its lot 2 exit. Not a contradiction, just more precision.
+
+### Not yet done / open threads
+
+- **The 2.0-vs-2.5 decision itself** — pending, blocked mainly on open caveat #1 above (2.0's
+  T1 grid needs widening) and #3 (no CRUDEOIL cross-validation for either).
+- Re-run the robustness check (fixed combo across the whole multiplier grid) against the
+  2026-09-01 data and the now-8-point grid (2.0–5.5) — the version quoted above predates both.
+- CRUDEOIL cross-validation, for whichever candidate is chosen.
+- Transaction-cost modeling, given how trade-count-sensitive the candidates are to each other.
+- Once a candidate is chosen: fold it into `configs_p3.py` as the default, and decide whether
+  Phase 3 supersedes Phase 2 as the production target or runs alongside it.
+
 ## Running
 
 ```bash
-python prometheus_backtest/run.py              # v1 baseline
-python prometheus_backtest/sweep.py             # v1 calibration grids
-python prometheus_backtest/phase2/run_p2.py     # Phase 2, current recommended config
-python prometheus_backtest/phase2/sweep_p2.py   # Phase 2 calibration grids
+python prometheus_backtest/run.py                    # v1 baseline
+python prometheus_backtest/sweep.py                  # v1 calibration grids
+python prometheus_backtest/phase2/run_p2.py          # Phase 2, current recommended config
+python prometheus_backtest/phase2/sweep_p2.py        # Phase 2 calibration grids
+python prometheus_backtest/phase3/sweep_p3.py        # Phase 3, raw signal-quality sweep (all multipliers)
+python prometheus_backtest/phase3/exit_calib_p3.py   # Phase 3, exit calibration (all multipliers; reuses sweep_p3.py's logs)
+python prometheus_backtest/phase3/bespoke_2lot_p3.py # Phase 3, full per-trade detail for the two candidate combos
 ```
 
-Symbol switch: `SYMBOL` in `configs.py` / `configs_p2.py` — `'CRUDEOILM'` (default, primary
-calibration target) or `'CRUDEOIL'` (cross-validation, full-size contract).
+Symbol switch: `SYMBOL` in `configs.py` / `configs_p2.py` / `configs_p3.py` — `'CRUDEOILM'`
+(default, primary calibration target) or `'CRUDEOIL'` (cross-validation, full-size contract).
+Phase 3 has not yet been run against CRUDEOIL (see Phase 3's open threads above).
 
 All generated output (`data/`, `data_sweep/`, per-trade logs) is gitignored — every number in
 this README was verified against a fresh run of the current code, not carried over from

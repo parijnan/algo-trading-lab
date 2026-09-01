@@ -453,8 +453,28 @@ production architecture.
 | Stop loss | 1.8% of entry — single shared stop protecting whichever lot(s) remain open |
 | Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
 | Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
-| Backtest | 219 trades · WR 55.7% · ₹44,693 total P&L (151 trading days) · Calmar 2.99 (unitless) / 5.20 (annualized, ₹1L capital basis) |
+| Backtest (Phase 2, above config) | 221 trades · WR 55.2% · ₹42,453 total P&L (152 trading days, refreshed through the latest candle) · Calmar 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
 | Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built (`prometheus_production/`), `DRY_RUN=True` by default — not yet live-tested.** Order-update WebSocket unverified for MCX (Rollout step 2). |
+
+### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest-only, decision pending)
+
+Not to be confused with the unrelated "Phase 3 Research" section below (that one's ML regime
+work tied to Apollo). This is a second Prometheus design track, still backtest-only: positional
+2-lot scale-out (no EOD square-off — a genuine architectural departure from the session-bound
+Phase 2 above), with the entry signal's own Supertrend multiplier itself put under test for the
+first time (Phase 2's `ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated
+for crude). Two calibrated candidates are under live consideration as of 2026-09-01 — decision
+pending, not yet folded into `prometheus_production/`:
+
+| | Mult 2.0 (SL 2.2%/T1 2.0%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
+|---|---|---|
+| Backtest | 375 trades · WR 44.3% · ₹163,451 total P&L · Calmar 9.83 | 285 trades · WR 48.1% · ₹103,420 total P&L · Calmar 9.22 |
+
+Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
+edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade
+manager — structurally different strategies, not the same one at a different scale), and the
+open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3
+section.
 
 ---
 
@@ -513,6 +533,7 @@ algo-trading-lab/
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── prometheus-phase2-production.md   # [DESIGN ONLY] Prometheus Phase 2 production architecture — standalone, not Leto-routed
+│   ├── prometheus-phase3-production.md   # [DRAFT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; several sections OPEN
 │   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
@@ -669,7 +690,7 @@ algo-trading-lab/
 │       ├── .gitkeep
 │       └── trade_logs/             # Per-trade minute-by-minute option price logs
 ├── prometheus_backtest/            # Prometheus — MCX CRUDEOILM intraday trend-following (backtest only)
-│   ├── README.md                   # Full design + calibration journey for both phases
+│   ├── README.md                   # Full design + calibration journey, all three phases
 │   ├── configs.py                  # Phase 1 (v1) — dual-timeframe, superseded, retained for reference
 │   ├── data_loader.py
 │   ├── backtest.py
@@ -679,15 +700,23 @@ algo-trading-lab/
 │   ├── trade_paths.py
 │   ├── data/                       (generated — gitignored)
 │   ├── data_sweep/                 (generated — gitignored)
-│   └── phase2/                     # Phase 2 — two-lot scale-out (active, calibrated & cross-validated)
-│       ├── configs_p2.py           # Sole parameter source — THRESHOLD_MODE='pct', SL_PCT=1.8, TARGET1_PCT=1.0, TARGET2_MODE='flat_pct'
-│       ├── data_loader_p2.py
-│       ├── backtest_p2.py          # Two-lot state machine
-│       ├── trade_paths_p2.py       # Per-trade logs: lot1/lot2/total running P&L + MAE/MFE
-│       ├── analysis_p2.py
-│       ├── run_p2.py
-│       ├── sweep_p2.py
-│       ├── data/                   (generated — gitignored)
+│   ├── phase2/                     # Phase 2 — two-lot scale-out (active, calibrated & cross-validated)
+│   │   ├── configs_p2.py           # Sole parameter source — THRESHOLD_MODE='pct', SL_PCT=1.8, TARGET1_PCT=1.0, TARGET2_MODE='flat_pct'
+│   │   ├── data_loader_p2.py
+│   │   ├── backtest_p2.py          # Two-lot state machine
+│   │   ├── trade_paths_p2.py       # Per-trade logs: lot1/lot2/total running P&L + MAE/MFE
+│   │   ├── analysis_p2.py
+│   │   ├── run_p2.py
+│   │   ├── sweep_p2.py
+│   │   ├── data/                   (generated — gitignored)
+│   │   └── data_sweep/             (generated — gitignored)
+│   └── phase3/                     # Phase 3 — positional two-lot scale-out (backtest-only, decision pending)
+│       ├── configs_p3.py           # ST_MULTIPLIER_GRID (signal itself under test — never calibrated for crude before)
+│       ├── backtest_p3.py          # Raw signal-following state machine (trend_flip-only exit)
+│       ├── trade_paths_p3.py       # Per-trade 1-min MAE/MFE/unrealised-P&L logs — the exit-calibration substrate
+│       ├── sweep_p3.py             # Raw signal-quality sweep across the multiplier grid
+│       ├── exit_calib_p3.py        # Staged SL/target1/target2 calibration, reuses sweep_p3.py's logs
+│       ├── bespoke_2lot_p3.py      # Full per-trade detail for a chosen combo, schema-matched to trade_summary_p2.csv
 │       └── data_sweep/             (generated — gitignored)
 ├── prometheus_production/          # Prometheus live paper/production trading — standalone, not Leto-routed
 │   ├── prometheus.py               # Main strategy loop — own login/session/teardown, own cron entry

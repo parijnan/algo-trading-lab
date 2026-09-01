@@ -71,7 +71,11 @@ MIN_ENTRY_TIME = '09:15'   # skip first 15 min — thin opening liquidity
 # ---------------------------------------------------------------------------
 ST_PERIOD = 10   # held fixed; not swept this round (grid is multiplier-only,
                  # matching the user's specific 10,3-vs-10,4 hypothesis)
-ST_MULTIPLIER_GRID = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
+ST_MULTIPLIER_GRID = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
+# 2.0 added 2026-09-01: raw Calmar was still climbing steadily from 5.5 down
+# to 2.5, the classic edge-of-grid overfitting signature -- extending one
+# step further was needed to check whether that climb continues (it didn't;
+# see prometheus_backtest/README.md's Phase 3 section).
 
 # ---------------------------------------------------------------------------
 # Costs — same convention as every other phase: deliberately absent.
