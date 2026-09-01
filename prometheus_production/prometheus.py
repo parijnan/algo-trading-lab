@@ -100,6 +100,13 @@ class Prometheus:
         self.feed = None
         self.order_watcher = OrderFillWatcher()
         self._shutdown = False
+        # Set by the KILL command handler so _teardown() knows NOT to
+        # auto-exit an open position -- KILL's entire premise ("Control
+        # dropped. Position remains OPEN.", slack_listener.py's own message)
+        # contradicts _teardown()'s default behavior of auto-flattening
+        # anything still open, since teardown otherwise has no way to tell
+        # a deliberate hand-off apart from a normal end-of-session flatten.
+        self._kill_no_exit = False
 
         self._contract = None      # resolved once at setup — §1's single authoritative source
         self._df_15m = None        # full seeded + accumulated 15-min ST series (in-memory)
@@ -182,6 +189,7 @@ class Prometheus:
                 msg = f'\U0001f6a8 {tag}: Slack `Kill Switch` detected. Dropping control immediately.'
                 logger.critical(msg.replace('*', ''))
                 _slack(msg, SLACK_TRADE_ALERTS)
+                self._kill_no_exit = True   # tell _teardown() not to auto-exit an open position
                 raise RuntimeError('Session terminated by Slack !kill command.')
 
             # DISABLE: startup gate only, handled in main() before instantiation.
@@ -296,6 +304,24 @@ class Prometheus:
 
     def _teardown(self) -> None:
         tag = _tag(self._contract['symbol_root']) if self._contract else '*Prometheus*'
+
+        if self._kill_no_exit and self.state.status == 'in_trade':
+            # KILL's entire premise (slack_listener.py's own message: "Control
+            # dropped. Position remains OPEN.") is to hand the position off
+            # untouched for manual management -- do not place any exit order,
+            # do not change state. Only the feed/process itself shuts down.
+            if self.feed:
+                try:
+                    self.feed.stop()
+                except Exception:
+                    pass
+            logger.warning('Teardown after KILL — leaving open position untouched, per Kill Switch.')
+            _slack(f'⏹ {tag}: stopped via Kill Switch. Position left OPEN and untouched, '
+                  f'as promised — manage it manually, or restart Prometheus to resume monitoring it.',
+                  SLACK_TRADEBOT_CHANNEL)
+            self._send_session_report()
+            return
+
         exit_confirmed = True
         if self.state.status == 'in_trade':
             logger.warning('Teardown with open position — exiting.')
