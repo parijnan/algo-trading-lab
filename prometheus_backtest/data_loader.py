@@ -16,10 +16,23 @@ def load_futures_1min(symbol: str) -> pd.DataFrame:
     """
     Concatenate every per-contract CSV for `symbol` under
     data_pipeline/data/mcx/<symbol>/, tagging each row with the contract's
-    expiry date. No back-adjustment needed: the strategy is pure intraday,
-    so no position ever spans a contract roll — each day's bars belong to
-    whichever contract was genuinely front-month that day, which is exactly
-    what the earlier expiry-boundary split already preserved.
+    expiry date, then keep only the genuinely-front-month row for each
+    calendar date. No back-adjustment needed: the strategy is pure intraday
+    (Phase 1/2) or the ST-splicing-across-rolls question is a separate,
+    already-accepted issue (Phase 3) — no position ever spans a contract
+    roll in a way this function needs to handle differently.
+
+    The front-month de-duplication step (added 2026-09-01) is NOT
+    optional: a contract's own file can now carry data well before its own
+    front-month tenure (data_downloader_mcx.py's own backfills for live
+    seeding purposes deliberately extend a newly-effective contract's file
+    backward — confirmed live this session, e.g. 2026-09-21_futures.csv now
+    starts 2026-02-11, months before it was ever front-month). Without this
+    step, dates covered by more than one contract's file get silently
+    blended — the resample step downstream just picks whichever row sorts
+    first for a given minute, mixing two different instruments' prices.
+    Caught via a real anomaly: a trade entered and exited entirely within
+    2026-02-10/11 showed exit_contract_expiry='2026-09-21' before this fix.
     """
     contract_dir = os.path.join(configs.MCX_DATA_DIR, symbol)
     files = sorted(glob.glob(os.path.join(contract_dir, '*_futures.csv')))
@@ -30,11 +43,30 @@ def load_futures_1min(symbol: str) -> pd.DataFrame:
     for f in files:
         df = pd.read_csv(f, parse_dates=['time_stamp'])
         df['time_stamp'] = pd.to_datetime(df['time_stamp']).dt.tz_localize(None)
-        df['contract_expiry'] = os.path.basename(f).replace('_futures.csv', '')
+        expiry_str = os.path.basename(f).replace('_futures.csv', '')
+        df['contract_expiry'] = expiry_str
+        df['expiry_date'] = pd.Timestamp(expiry_str)
         frames.append(df)
 
     full = pd.concat(frames, ignore_index=True)
     full = full[(full['close'].notna()) & (full['close'] > 0)]
+
+    # For each calendar date, the genuine front-month contract is the one
+    # with the smallest expiry_date >= that date (matches
+    # data_downloader_mcx.py's own select_front_month_contracts() rule) --
+    # keep only rows matching that contract, dropping any "extra" history a
+    # file carries beyond its own real front-month tenure.
+    full['date'] = full['time_stamp'].dt.normalize()
+    all_dates = pd.DataFrame({'date': sorted(full['date'].unique())})
+    expiry_calendar = pd.DataFrame({'expiry_date': sorted(full['expiry_date'].unique())})
+    front_month_by_date = pd.merge_asof(
+        all_dates, expiry_calendar, left_on='date', right_on='expiry_date', direction='forward'
+    ).rename(columns={'expiry_date': 'front_month_expiry'})
+
+    full = full.merge(front_month_by_date, on='date', how='left')
+    full = full[full['expiry_date'] == full['front_month_expiry']]
+    full = full.drop(columns=['date', 'expiry_date', 'front_month_expiry'])
+
     full = full.set_index('time_stamp').sort_index()
     return full
 
