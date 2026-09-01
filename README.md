@@ -468,7 +468,7 @@ pending, not yet folded into `prometheus_production/`:
 
 | | Mult 2.0 (SL 2.2%/T1 2.0%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|
-| Backtest | 375 trades · WR 44.3% · ₹163,451 total P&L · Calmar 9.83 | 285 trades · WR 48.1% · ₹103,420 total P&L · Calmar 9.22 |
+| Backtest | 373 trades · WR 44.5% · ₹167,819 total P&L · Calmar 10.09 | 283 trades · WR 48.8% · ₹111,734 total P&L · Calmar 9.96 |
 
 Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
 edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade

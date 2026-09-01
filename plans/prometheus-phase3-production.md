@@ -135,7 +135,29 @@ Total      : <realised + unrealised>
 
 ---
 
-## 10. Open decisions — summary
+## 10. ST-15 seed skip-list — excluding known-bad sessions from the daily re-seed window
+
+Since `prometheus.py` is a fresh cron-launched process every session (§2), it never carries an in-memory Supertrend state across days — `seed_st15` recomputes ST_15 from scratch every morning off a rolling `SEED_DAYS=18` calendar-day tail-read (`prometheus_configs.py`). Every single day's regime state depends on that same ~18-day (~13-14 trading-day) window of raw 1-min history, recomputed fresh — so a known-bad session anywhere in that window corrupts the live seed for as long as it stays in the window, not just the one day it happened on.
+
+This is the live-production version of exactly what was just fixed for the backtest: 2026-02-01's MCX Union Budget special session (WTI not trading, thin/disconnected price action) was confirmed this session to distort both raw ST_15 signal flips and SL/target fills, understating the true achievable P&L of both multiplier candidates by real money (₹4,368 at mult 2.0, ₹8,314 at mult 2.5, once fixed). The backtest fix was permanent — drop the date from the historical file, once, forever (`prometheus_backtest/data_loader.py`'s `load_futures_1min`). Live seeding can't do that the same way: the same date keeps re-entering the rolling window every morning for as long as it's within `SEED_DAYS` of today, and a *new* anomalous session (a future Budget day, a muhurat/special session, an exchange-declared correction) could appear at any time, not just retroactively.
+
+**Add `ST_SEED_SKIP_DATES` to `prometheus_configs.py`** (production counterpart of `configs_p3.py`): a plain list of ISO date strings, empty by default, manually populated by an operator when a known-bad session is identified —
+
+```python
+ST_SEED_SKIP_DATES = [
+    '2026-02-01',  # MCX Union Budget special session, WTI not trading -- added 2026-09-XX
+]
+```
+
+`seed_st15`/`_tail_read_contract_csv` filters these dates out of the raw 1-min tail-read before resampling to 15-min and computing Supertrend — same mechanism, same place in the pipeline, as the backtest fix. Applies wherever `seed_st15` runs, which includes the rollover re-seed (§5, item 2) as well as the normal daily `_setup()` seed — one function, one fix, no separate handling needed for either caller.
+
+**Lifecycle, per direction**: rarely populated, manually pruned, not a permanent growing list. Once a skipped date falls outside the rolling `SEED_DAYS` window (today minus `SEED_DAYS` calendar days > the skipped date), the entry is a no-op — it's excluding a date the window was never going to include anyway — and should be deleted from `configs.py` at that point. `SEED_DAYS=18` calendar days ≈ 13-14 trading days, so roughly 3 weeks after adding an entry it's due for removal. Annotate each entry with the date it was added (as above) so staleness is easy to eyeball rather than tracked separately.
+
+**Recommended, not required**: a non-blocking startup log line (in `seed_st15` or `_setup()`) listing any `ST_SEED_SKIP_DATES` entries that have already aged out of the current window — costs nothing, and turns "did anyone remember to prune this" into something the logs surface on their own rather than relying on an operator's memory.
+
+---
+
+## 11. Open decisions — summary
 
 1. §4 — missed-rollover recovery: roll immediately at open vs. refuse-and-alert. (Leaning: roll immediately, loudly alerted.)
 2. §6 — SL/target recalibration method: the proposed historical-basis method, reset-to-now, or flatten-and-don't-reopen. Blocked on the two empirical checks named there.

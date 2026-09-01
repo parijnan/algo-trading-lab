@@ -51,6 +51,18 @@ def load_futures_1min(symbol: str) -> pd.DataFrame:
     full = pd.concat(frames, ignore_index=True)
     full = full[(full['close'].notna()) & (full['close'] > 0)]
 
+    # Drop Sat/Sun bars (2026-09-01, real incident): the production cron is
+    # Mon-Fri only ("15 9 * * 1-5", CLAUDE.md), so a live Prometheus process
+    # never runs and never observes price action on a weekend special
+    # session -- confirmed exactly one such session exists in this dataset,
+    # MCX's 2026-02-01 Union Budget session (WTI itself wasn't trading).
+    # Left in, that session's thin, WTI-disconnected price action could
+    # (and did) drive both raw signal flips and SL/target fills a live
+    # Mon-Fri cron could never have reacted to -- e.g. mult 2.0/2.5's own
+    # bespoke exit-calibration each had 2-3 trades whose stop/target fired
+    # on that Sunday, net understating true achievable P&L by ~Rs 957-4,902.
+    full = full[full['time_stamp'].dt.dayofweek < 5]
+
     # For each calendar date, the genuine front-month contract is the one
     # with the smallest expiry_date >= that date (matches
     # data_downloader_mcx.py's own select_front_month_contracts() rule) --

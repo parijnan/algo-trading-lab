@@ -220,13 +220,25 @@ design, not reinstating Phase 2's session structure.
   comparison; saves `data_sweep/mult_<X.X>/bespoke_trade_summary.csv` — for manually inspecting
   individual trades, not for calibration itself
 
+**Data-quality fix (2026-09-01):** `load_futures_1min` now drops Saturday/Sunday bars entirely.
+Exactly one such session exists across the whole dataset — MCX's 2026-02-01 Union Budget special
+session (WTI itself wasn't trading) — but left in, it fed both the raw ST_15 signal computation
+and SL/target fill checks with thin, WTI-disconnected price action that a live Prometheus process
+could never have reacted to anyway: the production cron is Mon-Fri only (`15 9 * * 1-5`), so it
+simply isn't running on a Sunday. Confirmed via a real incident this session — a short entered
+Friday 2026-01-30 got stopped out one minute into that Sunday session, a fill no live deployment
+could ever have produced — this is a permanent fix to the historical data, not a one-off patch;
+every number below reflects it. (The live-production analogue — a known-bad session re-entering
+the *daily* ST re-seed window rather than one-time historical data — is tracked as `ST_SEED_SKIP_DATES`
+in `plans/prometheus-phase3-production.md` §10.)
+
 **Raw signal-quality sweep results** (`ST_PERIOD=10`, no SL/target/EOD, refreshed through the
 latest candle):
 
 | Multiplier | Trades | Win % | Total P&L | Max DD | Calmar |
 |---|---|---|---|---|---|
-| 2.0 | 375 | 41.6% | ₹145,600 | −₹19,740 | 7.38 |
-| 2.5 | 285 | 41.8% | ₹122,670 | −₹16,600 | 7.39 |
+| 2.0 | 373 | 41.8% | ₹147,320 | −₹19,740 | 7.46 |
+| 2.5 | 283 | 42.0% | ₹124,390 | −₹16,600 | 7.49 |
 | 3.0 | 229 | 39.3% | ₹66,950 | −₹19,680 | 3.40 |
 | 3.5 | 194 | 38.1% | ₹43,650 | −₹20,190 | 2.16 |
 | 4.0 | 158 | 38.6% | ₹29,550 | −₹18,850 | 1.57 |
@@ -234,11 +246,11 @@ latest candle):
 | 5.0 | 114 | 39.5% | ₹36,090 | −₹28,910 | 1.25 |
 | 5.5 | 97 | 40.2% | ₹29,540 | −₹32,340 | 0.91 |
 
-Raw Calmar climbs steadily as the multiplier drops from 5.5 to 2.5 (0.91 → 7.39) — on its own,
+Raw Calmar climbs steadily as the multiplier drops from 5.5 to 2.5 (0.91 → 7.49) — on its own,
 that's the signature of an under-explored grid edge, not a found optimum (the lowest multiplier
 tested looking best is exactly what you'd see if the real peak sits below the grid, or if the
 tightest setting is just chasing noise). Extending one step further to 2.0 broke that pattern:
-Calmar essentially flattened (7.38 vs 7.39) instead of continuing to climb — a reassuring
+Calmar essentially flattened (7.46 vs 7.49) instead of continuing to climb — a reassuring
 single data point, not proof, but it argues against 2.5 being purely a boundary artifact.
 
 **Exit calibration winners, all multipliers** (SL/target1/target2 grids: 1.0–3.5% / 0.5–2.0% /
@@ -246,13 +258,13 @@ single data point, not proof, but it argues against 2.5 being purely a boundary 
 
 | Multiplier | SL% | T1% | T2% | Calmar | Total P&L | Max DD |
 |---|---|---|---|---|---|---|
-| 2.0 | 2.2 | 2.0 | 5.0 | 10.07 | ₹163,451 | −₹16,235 |
-| 2.5 | 1.0 | 1.25 | 4.0 | 9.50 | ₹103,420 | −₹10,886 |
-| 3.0 | 1.8 | 0.75 | 6.0 | 5.19 | ₹82,700 | −₹15,937 |
-| 3.5 | 1.8 | 1.75 | 6.0 | 3.04 | ₹59,106 | −₹19,427 |
-| 4.0 | 2.6 | 1.75 | 3.0 | 3.21 | ₹52,247 | −₹16,272 |
-| 4.5 | 1.8 | 1.0 | 2.5 | 5.66 | ₹46,137 | −₹8,156 |
-| 5.0 | 1.0 | 1.0 | 5.0 | 8.82 | ₹65,655 | −₹7,446 |
+| 2.0 | 2.2 | 2.0 | 5.0 | 10.34 | ₹167,819 | −₹16,235 |
+| 2.5 | 1.0 | 1.25 | 4.0 | 10.26 | ₹111,734 | −₹10,886 |
+| 3.0 | 1.8 | 0.75 | 6.0 | 5.64 | ₹89,890 | −₹15,937 |
+| 3.5 | 1.8 | 1.75 | 6.0 | 3.41 | ₹66,296 | −₹19,427 |
+| 4.0 | 2.6 | 1.75 | 3.0 | 3.59 | ₹58,463 | −₹16,272 |
+| 4.5 | 1.8 | 1.0 | 2.5 | 6.29 | ₹51,290 | −₹8,156 |
+| 5.0 | 1.0 | 1.0 | 5.0 | 9.76 | ₹72,645 | −₹7,446 |
 | 5.5 | 1.0 | 1.0 | 5.0 | 10.50 | ₹67,162 | −₹6,394 |
 
 (Calmar/max-DD here use the per-trade, lot1+lot2-combined equity series that `exit_calib_p3.py`
@@ -273,20 +285,20 @@ directional, not current; it hasn't been re-run since.
 
 | Metric | Mult 2.0 (SL 2.2/T1 2.0/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
 |---|---|---|
-| Total trades | 375 | 285 |
-| Win % | 44.27% | 48.07% |
-| Total P&L | ₹163,451 | ₹103,420 |
-| Avg win / avg loss | ₹3,173 / −₹1,738 | ₹2,268 / −₹1,401 |
+| Total trades | 373 | 283 |
+| Win % | 44.50% | 48.76% |
+| Total P&L | ₹167,819 | ₹111,734 |
+| Avg win / avg loss | ₹3,173 / −₹1,734 | ₹2,280 / −₹1,399 |
 | Max win / max loss | ₹9,376 / −₹6,320 | ₹7,835 / −₹2,160 |
-| Max drawdown | −₹16,624 | −₹11,219 |
-| Calmar | 9.83 | 9.22 |
+| Max drawdown | −₹16,625 | −₹11,219 |
+| Calmar | 10.09 | 9.96 |
 
 Both re-run against the 2026-09-01 refreshed data. Both shown at 1 unit (2 lots) as traded —
 no capital normalisation.
 
 **Open caveats on both candidates, not yet resolved:**
 1. **Mult 2.0's `TARGET1_PCT` landed on the edge of its own grid** (0.5%–2.0% tested), with
-   Calmar still climbing at the top of that range (5.62 → 6.21 → 7.40 → 7.52 → **8.48** at
+   Calmar still climbing at the top of that range (5.73 → 6.46 → 7.66 → 7.77 → **8.73** at
    0.5%/1.0%/1.25%/1.75%/2.0%) — the same edge-of-grid problem flagged for multiplier
    selection itself, one level down. The grid needs widening past 2.0% before 2.0's combo can
    be trusted as a genuine optimum rather than a cut-off.
@@ -295,19 +307,19 @@ no capital normalisation.
 
    | | Mult 2.0 lot 1 | Mult 2.0 lot 2 | Mult 2.5 lot 1 | Mult 2.5 lot 2 |
    |---|---|---|---|---|
-   | trend_flip | 205 (54.7%) | 293 (78.1%) | 40 (14.0%) | 106 (37.2%) |
-   | target | 142 (37.9%) | 47 (12.5%) | 135 (47.4%) | 48 (16.8%) |
-   | stop_loss | 28 (7.5%) | 35 (9.3%) | 110 (38.6%) | 131 (46.0%) |
+   | trend_flip | 204 (54.7%) | 292 (78.3%) | 40 (14.1%) | 106 (37.5%) |
+   | target | 142 (38.1%) | 47 (12.6%) | 136 (48.1%) | 49 (17.3%) |
+   | stop_loss | 27 (7.2%) | 34 (9.1%) | 107 (37.8%) | 128 (45.2%) |
 
    At 2.5, the tight 1.0% SL does most of the work (largest single exit-reason bucket for both
    lots). At 2.0, the wide 2.2% SL barely intervenes — most trades just ride to the raw
-   trend_flip exit. **That trend_flip bucket is not benign for mult 2.0's lot 1**: 205 trades,
-   only 15.1% win rate, −₹120,600 in aggregate — the single biggest loss center in the whole
-   2.0 system, bigger than the SL bucket itself (−₹53,812). The SL is correctly sized to catch
-   *extreme* individual losers (mean −₹1,922/trade vs. trend_flip's −₹588), but the real drag on
+   trend_flip exit. **That trend_flip bucket is not benign for mult 2.0's lot 1**: 204 trades,
+   only 15.2% win rate, −₹119,740 in aggregate — the single biggest loss center in the whole
+   2.0 system, bigger than the SL bucket itself (−₹52,504). The SL is correctly sized to catch
+   *extreme* individual losers (mean −₹1,945/trade vs. trend_flip's −₹587), but the real drag on
    2.0's lot 1 is a large population of trades that never reach either target and bleed out
    slowly — a signal-quality issue, not something a different SL fixes. Lot 2's trend_flip, by
-   contrast, is genuinely closer to breakeven (−₹133 avg, 36.5% win rate) — the "let it play
+   contrast, is genuinely closer to breakeven (−₹131 avg, 36.6% win rate) — the "let it play
    out" framing holds there, just not for lot 1.
 3. **No CRUDEOIL cross-validation yet.** Phase 2 wasn't trusted until every major finding
    replicated on the full-size contract; Phase 3's multiplier and exit choices are CRUDEOILM-only
