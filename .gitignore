@@ -415,6 +415,8 @@ prometheus_backtest/data/
 prometheus_backtest/data_sweep/
 prometheus_backtest/phase2/data/
 prometheus_backtest/phase2/data_sweep/
+prometheus_backtest/phase3/data/
+prometheus_backtest/phase3/data_sweep/
 
 # Prometheus prep research — generated output
 research/crudeoilm_st15_pivots/outputs/
