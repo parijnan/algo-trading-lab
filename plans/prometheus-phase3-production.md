@@ -92,7 +92,11 @@ This reuses `resolve_effective_contract()` completely unchanged — just called 
 1. **How often does a position actually straddle a roll?** Cross each candidate's `bespoke_trade_summary.csv` entry/exit timestamps against the per-contract trading-day calendar (already built once this session for the Phase 2 plan's drop-analysis re-verification). If straddling rolls are rare (a couple of instances across the whole backtest), a simple scheme is fine even if imperfect; if it's common, the method matters a lot more. The raw backtest's `avg_hold_hours` (17.9 at mult 2.5, up to 51.0 at 5.5, maxima 103–145h) suggests *rare but real* — but that's the *unmanaged* hold time; the calibrated 2-lot versions exit earlier on average and need their own check.
 2. **Basis drift vs. target distance, over realistic hold windows — tried this against a real instance, blocked.** `TENDER_ROLL_TRADING_DAYS=5` off the Aug-19 expiry puts a real rollover at **2026-08-12, 23:15** (confirmed against `_count_trading_days_inclusive` and the real MCX holiday calendar), and both mult 2.0 and mult 2.5's bespoke backtests had a position open at exactly that moment (trade 344 / trade 264, both bearish, both lots still open). Tried computing the basis directly from this instance and hit a data problem, not a market one: `2026-09-21_futures.csv`'s price is an **exact clone** of whichever contract was genuinely front-month at each point in its backfilled history — checked against August (its own eventual predecessor), July, and June, all three showing **zero spread across the entire overlap, to the last paisa, over ~18-19k one-minute bars each**. Ruled out our own code as the cause (`download_futures_contract` correctly requests the contract's own token from AngelOne); the clone is coming from the broker's historical response for a token that far from expiry. Confirmed with the user this reads as a broker/historical-API artifact, not a genuine MCX quoting convention — i.e., a *live* LTP poll for the next contract at the time would likely be genuine; it's specifically a *retroactive historical* request for an inactive token that comes back corrupted. **This means check #2 cannot be run against current historical data at all** — the "overlapping 1-min data" once assumed usable for this is exactly the corrupted stretch. It can only be redone once genuine live-captured history exists (see the new prerequisite below).
 
-**New prerequisite this surfaced, specific to the historical-basis method**: nothing in the current pipeline ever captures live price data for a contract before it becomes front-month. `select_front_month_contracts()` (used by both `data_downloader_mcx.py`'s offline backfill and `mcx_live_downloader.py`'s live poller) returns exactly one row per underlying — "the contract with the nearest expiry that has not yet passed" — and `resolve_effective_contract()` resolves to that same single contract. So even in live production, the *only* way to learn what the next contract was trading at some point in the past is a historical backfill request after the fact — the exact request type just shown to come back corrupted. **For the historical-basis method to ever have trustworthy data, the pipeline needs to proactively track every currently-listed contract's live 1-min price in parallel, not only the front-month one** — started early enough (ideally from first listing) that genuine live-captured history already exists back to any open position's entry timestamp by the time a rollover happens. This is real new infrastructure, not a config change, and it's a cost specific to this method — reset-to-now and flatten-and-don't-reopen only ever need the new contract's *current* price at rollover time, which a plain live poll already gets correctly regardless of any of this.
+**New prerequisite this surfaced, specific to the historical-basis method — now partially built (2026-09-02).** At the time this was written, nothing in the pipeline ever captured live price data for a contract before it became front-month: `select_front_month_contracts()` (used by both `data_downloader_mcx.py`'s offline backfill and `mcx_live_downloader.py`'s live poller) returned exactly one row per underlying, and `resolve_effective_contract()` resolved to that same single contract — so the only way to learn what the next contract was trading at some point in the past was a historical backfill request after the fact, the exact request type just shown to come back corrupted.
+
+`data_downloader_mcx.py` now also tracks the **next-month** contract for every enabled underlying, including CRUDEOIL/CRUDEOILM (`select_next_month_contracts()` — second-nearest unexpired expiry, downloaded via the same `download_futures_contract()` path, forward-only from first sight, same as front-month; initially scoped to just the traded pair via a `track_next_month` config column, simplified 2026-09-02 to apply uniformly to all 22 enabled underlyings instead, alongside a wider redesign — see below). Run nightly (`run_mcx_downloader.sh`, weekdays 23:56 IST, right after the session closes), this means genuine live-captured history now accumulates on the next contract for however long it sits at next-month before rolling — which is exactly what check #2 above needs, and directly closes the "no genuine live-captured history exists" half of this prerequisite.
+
+What this does *not* yet close: the history only starts accumulating from 2026-09-02 forward (no backfill, by design — see the LOOKBACK_DAYS section of `data_pipeline/README.md`), so check #2 still can't be run against the 2026-08-12 rollover instance above — that gap in the data predates this fix and can't be recovered. It also doesn't retroactively fix the already-corrupted `2026-09-21_futures.csv`/etc. on-disk files described above; those stay corrupted (`data_pipeline/README.md`'s "Known limitation, not yet cleaned up"). Whether the accumulated next-month history by *some future* rollover is enough — or whether "started early enough (ideally from first listing)" needs a deeper fix — remains open; re-evaluate once a rollover happens after 2026-09-02 with a real open position at the time.
 
 **Two alternatives worth weighing once those checks are in:**
 
@@ -114,7 +118,87 @@ Either way, **this needs deciding before building the trade log, not discovered 
 
 ---
 
-## 9. Reporting: realised, unrealised, and total P&L in trade updates
+## 8. First-minute exit guard — avoid SL/target/trend_flip on session-open price-discovery noise
+
+**Real incident, 2026-09-02**: CRUDEOILM's very first 1-min candle of the day (09:00:00) printed O=8199 / H=8627 / L=8180 / C=8605 — a 447-point (5.45%) high-low range inside a single minute, on real volume (201 contracts), not a stray tick. User-reported (not independently verified against a file in this repo — the local `CRUDEOIL` data only runs to 2026-08-28, no 09-01/09-02 coverage): the full-size CRUDEOIL contract's same minute showed a normal ~10-point range (8603/8611/8601/8604), suggesting this was thin-liquidity price discovery specific to the mini contract's first minute rather than a genuine underlying move — plausible and consistent with everything below, but flagged here as user-reported pending independent confirmation once CRUDEOIL data for these dates is available locally. Prometheus was flat at the time (last position had closed the evening before), so nothing fired — but this is exactly the shape of print that could trigger a spurious SL or target exit on a real open position, and Phase 3 makes that the *normal* case, not a rare one: positions now routinely sit open across a session's opening bar (§2), where Phase 2 almost never did (always flat by EOD, so its exit-check logic essentially never runs at session start — except in the rare case of a genuinely unconfirmed EOD-exit failure carrying a position into the next day, per the post-2026-08-31 fill-confirmation invariant).
+
+**Precedent already in this codebase**: Apollo has exactly this guard. `apollo_configs.py`: `NO_EXIT_BEFORE = '09:16'`, with the comment "No exit on 09:15 candle close — defer SL check to 09:16." Applied as a plain, non-blocking early return at the top of both exit-check functions (`apollo.py:920-922`, `:942-944`): `if datetime.now().time() < self._no_exit_time: return False`. Artemis has a heavier version (`credit_spread.py:948-991`) that blocks with `sleep()` until 9:16 and does a single fresh re-check when an SL condition fires early, rather than just skipping. Apollo's version is the right fit here — Prometheus's own loop already re-ticks every 0.5–1s, so the very next tick after the guard time re-evaluates with a fresh price automatically; no explicit sleep needed.
+
+**Requirement**: add `NO_EXIT_BEFORE` to `prometheus_configs.py`'s production counterpart, set to **09:01** — one minute past MCX's actual session open (`SESSION_START_TIME='09:00'`), mirroring the *same principle* Apollo/Artemis apply at NSE's 9:15 open (one minute of price-discovery buffer), not the literal clock value, since MCX opens 15 minutes earlier than NSE. Gate the continuous LTP-driven SL/target checks (`_check_exit_conditions_ltp`) behind it.
+
+**This guard does NOT cover trend_flip — a real gap, not a simplification.** Checked `_handle_new_15m_bar` (`prometheus.py:551-628`) directly: it runs unconditionally on every 15-min boundary, with no time gate anywhere in it. It builds the new bar, calls `compute_st` on the combined series, persists it, and reads `flip`/`direction_now` straight off the just-recomputed trend — completely independent of `NO_EXIT_BEFORE`, which only guards the separate continuous-LTP check path. A corrupted 09:00 bar that happened to also cross the existing ST band would have produced a *recorded* `trend_flip`, and under Rule 7 that's simultaneously an exit and a reversed entry, fired immediately at 09:15:04-ish when the bar closes — `NO_EXIT_BEFORE` would not have stopped it. §9 below covers this properly, since it's really the same underlying problem (one bad print distorting the signal) rather than a second, separate first-minute issue.
+
+---
+
+## 9. Price-artifact protection for ST_15 — a single bad print can freeze the signal, not just trigger one bad exit
+
+**The same 2026-09-02 candle corrupted the Supertrend calculation itself, not just the momentary price.** Computed `compute_st` directly against real CRUDEOILM data across the anomalous bar, both multipliers:
+
+- **Mult 3.0: completely frozen.** ST = 8410.370081 at 23:15 (the bar before), stays at *exactly* 8410.370081 through 09:00 (the anomalous bar), 09:15, and 09:30 — three consecutive 15-min bars, 45 minutes, zero movement, while price rallied from ~8528 to ~8617.
+- **Mult 2.0: frozen during the bad bar, then a muted creep.** ST = 8452.246721 at 23:15 and stays there through 09:00, then only creeps to 8456.50 (09:15) and 8472.75 (09:30) — far slower than the move in price would suggest.
+
+**Mechanism**: Supertrend's ratchet takes `max(previous_lower_band, basic_lower)` in an uptrend, where `basic_lower = midpoint − multiplier × ATR`. The 447-point true range on that one bar spiked ATR, which pushed `basic_lower` *down* — below the already-ratcheted previous value — so the ratchet just kept the old band unchanged. The close (8606) itself was fine; it's the *range* that corrupted ATR, and ATR's own rolling window then carries that one inflated reading forward for roughly `ST_PERIOD` (10) more bars, not just this one — meaning the signal can stay distorted well past the bad print itself, not just risk one bad immediate trigger. This is a different, more fundamental problem than §8: §8 stops the SL/target *action*; this is the *signal itself* being wrong for an extended window afterward, including the trend/flip state that Rule 7 acts on.
+
+**Before assuming this is fixable by filtering at all, checked whether the artifact is distinguishable from genuine volatility by size.** Computed the full 15-min true-range distribution across CRUDEOILM's whole history (8,574 bars, mean 48.9, std 43.8). Today's 447-point bar ranks **#11 largest, 99.87th percentile, ~9.1 std devs above the mean** — large, but **not uniquely so**: at least 10 historical bars are equal or bigger, up to 809 points (2026-03-09). **Pure magnitude alone can't separate "bad print" from "real large move"** — but cross-checking each of those 10 bars against CRUDEOIL (the full-size contract, same underlying, same exchange, same minute) at the same timestamps found a much cleaner signal than magnitude:
+
+| Timestamp | CRUDEOILM TR | CRUDEOIL TR | Ratio | Session-opening bar? |
+|---|---|---|---|---|
+| 2026-03-09 10:45 | 809 | 715 | 0.88 | No |
+| 2026-03-23 16:30 | 654 | 654 | 1.00 | No |
+| 2026-04-08 09:30 | 640 | 320 | 0.50 | No (09:30) |
+| 2026-04-06 09:00 | 618 | 160 | 0.26 | **Yes** |
+| 2026-03-09 09:00 | 525 | 365 | 0.70 | **Yes** |
+| 2026-03-09 15:00 | 521 | 521 | 1.00 | No |
+| 2026-03-31 22:00 | 515 | 480 | 0.93 | No |
+| 2026-05-19 09:00 | 490 | 21 | 0.04 | **Yes** |
+| 2026-06-03 09:00 | 477 | 26 | 0.05 | **Yes** |
+| 2026-05-25 09:00 | 468 | 180 | 0.38 | **Yes** |
+| 2026-09-02 09:00 | 447 | n/a (no local coverage) | — | **Yes** |
+| 2026-03-09 19:30 | 442 | 469 | 1.06 | No |
+| 2026-04-02 20:00 | 428 | 424 | 0.99 | No |
+| 2026-03-09 11:15 | 422 | 418 | 0.99 | No |
+| 2026-05-11 09:00 | 397 | 114 | 0.29 | **Yes** |
+
+**Every non-opening-bar large-range event has CRUDEOIL moving in near-lockstep with CRUDEOILM (ratio 0.88–1.06) — these are real market moves.** Every session-*opening*-bar large-range event but one has CRUDEOIL's range at a fraction of CRUDEOILM's (ratio 0.04–0.38) — CRUDEOIL barely moved while CRUDEOILM spiked. Today's incident is the **sixth** confirmed instance of this exact pattern over ~7 months, not a one-off.
+
+**2026-03-09's opening bar (ratio 0.70) is excluded from that pattern, not a partial exception to it.** User's own external research: that date had MCX-side backend changes that may have corrupted data independent of anything about price discovery — a separate, unrelated data-quality issue, not a milder version of the same artifact. Whatever caused it is out of scope here; it shouldn't be forced into the "opening bar" story just because it happened to also be an opening bar, and it shouldn't inform the fix below (its data is potentially unreliable on both instruments, so CRUDEOIL isn't a trustworthy reference for that specific date either).
+
+**Decided: cross-instrument substitution, not filtering.** Since all six confirmed artifacts land in the same single bar (09:00, the very first candle of the session) and CRUDEOIL is confirmed reliable at that exact moment every time, the fix doesn't need to guess at a magnitude threshold or discard information — it can directly replace the bad print with a known-good one. Runs once per session, right after the 09:00 candle downloads; no comparison for any other bar, any other time:
+
+```python
+def patch_opening_bar_if_artifact(m_bar: dict, o_bar: dict, threshold: float = 0.5) -> dict:
+    """
+    m_bar/o_bar: the 09:00 1-min candle for CRUDEOILM/CRUDEOIL, each
+    {'open','high','low','close'}. Same underlying, same per-barrel price
+    (only lot size differs -- no scaling needed, see prometheus_backtest/
+    README.md's CRUDEOIL cross-validation convention). If CRUDEOIL's true
+    range is under `threshold` of CRUDEOILM's at this exact minute,
+    CRUDEOILM's own print is thin-liquidity noise -- substitute CRUDEOIL's
+    OHLC outright. Runs once, right after the 09:00 candle downloads; BAU
+    for the rest of the session either way.
+    """
+    m_tr = m_bar['high'] - m_bar['low']
+    o_tr = o_bar['high'] - o_bar['low']
+    if m_tr > 0 and (o_tr / m_tr) < threshold:
+        logger.warning(f"Opening-bar artifact: CRUDEOILM TR={m_tr} vs CRUDEOIL "
+                        f"TR={o_tr} (ratio {o_tr/m_tr:.2f}) -- substituting.")
+        return o_bar.copy()
+    return m_bar
+```
+
+`threshold=0.5` is a deliberate, evidence-backed choice: it clears every confirmed artifact (0.04–0.38, all comfortably below) with margin, and sits below every confirmed real-move ratio (0.88 and up) from the non-opening-bar evidence — a clean gap, not a fitted cutoff. Because the check only ever runs against the 09:00 bar, it never touches 2026-04-08's 09:30 bar (ratio 0.50, ambiguous, but out of scope by construction) or 2026-03-09's excluded case.
+
+**This beats both insertion points considered earlier** (1-min raw clamp, and ATR-input winsorizing): it doesn't rewrite broad swaths of history the way a general clamp would (only ever touches one candle, once a day, and only when the check actually fires), and it doesn't need a guessed cap or a discarded bar the way winsorizing/exclusion would — CRUDEOIL's own print *is* the correct value, not an estimate of one.
+
+**New production requirement this creates**: the pipeline needs CRUDEOIL's own 09:00 candle available at the moment CRUDEOILM's downloads, every session — a live poll for that one instrument, once a day, right at the open. Smaller and more targeted than §6's "track every listed contract continuously" requirement (that one's for arbitrary historical lookback across a rollover's whole holding period; this one only ever needs a single, same-day candle), but it's the same class of gap — nothing in the current pipeline polls CRUDEOIL at all today (`select_front_month_contracts` per underlying, §6) — so this still needs building, not assuming.
+
+**Applies to both backtest and production, but not identically implemented**: the backtest correction (`prometheus_backtest/data_loader.py`, `_CRUDEOILM_OPENING_BAR_CORRECTIONS`) is a hardcoded dict of the 6 confirmed dates and their known-correct OHLC values — a fixed, reviewed substitution for reproducing this calibration, not a live `threshold=0.5` check. It does not auto-detect a 7th instance if one occurs in data added later; a future date showing the same pattern needs to be confirmed and added to the dict by hand, the same way these 6 were. Production runs the actual live `patch_opening_bar_if_artifact()` check described above, every session, against whatever CRUDEOIL prints that day — that one *is* general-purpose. Don't assume the backtest's behavior generalizes past these 6 dates.
+
+**Cost of getting this wrong either way**: this changes the ST_15 series again, which means the mult 2.0-vs-2.5 comparison (already re-run once this session for the weekend-bar fix) needs re-running a second time once this is implemented. Known cost, not a surprise.
+
+---
+
+## 10. Reporting: realised, unrealised, and total P&L in trade updates
 
 **Requirement (Phase 3 only — Phase 2 keeps its current reporting unchanged):** every periodic trade update and the "still open at session end" line in the session report must show realised P&L, unrealised P&L, and their total, not unrealised alone.
 
@@ -137,7 +221,7 @@ Total      : <realised + unrealised>
 
 ---
 
-## 10. ST-15 seed skip-list — excluding known-bad sessions from the daily re-seed window
+## 11. ST-15 seed skip-list — excluding known-bad sessions from the daily re-seed window
 
 Since `prometheus.py` is a fresh cron-launched process every session (§2), it never carries an in-memory Supertrend state across days — `seed_st15` recomputes ST_15 from scratch every morning off a rolling `SEED_DAYS=18` calendar-day tail-read (`prometheus_configs.py`). Every single day's regime state depends on that same ~18-day (~13-14 trading-day) window of raw 1-min history, recomputed fresh — so a known-bad session anywhere in that window corrupts the live seed for as long as it stays in the window, not just the one day it happened on.
 
@@ -159,10 +243,46 @@ ST_SEED_SKIP_DATES = [
 
 ---
 
-## 11. Open decisions — summary
+## 12. Prometheus write-removal — stop writing to the shared MCX contract CSV [OPEN, PROPOSED 2026-09-02]
+
+**The idea.** `data_downloader_mcx.py` was redesigned 2026-09-02 to run once nightly (23:56 IST, right after MCX close) and be the *sole* writer of every contract's on-disk CSV — front-month and next-month, every enabled underlying (`data_pipeline/README.md`). For that to actually hold, Prometheus has to stop writing into the same files during the day: keep its own in-memory intraday 1-min series for its own decision-making, never persist it, and rebuild it from scratch (yesterday off disk, today off a live re-fetch) on every startup — fresh morning start and mid-day crash-restart treated identically, one code path. This removes the write-race the old `_already_up_to_date()` skip existed to avoid (already removed from `data_downloader_mcx.py` — see `data_pipeline/README.md`'s "sequencing note": until *this* section is implemented, Prometheus still writes intraday, so the nightly downloader will redundantly, harmlessly re-fetch CRUDEOIL/CRUDEOILM's session each night).
+
+**Why now, not just "would be nice":** Phase 3 positions span rollovers (§2-§6), and a front-month-only, no-backfill downloader (§6, this session's earlier fix) means the new front-month contract has *zero* history the instant it becomes front-month — unless something tracks it before then. The 2026-09-02 redesign's universal next-month tracking closes that gap from the data-pipeline side. This section is the other half: making Prometheus actually rely on the pipeline as the single source of truth, instead of half-relying on its own historical writes into the same file.
+
+**Every current write into the shared contract CSV, enumerated** (`grep`-verified against `prometheus.py`/`prometheus_functions.py`, 2026-09-02):
+
+| Call site | What it does today | Disposition |
+|---|---|---|
+| `_merge_1m` (`prometheus.py:530-545`) | Writes every 1-min poll to `_merge_and_save(self._contract['filepath'], new_df)` **and** appends to `self._df_1m_today` in-memory | **Delete the write, keep the in-memory append.** One line removed (`_merge_and_save(...)`); everything downstream (`_handle_new_15m_bar`, called right after) already reads only `self._df_1m_today`/`self._df_15m` in-memory, never the disk file — confirmed by reading it end to end. This is the only change needed to the intraday loop itself. |
+| `backfill_contract_if_needed` (`prometheus_functions.py:293-322`) | On a newly-effective contract whose file's oldest row isn't old enough for `SEED_DAYS`, fetches and writes the missing older history | **Keep, as a defensive fallback — orthogonal to this section.** This fixes genuinely-missing *historical* data (an under-tracked contract), not the intraday-poll write point 4 is about. Under the new pipeline design it should rarely fire (front+next month are tracked nightly for every underlying), but if the nightly cron ever fails or the VPS is down, this is the thing that lets Prometheus self-heal instead of silently seeding short. Leave it writing — extending the pipeline's own file when the pipeline itself fell behind is the correct behavior, not a violation of "Prometheus doesn't write intraday data." |
+| `backfill_recent_gap_if_needed` (`prometheus_functions.py:325-369`) | Closes the gap between the file's last on-disk row and `now`, sized for downtime *Prometheus's own intraday writes* would otherwise have left | **Dead under the new design — remove the call from `seed_st15`.** Its entire reason to exist was that Prometheus used to be a co-writer of the file's *today* rows, so a restart could leave a same-day hole in them (this is literally the function that fixed the 2026-08-31 Kill Switch incident, minutes 12:03-12:08 lost). Once Prometheus never writes today's rows to disk at all, there is no such hole to close — the file will always end at yesterday's last row, every single day, and the *replacement* mechanism (below) is a different operation, not a repurposing of this one. |
+| `_setup`'s "seed today's in-memory accumulator from whatever the file already has" (`prometheus.py:229-236`) | Reads today's rows out of the shared file, if any exist (relevant today because a live process, including Prometheus itself, might have already written some) | **Replace, don't keep as-is.** Under the new design the shared file will *never* have today's rows (data_pipeline only writes overnight), so this block would always find zero and silently no-op — worse than deleting it, because it looks like it does something. Replace with an unconditional live re-fetch of today 09:00→`now` (see below), which subsumes both the fresh-morning case (an essentially-empty fetch, since `now` ≈ 09:00) and the crash-restart case (the real gap-filler) in one code path. |
+| `seed_st15` (`prometheus_functions.py:470-507`) | Tail-reads the file (past days *and* whatever of today it has), resamples, gap-checks, computes ST — treats "the file" as the single source for both | **Restructure, not delete.** Past days stay disk-sourced (now robustly guaranteed by the nightly pipeline instead of best-effort). Today has no disk source anymore under this design — it must come from the new live re-fetch step, concatenated with the disk-sourced past days *before* `_resample_1m_to_15m`/`_find_15m_gaps` run, so gap-checking still sees one contiguous series, not two independently-validated halves. |
+| `persist_15m_series`, `_append_running_row`/trade-log CSVs | Separate files (`SERIES_15M_FILE` debug dump, `TRADES_FILE`/cumulative trade log) | **Unrelated, unchanged.** Neither is the shared MCX contract CSV `data_downloader_mcx.py` maintains — flagged here only so a future reader doesn't lump them in. |
+| `PrometheusState` (`prometheus_state.py`, `save_state`/`load_state`, `_setup`'s "Resuming in-trade state" block) | Trade-state (in_trade/watching, entry price, lot status) persistence and resumption | **Unrelated, unchanged.** A completely separate recovery mechanism from the 1-min OHLCV series this section is about — point 4's "watch out for crashes and restarts" already has an answer here that this section doesn't touch. |
+
+**The new startup sequence** (`_setup`/`seed_st15`, both a fresh 09:00 start and a mid-day crash-restart, same code path):
+1. `backfill_contract_if_needed` — defensive, as above, rarely fires.
+2. Tail-read the shared file for calendar days *before* today only (an explicit cutoff, not "whatever's on the file" — the file may contain nothing for today, or, during the transition described in the sequencing note above, it may still contain some of today's rows from an old build; excluding today explicitly avoids depending on which is true).
+3. Fetch today `SESSION_START_TIME`→`now` live from the broker (same `fetch_one_minute_window`/resilient-poller mechanics §3 already built, reused — not new infrastructure), building `self._df_1m_today` from scratch every single startup regardless of restart vs. fresh start.
+4. Concatenate (2) and (3) into one 1-min series, *then* resample to 15-min, gap-check, compute ST — same `_resample_1m_to_15m`/`_find_15m_gaps`/`compute_st` functions, unchanged, fed a differently-assembled input.
+
+**Two incident-derived constraints this must not lose, both already enforced by existing code and unaffected by the restructuring above — call this out explicitly when it's built, don't just assume it carries over:**
+- `_resample_1m_to_15m`'s "a window only counts once it has genuinely finished elapsing by `now`" guard (2026-08-31, 12:13:49 restart produced ST=8105.67 from a 13-of-15-minute partial bar vs. the chart's correct 8102.33). Applies identically to a bar built from step 3's live-fetched today data — the function itself doesn't change, but it's now doing more of the work (all of today, not just whatever gap remained), so it deserves being named as still-load-bearing, not silently assumed.
+- The *intent* behind `backfill_recent_gap_if_needed` (never let a same-day hole go unrecovered) doesn't disappear — it moves entirely into step 3 above (an unconditional full re-fetch, not a diff against a stale on-disk marker). This is a strictly simpler mechanism than the old gap-diff approach, but it changes the failure mode described next.
+
+**New robustness trade-off this introduces — flag to the user, not a detail to bury:** today's data now has no on-disk fallback. Old design: if a live poll failed, whatever had already been written to disk for today survived a restart untouched, and only the actual gap needed re-fetching. New design: a broker/network hiccup during step 3's re-fetch blocks `seed_st15` entirely for the *whole* day so far, not just the failed window — `_find_15m_gaps` still refuses to seed on any hole, and there's no cached partial copy to fall back to. This is a real, deliberate cost of removing the shared-file write, not a bug to fix — but it means a rough network patch on a rollover morning specifically (exactly when the new front-month's own intraday history is thinnest) is more disruptive than it would have been under the old design. Worth deciding, explicitly, whether that trade is acceptable before this ships.
+
+**Status: proposed, not implemented.** Confirm the sequence above (especially the "today has no disk fallback" trade-off) before touching `prometheus.py`/`prometheus_functions.py` — this is live-trading crash-recovery code, not yet live-tested even under `DRY_RUN=True`, and CLAUDE.md's Production QC rule (read the entry path end-to-end before any live session) applies with extra weight here given how much of this section is incident-derived from real 2026-08-31 failures.
+
+---
+
+## 13. Open decisions — summary
 
 1. §4 — missed-rollover recovery: roll immediately at open vs. refuse-and-alert. (Leaning: roll immediately, loudly alerted.)
 2. §6 — SL/target recalibration method: the proposed historical-basis method, reset-to-now, or flatten-and-don't-reopen. Blocked on the two empirical checks named there.
 3. §7 — rolled-trade log schema: two linked rows vs. one row with rollover columns.
 4. Whether `TENDER_ROLL_TRADING_DAYS=5` itself (inherited from Phase 2, not independently re-verified here) is actually where MCX's tender margin kicks in — worth confirming once, since everything else in §3 is built on top of it being correct.
-5. §9 — whether "realised" resets to zero on a rollover's flatten-and-reopen leg, or carries the prior leg's booked P&L forward as one continuous total. Tied to the §7 schema choice — resolve together.
+5. §10 — whether "realised" resets to zero on a rollover's flatten-and-reopen leg, or carries the prior leg's booked P&L forward as one continuous total. Tied to the §7 schema choice — resolve together.
+6. §9 — decided in direction (cross-instrument substitution on the 09:00 bar only, `threshold=0.5`), not yet built. Remaining work is implementation, not design: add a live CRUDEOIL poll for the opening candle to the production pipeline (new requirement, nothing polls CRUDEOIL today), apply the same substitution to the backtest's historical data, and re-run the mult 2.0-vs-2.5 comparison a second time once that's done.
+7. §12 — Prometheus write-removal: confirm the proposed startup sequence (especially the "today has no on-disk fallback if the live re-fetch fails" trade-off) before implementing.

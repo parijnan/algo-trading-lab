@@ -43,22 +43,23 @@ OHLCV_HEADERS   = ["time_stamp", "open", "high", "low", "close", "volume"]
 MCX_EXCHANGE = "MCX"
 CHUNK_DAYS   = 2     # days per API call (matches equities downloader's sizing)
 
-# SmartAPI does not serve historical data for expired F&O contracts, so
-# forward-testing data collection starts from whatever history the current
-# (unexpired) front-month contract has since its own listing date. MCX
-# typically lists a new contract several months ahead of its expiry, so this
-# lookback is generous rather than tightly measured; chunks with no data
-# before the true listing date simply come back empty at no extra cost beyond
-# the wasted call.
-LOOKBACK_DAYS = 200
+# A brand-new contract file NEVER backfills into the past (2026-09-02,
+# CRUDEOILM September-contract incident — see prometheus_backtest/README.md
+# and plans/prometheus-phase3-production.md §6): querying getCandleData for
+# a contract's token over a date range before that contract was genuinely
+# front-month does not come back empty, it comes back with whichever OTHER
+# contract actually was front-month at that time, silently mislabeled under
+# the requested token. Confirmed across three separate contract-pairs this
+# session (zero-spread clone across the entire pre-front-month history). A
+# lookback deep enough to reach a contract's real listing date (the old
+# LOOKBACK_DAYS=200 approach) therefore doesn't get "extra history at no
+# cost" — it gets months of some other contract's prices stamped with this
+# contract's expiry, exactly the bug the front-month de-dup step in
+# prometheus_backtest/data_loader.py has to work around downstream. There is
+# no way to tell from here when a not-yet-tracked contract's own front-month
+# tenure began, so the only safe rule is: a file with no prior tracking
+# history starts capturing from today, forward only.
 
-# How fresh a file's last candle must be, relative to when this post-market
-# script runs, to be considered "already kept current by a live process"
-# and skipped (plans/prometheus-phase2-production.md §1). Generous enough to
-# cover the gap between MCX's variable close (23:30-23:55, DST-dependent)
-# and whenever this script's own cron actually fires, without needing to
-# import Prometheus's CLOSING_TIME config here (no cross-module coupling).
-LIVE_FEED_FRESHNESS_MIN = 60
 
 # Rate limit parameters (broker limits: 3/sec, 180/min, 5000/hour)
 RATE_LIMIT_PER_SEC  = 2
@@ -247,10 +248,13 @@ def load_enabled_underlyings() -> list:
     return df[df["enabled"] == True]["name"].tolist()  # noqa: E712
 
 
-def select_front_month_contracts(instruments_df: pd.DataFrame, names: list) -> pd.DataFrame:
+def _select_nth_nearest_contracts(instruments_df: pd.DataFrame, names: list, n: int) -> pd.DataFrame:
     """
-    For each requested underlying name, pick the contract with the nearest
-    expiry that has not yet passed. Returns one row per underlying.
+    For each requested underlying name, pick the contract at position `n`
+    (0-indexed) among unexpired contracts sorted by nearest expiry first.
+    n=0 is front-month; n=1 is next-month. Underlyings with fewer than n+1
+    unexpired contracts listed are silently omitted from the result (same
+    "missing" handling the front-month caller already does).
     """
     inst = instruments_df[instruments_df["name"].isin(names)].copy()
     inst["expiry_parsed"] = inst["expiry"].apply(parse_expiry_from_master)
@@ -259,8 +263,32 @@ def select_front_month_contracts(instruments_df: pd.DataFrame, names: list) -> p
     inst = inst[inst["expiry_parsed"] >= today]
 
     inst.sort_values(["name", "expiry_parsed"], inplace=True)
-    front_month = inst.groupby("name", as_index=False).first()
-    return front_month
+    nth = inst.groupby("name", as_index=False).nth(n)
+    return nth.reset_index(drop=True)
+
+
+def select_front_month_contracts(instruments_df: pd.DataFrame, names: list) -> pd.DataFrame:
+    """
+    For each requested underlying name, pick the contract with the nearest
+    expiry that has not yet passed. Returns one row per underlying.
+    """
+    return _select_nth_nearest_contracts(instruments_df, names, n=0)
+
+
+def select_next_month_contracts(instruments_df: pd.DataFrame, names: list) -> pd.DataFrame:
+    """
+    For each requested underlying name, pick the contract with the
+    second-nearest unexpired expiry — the one that will become front-month
+    at the *next* roll. Same selection logic as front-month, offset by one.
+
+    Tracked for every enabled underlying, not only the traded pair (design
+    simplified 2026-09-02 — see the "Cron schedule" note in
+    data_pipeline/README.md): starting the far-month contract's history
+    early, uniformly, means whichever underlying rolls next always already
+    has real accumulated data to seed from, with no per-instrument config
+    needed.
+    """
+    return _select_nth_nearest_contracts(instruments_df, names, n=1)
 
 
 # ===========================================================================
@@ -302,44 +330,24 @@ def get_futures_filepath(name: str, expiry_date: datetime) -> str:
     return os.path.join(contract_dir, filename)
 
 
-def _already_up_to_date(filepath: str) -> bool:
-    """
-    Skip check (plans/prometheus-phase2-production.md §1): if a live process
-    (mcx_live_downloader.py or Prometheus's own 1-min poller) has already
-    kept this contract's file current up to shortly before now, there is
-    nothing meaningful left for this post-market run to backfill.
-    Instrument-agnostic by construction — no underlying name is checked, so
-    it naturally skips whichever instrument is currently live-fed and picks
-    up any others (including one that WAS live-fed but no longer is, e.g.
-    after a §6 instrument switch away from it).
-    """
-    if not os.path.exists(filepath):
-        return False
-    try:
-        existing = pd.read_csv(filepath, usecols=["time_stamp"], parse_dates=["time_stamp"])
-        if existing.empty:
-            return False
-        last_ts = pd.to_datetime(existing["time_stamp"], utc=False, errors="coerce").max()
-        if last_ts.tzinfo is not None:
-            last_ts = last_ts.tz_localize(None)
-    except Exception:
-        return False
-    return (datetime.now() - last_ts) <= timedelta(minutes=LIVE_FEED_FRESHNESS_MIN)
-
-
 def download_futures_contract(obj, name: str, token: str, expiry_date: datetime) -> int:
     """
     Download 1-minute candle data for a single front-month futures contract,
     saving to disk after every chunk so progress is never lost mid-run.
     Returns the number of new rows added.
+
+    No longer skips a "live-fed" file (removed 2026-09-02, along with
+    `_already_up_to_date()`/`LIVE_FEED_FRESHNESS_MIN`): Prometheus's own
+    live poller no longer writes into this shared file at all (it keeps its
+    own in-memory intraday series instead — plans/prometheus-phase3-
+    production.md's Prometheus-write-removal section), so this script is now
+    the sole writer for every contract, every run. The only other thing that
+    ever wrote here, `mcx_live_downloader.py`, is a manual/ad hoc diagnostic
+    tool, rarely run — losing the skip just costs one redundant, dedup-safe
+    re-fetch of that evening's session on the (uncommon) night someone runs
+    it alongside this cron.
     """
     filepath = get_futures_filepath(name, expiry_date)
-
-    if _already_up_to_date(filepath):
-        logger.info(f"[{name}] {filepath} already current (last candle within "
-                    f"{LIVE_FEED_FRESHNESS_MIN} min of now) — skipping, a live "
-                    f"process is already keeping it up to date.")
-        return 0
 
     if os.path.exists(filepath):
         existing = pd.read_csv(filepath, parse_dates=["time_stamp"])
@@ -362,7 +370,12 @@ def download_futures_contract(obj, name: str, token: str, expiry_date: datetime)
         # the from-date as being in the future.
         fetch_from = last_ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     else:
-        fetch_from = datetime.now() - timedelta(days=LOOKBACK_DAYS)
+        # No prior file for this contract — start capturing from today only.
+        # See the LOOKBACK_DAYS-removal comment above: any deeper lookback
+        # risks pulling another contract's prices mislabeled under this
+        # one's token, for however far back it reaches before this contract
+        # was genuinely front-month.
+        fetch_from = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     fetch_to = min(expiry_date, datetime.now())
 
@@ -460,6 +473,17 @@ if __name__ == "__main__":
             logger.warning(f"No live contract found for: {sorted(missing)}")
 
         logger.info(f"Front-month contracts selected for {len(front_month)} underlying(s).")
+
+        # Next-month contracts — every enabled underlying, same `names` list
+        # as front-month (simplified 2026-09-02: no separate opt-in column;
+        # see select_next_month_contracts()'s docstring). Selected from the
+        # same freshly-refreshed instrument master, so it's always the
+        # genuine second-nearest expiry, never a stale/cached one.
+        next_month = select_next_month_contracts(mcx_futures_df, names)
+        next_month_missing = set(names) - set(next_month["name"])
+        if next_month_missing:
+            logger.warning(f"No next-month contract listed yet for: {sorted(next_month_missing)}")
+        logger.info(f"Next-month contracts selected for {len(next_month)}/{len(names)} underlying(s).")
     except Exception as e:
         logger.error(f"Instrument master refresh failed: {e}")
         slack_bot_sendtext(f"🚨 *Data Downloader (MCX)* – Instrument master refresh failed: {e}",
@@ -478,15 +502,26 @@ if __name__ == "__main__":
             SLACK_DATA_CHANNEL
         )
 
-    # --- Download all front-month futures ---
+    # --- Download all front-month (and, where tracked, next-month) futures ---
     try:
         results = download_all_front_month_futures(obj, front_month)
         total_new = sum(results.values())
+
+        next_month_results = {}
+        if not next_month.empty:
+            # download_futures_contract() is generic on (name, token,
+            # expiry_date) — nothing about it assumes "front-month", so the
+            # same function and the same no-backfill-into-the-past rule
+            # apply unchanged to a next-month contract's file.
+            next_month_results = download_all_front_month_futures(obj, next_month)
+            total_new += sum(next_month_results.values())
+
         logger.info(f"MCX futures update complete – {total_new} total new row(s) "
-                    f"across {len(results)} contract(s).")
+                    f"across {len(results) + len(next_month_results)} contract(s) "
+                    f"({len(results)} front-month, {len(next_month_results)} next-month).")
         slack_bot_sendtext(
             f"☁️ *MCX Futures Update* – {total_new} new row(s) across "
-            f"{len(results)} front-month contract(s).",
+            f"{len(results)} front-month + {len(next_month_results)} next-month contract(s).",
             SLACK_DATA_CHANNEL
         )
     except Exception as e:
