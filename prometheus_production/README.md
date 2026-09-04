@@ -498,6 +498,18 @@ older rows into `NaT` on the second write. This affected the shared per-contract
 (`backfill_contract_if_needed`'s multi-chunk backfills), not just this new cache — fixed by
 normalizing both sides to tz-naive before concatenating.
 
+**A second, related tz bug — caught live, first real Delos run of Phase 3 (2026-09-04):**
+`fetch_one_minute_window` parses the broker's `+05:30`-suffixed timestamps with a format string
+that includes `%z`, so its output was tz-**aware** (fixed offset), while every other in-memory
+series in this file (`_tail_read_contract_csv`, `read_today_cache`, `_df_1m_today`) is tz-naive.
+Three of five call sites already stripped this defensively right after calling it —
+`seed_st15`'s own gap-fetch (`prometheus_functions.py`) didn't, so on the very first live run (a
+fresh, empty private cache) the live gap-fetch's tz-aware rows collided with the shared
+pipeline's tz-naive past-days rows on the next concat: `TypeError: Cannot compare tz-naive and
+tz-aware timestamps`, crashing `_setup()` before the session even reached the main loop. Fixed at
+the source — `fetch_one_minute_window` itself now strips tz to naive before returning — so every
+caller gets consistent naive timestamps without needing to remember to do it themselves.
+
 ---
 
 ## Setup on Delos

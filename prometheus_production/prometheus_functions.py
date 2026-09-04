@@ -799,6 +799,20 @@ def fetch_one_minute_window(obj, token: str, from_dt: datetime, to_dt: datetime)
                 df = pd.DataFrame(raw, columns=dl.OHLCV_HEADERS)
                 df['time_stamp'] = pd.to_datetime(df['time_stamp'], format=dl.METHOD_TS_FMT,
                                                    utc=False, errors='coerce')
+                # Real bug, caught live 2026-09-04: METHOD_TS_FMT's '%z' makes
+                # this tz-AWARE (fixed offset, from the broker's '+05:30'
+                # suffix), while every other in-memory series in this file
+                # (_tail_read_contract_csv, read_today_cache, _df_1m_today) is
+                # tz-naive. Three of five call sites already strip this
+                # defensively right after calling this function; seed_st15's
+                # gap-fetch (the very first live call, first-ever run) didn't,
+                # so a fresh empty cache's gap_df collided with the tz-naive
+                # shared-pipeline past-days data on the next concat --
+                # "Cannot compare tz-naive and tz-aware timestamps". Fixed at
+                # the source so every caller gets naive without having to
+                # remember to strip it themselves.
+                if df['time_stamp'].dt.tz is not None:
+                    df['time_stamp'] = df['time_stamp'].dt.tz_localize(None)
                 return df
             logger.warning(f'Fetch failed (empty response) [{from_str} -> {to_str}] '
                            f'attempt {attempt}/{INNER_RETRY_ATTEMPTS}: {response}')
