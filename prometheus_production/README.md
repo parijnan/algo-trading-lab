@@ -811,6 +811,18 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       `now_after_min_entry()` function is gone; all three call sites (fresh entry, Rule 7
       re-entry, the provisional-boundary path) now call `self._past_min_entry_guard`. Mock-verified
       (8/8 checks, including the evening-only case).
+- [x] **`_safe_concat` — fixes a live pandas dtype-corruption bug, not just a future warning
+      (2026-09-04)**: this codebase's `self._df_1m_today`/`self._df_15m`/`cached_today`
+      accumulators all legitimately start each day as an empty DataFrame, then concatenate
+      against the first real fetch — exactly the shape that triggers pandas's "concat with empty
+      or all-NA entries" warning. Checked precisely: with the currently-installed pandas, this
+      isn't just a future-version concern — `pd.concat([empty_df, real_df])` silently degrades
+      `open`/`high`/`low`/`close`/`volume` from numeric (`int64`/`float64`) to `object` dtype
+      *today*. `_safe_concat` (`prometheus_functions.py`) excludes empty frames before
+      concatenating (pandas's own recommended fix), applied at all 8 `pd.concat` call sites in
+      `prometheus.py`/`prometheus_functions.py` that touch one of these accumulators — not just
+      the two that happened to warn in one session's log. Verified numerically identical output,
+      correct dtype, warning gone (9/9 checks).
 - [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
       `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
       (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same

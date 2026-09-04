@@ -65,6 +65,40 @@ except ImportError:
 logger = get_logger(__name__)
 
 
+def _safe_concat(dfs: list, **kwargs) -> pd.DataFrame:
+    """
+    pd.concat wrapper that excludes empty (0-row) frames before
+    concatenating (2026-09-04) -- pandas's own recommended fix for the
+    "DataFrame concatenation with empty or all-NA entries is deprecated"
+    FutureWarning. NOT a cosmetic future-proofing patch: verified this is
+    a live, CURRENT dtype-corruption bug, not just a future one --
+    `pd.concat([empty_ohlcv_df, real_ohlcv_df])` silently degrades
+    open/high/low/close/volume from int64/float64 to `object` dtype right
+    now, today, with the currently-installed pandas version, every single
+    time one of this codebase's accumulators concatenates its first real
+    fetch of the day against its own empty starting state. `_safe_concat`
+    gives the numerically-identical result with the CORRECT dtype.
+
+    Every self._df_1m_today/self._df_15m/cached_today-style accumulator in
+    this codebase legitimately starts life as an empty DataFrame (fresh
+    session start, first rollover top-up poll, first private-cache write
+    of the day) and gets concatenated against a fresh, non-empty fetch
+    result on every subsequent call -- exactly the shape this warning
+    fires on. Used everywhere in prometheus.py/prometheus_functions.py
+    that concatenates one of those accumulators, not a targeted patch on
+    just the two call sites that happened to warn on a given day.
+
+    If every frame passed in is empty, returns the first one unchanged
+    (preserves its column structure for downstream callers that expect a
+    DataFrame back, even a 0-row one) rather than calling pd.concat on an
+    all-empty list.
+    """
+    non_empty = [d for d in dfs if d is not None and not d.empty]
+    if not non_empty:
+        return dfs[0] if dfs else pd.DataFrame()
+    return pd.concat(non_empty, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Supertrend (copied verbatim from apollo_production/technical_indicators.py,
 # same precedent as iris_functions.py — production never imports the backtest)
@@ -334,7 +368,7 @@ def _merge_and_save(filepath: str, new_df: pd.DataFrame) -> int:
     if new_df['time_stamp'].dt.tz is not None:
         new_df['time_stamp'] = new_df['time_stamp'].dt.tz_localize(None)
     before = len(on_disk)
-    merged = pd.concat([on_disk, new_df], ignore_index=True)
+    merged = _safe_concat([on_disk, new_df], ignore_index=True)
     merged['time_stamp'] = pd.to_datetime(merged['time_stamp'], utc=False, errors='coerce')
     merged.drop_duplicates(subset=['time_stamp'], keep='first', inplace=True)
     merged.sort_values('time_stamp', inplace=True)
@@ -614,7 +648,7 @@ def compute_st_for_contract(contract: dict, today_1m: pd.DataFrame, now: datetim
     st_period = st_period if st_period is not None else ST_PERIOD
     st_multiplier = st_multiplier if st_multiplier is not None else ST_MULTIPLIER
     raw_1m_past = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
-    raw_1m = (pd.concat([raw_1m_past, today_1m], ignore_index=True)
+    raw_1m = (_safe_concat([raw_1m_past, today_1m], ignore_index=True)
               .sort_values('time_stamp').reset_index(drop=True))
     if raw_1m.empty:
         return pd.DataFrame()
@@ -700,7 +734,7 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
         gap_df = fetch_one_minute_window(obj, contract['token'], gap_from, now)
         if gap_df is not None and not gap_df.empty:
             _merge_and_save(TODAY_1M_CACHE_FILE, gap_df)
-            cached_today = (pd.concat([cached_today, gap_df], ignore_index=True)
+            cached_today = (_safe_concat([cached_today, gap_df], ignore_index=True)
                              .drop_duplicates(subset=['time_stamp'], keep='last')
                              .sort_values('time_stamp').reset_index(drop=True))
         elif cached_today.empty:
@@ -710,7 +744,7 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
             logger.warning(f'seed_st15: live gap-fetch failed, proceeding with cached data only '
                            f'(through {cached_today["time_stamp"].max()}).')
 
-    raw_1m = (pd.concat([raw_1m_past, cached_today], ignore_index=True)
+    raw_1m = (_safe_concat([raw_1m_past, cached_today], ignore_index=True)
               .sort_values('time_stamp').reset_index(drop=True))
     if raw_1m.empty:
         logger.error('seed_st15: no 1-min history available after backfill + cache + live fetch.')

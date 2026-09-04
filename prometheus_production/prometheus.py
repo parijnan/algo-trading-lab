@@ -47,7 +47,7 @@ from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
 from prometheus_functions import (
     compute_st, resolve_effective_contract, seed_st15, persist_15m_series,
-    fetch_one_minute_window, _merge_and_save, clear_today_cache, read_today_cache,
+    fetch_one_minute_window, _merge_and_save, clear_today_cache, read_today_cache, _safe_concat,
     patch_opening_bar_if_artifact, fetch_crudeoil_opening_bar,
     resolve_thresholds, resolve_target2, next_trading_day,
     compute_st_for_contract, historical_basis_price,
@@ -415,7 +415,7 @@ class Prometheus:
             'time_stamp': window_start, 'open': acc['open'], 'high': acc['high'],
             'low': acc['low'], 'close': acc['close'], 'volume': 0,
         }])
-        combined = pd.concat([self._df_15m, provisional_bar], ignore_index=True)
+        combined = _safe_concat([self._df_15m, provisional_bar], ignore_index=True)
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last').sort_values('time_stamp')
         provisional_series = compute_st(combined.reset_index(drop=True), ST_PERIOD, ST_MULTIPLIER)
         row = provisional_series[provisional_series['time_stamp'] == window_start]
@@ -584,7 +584,7 @@ class Prometheus:
         new_today = working[working['time_stamp'].dt.date == today]
         if new_today.empty:
             return
-        combined = pd.concat([self._df_1m_today_new, new_today], ignore_index=True)
+        combined = _safe_concat([self._df_1m_today_new, new_today], ignore_index=True)
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
         self._df_1m_today_new = combined.sort_values('time_stamp').reset_index(drop=True)
 
@@ -1231,7 +1231,7 @@ class Prometheus:
         new_today = working[working['time_stamp'].dt.date == today]
         if new_today.empty:
             return
-        combined = pd.concat([self._df_1m_today, new_today], ignore_index=True)
+        combined = _safe_concat([self._df_1m_today, new_today], ignore_index=True)
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
         self._df_1m_today = combined.sort_values('time_stamp').reset_index(drop=True)
         self._maybe_check_opening_bar()
@@ -1300,7 +1300,7 @@ class Prometheus:
             'high': window['high'].max(), 'low': window['low'].min(),
             'close': window['close'].iloc[-1], 'volume': window['volume'].sum(),
         }])
-        combined = pd.concat([self._df_15m, new_bar], ignore_index=True)
+        combined = _safe_concat([self._df_15m, new_bar], ignore_index=True)
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last').sort_values('time_stamp')
         self._df_15m = compute_st(combined.reset_index(drop=True), ST_PERIOD, ST_MULTIPLIER)
         persist_15m_series(self._df_15m)
