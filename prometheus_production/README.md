@@ -760,6 +760,17 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       rollover reopen's basis-vs-fill-price separation) — not yet live-tested end-to-end, since
       that needs an actual rollover (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21
       CRUDEOILM expiry) to exercise for real.
+- [x] **Provisional boundary computation (§12a, built 2026-09-04)** — at a 15m-aligned boundary,
+      if REST is already incomplete at that instant, build a provisional candle from
+      `SharedFeed.get_ohlc()`'s genuine tick-aggregated OHLC (not sampled — Apollo already reads
+      this for Nifty/VIX), act on it (entry and/or exit, same real order-placement paths as a
+      normal flip) only if it clears `PROVISIONAL_MARGIN_PCT` past the band, then reconcile
+      against the real bar once REST recovers. Gated off (`PROVISIONAL_BOUNDARY_ENABLED=False`),
+      shadow-logs the verdict unconditionally so the margin can eventually be calibrated on real
+      agreement data — see `plans/prometheus-phase3-production.md` §12a for the full design and
+      the margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks), not yet
+      live-tested — the trigger condition is rare (never breached the existing 1-minute cutoff in
+      ~34 hours of DRY_RUN observation before this was built).
 - [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
       `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
       (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same

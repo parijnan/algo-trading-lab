@@ -234,6 +234,36 @@ LTP_POLL_LIMIT    = 10     # REST ltpData calls/sec when WS feed is disconnected
 # tick regardless).
 DEFERRED_BAR_CUTOFF_MIN = 1
 
+# ── Provisional boundary computation (2026-09-04, user-directed) ────────────
+# At a 15m-aligned boundary, if the REST 1-min window is already incomplete
+# at that instant (checked once, at T+0 -- NOT "the boundary poll's own
+# retry burst exhausted," a different and less precise condition), build a
+# provisional 15m candle from SharedFeed's own tick-aggregated OHLC
+# (feed.get_ohlc -- genuine WS ticks, not sampled; Apollo already reads this
+# for Nifty/VIX, so it's existing shared infra, not new). Compute a
+# provisional ST verdict from it (against a COPY of the real series --
+# never mutates or persists it) and, only if PROVISIONAL_BOUNDARY_ENABLED
+# and the provisional close clears the band by more than
+# PROVISIONAL_MARGIN_PCT, act immediately (exit and/or entry, mirroring
+# _handle_new_15m_bar's own real branching). Inside the margin, or with the
+# toggle off, this is a pure shadow-log -- falls through to the existing
+# §12 deferred-wait/cutoff path completely unchanged. Reconciled against
+# the real bar once §12 eventually computes it: agreement clears silently;
+# disagreement is CRITICAL + Slack + provisional gating disabled for the
+# REST OF THIS SESSION (a restart re-arms it) -- no automated reversal.
+# Suppressed entirely during a scheduled/in-progress rollover or an
+# already-stuck Rule 7 transition.
+#
+# OFF by default -- built + unit-tested 2026-09-04 (mock-based, see the
+# session's memory notes), but PROVISIONAL_MARGIN_PCT below is an
+# UNCALIBRATED PLACEHOLDER. Same "shadow-log first, calibrate the toggle on
+# real agreement data" pattern as OPENING_BAR_CORRECTION_ENABLED and
+# ENTRY_FILTER_1H_ALIGN_ENABLED -- do not flip this on without reviewing a
+# few sessions of shadow-log agreement/disagreement first.
+PROVISIONAL_BOUNDARY_ENABLED = False
+PROVISIONAL_MARGIN_PCT = 0.15   # % of price the provisional close must clear the provisional
+                                 # Supertrend band by before acting -- PLACEHOLDER, not calibrated
+
 # ── Order execution ──────────────────────────────────────────────────────────
 ORDER_TIMEOUT_SEC = 30     # seconds to wait for order fill (WS fast path + REST fallback)
 REJECTION_RETRY_ATTEMPTS  = 3     # place_order (§1): retries on an actual 'rejected' response

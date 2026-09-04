@@ -40,6 +40,7 @@ from prometheus_configs import (
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
     ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
+    PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -145,6 +146,16 @@ class Prometheus:
                                               # execution (exit confirm / reopen), never re-litigate go/no-go
 
         self._pending_flip = None   # §7: Rule 7's combined-order retry-until-resolved marker
+
+        # Provisional boundary computation (2026-09-04, user-directed) —
+        # all in-memory only, same precedent as _pending_recovery/
+        # _pending_15m_boundary: a crash loses this and falls back to a
+        # safe default (no provisional bookkeeping, real series untouched).
+        self._tick_ohlc_accum = {'open': None, 'high': None, 'low': None, 'close': None}
+        self._provisional_pending = None   # set only while a provisional action awaits
+                                            # reconciliation against the real bar for the SAME boundary
+        self._provisional_disabled_this_session = False   # latched True on any real disagreement —
+                                                            # a restart re-arms it
 
         self._summary = {'strategy': 'Prometheus', 'symbol': SYMBOL, 'traded': False}
 
@@ -341,6 +352,176 @@ class Prometheus:
             logger.info(f"1h-alignment filter: {direction} blocked — 1h ST is "
                        f"{st_1h_direction} on {contract['symbol']}.")
         return agree
+
+    # -----------------------------------------------------------------------
+    # Provisional boundary computation (2026-09-04, user-directed) — see
+    # prometheus_configs.py's PROVISIONAL_BOUNDARY_ENABLED docstring for the
+    # full design rationale.
+    # -----------------------------------------------------------------------
+
+    def _harvest_tick_ohlc(self) -> None:
+        """
+        Drains SharedFeed's own tick-aggregated OHLC window for the current
+        contract (feed.get_ohlc — genuine WS ticks, resets on each call;
+        Apollo already reads this same mechanism for Nifty/VIX) every 1-min
+        cycle and merges it into an accumulator covering the CURRENT
+        in-progress 15m window. Reset in run() right after that window's
+        real bar is finalized. Entirely independent of the REST poller — an
+        AB1021 stretch on the candle endpoint never touches the WS feed, so
+        this keeps accumulating right through one.
+        """
+        if self.feed is None:
+            return
+        chunk = self.feed.get_ohlc(self._contract['token'])
+        if chunk is None:
+            return
+        acc = self._tick_ohlc_accum
+        acc['open'] = chunk['open'] if acc['open'] is None else acc['open']
+        acc['high'] = chunk['high'] if acc['high'] is None else max(acc['high'], chunk['high'])
+        acc['low'] = chunk['low'] if acc['low'] is None else min(acc['low'], chunk['low'])
+        acc['close'] = chunk['close']
+
+    def _evaluate_provisional_boundary(self, boundary: datetime, window_start: datetime) -> None:
+        """
+        Runs exactly ONCE per 15m-aligned boundary, at the instant the
+        boundary tick arrives (T+0), and only when the caller has already
+        confirmed the REST 1-min window is incomplete right then. Builds a
+        provisional candle from the tick-OHLC accumulator, computes a
+        provisional ST verdict against a COPY of self._df_15m (never
+        mutates or persists the real series), and:
+          - ALWAYS shadow-logs the verdict, toggle or margin regardless —
+            this is how PROVISIONAL_MARGIN_PCT eventually gets calibrated
+            on real agreement data instead of a guess.
+          - Only ACTS (mirroring _handle_new_15m_bar's own real branching)
+            if PROVISIONAL_BOUNDARY_ENABLED and the provisional close
+            clears the band by PROVISIONAL_MARGIN_PCT. Otherwise this is a
+            no-op on real state — the existing §12 wait/cutoff path is
+            completely unaffected either way.
+        Suppressed entirely during a scheduled/in-progress rollover or an
+        already-stuck Rule 7 transition — deliberately not layered on top
+        of those already-complex sequences.
+        """
+        tag = _tag(self._contract['symbol_root'])
+        acc = self._tick_ohlc_accum
+        if acc['open'] is None or acc['close'] is None:
+            logger.debug('Provisional boundary check: no tick OHLC accumulated this window — skipping.')
+            return
+        if self._rollover_new_contract is not None or self._pending_flip is not None:
+            logger.info('Provisional boundary check: skipped (rollover pending or Rule 7 mid-transition).')
+            return
+
+        provisional_bar = pd.DataFrame([{
+            'time_stamp': window_start, 'open': acc['open'], 'high': acc['high'],
+            'low': acc['low'], 'close': acc['close'], 'volume': 0,
+        }])
+        combined = pd.concat([self._df_15m, provisional_bar], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['time_stamp'], keep='last').sort_values('time_stamp')
+        provisional_series = compute_st(combined.reset_index(drop=True), ST_PERIOD, ST_MULTIPLIER)
+        row = provisional_series[provisional_series['time_stamp'] == window_start]
+        if row.empty or pd.isna(row.iloc[-1]['trend']):
+            logger.warning('Provisional boundary check: provisional ST could not be computed — skipping.')
+            return
+        bar = row.iloc[-1]
+        direction_prov = 'bullish' if bool(bar['trend']) else 'bearish'
+        flip_prov = bool(bar['trend_flip'])
+        band_distance_pct = (abs(bar['close'] - bar['supertrend']) / bar['close'] * 100
+                             if bar['close'] else 0.0)
+        clears_margin = band_distance_pct > PROVISIONAL_MARGIN_PCT
+
+        logger.info(f'Provisional boundary {window_start:%H:%M}: close={bar["close"]:.2f} '
+                   f'ST={bar["supertrend"]:.2f} direction={direction_prov} flip={flip_prov} '
+                   f'band_dist_pct={band_distance_pct:.3f} (margin={PROVISIONAL_MARGIN_PCT}) '
+                   f'clears_margin={clears_margin} '
+                   f'gating={"ON" if PROVISIONAL_BOUNDARY_ENABLED else "OFF"} — SHADOW LOG, '
+                   f'reconciled against the real bar once it computes.')
+
+        if not PROVISIONAL_BOUNDARY_ENABLED or not clears_margin:
+            return
+        if self._provisional_disabled_this_session:
+            logger.warning('Provisional boundary check: disabled for the rest of this session '
+                           '(a prior disagreement fired) — skipping action.')
+            return
+        if not flip_prov:
+            return   # nothing to act on -- no provisional flip at this boundary
+
+        pre_status, pre_direction = self.state.status, self.state.direction
+        acted = False
+
+        if self.state.status == 'in_trade':
+            if direction_prov != self.state.direction:
+                _slack(f'⚠️ {tag}: PROVISIONAL flip -> {direction_prov} at '
+                      f'{window_start:%H:%M} (REST data incomplete, acting on a '
+                      f'tick-reconstructed candle; band_dist={band_distance_pct:.3f}%). '
+                      f'Will reconcile against the real bar once REST recovers.',
+                      SLACK_TRADEBOT_CHANNEL)
+                self._execute_rule7_flip(direction_prov, window_start, bar['close'])
+                acted = True
+        elif self.state.status == 'watching':
+            if (now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+                    and self._check_1h_alignment(direction_prov)):
+                _slack(f'⚠️ {tag}: PROVISIONAL entry {direction_prov.upper()} at '
+                      f'{window_start:%H:%M} (REST data incomplete, acting on a '
+                      f'tick-reconstructed candle; band_dist={band_distance_pct:.3f}%). '
+                      f'Will reconcile against the real bar once REST recovers.',
+                      SLACK_TRADEBOT_CHANNEL)
+                self._execute_entry(direction_prov, window_start, bar['close'])
+                acted = True
+
+        if not acted:
+            return
+
+        self._provisional_pending = {
+            'boundary': boundary, 'window_start': window_start,
+            'provisional_direction': direction_prov,
+            'pre_action_status': pre_status, 'pre_action_direction': pre_direction,
+        }
+        logger.warning(f'Provisional action taken for boundary {window_start:%H:%M} -> '
+                       f'{direction_prov}. Awaiting reconciliation against the real bar.')
+
+    def _reconcile_provisional(self, real_direction: str, real_bar) -> None:
+        """
+        Called from _handle_new_15m_bar once the REAL bar for a boundary
+        that already had a provisional action taken finally computes.
+        Compares the real, state-independent verdict (what does an
+        accurate ST_15 say the trend is for this closed bar) against the
+        provisional one. Agreement clears silently. Disagreement is
+        CRITICAL + Slack + provisional gating disabled for the rest of
+        this session (a restart re-arms it) — deliberately NO automated
+        reversal (see PROVISIONAL_BOUNDARY_ENABLED's docstring for why:
+        the margin guard is meant to make this dead code, and if it fires,
+        that means the margin is mis-sized, not something to paper over
+        with another automated order).
+        """
+        pending = self._provisional_pending
+        tag = _tag(self._contract['symbol_root'])
+        agree = real_direction == pending['provisional_direction']
+
+        if agree:
+            logger.info(f"Provisional reconciliation AGREES: real bar confirms {real_direction} "
+                       f"for {pending['window_start']:%H:%M} (ST={real_bar['supertrend']:.2f} "
+                       f"close={real_bar['close']:.2f}).")
+            _slack(f'✅ {tag}: provisional {pending["provisional_direction"]} flip at '
+                  f'{pending["window_start"]:%H:%M} CONFIRMED by the real bar.', SLACK_TRADEBOT_CHANNEL)
+        else:
+            logger.critical(f"Provisional reconciliation DISAGREES: acted on "
+                           f"{pending['provisional_direction']} but the real bar says "
+                           f"{real_direction} for {pending['window_start']:%H:%M} "
+                           f"(ST={real_bar['supertrend']:.2f} close={real_bar['close']:.2f}). "
+                           f"No automated reversal — provisional gating disabled for the rest of "
+                           f"this session. Manual review required.")
+            _slack(f'\U0001f6a8 {tag}: provisional {pending["provisional_direction"]} flip at '
+                  f'{pending["window_start"]:%H:%M} DISAGREES with the real bar ({real_direction}). '
+                  f'Current position may be WRONG — REVIEW MANUALLY. Provisional gating disabled '
+                  f'for the rest of this session.', SLACK_ERRORS_CHANNEL)
+            self._provisional_disabled_this_session = True
+            if self._pending_flip is not None:
+                logger.critical('Abandoning still-pending Rule 7 flip due to provisional '
+                               'disagreement — broker-side position may need manual reconciliation.')
+                _slack(f'\U0001f6a8 {tag}: abandoning an in-progress Rule 7 order due to the '
+                      f'provisional disagreement above — CHECK THE BROKER TERMINAL MANUALLY NOW.',
+                      SLACK_ERRORS_CHANNEL)
+                self._pending_flip = None
+        self._provisional_pending = None
 
     def _check_rollover_timing(self, now: datetime) -> None:
         """§6 steps 2-4, called every 1-min cycle from the main loop
@@ -930,6 +1111,7 @@ class Prometheus:
                 if now >= next_boundary:
                     boundary = next_boundary
                     self._recover_pending_windows()
+                    self._harvest_tick_ohlc()   # provisional-boundary feature, every 1-min cycle
                     self._check_rollover_timing(now)   # §6 steps 2-4, same 1-min cadence
                     win_to = datetime.now()
                     win_from = win_to - timedelta(minutes=5)
@@ -953,6 +1135,20 @@ class Prometheus:
                         self._pending_15m_boundary = boundary
                         self._pending_15m_deadline = boundary + timedelta(minutes=DEFERRED_BAR_CUTOFF_MIN)
 
+                        # Provisional boundary check (2026-09-04) — exactly
+                        # once per boundary, right here, before the
+                        # deferred-wait loop below gets its first chance to
+                        # run. Predicate is "window incomplete AT the
+                        # boundary tick," checked directly — NOT "the
+                        # boundary poll's own retry burst exhausted," which
+                        # is a different (and less precise) condition.
+                        pb_window_start = boundary - timedelta(minutes=15)
+                        pb_window = self._df_1m_today[
+                            (self._df_1m_today['time_stamp'] >= pb_window_start) &
+                            (self._df_1m_today['time_stamp'] < boundary)]
+                        if len(pb_window) < 15:
+                            self._evaluate_provisional_boundary(boundary, pb_window_start)
+
                     if self._pending_15m_boundary is not None:
                         pb = self._pending_15m_boundary
                         window_start = pb - timedelta(minutes=15)
@@ -973,6 +1169,11 @@ class Prometheus:
                             self._handle_new_15m_bar(pb)
                             self._pending_15m_boundary = None
                             self._pending_15m_deadline = None
+                            # Provisional-boundary feature: this window is
+                            # resolved (real bar computed either way) —
+                            # reset the tick-OHLC accumulator to start
+                            # tracking the NEXT window fresh.
+                            self._tick_ohlc_accum = {'open': None, 'high': None, 'low': None, 'close': None}
 
                     # §4: "one row per polling cycle" — the 1-min boundary,
                     # not the 0.5s exit-check tick (~24,000 rows/trade at
@@ -1113,6 +1314,14 @@ class Prometheus:
         flip = bool(bar['trend_flip'])
         direction_now = 'bullish' if bool(bar['trend']) else 'bearish'
         tag = _tag(self._contract['symbol_root'])
+
+        # Provisional boundary computation (2026-09-04): this boundary
+        # already had a provisional action taken on it — this is the
+        # reconciliation moment, not a fresh decision. Never a second live
+        # action for the same boundary.
+        if self._provisional_pending is not None and self._provisional_pending['boundary'] == boundary:
+            self._reconcile_provisional(direction_now, bar)
+            return
 
         if flip:
             logger.info(f'15m bar {window_start:%H:%M} — ST={bar["supertrend"]:.2f} '
