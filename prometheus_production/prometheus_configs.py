@@ -214,7 +214,9 @@ except Exception:
 # ── Resilient polling (§3) — ported from mcx_live_downloader.py, itself
 # ported from Iris's 2026-08-10 hardening. ──────────────────────────────────
 POLL_INTERVAL_SEC        = 60
-INNER_RETRY_ATTEMPTS     = 3
+INNER_RETRY_ATTEMPTS     = 5   # raised from 3, 2026-09-04 -- live-test day saw frequent AB1021
+                                # bursts; 4x 1s sleeps (~4s worst-case blocking of the main loop,
+                                # incl. LTP-based SL/target checks while in_trade) vs. the old 2s
 INNER_RETRY_INTERVAL_SEC = 1
 CANDLE_CLOSE_BUFFER_SEC  = 0    # fire exactly at the boundary, no artificial margin
 
