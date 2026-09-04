@@ -34,6 +34,15 @@ TRADES_FILE  = DATA_DIR / 'prometheus_trades.csv'
 COUNTER_FILE = DATA_DIR / 'trade_counter.txt'
 SERIES_15M_FILE = DATA_DIR / 'prometheus_15m_series.csv'
 
+# Private, Prometheus-only intraday cache (plan §15, 2026-09-04) — NOT the
+# shared MCX contract CSV data_downloader_mcx.py maintains. Nothing else
+# reads or writes this file, so it carries none of the write-race/single-
+# source-of-truth concerns that motivated removing writes to the shared
+# file. Written incrementally through the day, cleared at logoff, and
+# always date-filtered on read (belt-and-suspenders against an ungraceful
+# crash that skips teardown).
+TODAY_1M_CACHE_FILE = DATA_DIR / 'prometheus_today_1m.csv'
+
 # Prometheus's own circuit breaker — deliberately separate from
 # data/SLACK_COMMAND.flag (§5): an operator managing NSE/BSE shouldn't
 # accidentally also kill the MCX side, and vice versa.
@@ -95,22 +104,21 @@ MIN_ENTRY_TIME      = '09:15'  # skip first 15 min — thin opening liquidity
 # plan §3. Current value is correct for 2026-08-30 (DST in force).
 CLOSING_TIME = '23:30'
 
-MAX_ENTRY_BEFORE_CLOSE_MIN     = 60   # no new entry within this many min of CLOSING_TIME
-EOD_SQUAREOFF_BEFORE_CLOSE_MIN = 15   # flat with this many min left, always (clock-driven, not grid-snapped)
+# Plan §2, Phase 3: no EOD flatten, no entry cutoff before close — a position
+# is *expected* to still be open at session end most days (§3's "a position
+# can span a contract roll"), and there's nothing to "hold until" any more
+# (positional, not intraday-only). MAX_ENTRY_BEFORE_CLOSE_MIN/LAST_ENTRY_TIME/
+# EOD_SQUAREOFF_* (Phase 2 concepts) are deliberately gone, not renamed —
+# `configs_p3.py` never gated entries near close, and production must match
+# what was calibrated. Exit priority drops to SL -> lot1 target -> lot2
+# target -> trend_flip only (`_check_exit_conditions_ltp`, prometheus.py).
 
 # Poller/WS session-end buffer — tracks CLOSING_TIME plus the same generous
 # buffer mcx_live_downloader.py uses (SESSION_END_TIME=23:55 vs its own
-# MARKET_CLOSE=23:30, a 25-min buffer).
+# MARKET_CLOSE=23:30, a 25-min buffer). This is process-lifecycle only (when
+# the daily cron's run() loop stops), not position management — unaffected
+# by the no-EOD-flatten change above.
 SESSION_END_BUFFER_MIN = 25
-
-
-def _nearest_15min_boundary(hhmm: str) -> str:
-    from datetime import datetime as _dt
-    t = _dt.strptime(hhmm, '%H:%M')
-    total_min = t.hour * 60 + t.minute
-    rounded = round(total_min / 15) * 15
-    h, m = divmod(rounded % (24 * 60), 60)
-    return f'{h:02d}:{m:02d}'
 
 
 def _minus_minutes(hhmm: str, minutes: int) -> str:
@@ -118,16 +126,6 @@ def _minus_minutes(hhmm: str, minutes: int) -> str:
     t = _dt.strptime(hhmm, '%H:%M') - _td(minutes=minutes)
     return t.strftime('%H:%M')
 
-
-# Entries only ever happen on 15-min bar opens, so the raw offset from
-# CLOSING_TIME must snap to the grid rather than being used as a continuous
-# cutoff (plan §3): CLOSING_TIME=23:30 -> LAST_ENTRY_TIME=22:30 (60min runway);
-# CLOSING_TIME=23:55 -> LAST_ENTRY_TIME=23:00 (55min runway, both verified in plan).
-LAST_ENTRY_TIME = _nearest_15min_boundary(_minus_minutes(CLOSING_TIME, MAX_ENTRY_BEFORE_CLOSE_MIN))
-
-# EOD_SQUAREOFF is LTP-driven, checked every loop tick (not bar-gated) — a
-# plain clock trigger, no grid-snapping needed.
-EOD_SQUAREOFF_TIME = _minus_minutes(CLOSING_TIME, EOD_SQUAREOFF_BEFORE_CLOSE_MIN)
 
 SESSION_END_TIME = _minus_minutes(CLOSING_TIME, -SESSION_END_BUFFER_MIN)   # CLOSING_TIME + buffer
 
@@ -139,6 +137,31 @@ ST_MULTIPLIER = 3.0
 # plan §1 — lands ~975-1,300 fifteen-min bars, same generosity band as
 # Iris's SEED_DAYS=13 relative to its own ST_PERIOD).
 SEED_DAYS = 18
+
+# Known-bad sessions excluded from the daily ST_15 re-seed window (plan §14).
+# Empty by default, manually populated by an operator when a bad session is
+# identified — annotate each entry with the date it was added so staleness
+# is easy to eyeball. Remove an entry once it falls outside SEED_DAYS of
+# today (it's then a no-op, excluding a date the window was never going to
+# include anyway).
+ST_SEED_SKIP_DATES = [
+    # '2026-02-01',  # example: MCX Union Budget special session, WTI not trading
+]
+
+# ── Opening-bar price-artifact protection (plan §11) ────────────────────────
+# CRUDEOILM's very first 1-min candle of the session has shown a recurring
+# thin-liquidity price-discovery artifact (confirmed 7 instances, 2026-03
+# through 2026-09) that distorts ST_15's ATR for ~ST_PERIOD bars afterward.
+# Fix: substitute CRUDEOILM's 09:00 print with CRUDEOIL's own (same
+# underlying, confirmed reliable at that exact minute every time) when
+# CRUDEOIL's true range is under OPENING_BAR_ARTIFACT_THRESHOLD of
+# CRUDEOILM's. Gated off by default (2026-09-04) so the user can validate
+# ST accuracy against the raw, uncorrected broker chart first — the check
+# still runs and logs what it *would* have done either way.
+OPENING_BAR_CORRECTION_ENABLED  = False
+OPENING_BAR_ARTIFACT_THRESHOLD  = 0.5
+CRUDEOIL_REFERENCE_SYMBOL       = 'CRUDEOIL'   # full-size contract, reference only —
+                                                # Prometheus never trades this symbol
 
 # ── Scale-out (calibrated 2026-08-27, configs_p2.py) — 'pct' hardcoded per
 # Rollout step 5: "backtest keeps both modes for comparison, production
@@ -179,8 +202,33 @@ CANDLE_CLOSE_BUFFER_SEC  = 0    # fire exactly at the boundary, no artificial ma
 CANDLE_POLL_LIMIT = 3      # getCandleData calls/sec — broker-wide client-side cap
 LTP_POLL_LIMIT    = 10     # REST ltpData calls/sec when WS feed is disconnected
 
+# ── 15-min-boundary deferred-bar computation (plan §12) ──────────────────────
+# Don't build a 15m bar the instant its boundary tick arrives if the 1-min
+# poller hasn't actually delivered all 15 minutes yet (e.g. an AB1021
+# stretch) -- wait up to this long, re-checking every 1-min cycle, before
+# falling back to building it from whatever's on hand with a loud warning.
+# 1 minute, not longer: minimizes flip-detection lag over fallback
+# precision (user's call, 2026-09-03) -- SL/target monitoring is completely
+# unaffected by the wait either way (_check_exit_conditions_ltp runs every
+# tick regardless).
+DEFERRED_BAR_CUTOFF_MIN = 1
+
 # ── Order execution ──────────────────────────────────────────────────────────
 ORDER_TIMEOUT_SEC = 30     # seconds to wait for order fill (WS fast path + REST fallback)
+REJECTION_RETRY_ATTEMPTS  = 3     # place_order (§1): retries on an actual 'rejected' response
+REJECTION_RETRY_COOLDOWN_SEC = 1
+GHOST_RECOVERY_COOLDOWN_SEC  = 2  # place_order (§1): sleep before checking the order book
+                                   # on DataException/NetworkException, mirrors Athena's pattern
+GHOST_RECOVERY_LOOKBACK_SEC  = 60 # only trust an order-book match updated within this long
+
+# ── Startup resilience (plan §15) ────────────────────────────────────────────
+# _setup()'s seed_st15 call is single-shot by default (no retry loop) --
+# aborts the whole day's trading on any failure. Wrap it in a bounded,
+# blocking retry: safe specifically here because _setup() runs before the
+# main loop starts (no position, no concurrent exit-check loop to starve --
+# unlike every other retry in this codebase, which must stay non-blocking).
+SEED_RETRY_ATTEMPTS = 5
+SEED_RETRY_INTERVAL_SEC = 120   # 2 min apart, ~10 min total before giving up
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
 TRADE_UPDATE_SEC = 20      # matches Artemis's/Athena's convention, not Iris's 10s (§5)

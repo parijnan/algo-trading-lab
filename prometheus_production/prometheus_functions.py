@@ -29,9 +29,14 @@ from prometheus_configs import (
     REPO_ROOT, MCX_DATA_DIR, INSTRUMENT_MASTER_FILE, MCX_HOLIDAYS_FILE,
     FO_EXCHANGE, LOT_SIZE, SYMBOL,
     ST_PERIOD, ST_MULTIPLIER, SEED_DAYS, SESSION_START_TIME, CLOSING_TIME,
+    ST_SEED_SKIP_DATES, TODAY_1M_CACHE_FILE,
+    OPENING_BAR_CORRECTION_ENABLED, OPENING_BAR_ARTIFACT_THRESHOLD, CRUDEOIL_REFERENCE_SYMBOL,
     TENDER_ROLL_TRADING_DAYS, TARGET1_PCT, TARGET2_MODE, TARGET2_FLAT_PCT, SL_PCT,
     CANDLE_POLL_LIMIT, LTP_POLL_LIMIT, INNER_RETRY_ATTEMPTS, INNER_RETRY_INTERVAL_SEC,
     CANDLE_CLOSE_BUFFER_SEC, ORDER_TIMEOUT_SEC,
+    REJECTION_RETRY_ATTEMPTS, REJECTION_RETRY_COOLDOWN_SEC,
+    GHOST_RECOVERY_COOLDOWN_SEC, GHOST_RECOVERY_LOOKBACK_SEC,
+    SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     TRADES_FILE, TRADE_LOGS_DIR, COUNTER_FILE, SERIES_15M_FILE, SERIES_15M_RETENTION_DAYS,
 )
 
@@ -47,6 +52,15 @@ try:
     _ORDER_WS_AVAILABLE = True
 except ImportError:
     _ORDER_WS_AVAILABLE = False
+
+try:
+    from SmartApi.smartExceptions import DataException, NetworkException
+except ImportError:
+    class DataException(Exception):
+        pass
+
+    class NetworkException(Exception):
+        pass
 
 logger = get_logger(__name__)
 
@@ -257,6 +271,10 @@ def resolve_effective_contract(symbol: str = None, today: date = None) -> dict:
         'filepath':              dl.get_futures_filepath(symbol, expiry_date),
         'rolled_early':          rolled_early,
         'trading_days_to_expiry': trading_days_left if not rolled_early else None,
+        # §1: read live off the instrument master, not a hardcoded constant
+        # like the other four strategies' QTY_FREEZE — MCX freeze quantities
+        # are set per-commodity and could differ or change over time.
+        'freeze_qty':            int(chosen['freeze_qty']),
     }
 
 
@@ -267,6 +285,22 @@ def resolve_effective_contract(symbol: str = None, today: date = None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _merge_and_save(filepath: str, new_df: pd.DataFrame) -> int:
+    """
+    Fixed 2026-09-04 — a real, pre-existing bug, not something new to this
+    session's changes: `on_disk` (re-read from a file already carrying
+    `+05:30`-suffixed timestamps) parses to a FIXED-OFFSET tz
+    (`UTC+05:30`), while `new_df` used to be explicitly localized to the
+    NAMED zone `Asia/Kolkata` — numerically identical, but different pandas
+    tz dtypes. Concatenating the two silently fell back to `object` dtype,
+    and the subsequent `pd.to_datetime(..., utc=False)` on that mixed-
+    representation column silently turned the OLDER (on-disk) rows into
+    NaT on every second-or-later call against the same file — i.e. on
+    every multi-chunk backfill and every private-cache write this session
+    added (§15), not a contrived edge case. Fix: normalize both sides to
+    tz-naive before concatenating; `dl.format_timestamp` already localizes
+    a naive timestamp to Asia/Kolkata per-row at save time on its own, so
+    the separate pre-localization step wasn't even needed.
+    """
     if new_df is None or new_df.empty:
         return 0
     import os
@@ -274,9 +308,11 @@ def _merge_and_save(filepath: str, new_df: pd.DataFrame) -> int:
                if os.path.exists(filepath) else pd.DataFrame(columns=dl.OHLCV_HEADERS))
     if not on_disk.empty:
         on_disk['time_stamp'] = pd.to_datetime(on_disk['time_stamp'], utc=False, errors='coerce')
+        if on_disk['time_stamp'].dt.tz is not None:
+            on_disk['time_stamp'] = on_disk['time_stamp'].dt.tz_localize(None)
     new_df = new_df.copy()
-    if new_df['time_stamp'].dt.tz is None:
-        new_df['time_stamp'] = new_df['time_stamp'].dt.tz_localize('Asia/Kolkata')
+    if new_df['time_stamp'].dt.tz is not None:
+        new_df['time_stamp'] = new_df['time_stamp'].dt.tz_localize(None)
     before = len(on_disk)
     merged = pd.concat([on_disk, new_df], ignore_index=True)
     merged['time_stamp'] = pd.to_datetime(merged['time_stamp'], utc=False, errors='coerce')
@@ -322,51 +358,40 @@ def backfill_contract_if_needed(obj, contract: dict, seed_days: int = SEED_DAYS)
     logger.info(f"Backfill complete: {total_new} new row(s) added to {filepath}")
 
 
-def backfill_recent_gap_if_needed(obj, contract: dict, now: datetime) -> None:
-    """
-    Closes the gap that forms between a contract file's last on-disk row
-    and `now` after any downtime longer than the live poller's own 5-min
-    lookback window (win_from = win_to - 5min, prometheus.py's run loop)
-    can absorb on its own once polling resumes.
+# ---------------------------------------------------------------------------
+# §15 (2026-09-04): private, Prometheus-only intraday cache — TODAY_1M_CACHE_FILE.
+# Nothing else reads or writes this file (unlike the shared per-contract CSV
+# above), so none of the write-race/single-source-of-truth reasoning that
+# removed Prometheus's writes to the shared file applies here. Written
+# incrementally through the day (_merge_and_save, reused as-is — it's
+# already generic over `filepath`), cleared at logoff, and always
+# date-filtered on read as a second line of defense against an ungraceful
+# crash that skipped the clear.
+# ---------------------------------------------------------------------------
 
-    backfill_contract_if_needed (above) does NOT catch this: it only checks
-    whether the file's OLDEST timestamp goes back far enough for SEED_DAYS
-    of history, never whether there's a RECENT interior/tail gap. Confirmed
-    live 2026-08-31: a ~10-minute gap between a Kill Switch and the next
-    restart left minutes 12:03-12:08 permanently missing -- the restart's
-    first poll only reached back 5 minutes (to 12:09), and nothing else
-    ever revisited the rest of the gap. Reuses the same
-    date_range_chunks/fetch_candle_chunk mechanism as
-    backfill_contract_if_needed (day-granularity, dedup-safe on merge) --
-    consistent with how this repo already backfills, not a new code path.
-    """
+def read_today_cache(now: datetime) -> pd.DataFrame:
     import os
-    filepath = contract['filepath']
-    if not os.path.exists(filepath):
-        return   # backfill_contract_if_needed handles "no file at all"
+    if not os.path.exists(TODAY_1M_CACHE_FILE):
+        return pd.DataFrame(columns=dl.OHLCV_HEADERS)
+    df = pd.read_csv(TODAY_1M_CACHE_FILE, parse_dates=['time_stamp'])
+    if df.empty:
+        return df
+    df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False, errors='coerce').dt.tz_localize(None)
+    today = now.date()
+    return df[df['time_stamp'].dt.date == today].sort_values('time_stamp').reset_index(drop=True)
 
-    existing = pd.read_csv(filepath, parse_dates=['time_stamp'])
-    if existing.empty:
-        return
-    existing['time_stamp'] = pd.to_datetime(existing['time_stamp'], utc=False, errors='coerce')
-    last_ts = existing['time_stamp'].max()
-    if last_ts.tzinfo is not None:
-        last_ts = last_ts.tz_localize(None)
 
-    gap_start = last_ts + timedelta(minutes=1)
-    gap_end   = now - timedelta(minutes=5)   # leave the last 5 min to the live poller itself
-    if gap_start >= gap_end:
-        return   # no gap large enough to matter
-
-    logger.warning(f"Recent-gap backfill: {contract['symbol']} last on-disk row is "
-                   f"{last_ts} ({(now - last_ts).total_seconds() / 60:.0f} min old) — "
-                   f"fetching {gap_start} -> {gap_end} before seeding.")
-    total_new = 0
-    for chunk_start, chunk_end in dl.date_range_chunks(gap_start, gap_end):
-        chunk_df = dl.fetch_candle_chunk(obj, contract['token'], chunk_start, chunk_end)
-        if not chunk_df.empty:
-            total_new += _merge_and_save(filepath, chunk_df)
-    logger.info(f"Recent-gap backfill complete: {total_new} new row(s) added to {filepath}")
+def clear_today_cache() -> None:
+    """Called from _teardown() at end of session — the cache only ever
+    represents "today," so it must never survive unfiltered into the next
+    session. Belt-and-suspenders: read_today_cache() also date-filters, so
+    a crash that skips this still can't corrupt the next day's seed."""
+    import os
+    try:
+        if os.path.exists(TODAY_1M_CACHE_FILE):
+            os.remove(TODAY_1M_CACHE_FILE)
+    except Exception as e:
+        logger.warning(f'clear_today_cache: failed to remove {TODAY_1M_CACHE_FILE}: {e}')
 
 
 def _tail_read_contract_csv(filepath: str, now: datetime, n_days: int) -> pd.DataFrame:
@@ -391,39 +416,63 @@ def _tail_read_contract_csv(filepath: str, now: datetime, n_days: int) -> pd.Dat
     df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False, errors='coerce').dt.tz_localize(None)
     cutoff = pd.Timestamp(now).normalize() - timedelta(days=n_days)
     df = df[df['time_stamp'] >= cutoff]
+    # §15 (2026-09-04): explicit cutoff, not "whatever's on the file" — the
+    # shared file may still contain some of today's rows during the
+    # transition to write-removal, or none at all once it's fully deployed.
+    # Excluding today explicitly avoids depending on which is true; today's
+    # data always comes from the private cache + live gap-fetch instead
+    # (seed_st15).
+    df = df[df['time_stamp'].dt.date < now.date()]
+    if ST_SEED_SKIP_DATES:
+        skip = {pd.Timestamp(d).date() for d in ST_SEED_SKIP_DATES}
+        df = df[~df['time_stamp'].dt.date.isin(skip)]
     return df.sort_values('time_stamp').reset_index(drop=True)
 
 
-def _resample_1m_to_15m(df_1m: pd.DataFrame, now: datetime = None) -> pd.DataFrame:
+def _resample_1m_to_Nmin(df_1m: pd.DataFrame, minutes: int, now: datetime = None) -> pd.DataFrame:
     """
-    Resample 1-min OHLCV to 15-min, anchored at SESSION_START_TIME (09:00),
+    Resample 1-min OHLCV to N-min, anchored at SESSION_START_TIME (09:00),
     day-by-day — same fixed-clock-time-bucket approach as
     iris_functions.py's _resample_to_15m/_resample_1m_to_5m, one level up.
     Each day's buckets stop at CLOSING_TIME (variable, DST-dependent).
+    Generalized from the original 15-min-only _resample_1m_to_15m (plan §17,
+    2026-09-04) so a future 1h resample shares this one guard instead of a
+    second, potentially-drifting copy of it.
 
-    A window is only included once it has genuinely finished elapsing by
-    `now` (defaults to datetime.now()) -- not merely "has some data in it".
-    Without this, seeding mid-way through an in-progress 15-min window (a
-    restart, not a fresh 09:00 start) would build a "complete" bar from
-    whatever partial minutes happen to exist so far, feed that into
-    compute_st, and shift the ST value away from what a chart (which
-    correctly excludes the still-forming candle) shows. Confirmed live
-    2026-08-31: a 12:13:49 restart produced ST=8105.67 from a bar built on
-    only ~13 of the 12:00-12:15 window's 15 minutes, vs. the chart's
-    correct (unchanged) 8102.33.
+    A window is only included once it's genuinely done -- either it has
+    fully elapsed by `now` (defaults to datetime.now()), or the session
+    itself has already closed for that day. These are deliberately NOT the
+    same check:
+      - "hasn't fully elapsed, session still open" -> skip. More 1-min rows
+        are still going to arrive for this window; computing it now would
+        build a bar from partial data that silently changes once the rest
+        arrives. This is the original 2026-08-31 failure mode: a 12:13:49
+        restart produced ST=8105.67 from a bar built on only ~13 of the
+        12:00-12:15 window's 15 minutes, vs. the chart's correct 8102.33.
+      - "hasn't fully elapsed, but the session has already closed for that
+        day" -> compute it anyway, from whatever real rows exist. Nothing
+        more will EVER arrive for it, so it's exactly as complete as it's
+        going to get -- and the chart shows this trailing bucket as one bar
+        regardless of duration, not a dropped one. Concretely: on a
+        CLOSING_TIME=23:55 day, the last 15-min bucket only ever has 10
+        real minutes (895/15=59.67); on EITHER CLOSING_TIME, the last
+        60-min bucket only ever has 30 or 55 real minutes (870/60=14.5,
+        895/60=14.92) -- every single day, not just an edge case.
     """
     now = now or datetime.now()
-    candles_15 = []
+    candles = []
     for day, day_df in df_1m.groupby(df_1m['time_stamp'].dt.date):
-        anchor     = pd.Timestamp(f'{day} {SESSION_START_TIME}')
-        day_cutoff = pd.Timestamp(f'{day} {CLOSING_TIME}')
+        anchor       = pd.Timestamp(f'{day} {SESSION_START_TIME}')
+        day_cutoff   = pd.Timestamp(f'{day} {CLOSING_TIME}')
+        day_has_closed = now >= day_cutoff   # true for any past day; true for
+                                              # today only once today's own close has passed
         while anchor <= day_cutoff:
-            window_end = anchor + timedelta(minutes=15) - timedelta(minutes=1)
-            if anchor + timedelta(minutes=15) > now:
-                break   # this window (and every later one today) hasn't finished elapsing yet
+            window_end = anchor + timedelta(minutes=minutes) - timedelta(minutes=1)
+            if anchor + timedelta(minutes=minutes) > now and not day_has_closed:
+                break   # still forming, live session -- more data still coming, wait
             window = day_df[(day_df['time_stamp'] >= anchor) & (day_df['time_stamp'] <= window_end)]
             if not window.empty:
-                candles_15.append({
+                candles.append({
                     'time_stamp': anchor,
                     'open':       window['open'].iloc[0],
                     'high':       window['high'].max(),
@@ -431,10 +480,71 @@ def _resample_1m_to_15m(df_1m: pd.DataFrame, now: datetime = None) -> pd.DataFra
                     'close':      window['close'].iloc[-1],
                     'volume':     window['volume'].sum(),
                 })
-            anchor += timedelta(minutes=15)
-    if not candles_15:
+            anchor += timedelta(minutes=minutes)
+    if not candles:
         return pd.DataFrame()
-    return pd.DataFrame(candles_15).reset_index(drop=True)
+    return pd.DataFrame(candles).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# §11 (2026-09-04): opening-bar price-artifact protection. CRUDEOILM's very
+# first 1-min candle of the session has shown a recurring thin-liquidity
+# price-discovery artifact (7 confirmed instances, 2026-03 through 2026-09)
+# that distorts ST_15's ATR for ~ST_PERIOD bars afterward. CRUDEOIL is
+# confirmed reliable at that exact minute every time.
+# ---------------------------------------------------------------------------
+
+def patch_opening_bar_if_artifact(m_bar: dict, o_bar: dict,
+                                  threshold: float = OPENING_BAR_ARTIFACT_THRESHOLD) -> dict:
+    """
+    m_bar/o_bar: the 09:00 1-min candle for CRUDEOILM/CRUDEOIL, each
+    {'open','high','low','close'}. Same underlying, same per-barrel price
+    (only lot size differs — no scaling needed). If CRUDEOIL's true range is
+    under `threshold` of CRUDEOILM's at this exact minute, CRUDEOILM's own
+    print is thin-liquidity noise — substitute CRUDEOIL's OHLC outright.
+    Runs once, right after the 09:00 candle downloads; BAU for the rest of
+    the session either way.
+
+    Gated by OPENING_BAR_CORRECTION_ENABLED (default False, 2026-09-04):
+    when disabled, this still runs and logs what it WOULD have done, but
+    returns m_bar unpatched — lets the user validate ST accuracy against
+    the raw, uncorrected broker chart before trusting a live substitution.
+    """
+    m_tr = m_bar['high'] - m_bar['low']
+    o_tr = o_bar['high'] - o_bar['low']
+    if m_tr > 0 and (o_tr / m_tr) < threshold:
+        verb = 'substituting' if OPENING_BAR_CORRECTION_ENABLED else 'would substitute (correction disabled)'
+        logger.warning(f'Opening-bar artifact: CRUDEOILM TR={m_tr} vs CRUDEOIL TR={o_tr} '
+                       f'(ratio {o_tr / m_tr:.2f}) — {verb}.')
+        if OPENING_BAR_CORRECTION_ENABLED:
+            return dict(o_bar)
+    return m_bar
+
+
+def fetch_crudeoil_opening_bar(obj, session_start_ts: datetime) -> dict:
+    """
+    Live poll of CRUDEOIL's own 09:00 1-min candle — needed once per session
+    as the reference for patch_opening_bar_if_artifact. Reuses
+    resolve_effective_contract (already supports an arbitrary symbol) and
+    fetch_one_minute_window (same resilient 3-attempt burst as every other
+    1-min fetch in this file) — not new infrastructure, a new call site.
+    Returns None on failure; caller must treat that as "reference
+    unavailable," never fabricate one.
+    """
+    try:
+        contract = resolve_effective_contract(CRUDEOIL_REFERENCE_SYMBOL, session_start_ts.date())
+    except Exception as e:
+        logger.error(f'fetch_crudeoil_opening_bar: could not resolve {CRUDEOIL_REFERENCE_SYMBOL} '
+                     f'contract: {e}')
+        return None
+    df = fetch_one_minute_window(obj, contract['token'], session_start_ts,
+                                 session_start_ts + timedelta(minutes=1))
+    if df is None or df.empty:
+        logger.error(f'fetch_crudeoil_opening_bar: no {CRUDEOIL_REFERENCE_SYMBOL} data for '
+                     f'{session_start_ts:%H:%M}.')
+        return None
+    row = df.iloc[0]
+    return {'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']}
 
 
 def _find_15m_gaps(df_15m: pd.DataFrame) -> list:
@@ -469,19 +579,43 @@ def persist_15m_series(df_15m: pd.DataFrame) -> None:
 
 def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
     """
-    §1: tail-read the current effective contract's own file (past days +
-    whatever of today the file already has), resample to 15-min, gap-check,
-    compute ST from scratch. Refuses to seed (returns empty df) on any gap
-    or missing data, rather than seeding silently stale.
+    §15 (2026-09-04): past days come from the shared pipeline file (never
+    written by Prometheus); today comes from the private intraday cache
+    plus a live gap-fetch for whatever it doesn't already cover — same code
+    path for a fresh 09:00 start (an essentially-empty gap) and a mid-day
+    crash-restart (the real gap-filler), same as the old design's intent,
+    just re-targeted at a file only Prometheus ever touches. Resample to
+    15-min, gap-check, compute ST from scratch. Refuses to seed (returns
+    empty df) on any gap or missing data, rather than seeding silently stale.
     """
-    backfill_contract_if_needed(obj, contract)
-    backfill_recent_gap_if_needed(obj, contract, now)
-    raw_1m = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
+    backfill_contract_if_needed(obj, contract)   # defensive: genuinely missing OLDER history
+    raw_1m_past = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
+
+    cached_today = read_today_cache(now)
+    session_start = pd.Timestamp(f'{now.date()} {SESSION_START_TIME}')
+    gap_from = (cached_today['time_stamp'].max() + timedelta(minutes=1)
+                if not cached_today.empty else session_start)
+    if gap_from < now:
+        gap_df = fetch_one_minute_window(obj, contract['token'], gap_from, now)
+        if gap_df is not None and not gap_df.empty:
+            _merge_and_save(TODAY_1M_CACHE_FILE, gap_df)
+            cached_today = (pd.concat([cached_today, gap_df], ignore_index=True)
+                             .drop_duplicates(subset=['time_stamp'], keep='last')
+                             .sort_values('time_stamp').reset_index(drop=True))
+        elif cached_today.empty:
+            logger.error('seed_st15: no cached today data and live gap-fetch failed — cannot seed.')
+            return pd.DataFrame()
+        else:
+            logger.warning(f'seed_st15: live gap-fetch failed, proceeding with cached data only '
+                           f'(through {cached_today["time_stamp"].max()}).')
+
+    raw_1m = (pd.concat([raw_1m_past, cached_today], ignore_index=True)
+              .sort_values('time_stamp').reset_index(drop=True))
     if raw_1m.empty:
-        logger.error('seed_st15: no 1-min history available on disk after backfill.')
+        logger.error('seed_st15: no 1-min history available after backfill + cache + live fetch.')
         return pd.DataFrame()
 
-    df_15m_raw = _resample_1m_to_15m(raw_1m, now)
+    df_15m_raw = _resample_1m_to_Nmin(raw_1m, 15, now)
     if df_15m_raw.empty:
         logger.error('seed_st15: resample produced no 15-min bars.')
         return pd.DataFrame()
@@ -708,35 +842,128 @@ class OrderFillWatcher(SmartWebSocketOrderUpdate if _ORDER_WS_AVAILABLE else obj
 
 
 # ---------------------------------------------------------------------------
-# §2: Order placement (single market order, 2 lots per unit) + fill/qty
-# resolution. Partial-fill handling: if filled qty < requested, lot2 simply
-# never opens (§2's explicit decision — no retry, entry price has already moved).
+# §1 (2026-09-04): resilient order placement — ported from Athena's
+# _place_order (athena_engine.py:231-303), adapted for Prometheus's single-
+# instrument-token calling convention and a per-contract, dynamically-
+# sourced freeze_qty (not a hardcoded constant like the other four
+# strategies' QTY_FREEZE). Does three things Prometheus's original
+# single-try/except place_order didn't:
+#   1. Freeze-limit quantity splitting — chunks a request bigger than the
+#      broker will accept in one order into several, each placed separately.
+#   2. Rejection retry — an actual 'rejected' broker response gets retried
+#      up to REJECTION_RETRY_ATTEMPTS times before giving up on that chunk.
+#   3. Ghost-order recovery — on DataException/NetworkException specifically
+#      (a lost response, not necessarily a lost order), check the order book
+#      for a matching order before assuming nothing happened and retrying
+#      placement, which could otherwise produce a genuine double-fill.
 # ---------------------------------------------------------------------------
 
-def place_order(obj, transaction_type: str, symbol: str, token: str,
-                lots: int, dry_run: bool) -> str:
-    """`lots` is an already-resolved lot count — callers compute it from
-    units (entry: units*2 combined; a single lot exit: units*1) since entry
-    and exit orders need different quantities for the same position (§2)."""
-    qty = lots * LOT_SIZE
-    if dry_run:
-        logger.info(f'[PAPER] {transaction_type} {qty} units of {symbol} (token={token})')
-        return 'PAPER_ORDER_ID'
+_placed_order_ids = set()   # ghost-recovery collision guard: IDs this
+                            # process has itself placed, so a ghost-recovery
+                            # scan never re-claims an order already ours —
+                            # module-level, matching _candle_counter/
+                            # _ltp_counter's existing pattern in this file.
 
-    orderparams = {
-        'variety': 'NORMAL', 'tradingsymbol': symbol, 'symboltoken': token,
-        'transactiontype': transaction_type, 'exchange': FO_EXCHANGE,
-        'ordertype': 'MARKET', 'producttype': 'CARRYFORWARD', 'duration': 'DAY',
-        'quantity': str(qty), 'price': '0', 'triggerprice': '0',
-    }
-    try:
-        resp = obj.placeOrderFullResponse(orderparams)
-        order_id = resp.get('data', {}).get('orderid')
-        logger.info(f'Order placed: {transaction_type} {qty} x {symbol} -> orderid={order_id}')
-        return order_id
-    except Exception as e:
-        logger.error(f'Order placement failed: {e}')
-        return None
+
+def place_order(obj, transaction_type: str, symbol: str, token: str,
+                lots: int, dry_run: bool, freeze_qty: int = None) -> list:
+    """
+    `lots` is an already-resolved lot count — callers compute it from units
+    (entry: units*2 combined; a single lot exit: units*1) since entry and
+    exit orders need different quantities for the same position.
+
+    Returns a LIST of order IDs, not one. At today's 2-4 lot sizing this
+    list always has exactly one element and the freeze-limit split never
+    fires — freeze_qty=10000 for CRUDEOILM (lotsize=10) allows up to 1000
+    lots in a single order. Callers (get_fill_price_and_qty) must aggregate
+    across the whole list regardless, not assume a single ID.
+    """
+    if dry_run:
+        dry_id = f'PAPER_{token}_{transaction_type}_{datetime.now():%H%M%S}'
+        logger.info(f'[PAPER] {transaction_type} {lots} lot(s) of {symbol} (token={token}) -> {dry_id}')
+        return [dry_id]
+
+    l_limit = max(1, (freeze_qty or lots * LOT_SIZE) // LOT_SIZE)
+    order_quantities = []
+    rem = lots
+    while rem > 0:
+        chunk = min(rem, l_limit)
+        order_quantities.append(chunk)
+        rem -= chunk
+
+    orderid_list = []
+    for lot_chunk in order_quantities:
+        qty_shares = int(lot_chunk * LOT_SIZE)
+        orderparams = {
+            'variety': 'NORMAL', 'tradingsymbol': symbol, 'symboltoken': token,
+            'transactiontype': transaction_type, 'exchange': FO_EXCHANGE,
+            'ordertype': 'MARKET', 'producttype': 'CARRYFORWARD', 'duration': 'DAY',
+            'quantity': str(qty_shares), 'price': '0', 'triggerprice': '0',
+        }
+        rejection_count = 0
+        while True:
+            try:
+                resp = obj.placeOrderFullResponse(orderparams)
+                if resp.get('message') == 'SUCCESS':
+                    oid = resp['data']['orderid']
+                    orderid_list.append(oid)
+                    _placed_order_ids.add(oid)
+                    logger.info(f'Order placed: {transaction_type} {qty_shares} x {symbol} -> orderid={oid}')
+                    break
+                rejection_count += 1
+                err_msg = resp.get('message', 'Unknown error')
+                logger.error(f'Order rejected ({rejection_count}/{REJECTION_RETRY_ATTEMPTS}): '
+                             f'{symbol} — {err_msg}')
+                if rejection_count >= REJECTION_RETRY_ATTEMPTS:
+                    logger.critical(f'Order rejected {REJECTION_RETRY_ATTEMPTS}x for {symbol} '
+                                    f'({err_msg}) — giving up on this chunk.')
+                    break
+                time.sleep(REJECTION_RETRY_COOLDOWN_SEC)
+            except (DataException, NetworkException) as e:
+                err_msg = str(e).lower()
+                if 'access rate' in err_msg or 'exceeding' in err_msg:
+                    logger.warning(f'Rate limit hit placing {symbol} order — cooling down '
+                                   f'{GHOST_RECOVERY_COOLDOWN_SEC}s.')
+                    time.sleep(GHOST_RECOVERY_COOLDOWN_SEC)
+                    continue
+                logger.warning(f'Connectivity issue ({type(e).__name__}) placing {symbol} order — '
+                               f'checking the order book for a ghost order before retrying.')
+                time.sleep(GHOST_RECOVERY_COOLDOWN_SEC)
+                try:
+                    book = obj.orderBook().get('data') or []
+                    found = False
+                    for o in book:
+                        if (o.get('tradingsymbol') == symbol and
+                                o.get('transactiontype') == transaction_type and
+                                int(o.get('quantity', 0)) == qty_shares and
+                                o.get('status') in ('complete', 'open', 'validation pending')):
+                            oid = o.get('orderid')
+                            if not oid or oid in _placed_order_ids:
+                                continue
+                            try:
+                                ut = datetime.strptime(o['updatetime'], '%d-%b-%Y %H:%M:%S')
+                                fresh = (datetime.now() - ut).total_seconds() < GHOST_RECOVERY_LOOKBACK_SEC
+                            except Exception:
+                                fresh = False
+                            if fresh:
+                                orderid_list.append(oid)
+                                _placed_order_ids.add(oid)
+                                logger.info(f'Ghost order recovered for {symbol}: orderid={oid}')
+                                found = True
+                                break
+                    if found:
+                        break
+                    logger.info(f'No matching ghost order found for {symbol} — retrying placement.')
+                except Exception as e_inner:
+                    logger.error(f'orderBook check failed while recovering a ghost order for '
+                                f'{symbol}: {e_inner} — retrying placement.')
+            except Exception as e:
+                if 'token' in str(e).lower() or 'invalid' in str(e).lower():
+                    logger.critical(f'Session failure placing {symbol} order: {e} — aborting.')
+                    raise
+                logger.error(f'Order placement failed for {symbol}: {e}')
+                time.sleep(REJECTION_RETRY_COOLDOWN_SEC)
+    return orderid_list
 
 
 _ltp_counter = {'count': 0, 'limit': LTP_POLL_LIMIT, 'last_reset': 0.0}
@@ -765,13 +992,26 @@ def fetch_ltp_rest(obj, symbol: str, token: str) -> float:
         return None
 
 
-def get_fill_price_and_qty(obj, order_watcher: OrderFillWatcher, order_id: str,
+def get_fill_price_and_qty(obj, order_watcher: OrderFillWatcher, order_ids: list,
                            symbol: str, token: str, requested_lots: int,
                            dry_run: bool, feed) -> tuple:
     """
     Returns (avg_fill_price, filled_lots) or (None, 0) on failure (live
     only — caller should abort). filled_lots < requested_lots signals a
-    partial fill (§2) — caller decides whether lot2 opens.
+    partial fill — caller decides whether lot2 opens.
+
+    order_ids is a LIST (§1, 2026-09-04) — place_order may have chunked a
+    large request into several broker-legal orders (freeze_qty). Aggregates
+    fill quantity/value across every ID in the list before returning a
+    single blended average price, mirroring Athena's _fetch_order_details.
+    At today's 2-4 lot sizing this list always has one element and the
+    aggregation degenerates to the original single-order behavior.
+    Acknowledged limitation, not solved here: if some chunks fill and others
+    time out, this returns a hard failure (None, 0) rather than attempting a
+    partial-across-multiple-orders reconciliation — consistent with the
+    "never fabricate, never guess" invariant elsewhere in this file, and
+    unreachable at current sizing (freeze_qty allows 1000 lots/order, orders
+    here never exceed 4).
 
     Unlike iris_functions.get_fill_price (which subscribes/unsubscribes a
     fresh OPTION token per trade), Prometheus always trades the SAME futures
@@ -795,44 +1035,67 @@ def get_fill_price_and_qty(obj, order_watcher: OrderFillWatcher, order_id: str,
             return ltp, requested_lots
         return None, 0
 
+    if not order_ids:
+        logger.error(f'get_fill_price_and_qty: empty order_ids for {symbol} — nothing to verify.')
+        return None, 0
+
     if order_watcher._ws_ready.is_set():
         deadline = time.time() + ORDER_TIMEOUT_SEC
         while time.time() < deadline:
             with order_watcher._lock:
-                od = order_watcher.live_orders.get(str(order_id))
-            if od:
-                avg = float(od.get('averageprice') or 0.0)
-                qty = int(od.get('filledshares') or 0)
-                if qty > 0:
-                    filled_lots = qty // LOT_SIZE
-                    logger.info(f'Fill (WS): {symbol} avg={avg} qty={qty} ({filled_lots} lot(s))')
+                orders = {oid: order_watcher.live_orders.get(str(oid)) for oid in order_ids}
+            if all(orders.values()):
+                total_qty, total_val = 0, 0.0
+                for od in orders.values():
+                    qty = int(od.get('filledshares') or 0)
+                    total_qty += qty
+                    total_val += float(od.get('averageprice') or 0.0) * qty
+                if total_qty > 0:
+                    filled_lots = total_qty // LOT_SIZE
+                    avg = round(total_val / total_qty, 2)
+                    logger.info(f'Fill (WS): {symbol} avg={avg} qty={total_qty} '
+                               f'({filled_lots} lot(s)) across {len(order_ids)} order(s)')
                     return avg, filled_lots
             time.sleep(0.05)
-        logger.warning(f'WS fill timeout for {order_id} ({symbol}) — falling back to REST.')
+        logger.warning(f'WS fill timeout for {order_ids} ({symbol}) — falling back to REST.')
     else:
         logger.info('OrderFillWatcher WS not ready — using REST orderBook.')
 
     deadline = time.time() + ORDER_TIMEOUT_SEC
     while time.time() < deadline:
         try:
-            book   = obj.orderBook()
-            orders = book.get('data') or []
-            for o in orders:
-                if str(o.get('orderid')) == str(order_id):
-                    if o.get('status') == 'complete':
-                        avg = float(o.get('averageprice', 0))
-                        qty = int(o.get('filledshares', o.get('quantity', 0)))
-                        filled_lots = qty // LOT_SIZE
-                        logger.info(f'Fill (REST): {symbol} avg={avg} qty={qty} ({filled_lots} lot(s))')
-                        return avg, filled_lots
-                    if o.get('status') in ('rejected', 'cancelled'):
-                        logger.error(f'Order {order_id} {o.get("status")}')
-                        return None, 0
+            book = obj.orderBook()
+            by_id = {str(o.get('orderid')): o for o in (book.get('data') or [])}
+            total_qty, total_val = 0, 0.0
+            all_resolved, any_rejected = True, False
+            for oid in order_ids:
+                o = by_id.get(str(oid))
+                if not o:
+                    all_resolved = False
+                    continue
+                status = o.get('status')
+                if status == 'complete':
+                    qty = int(o.get('filledshares', o.get('quantity', 0)))
+                    total_qty += qty
+                    total_val += float(o.get('averageprice', 0)) * qty
+                elif status in ('rejected', 'cancelled'):
+                    any_rejected = True
+                else:
+                    all_resolved = False
+            if any_rejected and total_qty == 0:
+                logger.error(f'Order(s) {order_ids} rejected/cancelled for {symbol}, nothing filled.')
+                return None, 0
+            if all_resolved and total_qty > 0:
+                filled_lots = total_qty // LOT_SIZE
+                avg = round(total_val / total_qty, 2)
+                logger.info(f'Fill (REST): {symbol} avg={avg} qty={total_qty} '
+                           f'({filled_lots} lot(s)) across {len(order_ids)} order(s)')
+                return avg, filled_lots
         except Exception as e:
             logger.warning(f'orderBook poll failed: {e}')
         time.sleep(1)
 
-    logger.error(f'Fill timeout for {order_id} ({symbol})')
+    logger.error(f'Fill timeout for {order_ids} ({symbol})')
     return None, 0
 
 

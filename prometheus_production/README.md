@@ -9,8 +9,19 @@ Iris, Prometheus owns its own Angel One session — it is not launched by Leto (
 exchange, different underlying, no VIX coupling; see
 [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
-**Status: Built, `DRY_RUN=True` (paper mode). Not yet live-tested.** Reverted to paper mode
-2026-08-31 after a real incident — see Status section at the bottom before touching `DRY_RUN`.
+**Status: Phase 3 build in progress, `DRY_RUN=True` (paper mode). Not yet live-tested.**
+[`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
+current design doc — every section there is `[DECIDED]`. Built so far (2026-09-04): resilient
+order execution (§1), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten
+(§2), the 15-min-boundary deferred-bar fix + the resample day-end-boundary fix that also underlies
+it (§12/§17), opening-bar price-artifact correction (§11), realised/unrealised/total P&L
+reporting (§13), the ST seed skip-list (§14), and the `state.token` invariant fix (§3). **Not yet
+built: the rollover trigger/recovery/execution mechanics, Rule 7's combined order, SL/target
+recalibration, and the rolled-trade log schema (§4–§9)** — elaborate, interdependent, and not
+exercised until the next rollover (~2026-09-15, per the plan's `TENDER_ROLL_TRADING_DAYS=5`
+confirmation), so building them half-wired was judged worse than not building them yet. The 1h/15m
+entry filter (§17) has its resample groundwork built but stays off (`ENTRY_FILTER_1H_ALIGN_ENABLED`
+doesn't exist yet — the filter itself isn't wired into any entry call site).
 
 ---
 
@@ -40,11 +51,15 @@ graph TD
     KillOld --> Login[Angel One login]
     Login --> Setup[_setup]
 
-    Setup --> Contract[resolve_effective_contract:\nexchange front-month, UNLESS\n< 5 trading days to its expiry\n-- then roll to next contract out]
-    Contract --> Seed[seed_st15:\ntail-read SEED_DAYS=18 days 1-min,\nresample to 15m, compute ST\ngap-checked -- refuses to seed on a hole]
-    Seed -- Fail --> AbortSeed([Exit — seed failed])
-    Seed -- OK --> TodayAccum[Seed today's in-memory\n1-min accumulator from disk]
-    TodayAccum --> Feed[Start SharedFeed WebSocket\nsubscribe MCX contract token\npermanent for the session]
+    Setup --> Contract[resolve_effective_contract:\nexchange front-month, UNLESS\n< 5 trading days to its expiry\n-- then roll to next contract out.\nAlso reads freeze_qty live off\nthe instrument master, §1]
+    Contract --> SeedRetry{seed_st15 attempt\nfailed?}
+    SeedRetry -- Yes, attempts left --> SeedWait[Wait SEED_RETRY_INTERVAL_SEC\nlog + one WARNING Slack heads-up\non the first failure only, §15] --> SeedTry
+    SeedRetry -- Yes, exhausted --> AbortSeed([Exit -- seed failed after\nSEED_RETRY_ATTEMPTS, CRITICAL alert])
+    SeedTry[seed_st15:\npast days from the shared pipeline\nfile; today from the private cache\n+ live gap-fetch for the remainder,\n§15 -- resample, gap-check, compute ST]
+    SeedTry --> SeedRetry
+    SeedRetry -- No --> TodayAccum[Re-read the private cache\n(read_today_cache) into\nself._df_1m_today]
+    TodayAccum --> OpenBarCheck[_maybe_check_opening_bar:\nif today's 09:00 row is already\npresent (a restart), check it now\nagainst CRUDEOIL, §11]
+    OpenBarCheck --> Feed[Start SharedFeed WebSocket\nsubscribe MCX contract token\npermanent for the session]
     Feed --> OrderWS[Start OrderFillWatcher\nlive only -- skipped in DRY_RUN]
     OrderWS --> Resume{Resuming with\nstatus == in_trade?}
     Resume -- Yes --> ResumeWarn[Rebuild pending_trade_row from state\nSlack: NOT reconciled against broker --\nverify manually]
@@ -53,7 +68,7 @@ graph TD
     Watching --> LoopStart[Main loop armed]
 
     LoopStart --> Loop{not shutdown AND\nflag exists AND\nnow < SESSION_END_TIME?}
-    Loop -- No --> Teardown[_teardown]
+    Loop -- No --> Teardown[_teardown: stop feed,\nclear_today_cache -- §2 Phase 3:\nan open position is LEFT OPEN,\nthe normal case now, not force-exited]
     Teardown --> End([Session terminated])
 
     Loop -- Yes --> CmdFlag{prometheus_command.flag\n== EXIT or KILL?}
@@ -73,18 +88,22 @@ graph TD
     BoundaryCheck -- Yes --> Recover[Recover any pending windows\nfrom outer retry queue]
     Recover --> Fetch[fetch_one_minute_window\n5-min lookback, inner retry x3]
     Fetch -- Fail --> QueuePending[Push to pending_recovery\nnon-blocking, retried next boundary] --> Merge15Check
-    Fetch -- OK --> MergeWrite[_merge_1m:\nwrite into contract's shared file\n+ update in-memory today accumulator]
-    MergeWrite --> Merge15Check{boundary.minute\n% 15 == 0?}
-    Merge15Check -- Yes --> Handle15m[_handle_new_15m_bar]
-    Merge15Check -- No --> RunningRowCheck
+    Fetch -- OK --> MergeWrite[_merge_1m: write into the PRIVATE\nintraday cache, §15 -- never the\nshared file any more -- + update\nin-memory today accumulator, then\n_maybe_check_opening_bar §11]
+    MergeWrite --> Merge15Check{boundary.minute\n% 15 == 0 AND no\npending 15m boundary?}
+    Merge15Check -- Yes --> SetPending[Mark this boundary pending,\ndeadline = boundary + DEFERRED_BAR_CUTOFF_MIN]
+    Merge15Check -- No --> PendingCheck{15m boundary\npending?}
+    SetPending --> PendingCheck
+    PendingCheck -- No --> RunningRowCheck
+    PendingCheck -- Yes --> WindowComplete{Window has\nall 15 min? OR\npast cutoff?}
+    WindowComplete -- No --> RunningRowCheck
+    WindowComplete -- Yes, past cutoff\nbut incomplete --> LoudWarn[WARNING log + Slack:\nbuilding from what's on hand\n§12, cutoff=1min] --> Handle15m
+    WindowComplete -- Yes, complete --> Handle15m[_handle_new_15m_bar]
     Handle15m --> RunningRowCheck{status == in_trade?}
     RunningRowCheck -- Yes --> AppendRow[Append running-P&L row\ntrade_logs/trade_NNNN_*.csv]
     RunningRowCheck -- No --> Sleep
     AppendRow --> Sleep
 
-    ExitCheck --> ExitEOD{now >= EOD_SQUAREOFF_TIME?}
-    ExitEOD -- Yes --> ExitAllEOD[_execute_exit_all: eod_squareoff] --> Sleep
-    ExitEOD -- No --> ExitSL{SL hit on LTP?}
+    ExitCheck --> ExitSL{SL hit on LTP?}
     ExitSL -- Yes --> ExitAllSL[_execute_exit_all: stop_loss\nSL wins any same-tick tie vs a target] --> Sleep
     ExitSL -- No --> ExitT1{lot1 open AND\nlot1_target hit?}
     ExitT1 -- Yes --> ExitLot1[_execute_exit_lot 1: target1]
@@ -107,18 +126,18 @@ graph TD
     DirCheck -- Yes --> Rule7Exit[_execute_exit_all: trend_flip]
     Rule7Exit --> Rule7Confirmed{Exit confirmed\nfully closed?}
     Rule7Confirmed -- No --> Rule7Abort[Re-entry SKIPPED\nlogged critical] --> RunningRowCheck
-    Rule7Confirmed -- Yes --> Rule7Gate{after MIN_ENTRY_TIME AND\nbefore LAST_ENTRY_TIME?}
+    Rule7Confirmed -- Yes --> Rule7Gate{after MIN_ENTRY_TIME?}
     Rule7Gate -- Yes --> Entry[_execute_entry:\nnew direction, same 15m bar]
     Rule7Gate -- No --> RunningRowCheck
 
-    InTradeFlip -- No --> FreshGate{status == watching AND\nafter MIN_ENTRY_TIME AND\nbefore LAST_ENTRY_TIME?}
+    InTradeFlip -- No --> FreshGate{status == watching AND\nafter MIN_ENTRY_TIME?\n§2 Phase 3: no LAST_ENTRY_TIME\ncutoff before close any more}
     FreshGate -- Yes --> Entry
     FreshGate -- No --> RunningRowCheck
 
     Entry --> Units[_calculate_units + margin check]
-    Units --> PlaceOrder[place_order:\n2 x units x LOTS_PER_LEG lots]
+    Units --> PlaceOrder[place_order §1: 2 x units x LOTS_PER_LEG\nlots, chunked to freeze_qty, rejection\nretry, ghost-order recovery on\nDataException/NetworkException --\nreturns a LIST of order IDs]
     PlaceOrder -- Fail --> EntryAbort[Log error -- no position opened] --> RunningRowCheck
-    PlaceOrder -- OK --> FillVerify[get_fill_price_and_qty:\nWS fast path + REST fallback]
+    PlaceOrder -- OK --> FillVerify[get_fill_price_and_qty §1:\nWS fast path + REST fallback,\naggregated across the whole\norder-ID list]
     FillVerify -- Fail --> EntryAbort
     FillVerify -- OK --> SplitLots[Split filled lots -> lot1/lot2\npartial-fill aware: lot2 may\nnever open, never retried]
     SplitLots --> Thresholds[resolve_thresholds + resolve_target2:\nsl_price, lot1_target, lot2_target]
@@ -133,22 +152,44 @@ graph TD
 - **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=3.0`) — no regime gate,
   unlike Iris's dual-timeframe design. Same signal `prometheus_backtest/phase2/backtest_p2.py`
   was calibrated against.
-- **Seed at startup**: `seed_st15()` tail-reads `SEED_DAYS=18` calendar days of 1-min history
-  from the effective contract's own file, resamples to 15-min, computes ST — explicitly
-  gap-checked, refuses to seed across a hole rather than silently computing over one (unlike
-  Iris's Path A/B, there's no live-poll fallback path here — a bad seed aborts startup outright).
+- **Seed at startup**: `seed_st15()` combines two sources (§15) — past calendar days from the
+  *shared* MCX data pipeline file (`data_pipeline/data_downloader_mcx.py`, never written by
+  Prometheus), and *today* from Prometheus's own private intraday cache plus a live gap-fetch for
+  whatever the cache doesn't already cover. Resampled to 15-min, gap-checked, ST computed from
+  scratch — refuses to seed across a hole rather than silently computing over one. Wrapped in a
+  bounded retry (`SEED_RETRY_ATTEMPTS=5`, `SEED_RETRY_INTERVAL_SEC=120`) — see Private Intraday
+  Cache below for why this is safe to block on here specifically.
+- **Opening-bar artifact correction** (§11): CRUDEOILM's very first 1-min candle of the session
+  has shown a recurring thin-liquidity price-discovery artifact (7 confirmed instances,
+  2026-03 through 2026-09) that distorts ST's ATR for ~`ST_PERIOD` bars afterward.
+  `_maybe_check_opening_bar()` runs once per session, the first time today's 09:00 row is
+  available, and compares it against a live poll of CRUDEOIL's own 09:00 print (confirmed
+  reliable at that exact minute every time). Gated by `OPENING_BAR_CORRECTION_ENABLED`
+  (**default `False`**) — the check always runs and logs what it would have done, but only
+  patches `self._df_1m_today` in place (before any resample reads it) when the toggle is on.
+  Left off by default so ST accuracy can be validated against the raw, uncorrected broker chart
+  first — not a temporary flag with a removal date, a validation gate.
 - **Live update**: every 1-min boundary, the last 5 minutes are polled and merged into the
-  in-memory today-accumulator; on each 15-min boundary (`minute % 15 == 0`), a fresh 15m bar is
-  built from that window, appended to the full series, and ST is recomputed over the whole
-  thing (`compute_st`, not incremental — matches the backtest's own computation exactly).
+  in-memory today-accumulator (and the private cache, §15); on each 15-min boundary
+  (`minute % 15 == 0`), a fresh 15m bar is built from that window — **but not necessarily
+  immediately** (§12, see below) — appended to the full series, and ST is recomputed over the
+  whole thing (`compute_st`, not incremental — matches the backtest's own computation exactly).
   Persisted to `data/prometheus_15m_series.csv` after every bar — for inspection/restart-recovery
-  visibility only (§4 of the plan), never resumed from directly on restart (ST always recomputes
-  fresh from the seeded + accumulated 1-min history).
-- **Missing-bar handling**: a 15-min boundary can fire while the 1-min poller's own recovery
-  queue is still catching up. If the window has zero 1-min bars, the 15m bar is skipped outright
-  (a gap in the ST series, alerted loudly); if it has fewer than 8 of the expected 15, the bar is
-  still built from what's available, also alerted — "no silent staleness," matching the seed's
-  own refusal-to-guess philosophy but unable to fully refuse mid-session the way the seed can.
+  visibility only, never resumed from directly on restart (ST always recomputes fresh from the
+  seeded + accumulated 1-min history).
+- **Deferred-bar computation** (§12): a 15-min boundary tick doesn't compute the bar the instant
+  it arrives — it waits (re-checking every 1-min cycle) until `self._df_1m_today` genuinely has
+  all 15 minutes for that window, up to `DEFERRED_BAR_CUTOFF_MIN=1` minute, before falling back to
+  building it from whatever's on hand with a loud warning. Confirmed live 2026-09-03: an AB1021
+  stretch can span ~60s, and building a bar from a merely-short tail (14/15 present) previously
+  triggered no warning at all — the old `< 8/15` check only caught a much worse case. SL/target
+  monitoring is completely unaffected by the wait either way (`_check_exit_conditions_ltp` runs
+  every tick regardless of whether a 15m bar is pending). Also fixed the underlying resample
+  function's day-end boundary handling in the same pass (§17) — see that section below.
+- **Missing-bar handling**: if the window has zero 1-min bars even after the deferred-bar cutoff,
+  the 15m bar is skipped outright (a gap in the ST series, alerted loudly); if it has fewer than
+  8 of the expected 15, the bar is still built from what's available, also alerted — "no silent
+  staleness."
 
 ---
 
@@ -158,16 +199,18 @@ Checked in this order on every loop tick while `status == in_trade` (`_check_exi
 
 | Priority | Trigger | Notes |
 |---|---|---|
-| 1 | EOD square-off | `now >= EOD_SQUAREOFF_TIME` — clock-driven, not grid-snapped, always wins |
-| 2 | Stop loss | Single shared level protecting whichever lot(s) remain open; wins any same-tick tie against a target (`backtest_p2.py` convention) |
-| 3 | Lot 1 target | `TARGET1_PCT=1.0%` of entry |
-| 4 | Lot 2 target | `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3%` of entry |
+| 1 | Stop loss | Single shared level protecting whichever lot(s) remain open; wins any same-tick tie against a target (`backtest_p2.py` convention) |
+| 2 | Lot 1 target | `TARGET1_PCT=1.0%` of entry |
+| 3 | Lot 2 target | `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3%` of entry |
 | — | Trend flip | Checked separately, only on a 15-min boundary — closes whichever lot(s) remain open AND is itself the entry for the opposite direction, resolved at the same bar ("rule 7") |
 
-Entries (fresh or rule-7 re-entry) require both `now >= MIN_ENTRY_TIME` (09:15) and the signal
-bar to be at/before `LAST_ENTRY_TIME` — the grid-snapped cutoff derived from
-`CLOSING_TIME - MAX_ENTRY_BEFORE_CLOSE_MIN`, rounded to the nearest 15-min boundary since
-entries only ever happen on 15-min bar opens.
+**§2, Phase 3: no EOD square-off tier any more.** `configs_p3.py` was never calibrated with one —
+a position is expected to carry across sessions (and, once §4–§9 are built, a contract roll), not
+force-flattened at close.
+
+Entries (fresh or rule-7 re-entry) require only `now >= MIN_ENTRY_TIME` (09:15) — **no cutoff
+before close any more** (§2: `LAST_ENTRY_TIME`/`MAX_ENTRY_BEFORE_CLOSE_MIN` are gone, not
+renamed, matching `configs_p3.py`).
 
 **Rule 7's re-entry is gated on confirmed exit.** `_execute_exit_all` returns `True` only if the
 position ended up genuinely flat; a same-bar opposite-direction entry only fires if that's
@@ -188,10 +231,11 @@ state file or trade log.
 This exists because of a real 2026-08-31 incident: a trend-flip exit order failed at the broker
 (`orderid=None`) with no guard against it, and the prior code fabricated a fill from LTP anyway
 — both lots marked closed internally while the real 2-lot long stayed open and unmonitored at
-the broker for ~28 minutes until caught manually. Fixed via a three-layer confirmation check
-that this invariant, rule 7's re-entry gate, and `_teardown()`'s own exit-confirmation check all
-now share. `DRY_RUN` was reverted to `True` the same day and has not been flipped back — see
-Status.
+the broker for ~28 minutes until caught manually. Fixed via a confirmation check that this
+invariant and rule 7's re-entry gate both share. `DRY_RUN` was reverted to `True` the same day
+and has not been flipped back — see Status. (`_teardown()`'s own exit-confirmation check from
+that fix is gone now, not because the invariant weakened, but because §2's no-EOD-flatten change
+means teardown no longer attempts an exit at all in its normal path — see Process Lifecycle.)
 
 ---
 
@@ -244,13 +288,21 @@ actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 
 | `data/prometheus_trades.csv` | Cumulative append-only trade tracker, schema-matched to `trade_summary_p2.csv` plus `units` |
 | `data/trade_logs/trade_NNNN_*.csv` | Per-trade running log — one row per 1-min poll cycle while in-trade, same columns as the backtest's own per-trade logs |
 | `data/trade_counter.txt` | Persistent sequential trade ID counter (Apollo's convention, survives restarts) |
+| `data/prometheus_today_1m.csv` | Private intraday 1-min cache (§15) — Prometheus-only, cleared at every normal teardown, re-fetched fresh each day |
 | `logs/prometheus_YYYYMMDD.log` | Daily rotating log |
 
 **`EXIT`** liquidates any open position and terminates the session. **`KILL`** drops control
 immediately and leaves any open position **untouched** — deliberately, per its own promised
 contract ("Control dropped. Position remains OPEN.") — `_teardown()` checks `_kill_no_exit` and
-skips its normal auto-flatten specifically to honor that. **`DISABLE`** is a startup-only gate,
-checked in `main()` before the `Prometheus` object is even constructed.
+skips straight to stopping the feed, no exit attempt, no cache clear (a same-day restart after
+KILL should still get the cache's benefit). **`DISABLE`** is a startup-only gate, checked in
+`main()` before the `Prometheus` object is even constructed.
+
+**§2, Phase 3: teardown's normal path no longer force-exits an open position at all.** Where
+Phase 2 always flattened at session end, Phase 3 leaves it open — that's the expected shape most
+days (§3 of the plan: positions can span a contract roll). The only exits that happen are the
+ones already firing during `run()` itself (SL/target/trend-flip); teardown just stops the feed,
+clears the private cache, saves state as-is, and reports.
 
 ---
 
@@ -279,29 +331,87 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `TARGET2_MODE` / `TARGET2_FLAT_PCT` | `flat_pct` / 2.3% | Lot 2 — hardcoded `'pct'` mode in production per Rollout step 5 |
 | `TENDER_ROLL_TRADING_DAYS` | 5 | Trading days before expiry to roll early |
 | `SEED_DAYS` | 18 | Calendar days of 1-min history tail-read for ST seeding |
-| `MIN_ENTRY_TIME` | 09:15 | No entry before |
+| `MIN_ENTRY_TIME` | 09:15 | No entry before — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
 | `CLOSING_TIME` | 23:30 | **DST-dependent — must be hand-toggled around US DST changes** (→23:30 ~2nd Sun March, →23:55 ~1st Sun Nov) |
-| `MAX_ENTRY_BEFORE_CLOSE_MIN` | 60 | → `LAST_ENTRY_TIME`, grid-snapped to the nearest 15-min boundary |
-| `EOD_SQUAREOFF_BEFORE_CLOSE_MIN` | 15 | → `EOD_SQUAREOFF_TIME`, clock-driven, not grid-snapped |
-| `SESSION_END_BUFFER_MIN` | 25 | → `SESSION_END_TIME`, the main loop's own hard exit clock |
+| `SESSION_END_BUFFER_MIN` | 25 | → `SESSION_END_TIME`, the main loop's own hard exit clock (process lifecycle only — unaffected by §2's no-EOD-flatten change) |
 | `CANDLE_POLL_LIMIT` / `LTP_POLL_LIMIT` | 3 / 10 per sec | Broker-wide client-side rate caps |
 | `ORDER_TIMEOUT_SEC` | 30 | WS fast path + REST fallback timeout |
 | `TRADE_UPDATE_SEC` | 20 | Slack update cadence while in-trade — matches Artemis's/Athena's convention, not Iris's 10s |
+| `DEFERRED_BAR_CUTOFF_MIN` | 1 | §12 — how long to wait for a 15m window to fully arrive before building it from what's on hand |
+| `SEED_RETRY_ATTEMPTS` / `SEED_RETRY_INTERVAL_SEC` | 5 / 120 | §15 — bounded, blocking startup retry around `seed_st15` (safe pre-position, no concurrent loop to starve) |
+| `OPENING_BAR_CORRECTION_ENABLED` | `False` | §11 — the opening-bar fix always runs and logs; only patches when `True` |
+| `OPENING_BAR_ARTIFACT_THRESHOLD` | 0.5 | §11 — CRUDEOIL/CRUDEOILM true-range ratio below this at 09:00 triggers the substitution |
+| `ST_SEED_SKIP_DATES` | `[]` | §14 — manually populated dates excluded from the daily seed's tail-read (whole bad sessions, e.g. a Budget special session) |
+| `REJECTION_RETRY_ATTEMPTS` / `_COOLDOWN_SEC` | 3 / 1 | §1 — `place_order`'s retry on an actual broker rejection |
+| `GHOST_RECOVERY_COOLDOWN_SEC` / `_LOOKBACK_SEC` | 2 / 60 | §1 — `place_order`'s order-book check on a `DataException`/`NetworkException` |
 
 ---
 
-## Order Fill Verification
+## Resilient Order Execution (§1)
 
-`get_fill_price_and_qty()` follows the same two-path approach as Iris:
+`place_order()` was ported from Athena's `_place_order` pattern (`athena_engine.py`) 2026-09-04 —
+the original single-`try`/`except` version (Iris's simpler pattern, ported for Phase 2) didn't do
+any of this:
+
+1. **Freeze-limit quantity splitting** — chunks a request bigger than the broker will accept in
+   one order into several, each placed separately. `freeze_qty` is read live off the resolved
+   contract (`resolve_effective_contract()`'s own dict, sourced from
+   `data_pipeline/data/mcx_instrument_master.csv`), not a hardcoded constant like the other four
+   strategies' `QTY_FREEZE` — MCX freeze quantities are set per-commodity. Confirmed
+   `freeze_qty=10000` for CRUDEOILM (`lotsize=10`) → up to 1000 lots per order; today's 2-4 lot
+   sizing never exercises the split.
+2. **Rejection retry** — an actual `'rejected'` broker response retries up to
+   `REJECTION_RETRY_ATTEMPTS` times before giving up on that chunk.
+3. **Ghost-order recovery** — on `DataException`/`NetworkException` specifically (a lost
+   response, not necessarily a lost order), checks the order book for a matching order (same
+   symbol/type/quantity, recently updated, not already claimed by this run) before assuming
+   nothing happened and retrying placement — avoids a genuine double-fill on a network blip.
+
+**Returns a LIST of order IDs, not one.** `get_fill_price_and_qty()` aggregates fill
+quantity/value across the whole list (summed, then a blended average price) before returning —
+mirrors Athena's `_fetch_order_details`. At today's sizing this list always has one element and
+the aggregation degenerates to the original single-order behavior.
+
+`get_fill_price_and_qty()`'s own two-path approach is otherwise unchanged from Phase 2:
 1. **Fast path**: `OrderFillWatcher` (WebSocket `SmartWebSocketOrderUpdate`) — resolves as soon
-   as a fill is confirmed
+   as every order ID in the list is confirmed
 2. **Fallback**: REST order-book poll if WS doesn't confirm within `ORDER_TIMEOUT_SEC`
 3. **DRY_RUN**: returns the current feed LTP immediately (no order placed)
 
-Unlike Iris, this path is genuinely load-bearing for a 2-lot entry: a **partial fill** (only 1 of
-2 lots fills) is treated as an intentional single-lot trade — lot 2 simply never opens, and is
-never retried (retrying introduces its own entry-price-drift risk; per the plan, single-lot
-economics are already understood as an acceptable degraded mode, not a crisis).
+**Partial fills** (fewer lots filled than requested) are treated as an intentional smaller
+trade — lot 2 simply may never open, and is never retried (retrying introduces its own
+entry-price-drift risk). If some chunks of a multi-chunk order fill and others time out
+(unreachable at today's sizing, since chunking never fires), that's treated as a hard failure
+rather than a partial-across-orders reconciliation — consistent with "never fabricate, never
+guess."
+
+---
+
+## Private Intraday Cache (§15)
+
+Prometheus maintains its own 1-min OHLCV cache, `data/prometheus_today_1m.csv` — separate from
+the shared MCX contract CSV `data_downloader_mcx.py` maintains, which Prometheus stopped writing
+to entirely (2026-09-04). Nothing else reads or writes this file, so none of the write-race/
+single-source-of-truth reasoning that removed Prometheus's writes to the *shared* file applies to
+it.
+
+- **Written incrementally**: every 1-min poll (`_merge_1m`) appends to it, same merge-dedup
+  logic (`_merge_and_save`) the shared file uses.
+- **Read on startup**: `seed_st15` reads the cache for today's data and only live-fetches the
+  *gap* since its last row — a mid-day crash-restart goes from "re-fetch the whole session" to
+  "re-fetch a few minutes."
+- **Cleared at every normal teardown** (`clear_today_cache()`) — except the `KILL` path, which
+  explicitly anticipates a same-day restart and shouldn't lose the cache's benefit.
+- **Date-filtered on every read** (`read_today_cache`) as a second line of defense — even an
+  ungraceful crash that skips the clear can't leave a stale prior-day cache silently misread as
+  today's data.
+
+A real, pre-existing bug in `_merge_and_save` was found and fixed while wiring this in: writing
+to the same file twice in a row (on-disk rows re-parsed to a fixed-offset tz, freshly-localized
+new rows to a named-zone tz — numerically identical, different pandas dtypes) silently turned the
+older rows into `NaT` on the second write. This affected the shared per-contract files too
+(`backfill_contract_if_needed`'s multi-chunk backfills), not just this new cache — fixed by
+normalizing both sides to tz-naive before concatenating.
 
 ---
 
@@ -348,17 +458,41 @@ module; see that README's Phase 3 section before assuming Phase 2's parameters a
 
 ## Status
 
-- [x] Effective-contract resolution — exchange front-month with 5-trading-day-early roll
-- [x] ST_15 seeding — gap-checked tail-read, refuses to seed across a hole
+- [x] Effective-contract resolution — exchange front-month with 5-trading-day-early roll, plus
+      `freeze_qty` read live off the instrument master (§1)
+- [x] ST_15 seeding — past days from the shared pipeline file, today from the private cache + live
+      gap-fetch, gap-checked, bounded blocking startup retry (§15)
 - [x] Resilient 1-min polling — inner retry + non-blocking outer recovery queue
+- [x] Deferred 15m-bar computation — waits up to `DEFERRED_BAR_CUTOFF_MIN` for a genuinely
+      complete window before building from what's on hand (§12); underlying resample function's
+      day-end boundary bug fixed in the same pass (§17)
+- [x] Opening-bar price-artifact correction — built, gated `OPENING_BAR_CORRECTION_ENABLED=False`
+      pending chart validation (§11)
 - [x] 2-lot scale-out entry — partial-fill aware, lot 2 never retried if it doesn't fill
-- [x] Four exit conditions — SL, lot1 target, lot2 target, EOD square-off, plus trend-flip (rule 7, same-bar re-entry)
+- [x] Three exit conditions — SL, lot1 target, lot2 target, plus trend-flip (rule 7, same-bar
+      re-entry). **No EOD square-off any more** (§2) — a position carries across sessions
 - [x] Fill-confirmation invariant — no lot is ever marked closed without a genuine confirmed fill
+- [x] Resilient order execution — freeze-limit chunking, rejection retry, ghost-order recovery,
+      list-based order IDs aggregated on fill (§1)
+- [x] Realised/unrealised/total P&L reporting — both the periodic Slack update and the
+      session-report "still open" fallback (§13)
+- [x] ST seed skip-list — `ST_SEED_SKIP_DATES` for known-bad sessions (§14)
+- [x] `state.token` invariant — `_get_ltp()` now keys off the position's own token, not whichever
+      contract is currently "effective" (§3, ahead of rollover landing)
 - [x] State persistence — atomic CSV write, mid-trade restart recovery (not yet broker-reconciled)
 - [x] Guardian check — blocks start if another strategy has an open position
 - [x] Own circuit breaker — `prometheus_command.flag`, separate from the shared NSE/BSE one
 - [x] DRY_RUN paper mode — LTP-based fills, no real orders
 - [x] Session report — per-trade + session-total Slack summary at teardown
+- [ ] **Rollover trigger/recovery/execution mechanics, Rule 7's combined order, SL/target
+      recalibration, rolled-trade log schema (plan §4–§9)** — not built. Elaborate,
+      deeply interdependent, and not exercised until the next rollover
+      (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21 CRUDEOILM expiry) — shipping
+      them half-wired was judged worse than shipping them later, complete. If a rollover need
+      arose before this lands, it would need manual intervention.
+- [ ] **1h/15m entry filter (§17)** — only the resample-function groundwork is built; the filter
+      itself (ST_1H computation, the alignment gate at all three `_execute_entry` call sites,
+      `ENTRY_FILTER_1H_ALIGN_ENABLED`) isn't wired in yet
 - [ ] **Order-update WebSocket unverified for MCX** — worked during the brief 2026-08-31 live
       window (four real fills resolved via WS), but that window was cut short by the incident
       below before a full session could confirm it under sustained live conditions

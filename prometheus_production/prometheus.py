@@ -1,14 +1,17 @@
 """
-Prometheus — MCX CRUDEOILM/CRUDEOIL intraday trend-following (Phase 2:
-ST_15 single-timeframe, 2-lot scale-out). Standalone cron entry, not
-Leto-routed (plan §0: different exchange, different underlying, no VIX
-coupling).
+Prometheus — MCX CRUDEOILM/CRUDEOIL intraday trend-following. Phase 3
+(plans/prometheus-phase3-production.md): ST_15 single-timeframe, 2-lot
+scale-out, positions can now span multiple sessions (no EOD flatten) and,
+once §4-§9 are built, a contract rollover. Standalone cron entry, not
+Leto-routed (different exchange, different underlying, no VIX coupling).
 
 Lifecycle:
-  Start  -> resolve effective contract (§1) -> seed ST_15 -> arm (status=watching)
+  Start  -> resolve effective contract -> seed ST_15 (private intraday
+            cache + live gap-fetch, §15) -> arm (status=watching)
   Signal -> enter 2 lots (status=in_trade)
-  Exit   -> lot1 target / lot2 target / stop_loss / trend_flip / eod_squareoff
-  Stop   -> graceful teardown, flat by CLOSING_TIME always
+  Exit   -> lot1 target / lot2 target / stop_loss / trend_flip
+  Stop   -> graceful teardown; an open position is LEFT OPEN as the normal
+            case (§2, no EOD flatten) — a restart resumes monitoring it.
 
 DRY_RUN is ON by default (DRY_RUN=True in prometheus_configs.py).
 Set DRY_RUN=False only after Rollout steps 2-4 (plan) are complete:
@@ -30,15 +33,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from prometheus_configs import (
     DRY_RUN, DATA_DIR, FLAG_PATH, COMMAND_FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE,
     REPO_ROOT, SYMBOL, LOT_SIZE, LOTS_PER_LEG, MCX_FO_WS_EXCHANGE_TYPE,
-    MIN_ENTRY_TIME, LAST_ENTRY_TIME, EOD_SQUAREOFF_TIME,
+    MIN_ENTRY_TIME, SESSION_START_TIME,
     SESSION_END_TIME, ST_PERIOD, ST_MULTIPLIER,
     DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
+    TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
+    SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
 from prometheus_functions import (
     compute_st, resolve_effective_contract, seed_st15, persist_15m_series,
-    fetch_one_minute_window, _merge_and_save,
+    fetch_one_minute_window, _merge_and_save, clear_today_cache, read_today_cache,
+    patch_opening_bar_if_artifact, fetch_crudeoil_opening_bar,
     resolve_thresholds, resolve_target2,
     place_order, get_fill_price_and_qty, OrderFillWatcher, fetch_ltp_rest,
     load_trade_counter, save_trade_counter, append_trade_log_row, append_cumulative_trade,
@@ -113,6 +119,9 @@ class Prometheus:
         self._df_1m_today = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
 
         self._pending_recovery = []   # [(from_dt, to_dt)] — §3 outer non-blocking retry queue
+        self._pending_15m_boundary = None   # §12: 15m boundary awaiting a complete 1-min window
+        self._pending_15m_deadline = None   # §12: cutoff before building it from what's on hand
+        self._opening_bar_checked = False   # §11: run patch_opening_bar_if_artifact once per session
         self._trade_counter = load_trade_counter()
         self._pending_trade_row = {}   # built in _execute_entry; reconstructed in _setup() on crash resume
 
@@ -215,10 +224,28 @@ class Prometheus:
         _slack(f'{"[PAPER] " if DRY_RUN else ""}⚡ {tag} starting — '
               f'trading {self._contract["symbol"]}{roll_note}', SLACK_TRADEBOT_CHANNEL)
 
-        self._df_15m = seed_st15(self.obj, self._contract, datetime.now())
+        # §15: seed_st15 is single-shot by default (no retry) -- a broker
+        # hiccup during its live gap-fetch would otherwise block the whole
+        # day's trading. _setup() runs before the main loop starts, before
+        # any position exists and before _check_exit_conditions_ltp has
+        # anything to monitor, so a blocking retry here is safe -- unlike
+        # every other retry loop in this codebase, there's no concurrent
+        # exit-check loop to starve.
+        for attempt in range(1, SEED_RETRY_ATTEMPTS + 1):
+            self._df_15m = seed_st15(self.obj, self._contract, datetime.now())
+            if self._df_15m is not None and not self._df_15m.empty:
+                break
+            if attempt == 1:
+                _slack(f'⚠️ {tag}: ST_15 seed failed (attempt {attempt}/{SEED_RETRY_ATTEMPTS}) — '
+                      f'retrying every {SEED_RETRY_INTERVAL_SEC // 60} min.', SLACK_ERRORS_CHANNEL)
+            logger.warning(f'ST_15 seed failed (attempt {attempt}/{SEED_RETRY_ATTEMPTS}).')
+            if attempt < SEED_RETRY_ATTEMPTS:
+                time.sleep(SEED_RETRY_INTERVAL_SEC)
+
         if self._df_15m is None or self._df_15m.empty:
-            logger.error('ST_15 seed failed — cannot start.')
-            _slack(f'\U0001f6a8 {tag}: seed failed — cannot start.', SLACK_ERRORS_CHANNEL)
+            logger.critical(f'ST_15 seed failed after {SEED_RETRY_ATTEMPTS} attempts — cannot start.')
+            _slack(f'\U0001f6a8 {tag}: seed failed after {SEED_RETRY_ATTEMPTS} attempts — cannot start.',
+                  SLACK_ERRORS_CHANNEL)
             return False
 
         last = self._df_15m.iloc[-1]
@@ -226,14 +253,16 @@ class Prometheus:
         _slack(f'{"[PAPER] " if DRY_RUN else ""}✅ {tag}: ST_15 seeded '
               f'({len(self._df_15m)} bars). Trend: {trend_str}.', SLACK_TRADEBOT_CHANNEL)
 
-        # Seed today's in-memory 1-min accumulator from whatever the file already has
-        today = datetime.now().date()
-        try:
-            full_1m = pd.read_csv(self._contract['filepath'], parse_dates=['time_stamp'])
-            full_1m['time_stamp'] = pd.to_datetime(full_1m['time_stamp'], utc=False, errors='coerce').dt.tz_localize(None)
-            self._df_1m_today = full_1m[full_1m['time_stamp'].dt.date == today].reset_index(drop=True)
-        except Exception:
-            pass
+        # §15: seed_st15 already assembled + cached today's 1-min data
+        # internally (private cache + live gap-fetch) — re-read that same
+        # cache rather than the shared pipeline file, which never has
+        # today's rows under this design.
+        self._df_1m_today = read_today_cache(datetime.now())
+        self._maybe_check_opening_bar()   # §11: covers both a fresh 09:00 start
+                                           # (bar not there yet, no-op) and a
+                                           # mid-day restart (bar already
+                                           # present in the cache, check now
+                                           # rather than never)
 
         feed_token = self.obj.getfeedToken()
         self.feed = SharedFeed()
@@ -322,32 +351,29 @@ class Prometheus:
             self._send_session_report()
             return
 
-        exit_confirmed = True
-        if self.state.status == 'in_trade':
-            logger.warning('Teardown with open position — exiting.')
-            exit_confirmed = self._execute_exit_all('shutdown')
-
+        # §2 (Phase 3, 2026-09-04): no EOD flatten — a position is *expected*
+        # to still be open at session end most days (§3: positions can span
+        # a contract roll), so teardown's normal path is "leave it open,
+        # stop the feed, save state, exit cleanly," not "force flat and go
+        # idle" the way Phase 2 always did. The rare exits that DO need to
+        # happen before the process exits (SL/target/trend_flip firing right
+        # as the loop ends) are handled by their own existing paths
+        # (_check_exit_conditions_ltp, _handle_new_15m_bar) during run()
+        # itself — teardown never reaches in and flattens on its own
+        # initiative any more.
         if self.feed:
             try:
                 self.feed.stop()
             except Exception:
                 pass
 
-        if not exit_confirmed:
-            # Do NOT force status='idle' over a position we couldn't confirm
-            # closed -- this is the single most dangerous moment for that to
-            # happen, since once this process exits, literally nothing is
-            # left monitoring it until a human notices or a future restart's
-            # own resume-in-trade logic picks it up. Leave state as-is
-            # (still 'in_trade', accurate lot statuses) and alert loudly
-            # rather than silently paper over it with a clean-looking
-            # "stopped" message (2026-08-31 incident).
+        clear_today_cache()   # tomorrow re-fetches fresh regardless of position state (§15)
+
+        if self.state.status == 'in_trade':
             save_state(self.state)
-            logger.critical('Teardown could NOT confirm the position closed — '
-                            'leaving state as in_trade. Check the broker terminal manually.')
-            _slack(f'\U0001f6a8 {tag}: STOPPED WITHOUT CONFIRMING THE POSITION CLOSED. '
-                  f'State left as in_trade so a restart resumes monitoring it — '
-                  f'check the broker terminal manually NOW.', SLACK_ERRORS_CHANNEL)
+            logger.info('Teardown with an open position — left OPEN, as designed (Phase 3, no EOD flatten).')
+            _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ {tag} stopped. Position left OPEN — expected, '
+                  f'not an error. A restart resumes monitoring it.', SLACK_TRADEBOT_CHANNEL)
             self._send_session_report()
             return
 
@@ -367,9 +393,9 @@ class Prometheus:
         have several trades in one session (confirmed 2026-08-31: 2 trades
         in a single day), so a Leto-style "one outcome per strategy" shape
         doesn't fit -- this lists every trade plus a session total, and
-        falls back to reporting a still-open position (§4's force-exit-at-
-        teardown should normally have already closed it by the time this
-        runs, so this branch is a defensive fallback, not the normal path).
+        reports a still-open position (§2, Phase 3: no EOD flatten, so this
+        is the NORMAL end-of-day shape on most days, not a defensive
+        fallback for a rare unclosed position the way it was in Phase 2).
         Wrapped so a reporting failure never masks the actual teardown.
         """
         try:
@@ -417,15 +443,19 @@ class Prometheus:
                                     if self.state.entry_ts else '?')
                     entry = self.state.entry_price or 0
                     ltp = self.state.last_known_ltp or entry
-                    pnl_pts = (ltp - entry) if self.state.direction == 'bullish' else (entry - ltp)
-                    lots_open = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
-                               ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
-                    pnl_rs = pnl_pts * lots_open * LOT_SIZE
-                    total_rs += pnl_rs
+                    # §13 (2026-09-04): realised + unrealised, not unrealised
+                    # alone — a still-open trade routinely has one lot
+                    # already booked under Phase 3 (positions run days to
+                    # weeks, §3), and that locked-in P&L was previously
+                    # invisible here, silently understating the session total.
+                    pnl = self._compute_trade_pnl(ltp)
+                    total_rs += pnl['total_rs']
 
                     lines.append(f"*Open Position*  ·  {direction}  |  Units: {self.state.units}")
                     lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry:.2f}   Still open at session end")
-                    lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*  _(unrealised)_")
+                    lines.append(f"  ↳ Realised   : {pnl['realised_pts']:+.1f} pts  ({pnl['realised_rs']:+,.0f} Rs)")
+                    lines.append(f"  ↳ Unrealised : {pnl['unrealised_pts']:+.1f} pts  ({pnl['unrealised_rs']:+,.0f} Rs)")
+                    lines.append(f"  ↳ P&L        : *{pnl['total_rs']:+,.0f} Rs*")
                     lines.append('')
 
             lines.append('━' * 37)
@@ -483,8 +513,40 @@ class Prometheus:
                     else:
                         self._pending_recovery.append((win_from, win_to))
 
-                    if boundary.minute % 15 == 0:
-                        self._handle_new_15m_bar(boundary)
+                    # §12 (2026-09-04): don't compute a 15m bar the instant
+                    # its boundary tick arrives if the 1-min poller hasn't
+                    # actually delivered all 15 minutes yet (an AB1021
+                    # stretch, confirmed live 2026-09-03 to span ~60s) —
+                    # wait, re-checking every 1-min cycle, up to
+                    # DEFERRED_BAR_CUTOFF_MIN before building it from
+                    # whatever's on hand with a loud warning. Minimizes
+                    # flip-detection lag over fallback precision (user's
+                    # call) — SL/target monitoring above is completely
+                    # unaffected by the wait either way.
+                    if boundary.minute % 15 == 0 and self._pending_15m_boundary is None:
+                        self._pending_15m_boundary = boundary
+                        self._pending_15m_deadline = boundary + timedelta(minutes=DEFERRED_BAR_CUTOFF_MIN)
+
+                    if self._pending_15m_boundary is not None:
+                        pb = self._pending_15m_boundary
+                        window_start = pb - timedelta(minutes=15)
+                        window = self._df_1m_today[(self._df_1m_today['time_stamp'] >= window_start) &
+                                                   (self._df_1m_today['time_stamp'] < pb)]
+                        complete = len(window) >= 15
+                        past_cutoff = datetime.now() >= self._pending_15m_deadline
+                        if complete or past_cutoff:
+                            if not complete:
+                                logger.warning(f'15m bar {window_start:%H:%M}-{pb:%H:%M} still '
+                                               f'incomplete ({len(window)}/15) after '
+                                               f'{DEFERRED_BAR_CUTOFF_MIN}min cutoff — building from '
+                                               f'what is on hand.')
+                                _slack(f'⚠️ {tag}: 15m bar {window_start:%H:%M}-{pb:%H:%M} still '
+                                      f'incomplete ({len(window)}/15) after '
+                                      f'{DEFERRED_BAR_CUTOFF_MIN}min — building anyway.',
+                                      SLACK_ERRORS_CHANNEL)
+                            self._handle_new_15m_bar(pb)
+                            self._pending_15m_boundary = None
+                            self._pending_15m_deadline = None
 
                     # §4: "one row per polling cycle" — the 1-min boundary,
                     # not the 0.5s exit-check tick (~24,000 rows/trade at
@@ -528,10 +590,11 @@ class Prometheus:
         self._pending_recovery = still_pending
 
     def _merge_1m(self, new_df: pd.DataFrame) -> None:
-        """Writes into the contract's own shared on-disk file (same one
-        data_downloader_mcx.py maintains, §1) AND updates the in-memory
-        today-accumulator used to build 15-min bars."""
-        _merge_and_save(self._contract['filepath'], new_df)
+        """§15 (2026-09-04): writes into Prometheus's own private intraday
+        cache (TODAY_1M_CACHE_FILE) — NOT the shared file data_downloader_mcx.py
+        maintains, which Prometheus never writes to any more — AND updates
+        the in-memory today-accumulator used to build 15-min bars."""
+        _merge_and_save(TODAY_1M_CACHE_FILE, new_df)
 
         working = new_df.copy()
         if working['time_stamp'].dt.tz is not None:
@@ -543,6 +606,37 @@ class Prometheus:
         combined = pd.concat([self._df_1m_today, new_today], ignore_index=True)
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
         self._df_1m_today = combined.sort_values('time_stamp').reset_index(drop=True)
+        self._maybe_check_opening_bar()
+
+    def _maybe_check_opening_bar(self) -> None:
+        """§11 (2026-09-04): once per session, the first time today's 09:00
+        1-min row is available in self._df_1m_today, check it against
+        CRUDEOIL's own 09:00 print for the thin-liquidity price-discovery
+        artifact and patch it in place if OPENING_BAR_CORRECTION_ENABLED —
+        in memory only, at 1-min-ingestion time, before it's ever read by
+        any resample (compute_st's ATR window included). When the toggle
+        is off, this still runs and logs what it WOULD have done, so the
+        user can validate ST accuracy against the raw, uncorrected chart.
+        """
+        if self._opening_bar_checked or self._df_1m_today.empty:
+            return
+        session_start = pd.Timestamp(f'{datetime.now().date()} {SESSION_START_TIME}')
+        mask = self._df_1m_today['time_stamp'] == session_start
+        if not mask.any():
+            return
+        self._opening_bar_checked = True   # only ever attempt this once per session,
+                                            # success or failure — never retried mid-session
+        row = self._df_1m_today.loc[mask].iloc[0]
+        m_bar = {'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']}
+        o_bar = fetch_crudeoil_opening_bar(self.obj, session_start)
+        if o_bar is None:
+            logger.warning('Opening-bar artifact check: CRUDEOIL reference unavailable — skipping.')
+            return
+        patched = patch_opening_bar_if_artifact(m_bar, o_bar)
+        if patched is not m_bar:
+            idx = self._df_1m_today.index[mask][0]
+            for col in ('open', 'high', 'low', 'close'):
+                self._df_1m_today.at[idx, col] = patched[col]
 
     # -----------------------------------------------------------------------
     # 15-min bar handling — flip detection, fresh entry, trend-flip exit+reentry
@@ -592,9 +686,6 @@ class Prometheus:
 
         flip = bool(bar['trend_flip'])
         direction_now = 'bullish' if bool(bar['trend']) else 'bearish'
-        # LAST_ENTRY_TIME is already the grid-snapped cutoff (§3) — a plain
-        # clock comparison against this bar's own open time.
-        signal_allowed = boundary.time() <= datetime.strptime(LAST_ENTRY_TIME, '%H:%M').time()
         tag = _tag(self._contract['symbol_root'])
 
         if flip:
@@ -617,14 +708,16 @@ class Prometheus:
                 # state (the exact incident this whole confirmation chain
                 # was added to prevent, 2026-08-31).
                 closed = self._execute_exit_all('trend_flip')
-                if closed and now_after_min_entry() and signal_allowed:
+                if closed and now_after_min_entry():
                     self._execute_entry(direction_now, window_start, bar['close'])
                 elif not closed:
                     logger.critical('Rule 7 re-entry SKIPPED — trend-flip exit did not confirm closed.')
             return
 
-        # status == 'watching' — fresh entry detection
-        if flip and now_after_min_entry() and signal_allowed:
+        # status == 'watching' — fresh entry detection. §2 (Phase 3): no
+        # LAST_ENTRY_TIME cutoff before close any more — configs_p3.py never
+        # gated entries near close (positional, nothing to "hold until").
+        if flip and now_after_min_entry():
             self._execute_entry(direction_now, window_start, bar['close'])
 
     # -----------------------------------------------------------------------
@@ -643,15 +736,15 @@ class Prometheus:
             return
 
         requested_lots = units * LOTS_PER_LEG * 2
-        order_id = place_order(self.obj, 'BUY' if direction == 'bullish' else 'SELL',
-                               self._contract['symbol'], self._contract['token'],
-                               requested_lots, DRY_RUN)
-        if not order_id:
+        order_ids = place_order(self.obj, 'BUY' if direction == 'bullish' else 'SELL',
+                                self._contract['symbol'], self._contract['token'],
+                                requested_lots, DRY_RUN, self._contract['freeze_qty'])
+        if not order_ids:
             logger.error('Entry order failed.')
             return
 
         fill_price, filled_lots = get_fill_price_and_qty(
-            self.obj, self.order_watcher, order_id, self._contract['symbol'],
+            self.obj, self.order_watcher, order_ids, self._contract['symbol'],
             self._contract['token'], requested_lots, DRY_RUN, self.feed)
         if fill_price is None or filled_lots == 0:
             logger.error('Entry fill verification failed — no position opened.')
@@ -717,13 +810,21 @@ class Prometheus:
         _slack(msg)
 
     # -----------------------------------------------------------------------
-    # Exit — priority: EOD -> stop_loss -> lot1 target -> lot2 target
-    # (SL wins any same-tick tie against a target — backtest_p2.py convention)
+    # Exit — priority: stop_loss -> lot1 target -> lot2 target -> trend_flip
+    # (SL wins any same-tick tie against a target — backtest_p2.py convention).
+    # §2 (Phase 3): no EOD-squareoff tier any more — a position is expected
+    # to carry overnight/across days; matches configs_p3.py, which never
+    # had an EOD exit calibrated into it.
     # -----------------------------------------------------------------------
 
     def _get_ltp(self) -> float:
+        # §3 (2026-09-04): state.token, not self._contract['token'] — while
+        # in_trade, every price read keys off the position's own token, not
+        # whichever contract is currently resolved as "effective" (these can
+        # diverge across a rollover, not yet built — this fix lands ahead of
+        # that so the invariant is already in place when it does).
         if self.feed is not None and self.feed.is_connected():
-            ltp = self.feed.get_ltp(self._contract['token'])
+            ltp = self.feed.get_ltp(self.state.token)
             if ltp is not None:
                 return ltp
         return fetch_ltp_rest(self.obj, self.state.symbol, self.state.token)
@@ -733,11 +834,6 @@ class Prometheus:
         if ltp:
             self.state.last_known_ltp = ltp
             save_state(self.state)
-
-        eod = datetime.strptime(EOD_SQUAREOFF_TIME, '%H:%M').time()
-        if now.time() >= eod:
-            self._execute_exit_all('eod_squareoff')
-            return
 
         if not ltp:
             return
@@ -784,9 +880,10 @@ class Prometheus:
         if not lots:
             return True   # nothing to exit -- vacuously done, not a failure
         tag = _tag(self._contract['symbol_root'])
-        order_id = place_order(self.obj, 'SELL' if self.state.direction == 'bullish' else 'BUY',
-                               self.state.symbol, self.state.token, lots, DRY_RUN)
-        if not order_id:
+        order_ids = place_order(self.obj, 'SELL' if self.state.direction == 'bullish' else 'BUY',
+                                self.state.symbol, self.state.token, lots, DRY_RUN,
+                                self._contract['freeze_qty'])
+        if not order_ids:
             logger.critical(f'Lot{lot_num} exit order FAILED to place ({reason}) — '
                             f'position may still be OPEN at the broker.')
             _slack(f'\U0001f6a8 {tag}: Lot{lot_num} exit order FAILED to place ({reason}). '
@@ -795,13 +892,13 @@ class Prometheus:
             return False
 
         fill_price, filled = get_fill_price_and_qty(
-            self.obj, self.order_watcher, order_id, self.state.symbol, self.state.token,
+            self.obj, self.order_watcher, order_ids, self.state.symbol, self.state.token,
             lots, DRY_RUN, self.feed)
         if fill_price is None or filled == 0:
-            logger.critical(f'Lot{lot_num} exit order placed (orderid={order_id}, {reason}) but fill '
+            logger.critical(f'Lot{lot_num} exit order placed (orderid(s)={order_ids}, {reason}) but fill '
                             f'could NOT be confirmed (WS and REST both exhausted) — position status '
                             f'unknown, may still be open.')
-            _slack(f'\U0001f6a8 {tag}: Lot{lot_num} exit order placed (orderid={order_id}) but fill '
+            _slack(f'\U0001f6a8 {tag}: Lot{lot_num} exit order placed (orderid(s)={order_ids}) but fill '
                   f'unconfirmed — position status UNKNOWN. Check the broker terminal manually now; '
                   f'will keep retrying automatically.', SLACK_ERRORS_CHANNEL)
             return False
@@ -845,9 +942,12 @@ class Prometheus:
 
     def _execute_exit_all(self, reason: str) -> bool:
         """
-        EOD / stop_loss / trend_flip / slack_exit / shutdown — closes
-        whichever lot(s) remain open, at the SAME reason. Returns True only
-        if the position ended up fully closed (status back to 'watching').
+        stop_loss / trend_flip / slack_exit — closes whichever lot(s)
+        remain open, at the SAME reason. §2 (Phase 3): no more eod_squareoff
+        or teardown-triggered shutdown reasons — a position left open at
+        session end is the normal case now, not something teardown exits.
+        Returns True only if the position ended up fully closed (status
+        back to 'watching').
         Callers that chain an action after this — specifically rule 7's
         same-tick trend-flip re-entry in _handle_new_15m_bar — MUST check
         this before proceeding: firing a fresh entry in the opposite
@@ -938,21 +1038,65 @@ class Prometheus:
         }
         append_trade_log_row(self._trade_counter, entry_ts, row)
 
+    def _compute_trade_pnl(self, ltp: float) -> dict:
+        """§13 (2026-09-04): realised (booked lots) + unrealised (still-open
+        lots) + total — this is exactly what _finalize_trade/
+        _append_running_row already compute per lot, just needed here
+        un-conditioned on both lots being closed. Shared by _send_trade_update
+        and _send_session_report's "still open" fallback so both report the
+        same three numbers the same way.
+
+        Real, currently-existing gap this fixes: once lot1 books, its P&L
+        previously vanished from every subsequent update (both call sites
+        computed P&L only from still-open lots, labeled "unrealised") — a
+        trade mid-way through its scale-out silently understated its true
+        total by exactly the already-booked amount. In Phase 2 this was a
+        brief transitional window (position open at most one session); in
+        Phase 3 a position can run for days to weeks, so it's the normal
+        shape of a trade for most of its life, not an edge case.
+        """
+        entry = self.state.entry_price or 0
+        direction = self.state.direction
+
+        def _lot_realised(exit_price, status, lots):
+            if status != 'booked' or exit_price is None or not lots:
+                return 0.0, 0.0
+            pts = (exit_price - entry) if direction == 'bullish' else (entry - exit_price)
+            return pts, pts * lots * LOT_SIZE
+
+        def _lot_unrealised(status, lots):
+            if status != 'open' or not lots or not ltp:
+                return 0.0, 0.0
+            pts = (ltp - entry) if direction == 'bullish' else (entry - ltp)
+            return pts, pts * lots * LOT_SIZE
+
+        r1_pts, r1_rs = _lot_realised(self.state.lot1_exit_price, self.state.lot1_status, self.state.lot1_lots)
+        r2_pts, r2_rs = _lot_realised(self.state.lot2_exit_price, self.state.lot2_status, self.state.lot2_lots)
+        u1_pts, u1_rs = _lot_unrealised(self.state.lot1_status, self.state.lot1_lots)
+        u2_pts, u2_rs = _lot_unrealised(self.state.lot2_status, self.state.lot2_lots)
+
+        realised_rs, unrealised_rs = r1_rs + r2_rs, u1_rs + u2_rs
+        return {
+            'realised_pts': round(r1_pts + r2_pts, 2), 'realised_rs': round(realised_rs, 2),
+            'unrealised_pts': round(u1_pts + u2_pts, 2), 'unrealised_rs': round(unrealised_rs, 2),
+            'total_rs': round(realised_rs + unrealised_rs, 2),
+        }
+
     def _send_trade_update(self) -> None:
         if self.state.status != 'in_trade':
             return
         ltp = self.state.last_known_ltp or 0
         entry = self.state.entry_price or 0
         direction = self.state.direction
-        pnl_pts = (ltp - entry) if direction == 'bullish' else (entry - ltp)
-        lots_open = (self.state.lot1_lots if self.state.lot1_status == 'open' else 0) + \
-                   (self.state.lot2_lots if self.state.lot2_status == 'open' else 0)
-        pnl_rs = pnl_pts * lots_open * LOT_SIZE
+        pnl = self._compute_trade_pnl(ltp)
         tag = _tag(self._contract['symbol_root'])
         prefix = '[PAPER] ' if DRY_RUN else ''
         msg = (f'{prefix}\U0001f4ca {tag} update: {direction.upper()}  {self.state.symbol}  '
-              f'Entry: {entry:.2f}  LTP: {ltp:.2f}  Unrealised: {pnl_pts:+.2f} pts  Rs.{pnl_rs:+,.0f}')
-        logger.info(msg.replace(prefix, ''))
+              f'Entry: {entry:.2f}  LTP: {ltp:.2f}\n'
+              f'Realised: {pnl["realised_pts"]:+.2f} pts (Rs.{pnl["realised_rs"]:+,.0f})  '
+              f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{pnl["unrealised_rs"]:+,.0f})  '
+              f'Total: Rs.{pnl["total_rs"]:+,.0f}')
+        logger.info(msg.replace(prefix, '').replace('\n', '  '))
         _slack(msg, SLACK_TRADE_UPDATES)
 
 

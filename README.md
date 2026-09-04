@@ -431,7 +431,7 @@ Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy 
 
 ---
 
-## Prometheus — MCX Crude Oil (Production Built, Not Yet Live)
+## Prometheus — MCX Crude Oil (Phase 3 Build In Progress, Not Yet Live)
 
 Intraday trend-following strategy for MCX crude oil futures — genuinely independent of the
 Nifty/Sensex VIX-routed strategies above: different exchange (MCX vs. NSE/BSE), different
@@ -440,9 +440,14 @@ underlying (crude oil futures vs. index options), no VIX dependency. **Not route
 session, guardian check (mutually exclusive with Apollo/Athena/Artemis/Iris — shared broker
 rate-limit budget), and circuit breaker (`prometheus_command.flag`, separate from the shared
 `SLACK_COMMAND.flag`). See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)
-for the backtest design/calibration journey and
+for the backtest design/calibration journey,
 [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) for the
-production architecture.
+original production architecture, and
+[`plans/prometheus-phase3-production.md`](./plans/prometheus-phase3-production.md) (every
+section `[DECIDED]`) plus [`prometheus_production/README.md`](./prometheus_production/README.md)
+for what's being built on top of it now — positions can span multiple sessions (no more EOD
+flatten), resilient order execution, and (not yet built) a contract rollover under an open
+position.
 
 | | |
 |---|---|
@@ -455,7 +460,7 @@ production architecture.
 | Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
 | Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
 | Backtest (Phase 2, above config) | 221 trades · WR 55.2% · ₹42,453 total P&L (152 trading days, refreshed through the latest candle) · Calmar 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
-| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built (`prometheus_production/`), `DRY_RUN=True` by default — not yet live-tested.** Order-update WebSocket unverified for MCX (Rollout step 2). |
+| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build in progress (2026-09-04): resilient order execution, private intraday cache, no-EOD-flatten, opening-bar correction, deferred-bar/resample fixes, P&L reporting all landed; rollover mechanics under an open position (§4–§9 of the Phase 3 plan) not yet built. Order-update WebSocket unverified for MCX (Rollout step 2). |
 
 ### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest-only, decision pending)
 
@@ -534,7 +539,7 @@ algo-trading-lab/
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── prometheus-phase2-production.md   # [DESIGN ONLY] Prometheus Phase 2 production architecture — standalone, not Leto-routed
-│   ├── prometheus-phase3-production.md   # [DRAFT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; several sections OPEN
+│   ├── prometheus-phase3-production.md   # [DECIDED, PARTIALLY BUILT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; every section decided, non-rollover parts (§1/§2/§11-§15) built 2026-09-04, rollover mechanics (§4-§9) not yet
 │   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md
