@@ -97,7 +97,19 @@ DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a 
 
 # ── Session ───────────────────────────────────────────────────────────────────
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
-MIN_ENTRY_TIME      = '09:15'  # skip first 15 min — thin opening liquidity
+
+# Min-entry guard — a genuine buffer duration, NOT a clock time (fixed
+# 2026-09-04, same bug class/fix as NO_EXIT_BEFORE_BUFFER_MIN below).
+# MIN_ENTRY_TIME used to be a hardcoded '09:15' clock time, live since
+# Phase 3 first went live — silently gave ZERO minutes of thin-opening-
+# liquidity protection on the evening-only special sessions (~7/153 days,
+# confirmed against the user's own chart during Phase 4), where the real
+# session open is 17:00: the clock is already long past 09:15 the instant
+# trading starts on those days. Keyed off the ACTUAL first 1-min bar seen
+# today (self._df_1m_today['time_stamp'].min()) via _past_min_entry_guard,
+# not a hardcoded clock time — same dynamic-anchor principle as the 15m/1h
+# resample's day boundary (`data_loader.py`'s `origin=day.index[0]`).
+MIN_ENTRY_BUFFER_MIN = 15   # skip the first 15 min of the ACTUAL session — thin opening liquidity
 
 # First-minute exit guard (plan §10, built 2026-09-04) — a genuine buffer
 # duration, NOT a clock time. The plan's original proposal (`NO_EXIT_BEFORE

@@ -175,7 +175,7 @@ graph TD
     DirCheck -- Yes --> Rule7[_execute_rule7_flip, §7 --\nsee Rule 7 detail diagram]
     Rule7 --> RunningRowCheck
 
-    InTradeFlip -- No --> FreshGate{status == watching AND\nafter MIN_ENTRY_TIME AND\nnot rollover-suppressed AND\n1h filter agrees, §17\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
+    InTradeFlip -- No --> FreshGate{status == watching AND\npast MIN_ENTRY_BUFFER_MIN AND\nnot rollover-suppressed AND\n1h filter agrees, §17\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
     FreshGate -- Yes --> Entry[_execute_entry:\nnew direction, same 15m bar]
     FreshGate -- No --> RunningRowCheck
 
@@ -387,9 +387,13 @@ Checked in this order on every loop tick while `status == in_trade` (`_check_exi
 a position is expected to carry across sessions (and, once §4–§9 are built, a contract roll), not
 force-flattened at close.
 
-Entries (fresh or rule-7 re-entry) require only `now >= MIN_ENTRY_TIME` (09:15) — **no cutoff
-before close any more** (§2: `LAST_ENTRY_TIME`/`MAX_ENTRY_BEFORE_CLOSE_MIN` are gone, not
-renamed, matching `configs_p3.py`).
+Entries (fresh or rule-7 re-entry) require the session to have genuinely been open for at least
+`MIN_ENTRY_BUFFER_MIN` (15) minutes — **no cutoff before close any more** (§2:
+`LAST_ENTRY_TIME`/`MAX_ENTRY_BEFORE_CLOSE_MIN` are gone, not renamed, matching `configs_p3.py`).
+Fixed 2026-09-04: this used to be a hardcoded `MIN_ENTRY_TIME='09:15'` clock-time check, which
+silently gave zero minutes of protection on the evening-only special sessions (real open 17:00,
+already past 09:15 on the clock) — now keyed off the actual first 1-min bar of today's session
+(`_past_min_entry_guard`), same fix as the first-minute exit guard below.
 
 **Rule 7's re-entry is gated on confirmed exit.** `_execute_exit_all` returns `True` only if the
 position ended up genuinely flat; a same-bar opposite-direction entry only fires if that's
@@ -587,7 +591,8 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `TARGET2_MODE` / `TARGET2_FLAT_PCT` | `flat_pct` / 5.0% | Lot 2 — mult-2.0 candidate's value; hardcoded `'pct'` mode in production per Rollout step 5 |
 | `TENDER_ROLL_TRADING_DAYS` | 5 | Trading days before expiry to roll early |
 | `SEED_DAYS` | 18 | Calendar days of 1-min history tail-read for ST seeding |
-| `MIN_ENTRY_TIME` | 09:15 | No entry before — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
+| `MIN_ENTRY_BUFFER_MIN` | 15 | No entry until the session's real open + this many minutes (fixed 2026-09-04 from a hardcoded `MIN_ENTRY_TIME` clock time — see the Entry/Exit Priority section) — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
+| `NO_EXIT_BEFORE_BUFFER_MIN` | 1 | No SL/target exit check until the session's real open + this many minutes (§10, built 2026-09-04) |
 | `CLOSING_TIME` | 23:30 | **DST-dependent — must be hand-toggled around US DST changes** (→23:30 ~2nd Sun March, →23:55 ~1st Sun Nov) |
 | `SESSION_END_BUFFER_MIN` | 25 | → `SESSION_END_TIME`, the main loop's own hard exit clock (process lifecycle only — unaffected by §2's no-EOD-flatten change) |
 | `CANDLE_POLL_LIMIT` / `LTP_POLL_LIMIT` | 3 / 10 per sec | Broker-wide client-side rate caps |
@@ -798,10 +803,14 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       price-discovery print. Keyed off the actual first 1-min bar seen today, not a hardcoded
       clock time — the plan's original `NO_EXIT_BEFORE='09:01'` proposal would have silently done
       nothing on the ~7/153 evening-only special sessions, where the real open is 17:00, not
-      09:00. Mock-verified (8/8 checks, including the evening-only case). Building this surfaced
-      a related, already-live bug: `MIN_ENTRY_TIME='09:15'` has the identical hardcoded-clock-time
-      flaw and has been gating real entries since Phase 3 went live — not yet fixed, flagged in
-      `plans/prometheus-phase3-production.md` §10 for a separate decision.
+      09:00. Mock-verified (8/8 checks, including the evening-only case). Building this surfaced a
+      related, already-live bug, fixed the same day: `MIN_ENTRY_TIME='09:15'` had the identical
+      hardcoded-clock-time flaw and had been gating real entries since Phase 3 went live — replaced
+      by `_past_min_entry_guard`/`MIN_ENTRY_BUFFER_MIN=15` (shares `_minutes_since_session_open`
+      with the exit guard above, one dynamic-anchor mechanism, not two). The old bare
+      `now_after_min_entry()` function is gone; all three call sites (fresh entry, Rule 7
+      re-entry, the provisional-boundary path) now call `self._past_min_entry_guard`. Mock-verified
+      (8/8 checks, including the evening-only case).
 - [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
       `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
       (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same

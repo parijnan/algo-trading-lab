@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from prometheus_configs import (
     DRY_RUN, DATA_DIR, FLAG_PATH, COMMAND_FLAG_PATH, PID_FILE, STATE_FILE, CREDS_FILE,
     REPO_ROOT, SYMBOL, LOT_SIZE, LOTS_PER_LEG, MCX_FO_WS_EXCHANGE_TYPE,
-    MIN_ENTRY_TIME, SESSION_START_TIME,
+    MIN_ENTRY_BUFFER_MIN, SESSION_START_TIME,
     SESSION_END_TIME, ST_PERIOD, ST_MULTIPLIER,
     DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
     TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
@@ -458,7 +458,7 @@ class Prometheus:
                 self._execute_rule7_flip(direction_prov, window_start, bar['close'])
                 acted = True
         elif self.state.status == 'watching':
-            if (now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+            if (self._past_min_entry_guard(datetime.now()) and not self._rollover_entry_suppressed(datetime.now())
                     and self._check_1h_alignment(direction_prov)):
                 _slack(f'⚠️ {tag}: PROVISIONAL entry {direction_prov.upper()} at '
                       f'{window_start:%H:%M} (REST data incomplete, acting on a '
@@ -1348,7 +1348,7 @@ class Prometheus:
         # otherwise a fresh position could open seconds before the roll
         # flattens it straight back out. §17: additionally gated on 1h
         # alignment (inert unless ENTRY_FILTER_1H_ALIGN_ENABLED).
-        if (flip and now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+        if (flip and self._past_min_entry_guard(datetime.now()) and not self._rollover_entry_suppressed(datetime.now())
                 and self._check_1h_alignment(direction_now)):
             self._execute_entry(direction_now, window_start, bar['close'])
 
@@ -1363,8 +1363,9 @@ class Prometheus:
         quantity (`old_open_lots + new_trade_lots`), not two/three separate
         ones. Degenerates cleanly to a plain entry (both lots already
         flat — nothing to combine) or a plain exit (`new_trade_lots=0`
-        when re-entry isn't allowed — before MIN_ENTRY_TIME, a suppressed
-        rollover evening, or §17's 1h filter disagreeing).
+        when re-entry isn't allowed — still within MIN_ENTRY_BUFFER_MIN of
+        the session open, a suppressed rollover evening, or §17's 1h
+        filter disagreeing).
         """
         old_open_lots = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
                          ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
@@ -1372,7 +1373,7 @@ class Prometheus:
         # §17: additionally gated on 1h alignment (inert unless
         # ENTRY_FILTER_1H_ALIGN_ENABLED) — the exit half above still always
         # happens regardless; only the re-entry half is affected.
-        reentry_allowed = (now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+        reentry_allowed = (self._past_min_entry_guard(datetime.now()) and not self._rollover_entry_suppressed(datetime.now())
                            and self._check_1h_alignment(direction_now))
 
         if old_open_lots == 0:
@@ -1641,6 +1642,26 @@ class Prometheus:
                 return ltp
         return fetch_ltp_rest(self.obj, self.state.symbol, self.state.token)
 
+    def _minutes_since_session_open(self, now: datetime):
+        """
+        Minutes elapsed since the ACTUAL first 1-min bar of today's
+        session (self._df_1m_today's own earliest row), never a hardcoded
+        clock time — most days that's SESSION_START_TIME (09:00), but on
+        the evening-only special sessions the real open is 17:00, and a
+        fixed clock-time threshold would already be hours in the past by
+        then, guarding nothing. Same anchor-must-be-dynamic principle as
+        the 15m/1h resample's day anchor (data_loader.py's
+        origin=day.index[0], not a hardcoded 09:00). Returns None if no
+        bar has arrived yet at all. Shared by both the first-minute exit
+        guard (§10) and the min-entry guard below — both are the same
+        "how long has today's session actually been open" question
+        against a different threshold, not two separate mechanisms.
+        """
+        if self._df_1m_today.empty:
+            return None
+        first_bar_ts = self._df_1m_today['time_stamp'].min()
+        return (now - first_bar_ts).total_seconds() / 60.0
+
     def _past_first_minute_guard(self, now: datetime) -> bool:
         """
         §10 (built 2026-09-04): True once today's session has genuinely
@@ -1648,22 +1669,25 @@ class Prometheus:
         _check_exit_conditions_ltp against a first-minute price-discovery
         print (the 2026-09-02 incident: a 447-point single-minute range
         that would have been indistinguishable from a real SL/target hit
-        to the continuous LTP check). Keyed off the ACTUAL first 1-min bar
-        seen today (self._df_1m_today's own earliest row), never a
-        hardcoded clock time — most days that's SESSION_START_TIME
-        (09:00), but on the evening-only special sessions the real open
-        is 17:00, and a fixed '09:01' would already be hours in the past
-        by then, guarding nothing. Same anchor-must-be-dynamic principle
-        as the 15m/1h resample's day anchor (data_loader.py's
-        origin=day.index[0], not a hardcoded 09:00).
-        Returns False (guard still active) if no bar has arrived yet at
-        all — nothing to gate against differently in that case; the very
-        first tick IS the one this guard exists to hold off on.
+        to the continuous LTP check). False (guard still active) if no
+        bar has arrived yet — the very first tick IS the one this guard
+        exists to hold off on.
         """
-        if self._df_1m_today.empty:
-            return False
-        first_bar_ts = self._df_1m_today['time_stamp'].min()
-        return now >= first_bar_ts + timedelta(minutes=NO_EXIT_BEFORE_BUFFER_MIN)
+        elapsed = self._minutes_since_session_open(now)
+        return elapsed is not None and elapsed >= NO_EXIT_BEFORE_BUFFER_MIN
+
+    def _past_min_entry_guard(self, now: datetime) -> bool:
+        """
+        Fixed 2026-09-04 (same bug class as §10's guard, found while
+        building it): replaces the old module-level now_after_min_entry(),
+        which compared against a hardcoded MIN_ENTRY_TIME='09:15' clock
+        time — silently zero minutes of thin-opening-liquidity protection
+        on the evening-only sessions (real open 17:00, already past 09:15
+        on the clock). Gates fresh entries and Rule 7 re-entries. False
+        (still gated) if no bar has arrived yet.
+        """
+        elapsed = self._minutes_since_session_open(now)
+        return elapsed is not None and elapsed >= MIN_ENTRY_BUFFER_MIN
 
     def _check_exit_conditions_ltp(self, now: datetime) -> None:
         if not self._past_first_minute_guard(now):
@@ -1948,10 +1972,6 @@ class Prometheus:
               f'Total: Rs.{pnl["total_rs"]:+,.0f}')
         logger.info(msg.replace(prefix, '').replace('\n', '  '))
         _slack(msg, SLACK_TRADE_UPDATES)
-
-
-def now_after_min_entry() -> bool:
-    return datetime.now().time() >= datetime.strptime(MIN_ENTRY_TIME, '%H:%M').time()
 
 
 # ---------------------------------------------------------------------------
