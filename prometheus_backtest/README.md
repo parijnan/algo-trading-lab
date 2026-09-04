@@ -377,6 +377,95 @@ confirming the per-lot-exit-event methodology is applied consistently across bot
 - Once a candidate is chosen: fold it into `configs_p3.py` as the default, and decide whether
   Phase 3 supersedes Phase 2 as the production target or runs alongside it.
 
+## Phase 4 — 1h/15m ST alignment entry filter (tested, SHELVED 2026-09-04)
+
+Folder: `prometheus_backtest/phase4/`.
+
+**Motivation.** `prometheus_production/` already has an entry-time regime-confirmation gate built
+in (`_check_1h_alignment`, plan §17 preview) — a 1-hour-timeframe Supertrend that must agree with
+the 15m entry signal's own direction before a fresh entry, a Rule 7 re-entry, an evening
+rollover reopen, or a missed-rollover recovery reopen is allowed to proceed. It ships gated off
+(`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending this backtest. ST_15 held fixed at Phase 3's
+decided mult-2.0 candidate (period 10, mult 2.0) throughout — only the 1h filter's own
+`ST_1H_PERIOD`/`ST_1H_MULTIPLIER` varies, one variable changed per experiment.
+
+**Method.** The filter can only *remove* an entry a 15m flip would otherwise take, never add
+one — ST_15 flips are price-only and position-independent, so blocking one entry never moves any
+other trade's own `signal_ts`/`exit_ts`. This makes it valid to evaluate by filtering Phase 3's
+already-generated raw mult-2.0 trade list (`phase3/data_sweep/mult_2.0/`) rather than running a
+second parallel backtest engine: build the 1h ST series (`filter_1h_p4.build_1h_st_series`,
+reusing `data_loader.resample_ohlcv` unchanged — its per-day `origin=day.index[0]` anchor already
+constructs genuine trailing partial 1h buckets, including on the 7/153 evening-only special
+sessions that start at 17:00 rather than 09:00, confirmed against the user's own chart), check
+each trade's alignment at its own decision time (`filter_1h_p4.check_alignment` — decision_ts =
+signal_ts + 15min, the moment the 15m bar's window actually closes and the flip becomes known;
+only the LAST FULLY-CLOSED 1h bar as of that instant may inform the gate, via
+`pd.merge_asof(..., direction='backward')` — same no-lookahead rule as `_check_1h_alignment` in
+production, and the same bug class as Phase 1's previously-fixed 15-min regime-filter lookahead,
+just a 6x wider window), then re-apply the mult-2.0 bespoke exits (SL 2.2%/T1 2.0%/T2 5.0%) to
+both the kept and blocked subsets via `bespoke_2lot_p3._simulate_trade_detailed`.
+
+**Files:**
+- `configs_p4.py` — ST_15 and exits fixed at Phase 3's decided values; `ST_1H_PERIOD_GRID`/
+  `ST_1H_MULTIPLIER_GRID` for the 1h filter under test; `DECISION_OFFSET_MIN=15`
+- `filter_1h_p4.py` — `build_1h_st_series`, `check_alignment` (no-lookahead alignment check)
+- `run_p4.py` — loads Phase 3's raw trades/paths once, loops the full grid, applies bespoke
+  exits to kept/blocked subsets, computes per-lot-exit-event Calmar (same methodology as Phase
+  3's two-candidate table, for direct comparability) for both, and reports `n_1h_flips` per cell
+  (a degenerate-overfitting tripwire — as the 1h filter's own period/multiplier shrink toward
+  ST_15-like responsiveness, it stops being a regime filter and becomes a near-duplicate of the
+  entry signal itself). Doubles as the sweep entry point (loops `configs_p4.py`'s grid); no
+  separate `sweep_p4.py` was needed.
+
+**Result: every cell underperforms the unfiltered baseline, and the failure mode is structural.**
+
+Grid: period ∈ {3, 4, 5, 7, 10} × multiplier ∈ {1.0, 1.5, 2.0, 2.5, 3.0} (25 cells), against the
+mult-2.0 baseline (380 trades, ₹169,779, Calmar 10.21 — see Phase 3's two-candidate table).
+
+| | Best cell (period 3, mult 2.5) | Worst cell (period 10, mult 2.0) |
+|---|---|---|
+| Kept trades | 153 | 135 |
+| Kept total P&L | ₹105,401 | ₹72,765 |
+| Kept Calmar | 9.67 | 2.05 |
+| Blocked Calmar | 2.64 | 5.15 |
+| Δ vs. baseline Calmar | −0.54 | −8.16 |
+
+No cell in the grid reached baseline's Calmar of 10.21. Two distinct failure modes, split cleanly
+by multiplier:
+
+1. **Below mult 2.5 (15 of 25 cells): the filter anti-selects.** Blocked-set Calmar exceeds
+   kept-set Calmar at every one of these cells (e.g. the original preview setting, period 10/mult
+   2.0: kept Calmar 2.05 vs. blocked Calmar 5.15) — the filter systematically keeps the *worse*
+   trades and blocks the *better* ones. Confirmed not a directional bug (bullish/bearish pass
+   rates are balanced, 38.1%/33.0% at the preview setting) and not concentration of the known-bad
+   `trend_flip` population in one bucket (that population is ~55% of both kept and blocked, but
+   the kept share of it has a *worse* win rate — 12.0% vs. 17.2% blocked). At this multiplier
+   range the 1h ST flips 110–245 times over the window — too often to function as a slow regime
+   confirmation, not often enough to track ST_15 usefully either.
+2. **At mult ≥ 2.5 (10 of 25 cells): the sign corrects, but there's still no edge.** Fewer,
+   more decisive 1h flips (62–76 over the window) do correctly separate better trades from
+   worse (kept Calmar > blocked Calmar in all 10 cells) — but the best of these (9.67) still
+   trails the unfiltered baseline (10.21) on both Calmar and raw P&L, while discarding ~60% of
+   trades to get there. There's no compensating edge once the sign is right, only a smaller
+   sample of a strategy that was already fine.
+
+**Conclusion: shelved, not re-tuned.** This isn't a calibration gap — the full grid was already
+run. The 1h/15m alignment premise doesn't survive contact with the data: it either damages trade
+selection outright (mult < 2.5) or simply subtracts a large fraction of otherwise-good trades for
+no benefit (mult ≥ 2.5). `ENTRY_FILTER_1H_ALIGN_ENABLED` stays `False` in
+`prometheus_production/`; no live re-test is warranted on this evidence. The mechanism (and its
+production call sites — fresh entry, Rule 7 re-entry, rollover reopen, missed-rollover recovery)
+remains in the codebase, gated off, in case a future signal redesign wants a differently-shaped
+regime filter — but the specific "1h Supertrend agreement" mechanism itself is the finding here,
+not just this particular grid.
+
+### Not yet done / open threads
+
+- No CRUDEOIL cross-validation — moot while the mechanism is shelved on CRUDEOILM.
+- A wider grid (finer multiplier steps between 2.0 and 3.0, where the sign flips) was not run —
+  not pursued, since even the sign-correct region never beat baseline; diminishing-returns
+  territory rather than a promising lead.
+
 ## Running
 
 ```bash
@@ -387,6 +476,7 @@ python prometheus_backtest/phase2/sweep_p2.py        # Phase 2 calibration grids
 python prometheus_backtest/phase3/sweep_p3.py        # Phase 3, raw signal-quality sweep (all multipliers)
 python prometheus_backtest/phase3/exit_calib_p3.py   # Phase 3, exit calibration (all multipliers; reuses sweep_p3.py's logs)
 python prometheus_backtest/phase3/bespoke_2lot_p3.py # Phase 3, full per-trade detail for the two candidate combos
+python prometheus_backtest/phase4/run_p4.py          # Phase 4, 1h alignment filter grid (shelved finding — SL/exits still fixed at mult-2.0's combo)
 ```
 
 Symbol switch: `SYMBOL` in `configs.py` / `configs_p2.py` / `configs_p3.py` — `'CRUDEOILM'`

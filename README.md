@@ -449,8 +449,10 @@ for what's been built on top of it — positions now span multiple sessions (no 
 resilient order execution, and a full contract-rollover-under-an-open-position sequence (evening
 trigger, missed-rollover recovery, the ROLLOVER_TIME prefetch/veto/flatten/reopen timeline,
 historical-basis SL/target recalibration, and a two-linked-rows trade-log schema for a rolled
-trade). The 1h/15m entry filter (§17) is also now fully wired — built, unit-tested, and gated
-off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending its own calibration and chart validation.
+trade). The 1h/15m entry filter (§17) is also fully wired — built, unit-tested, and gated off
+(`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — its own backtest (Phase 4, below) found no combination
+of period/multiplier that beats the unfiltered baseline, so it stays off, not pending further
+calibration.
 
 | | |
 |---|---|
@@ -463,7 +465,7 @@ off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending its own calibration and char
 | Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
 | Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
 | Backtest (Phase 2, above config) | 226 trades · WR 55.8% · ₹42,778 total P&L (153 trading days, refreshed through 2026-09-03) · Calmar 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). The 1h/15m entry filter (§17) is fully wired, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending calibration. Order-update WebSocket unverified for MCX (Rollout step 2). |
+| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). The 1h/15m entry filter (§17) is fully wired, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — backtested 2026-09-04 (Phase 4), no grid cell beat the unfiltered baseline, shelved. Order-update WebSocket unverified for MCX (Rollout step 2). |
 
 ### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest research, decision made)
 
@@ -487,6 +489,24 @@ edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an 
 manager — structurally different strategies, not the same one at a different scale), and the
 open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3
 section.
+
+### Prometheus's own Phase 4 (`prometheus_backtest/phase4/` — backtest research, SHELVED)
+
+Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but
+gated off. ST_15 held fixed at Phase 3's decided mult-2.0 candidate; swept the 1h filter's own
+Supertrend period (3–10) and multiplier (1.0–3.0), 25 cells, by filtering Phase 3's raw trade
+list against a no-lookahead 1h alignment check and re-applying the mult-2.0 bespoke exits.
+
+**No cell beat the unfiltered baseline (380 trades, ₹169,779, Calmar 10.21).** Below multiplier
+2.5 the filter actively anti-selects — it keeps the worse trades and blocks the better ones (e.g.
+the original preview setting, period 10/mult 2.0: kept-set Calmar 2.05 vs. blocked-set Calmar
+5.15). At multiplier ≥ 2.5 the sign corrects, but the best cell found (period 3/mult 2.5: kept
+Calmar 9.67) still trails baseline while discarding ~60% of trades to get there. Conclusion:
+shelved, not a calibration gap — the mechanism itself doesn't add signal on top of ST_15 mult-2.0
+over this data window. `ENTRY_FILTER_1H_ALIGN_ENABLED` stays `False`; no live re-test warranted.
+
+Full grid, both failure-mode explanations, and open threads:
+[`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 4 section.
 
 ---
 
@@ -702,7 +722,7 @@ algo-trading-lab/
 │       ├── .gitkeep
 │       └── trade_logs/             # Per-trade minute-by-minute option price logs
 ├── prometheus_backtest/            # Prometheus — MCX CRUDEOILM intraday trend-following (backtest only)
-│   ├── README.md                   # Full design + calibration journey, all three phases
+│   ├── README.md                   # Full design + calibration journey, all four phases
 │   ├── configs.py                  # Phase 1 (v1) — dual-timeframe, superseded, retained for reference
 │   ├── data_loader.py
 │   ├── backtest.py
@@ -722,13 +742,18 @@ algo-trading-lab/
 │   │   ├── sweep_p2.py
 │   │   ├── data/                   (generated — gitignored)
 │   │   └── data_sweep/             (generated — gitignored)
-│   └── phase3/                     # Phase 3 — positional two-lot scale-out (decided 2026-09-04, mult 2.0 live in production)
+│   ├── phase3/                     # Phase 3 — positional two-lot scale-out (decided 2026-09-04, mult 2.0 live in production)
 │       ├── configs_p3.py           # ST_MULTIPLIER_GRID (signal itself under test — never calibrated for crude before)
 │       ├── backtest_p3.py          # Raw signal-following state machine (trend_flip-only exit)
 │       ├── trade_paths_p3.py       # Per-trade 1-min MAE/MFE/unrealised-P&L logs — the exit-calibration substrate
 │       ├── sweep_p3.py             # Raw signal-quality sweep across the multiplier grid
 │       ├── exit_calib_p3.py        # Staged SL/target1/target2 calibration, reuses sweep_p3.py's logs
 │       ├── bespoke_2lot_p3.py      # Full per-trade detail for a chosen combo, schema-matched to trade_summary_p2.csv
+│       └── data_sweep/             (generated — gitignored)
+│   └── phase4/                     # Phase 4 — 1h/15m alignment entry filter (tested, SHELVED 2026-09-04 — no beat vs. baseline)
+│       ├── configs_p4.py           # ST_15/exits fixed at Phase 3's mult-2.0; ST_1H_PERIOD_GRID/ST_1H_MULTIPLIER_GRID under test
+│       ├── filter_1h_p4.py         # 1h ST series + no-lookahead alignment check against each trade's own decision time
+│       ├── run_p4.py               # Filters Phase 3's raw trades, re-applies bespoke exits, per-lot-event Calmar; doubles as the grid sweep
 │       └── data_sweep/             (generated — gitignored)
 ├── prometheus_production/          # Prometheus live paper/production trading — standalone, not Leto-routed
 │   ├── prometheus.py               # Main strategy loop — own login/session/teardown, own cron entry
