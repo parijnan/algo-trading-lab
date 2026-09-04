@@ -119,6 +119,64 @@ CONTROL_PANEL_BLOCKS = [
     },
     {
         "type": "section",
+        "text": {"type": "mrkdwn", "text": "*Prometheus (MCX):*\nSeparate circuit breaker — standalone cron, not Leto-routed, so this does NOT affect Artemis/Athena/Apollo/Iris and vice versa."}
+    },
+    {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🚀 Start Prometheus"},
+                "style": "primary",
+                "action_id": "btn_prometheus_start"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⚠️ Exit Prometheus"},
+                "style": "danger",
+                "action_id": "btn_prometheus_exit",
+                "confirm": {
+                    "title": {"type": "plain_text", "text": "Are you sure?"},
+                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position and halt it."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Exit Prometheus"},
+                    "deny": {"type": "plain_text", "text": "Cancel"}
+                }
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🚨 Kill Prometheus"},
+                "style": "danger",
+                "action_id": "btn_prometheus_kill",
+                "confirm": {
+                    "title": {"type": "plain_text", "text": "Are you sure?"},
+                    "text": {"type": "plain_text", "text": "This will drop control immediately. Any Prometheus position remains OPEN for manual management."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Kill Prometheus"},
+                    "deny": {"type": "plain_text", "text": "Cancel"}
+                }
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "⏸️ Disable Prometheus"},
+                "action_id": "btn_prometheus_disable"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "✅ Clear Prometheus Flag"},
+                "style": "primary",
+                "action_id": "btn_prometheus_clear"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🛢️ Switch Instrument"},
+                "action_id": "btn_prometheus_instrument"
+            }
+        ]
+    },
+    {
+        "type": "divider"
+    },
+    {
+        "type": "section",
         "text": {"type": "mrkdwn", "text": "*Circuit Breakers:*\nHalt or liquidate active trades."}
     },
     {
@@ -181,64 +239,6 @@ CONTROL_PANEL_BLOCKS = [
                 "text": {"type": "plain_text", "text": "🚀 Start Leto"},
                 "style": "primary",
                 "action_id": "btn_start_leto"
-            }
-        ]
-    },
-    {
-        "type": "divider"
-    },
-    {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Prometheus (MCX):*\nSeparate circuit breaker — standalone cron, not Leto-routed, so this does NOT affect Artemis/Athena/Apollo/Iris and vice versa."}
-    },
-    {
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🚀 Start Prometheus"},
-                "style": "primary",
-                "action_id": "btn_prometheus_start"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⚠️ Exit Prometheus"},
-                "style": "danger",
-                "action_id": "btn_prometheus_exit",
-                "confirm": {
-                    "title": {"type": "plain_text", "text": "Are you sure?"},
-                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position and halt it."},
-                    "confirm": {"type": "plain_text", "text": "Yes, Exit Prometheus"},
-                    "deny": {"type": "plain_text", "text": "Cancel"}
-                }
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🚨 Kill Prometheus"},
-                "style": "danger",
-                "action_id": "btn_prometheus_kill",
-                "confirm": {
-                    "title": {"type": "plain_text", "text": "Are you sure?"},
-                    "text": {"type": "plain_text", "text": "This will drop control immediately. Any Prometheus position remains OPEN for manual management."},
-                    "confirm": {"type": "plain_text", "text": "Yes, Kill Prometheus"},
-                    "deny": {"type": "plain_text", "text": "Cancel"}
-                }
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⏸️ Disable Prometheus"},
-                "action_id": "btn_prometheus_disable"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "✅ Clear Prometheus Flag"},
-                "style": "primary",
-                "action_id": "btn_prometheus_clear"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🛢️ Switch Instrument"},
-                "action_id": "btn_prometheus_instrument"
             }
         ]
     },
