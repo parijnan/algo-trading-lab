@@ -465,15 +465,16 @@ off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending its own calibration and char
 | Backtest (Phase 2, above config) | 221 trades · WR 55.2% · ₹42,453 total P&L (152 trading days, refreshed through the latest candle) · Calmar 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
 | Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). The 1h/15m entry filter (§17) is fully wired, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending calibration. Order-update WebSocket unverified for MCX (Rollout step 2). |
 
-### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest-only, decision pending)
+### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest research, decision made)
 
 Not to be confused with the unrelated "Phase 3 Research" section below (that one's ML regime
-work tied to Apollo). This is a second Prometheus design track, still backtest-only: positional
-2-lot scale-out (no EOD square-off — a genuine architectural departure from the session-bound
-Phase 2 above), with the entry signal's own Supertrend multiplier itself put under test for the
-first time (Phase 2's `ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated
-for crude). Two calibrated candidates are under live consideration as of 2026-09-01 — decision
-pending, not yet folded into `prometheus_production/`:
+work tied to Apollo). This is a second Prometheus design track: positional 2-lot scale-out (no
+EOD square-off — a genuine architectural departure from the session-bound Phase 2 above), with
+the entry signal's own Supertrend multiplier itself put under test for the first time (Phase 2's
+`ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated for crude). Two calibrated
+candidates were under consideration as of 2026-09-01 — **decided 2026-09-04: mult 2.0**, now live
+in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.0`,
+`TARGET2_FLAT_PCT=5.0`):
 
 | | Mult 2.0 (SL 2.2%/T1 2.0%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|

@@ -131,7 +131,9 @@ SESSION_END_TIME = _minus_minutes(CLOSING_TIME, -SESSION_END_BUFFER_MIN)   # CLO
 
 # ── Signal: ST_15, single timeframe (no regime gate — Phase 2 design) ───────
 ST_PERIOD     = 10
-ST_MULTIPLIER = 3.0
+ST_MULTIPLIER = 2.0   # Phase 3 live-test value, set 2026-09-04 -- Phase 3 was designed for
+                       # 2.0/2.5 (vs. Phase 2's inherited 3.0); user chose 2.0 after confirming
+                       # 3.0's live ST value matched the chart correctly first.
 
 # ── Phase 4 preview: 1h/15m ST alignment entry filter (plan §17) ────────────
 # Only take a 15m ST_15 flip if the 1-hour Supertrend already agrees with
@@ -175,13 +177,18 @@ OPENING_BAR_ARTIFACT_THRESHOLD  = 0.5
 CRUDEOIL_REFERENCE_SYMBOL       = 'CRUDEOIL'   # full-size contract, reference only —
                                                 # Prometheus never trades this symbol
 
-# ── Scale-out (calibrated 2026-08-27, configs_p2.py) — 'pct' hardcoded per
-# Rollout step 5: "backtest keeps both modes for comparison, production
-# hardcodes 'pct'". ─────────────────────────────────────────────────────────
-TARGET1_PCT      = 1.0
+# ── Scale-out — 'pct' hardcoded per Rollout step 5: "backtest keeps both
+# modes for comparison, production hardcodes 'pct'". Changed 2026-09-04 from
+# Phase 2's mult-3.0 calibration (T1=1.0/T2=2.3 flat/SL=1.8, configs_p2.py,
+# 2026-08-27) to the mult-2.0 candidate's own calibration
+# (prometheus_backtest/phase3, README.md's Phase 3 table) — paired with
+# ST_MULTIPLIER=2.0 above, not mixed with the old exits: mult 2.0's stop is a
+# true tail-risk backstop (SL 2.2%, wider than Phase 2's), not an active
+# trade manager like Phase 2's 1.8% was. ────────────────────────────────────
+TARGET1_PCT      = 2.0
 TARGET2_MODE     = 'flat_pct'
-TARGET2_FLAT_PCT = 2.3
-SL_PCT           = 1.8
+TARGET2_FLAT_PCT = 5.0
+SL_PCT           = 2.2
 
 # ── Contract rollover — capital efficiency over parity (plan §1/§6) ─────────
 # Roll to the next contract out once fewer than this many TRADING days

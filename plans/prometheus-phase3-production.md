@@ -2,7 +2,7 @@
 
 **Status: DRAFT, first pass (2026-09-01).** Builds on `prometheus_production/` (Phase 2's build — see `plans/prometheus-phase2-production.md`), not a rewrite. Most of the process architecture — contract resolution mechanics, ST seeding, resilient polling, order execution, fill verification, guardian check, circuit breaker, sizing, state persistence pattern, Slack reporting — carries over. What's genuinely new is a single problem Phase 2 never had to solve: **a position can now be open at the moment a contract needs to roll.** Everything below either reuses Phase 2 unchanged, simplifies it (no EOD flatten), or exists specifically to handle that one new problem.
 
-**The 2.0-vs-2.5 multiplier decision is still pending** (`prometheus_backtest/README.md`'s Phase 3 section) — this plan is written to be agnostic to it; whichever wins just fills in `ST_MULTIPLIER`/`SL_PCT`/`TARGET1_PCT`/`TARGET2_FLAT_PCT` in `configs_p3.py`'s production counterpart. Nothing below depends on which candidate is chosen.
+**The 2.0-vs-2.5 multiplier decision — DECIDED 2026-09-04: mult 2.0** (`prometheus_backtest/README.md`'s Phase 3 section has the full comparison) — `ST_MULTIPLIER=2.0`/`SL_PCT=2.2`/`TARGET1_PCT=2.0`/`TARGET2_FLAT_PCT=5.0` are live in `prometheus_configs.py`. This plan was written to be agnostic to which candidate won; nothing below depended on the choice.
 
 **Several sections are marked OPEN — genuine decisions, not filled in yet.** Don't treat this document as ready to build from until those are resolved.
 

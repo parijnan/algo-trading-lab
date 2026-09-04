@@ -154,9 +154,13 @@ graph TD
 
 ## Signal: ST_15
 
-- **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=3.0`) — no regime gate,
-  unlike Iris's dual-timeframe design. Same signal `prometheus_backtest/phase2/backtest_p2.py`
-  was calibrated against.
+- **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=2.0`) — no regime gate,
+  unlike Iris's dual-timeframe design. `ST_MULTIPLIER` was `3.0` (Phase 2's value, inherited from
+  Iris, never itself calibrated for crude) through Phase 3's first live-test start on 2026-09-04;
+  after confirming that value's live ST matched the chart correctly, changed to `2.0` the same
+  day — Phase 3 was designed for a 2.0-vs-2.5 multiplier, and the user chose 2.0.
+  `prometheus_backtest/phase2/backtest_p2.py`'s own calibration used `3.0`; `2.0` is untested by
+  that backtest.
 - **Seed at startup**: `seed_st15()` combines two sources (§15) — past calendar days from the
   *shared* MCX data pipeline file (`data_pipeline/data_downloader_mcx.py`, never written by
   Prometheus), and *today* from Prometheus's own private intraday cache plus a live gap-fetch for
@@ -407,10 +411,10 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `DYNAMIC_SIZING` | `False` | Static at go-live; Artemis's margin-based formula when enabled |
 | `STATIC_UNITS` | 1 | Starting size |
 | `MARGIN_PER_UNIT` | 100,000 | ₹ — coupled to `SYMBOL`, overridden together via Slack |
-| `ST_PERIOD` / `ST_MULTIPLIER` | 10 / 3.0 | Matches `configs_p2.py`'s calibrated signal |
-| `SL_PCT` | 1.8% | Single shared stop |
-| `TARGET1_PCT` | 1.0% | Lot 1 |
-| `TARGET2_MODE` / `TARGET2_FLAT_PCT` | `flat_pct` / 2.3% | Lot 2 — hardcoded `'pct'` mode in production per Rollout step 5 |
+| `ST_PERIOD` / `ST_MULTIPLIER` | 10 / 2.0 | Phase 3 live-test value (2026-09-04) — Phase 2's calibrated `3.0` was the live-test starting point, changed to `2.0` after confirming `3.0`'s live ST matched the chart |
+| `SL_PCT` | 2.2% | Single shared stop — the mult-2.0 candidate's own calibrated value (2026-09-04), not Phase 2's 1.8%; a wider tail-risk backstop rather than an active trade manager (`prometheus_backtest/README.md`'s Phase 3 section) |
+| `TARGET1_PCT` | 2.0% | Lot 1 — mult-2.0 candidate's value; landed at the top of its own tested grid (0.5–2.0%), a known open caveat |
+| `TARGET2_MODE` / `TARGET2_FLAT_PCT` | `flat_pct` / 5.0% | Lot 2 — mult-2.0 candidate's value; hardcoded `'pct'` mode in production per Rollout step 5 |
 | `TENDER_ROLL_TRADING_DAYS` | 5 | Trading days before expiry to roll early |
 | `SEED_DAYS` | 18 | Calendar days of 1-min history tail-read for ST seeding |
 | `MIN_ENTRY_TIME` | 09:15 | No entry before — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
