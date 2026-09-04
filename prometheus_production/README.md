@@ -44,6 +44,18 @@ yet exercised by an actual live rollover (~2026-09-15).
 
 ## Execution Flow
 
+Five diagrams: startup/setup, the main loop (exits + 15m bar handling), Rule 7's combined-order
+mechanism in detail, the evening-triggered rollover timeline, and missed-rollover recovery at
+startup. Split from a single chart because Phase 3's rollover mechanics and Rule 7's combined
+order make one diagram unreadable — each is referenced from where it's called.
+
+Every gate touched by the §17 1h-alignment filter is labeled `inert unless
+ENTRY_FILTER_1H_ALIGN_ENABLED` — as of this writing that flag is `False` in
+`prometheus_configs.py`, so every one of those decision nodes always resolves to its "agrees"
+branch. Read them as dormant, not active.
+
+### Startup & Setup
+
 ```mermaid
 graph TD
     Start([python prometheus_production/prometheus.py]) --> Holiday{MCX fully closed today?\nmcx_holidays.csv}
@@ -54,34 +66,50 @@ graph TD
     Guardian -- Fail --> AbortGuardian([Exit — exclusive session required])
     Guardian -- Pass --> KillOld[SIGTERM old PID if exists]
     KillOld --> Login[Angel One login]
-    Login --> Setup[_setup]
+    Login --> Contract[resolve_effective_contract:\nexchange front-month, UNLESS\n< 5 trading days to its expiry\n-- then roll to next contract out.\nAlso reads freeze_qty live off\nthe instrument master, §1]
 
-    Setup --> Contract[resolve_effective_contract:\nexchange front-month, UNLESS\n< 5 trading days to its expiry\n-- then roll to next contract out.\nAlso reads freeze_qty live off\nthe instrument master, §1]
     Contract --> SeedRetry{seed_st15 attempt\nfailed?}
     SeedRetry -- Yes, attempts left --> SeedWait[Wait SEED_RETRY_INTERVAL_SEC\nlog + one WARNING Slack heads-up\non the first failure only, §15] --> SeedTry
     SeedRetry -- Yes, exhausted --> AbortSeed([Exit -- seed failed after\nSEED_RETRY_ATTEMPTS, CRITICAL alert])
     SeedTry[seed_st15:\npast days from the shared pipeline\nfile; today from the private cache\n+ live gap-fetch for the remainder,\n§15 -- resample, gap-check, compute ST]
     SeedTry --> SeedRetry
-    SeedRetry -- No --> TodayAccum[Re-read the private cache\n(read_today_cache) into\nself._df_1m_today]
-    TodayAccum --> OpenBarCheck[_maybe_check_opening_bar:\nif today's 09:00 row is already\npresent (a restart), check it now\nagainst CRUDEOIL, §11]
-    OpenBarCheck --> Feed[Start SharedFeed WebSocket\nsubscribe MCX contract token\npermanent for the session]
+    SeedRetry -- No --> TodayAccum[Re-read the private cache\ninto self._df_1m_today]
+    TodayAccum --> OpenBarCheck[_maybe_check_opening_bar:\nif today's 09:00 row already\npresent -- a restart -- check it now\nagainst CRUDEOIL, §11]
+    OpenBarCheck --> Feed[Start SharedFeed WebSocket\nsubscribe MCX contract token\npermanent for the session.\nAlso subscribe state.token if it\ndiffers -- a missed-roll resume, §3]
     Feed --> OrderWS[Start OrderFillWatcher\nlive only -- skipped in DRY_RUN]
     OrderWS --> Resume{Resuming with\nstatus == in_trade?}
     Resume -- Yes --> ResumeWarn[Rebuild pending_trade_row from state\nSlack: NOT reconciled against broker --\nverify manually]
     Resume -- No --> Watching[status = watching]
-    ResumeWarn --> LoopStart
-    Watching --> LoopStart[Main loop armed]
+    ResumeWarn --> SaveState[save_state]
+    Watching --> SaveState
 
-    LoopStart --> Loop{not shutdown AND\nflag exists AND\nnow < SESSION_END_TIME?}
+    SaveState --> MissedRoll{§5: state.token !=\nresolved contract's token?\nmissed rollover overnight}
+    MissedRoll -- Yes --> MissedRollExec[_recover_missed_rollover --\nsee Missed-Rollover Recovery diagram]
+    MissedRoll -- No --> RollTonight
+    MissedRollExec --> RollTonight{§4: tomorrow's contract\ndiffers from today's?}
+    RollTonight -- Yes --> RollTonightSetup[Confirm roll tonight at ROLLOVER_TIME\nprecompute recalibration basis, §8\nSlack heads-up -- see Rollover\nTimeline diagram]
+    RollTonight -- No --> SetupDone
+    RollTonightSetup --> SetupDone([Setup complete -- watchdog armed\n-- proceed to Main Loop])
+```
+
+### Main Loop
+
+```mermaid
+graph TD
+    LoopStart([Main loop armed]) --> Loop{not shutdown AND\nflag exists AND\nnow < SESSION_END_TIME?}
     Loop -- No --> Teardown[_teardown: stop feed,\nclear_today_cache -- §2 Phase 3:\nan open position is LEFT OPEN,\nthe normal case now, not force-exited]
     Teardown --> End([Session terminated])
 
     Loop -- Yes --> CmdFlag{prometheus_command.flag\n== EXIT or KILL?}
-    CmdFlag -- EXIT --> ForceExitAll[_execute_exit_all: slack_exit] --> RaiseStop[Raise -- session terminates]
+    CmdFlag -- EXIT --> ClearPending1[Drop any pending Rule 7 flip, §7] --> ForceExitAll[_execute_exit_all: slack_exit] --> RaiseStop[Raise -- session terminates]
     CmdFlag -- KILL --> SetKillFlag[_kill_no_exit = True\nposition left untouched] --> RaiseStop
     RaiseStop --> Teardown
 
-    CmdFlag -- No --> InTrade{status == in_trade?}
+    CmdFlag -- No --> PendingFlip{Rule 7 pending flip\nin progress, §7?}
+    PendingFlip -- Yes --> RetryFlip[_retry_pending_flip --\nsee Rule 7 detail diagram]
+    PendingFlip -- No --> InTrade
+    RetryFlip --> InTrade{status == in_trade?}
+
     InTrade -- Yes --> ExitCheck[_check_exit_conditions_ltp\nevery 0.5-1s tick]
     ExitCheck --> UpdateCadence{TRADE_UPDATE_SEC\nelapsed?}
     UpdateCadence -- Yes --> SlackUpdate[Slack unrealised P&L update]
@@ -91,7 +119,8 @@ graph TD
     InTrade -- No --> BoundaryCheck{1-min boundary\nreached?}
     BoundaryCheck -- No --> Sleep[sleep 0.5s in_trade\n1.0s watching] --> Loop
     BoundaryCheck -- Yes --> Recover[Recover any pending windows\nfrom outer retry queue]
-    Recover --> Fetch[fetch_one_minute_window\n5-min lookback, inner retry x3]
+    Recover --> RollTiming[_check_rollover_timing, §6 --\nsee Rollover Timeline diagram]
+    RollTiming --> Fetch[fetch_one_minute_window\n5-min lookback, inner retry x5]
     Fetch -- Fail --> QueuePending[Push to pending_recovery\nnon-blocking, retried next boundary] --> Merge15Check
     Fetch -- OK --> MergeWrite[_merge_1m: write into the PRIVATE\nintraday cache, §15 -- never the\nshared file any more -- + update\nin-memory today accumulator, then\n_maybe_check_opening_bar §11]
     MergeWrite --> Merge15Check{boundary.minute\n% 15 == 0 AND no\npending 15m boundary?}
@@ -128,15 +157,11 @@ graph TD
     FlipCheck -- Yes --> InTradeFlip{status == in_trade?}
     InTradeFlip -- Yes --> DirCheck{flip direction !=\ncurrent position direction?}
     DirCheck -- No --> RunningRowCheck
-    DirCheck -- Yes --> Rule7Exit[_execute_exit_all: trend_flip]
-    Rule7Exit --> Rule7Confirmed{Exit confirmed\nfully closed?}
-    Rule7Confirmed -- No --> Rule7Abort[Re-entry SKIPPED\nlogged critical] --> RunningRowCheck
-    Rule7Confirmed -- Yes --> Rule7Gate{after MIN_ENTRY_TIME?}
-    Rule7Gate -- Yes --> Entry[_execute_entry:\nnew direction, same 15m bar]
-    Rule7Gate -- No --> RunningRowCheck
+    DirCheck -- Yes --> Rule7[_execute_rule7_flip, §7 --\nsee Rule 7 detail diagram]
+    Rule7 --> RunningRowCheck
 
-    InTradeFlip -- No --> FreshGate{status == watching AND\nafter MIN_ENTRY_TIME?\n§2 Phase 3: no LAST_ENTRY_TIME\ncutoff before close any more}
-    FreshGate -- Yes --> Entry
+    InTradeFlip -- No --> FreshGate{status == watching AND\nafter MIN_ENTRY_TIME AND\nnot rollover-suppressed AND\n1h filter agrees, §17\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
+    FreshGate -- Yes --> Entry[_execute_entry:\nnew direction, same 15m bar]
     FreshGate -- No --> RunningRowCheck
 
     Entry --> Units[_calculate_units + margin check]
@@ -148,6 +173,136 @@ graph TD
     SplitLots --> Thresholds[resolve_thresholds + resolve_target2:\nsl_price, lot1_target, lot2_target]
     Thresholds --> NewState[New PrometheusState: in_trade\nsave_state, Slack entry message]
     NewState --> RunningRowCheck
+```
+
+### Rule 7: Combined-Order Detail (§7, 2026-09-04)
+
+A trend-flip against an open position no longer fires two or three separate orders (old
+Phase 2 shape: exit, confirm, then a separate entry). One order for the net quantity
+(`old_open_lots + new_trade_lots`) — partial fills reconciled explicitly, retried every main
+loop tick until fully resolved, independent of whether a fresh 15m flip is still "current."
+
+```mermaid
+graph TD
+    R7Start([_execute_rule7_flip\ncalled from Handle15m on a\nflip against an open position]) --> OldLots[old_open_lots = lot1_lots if open\n+ lot2_lots if open]
+    OldLots --> ReentryGate{now_after_min_entry AND\nnot rollover-suppressed AND\n1h filter agrees, §17\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
+    ReentryGate -- No --> NoReentry[reentry_allowed = False\nnew_trade_lots = 0 --\nexit half still always happens]
+    ReentryGate -- Yes --> UnitsCalc[_calculate_units\nnew_trade_lots = units x LOTS_PER_LEG x 2]
+    UnitsCalc --> MarginCheck{Margin sufficient\nfor the new leg?}
+    MarginCheck -- No --> ZeroNew[new_trade_lots = 0\nstill closes the old leg below]
+    MarginCheck -- Yes --> HaveTarget[new_trade_lots_target set]
+
+    NoReentry --> OldZero1{old_open_lots == 0?}
+    ZeroNew --> PendingSet
+    HaveTarget --> PendingSet
+    OldZero1 -- Yes, reentry allowed --> PlainEntry([Plain _execute_entry --\nnothing to combine])
+    OldZero1 -- Yes, no reentry --> NoOp([Nothing to do -- return])
+
+    OldZero1 -- No --> PendingSet[Set self._pending_flip:\ndirection, signal_ts/close, units,\nnew_trade_lots_target, opened_lots=0]
+    PendingSet --> Retry[_retry_pending_flip]
+
+    Retry --> Requested[requested = old_open_lots\n+ max 0, target - opened_lots]
+    Requested --> PlaceCombined[place_order: ONE order,\nnet quantity = requested]
+    PlaceCombined -- Fail --> AlertStuck1[_alert_pending_flip_stuck:\nCRITICAL, then debounced re-alert\nevery PENDING_FLIP_REALERT_DEBOUNCE_SEC] --> WaitNextTick
+    PlaceCombined -- OK --> FillCombined[get_fill_price_and_qty]
+    FillCombined -- Unconfirmed --> AlertStuck1
+    FillCombined -- OK --> Reconcile[closed_qty = min filled, old_open_lots\nopened_qty = filled - closed_qty]
+
+    Reconcile --> CloseLot2{closed_qty > 0 AND\nlot2 open?}
+    CloseLot2 -- Yes --> ApplyLot2[_apply_confirmed_lot_exit 2\ntrend_flip -- lot2-before-lot1\ntie-break, DECIDED]
+    CloseLot2 -- No --> CloseLot1
+    ApplyLot2 --> CloseLot1{remaining closed_qty > 0\nAND lot1 open?}
+    CloseLot1 -- Yes --> ApplyLot1[_apply_confirmed_lot_exit 1\ntrend_flip]
+    CloseLot1 -- No --> AccumNew
+    ApplyLot1 --> AccumNew{opened_qty > 0?}
+    AccumNew -- Yes --> Accum[Accumulate opened_lots +\nprice-weighted sum for a\ncorrect blended entry price]
+    AccumNew -- No --> CheckDone
+    Accum --> CheckDone{old lots fully closed\nAND new lots fully opened?}
+    CheckDone -- Yes --> Finalize7[_finalize_new_position\nusing the blended avg price\npending_flip cleared]
+    CheckDone -- No --> WaitNextTick([Retried next main-loop tick\nregardless of status, §7 --\nnot gated on a fresh trend_flip])
+```
+
+### Rollover Timeline (§4/§6/§8/§9, evening-triggered)
+
+```mermaid
+graph TD
+    Evening([Every _setup, after\nresolving today's contract]) --> CheckTonight{§4: tomorrow's trading day\nresolves to a different\ncontract than today's?}
+    CheckTonight -- No --> NoRoll([No rollover due tonight])
+    CheckTonight -- Yes --> Basis[_precompute_rollover_basis, §8:\nhistorical_basis_price lookup for\nthe new contract at the old\nentry's timestamp -- pure historical,\nno live fetch. No-op if flat.]
+    Basis --> SlackHeads[Slack heads-up: rolling\ntonight at ROLLOVER_TIME]
+    SlackHeads --> Armed([_rollover_new_contract set --\nchecked every 1-min tick by\n_check_rollover_timing])
+
+    Armed --> Prefetch{now >=\nROLLOVER_PREFETCH_TIME?}
+    Prefetch -- Yes, not done yet --> DoPrefetch[_do_rollover_prefetch:\nbulk-fetch new contract's today\nseries, subscribe its WS feed]
+    Prefetch -- Done already --> TopUp{now <\nROLLOVER_TIME?}
+    DoPrefetch --> TopUp
+    TopUp -- Yes --> DoTopUp[_do_rollover_topup_poll:\nsame 5-min lookback poll as the\nold contract, keeps the new\ncontract's series current]
+    DoTopUp --> RolloverTimeCheck
+    TopUp -- No --> RolloverTimeCheck{now >= ROLLOVER_TIME?}
+
+    RolloverTimeCheck -- No --> Armed
+    RolloverTimeCheck -- Yes --> Decision[_execute_rollover_decision]
+
+    Decision --> InTradeCheck{status == in_trade?}
+    InTradeCheck -- No --> FlatGo[go = True -- pure housekeeping,\nnothing to veto]
+    InTradeCheck -- Yes --> RefreshBasis[Refresh the basis precompute\nright before use -- not stale,\neven if position changed today]
+    RefreshBasis --> NewST{compute_st_for_contract\non the NEW contract, 15m:\nST unavailable / NaN?}
+    NewST -- Yes --> NoGoST[go = False\nSlack: ST unavailable, no-go]
+    NewST -- No --> STAgree{new_direction ==\ncarried position's direction?}
+    STAgree -- No --> NoGoDisagree[st_agree = False\nSlack: 15m ST disagrees, no-go]
+    STAgree -- Yes --> AlignCheck{§17: _check_1h_alignment\non the NEW contract\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
+    AlignCheck -- No --> NoGoAlign[align_agree = False\nSlack: 1h ST disagrees, no-go]
+    AlignCheck -- Yes --> BothAgree[go = st_agree AND align_agree\n= True]
+
+    FlatGo --> FlattenStep
+    NoGoST --> FlattenStep
+    NoGoDisagree --> FlattenStep
+    NoGoAlign --> FlattenStep
+    BothAgree --> FlattenStep[Step 5: flatten the OLD position\nunconditionally, regardless of\ngo/no-go, via _execute_exit_all]
+
+    FlattenStep --> ExitConfirmed{Exit confirmed\nfully closed?}
+    ExitConfirmed -- No --> RetryNextTick([Return -- retried\nnext tick, like any other\nunconfirmed exit])
+    ExitConfirmed -- Yes --> Unsub[Unsubscribe old contract's WS\nSwap self._contract to the new one]
+    Unsub --> ReopenGate{go == True AND\nbasis available?}
+    ReopenGate -- No --> ClearState([Flatten-only outcome --\nclear rollover state, done])
+    ReopenGate -- Yes --> Reopen[_execute_rollover_reopen:\nplace_order sized to\nlots_to_reopen, get_fill_price_and_qty,\n_finalize_new_position with\nparent_trade_id + basis_price\nkept separate from the real fill, §8/§9]
+    Reopen --> ClearState
+
+    ClearState --> Executed([_rollover_executed_today = True\n_df_1m_today = _df_1m_today_new])
+```
+
+### Missed-Rollover Recovery (§5, at startup)
+
+Same veto shape as the evening timeline above, triggered instead when the process wasn't alive
+at `ROLLOVER_TIME` (crash, MCX holiday, KILL, DISABLE) and resumes to find `state.token` no
+longer matches the freshly-resolved effective contract. By this point in `_setup()`,
+`self._contract` and `self._df_15m` are already the new contract's — no separate prefetch/poll
+needed, `_setup()`'s own normal flow already did that work.
+
+```mermaid
+graph TD
+    SetupMissed([_setup, after WS feed\nis subscribed to state.token]) --> MissedCheck{status == in_trade AND\nstate.token != resolved\ncontract's token?}
+    MissedCheck -- No --> NoMissed([Normal case -- no missed roll])
+    MissedCheck -- Yes --> MissedBasis[historical_basis_price for the\nNEW contract -- already resolved\nas self._contract by this point]
+    MissedBasis --> MissedST{self._df_15m --\nalready seeded for the new\ncontract -- trend NaN?}
+    MissedST -- Yes --> MissedNoGoST[go = False -- ST still warming up]
+    MissedST -- No --> MissedSTAgree{new_direction ==\ncarried position's direction?}
+    MissedSTAgree -- No --> MissedNoGoDisagree[st_agree = False]
+    MissedSTAgree -- Yes --> MissedAlign{§17: _check_1h_alignment,\nself._contract/self._df_1m_today\n-- already the new one's\ninert unless\nENTRY_FILTER_1H_ALIGN_ENABLED?}
+    MissedAlign -- No --> MissedNoGoAlign[align_agree = False]
+    MissedAlign -- Yes --> MissedGo[go = st_agree AND align_agree]
+
+    MissedNoGoST --> MissedFlatten
+    MissedNoGoDisagree --> MissedFlatten
+    MissedNoGoAlign --> MissedFlatten
+    MissedGo --> MissedFlatten[_execute_exit_all: rollover\nunconditional, same as the\nevening path's step 5]
+    MissedFlatten --> MissedConfirmed{Exit confirmed?}
+    MissedConfirmed -- No --> MissedRetry([Leave state as in_trade --\nretried on next restart])
+    MissedConfirmed -- Yes --> MissedUnsub[Unsubscribe old token's WS]
+    MissedUnsub --> MissedReopenGate{go AND basis\navailable?}
+    MissedReopenGate -- Yes --> MissedReopen[_execute_rollover_reopen\non self._contract -- same\nfunction the evening path uses]
+    MissedReopenGate -- No --> MissedDone
+    MissedReopen --> MissedDone([save_state -- setup continues\nto §4's evening check next])
 ```
 
 ---
@@ -539,21 +694,24 @@ rm prometheus_production/data/prometheus_active.flag
 
 ## Backtest Reference
 
-Calibrated from `prometheus_backtest/phase2/` — see
-[`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration
-journey (including **Prometheus's own Phase 3**, a second, backtest-only design track with a
-pending decision between two multiplier candidates — not yet folded into this production
-module; see that README's Phase 3 section before assuming Phase 2's parameters above are final).
+See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration
+journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate**
+(`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`,
+`TARGET1_PCT=2.0`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
 
-| Metric | Value |
-|---|---|
-| Config | `THRESHOLD_MODE='pct'`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 221 (refreshed through the latest candle, 2026-09-01) |
-| Win rate | 55.2% |
-| Total P&L | ₹42,453 |
-| Max drawdown | −₹14,943 |
-| Calmar | 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
-| Cross-validation | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
+|---|---|---|
+| Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
+| Trades | 380 (refreshed 2026-09-04, through 2026-09-03) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 44.5% | 55.8% |
+| Total P&L | ₹169,779 | ₹42,778 |
+| Max drawdown | −₹16,235 (per-trade series) / −₹16,625 (per-lot-exit-event series) | −₹14,943 |
+| Calmar | 10.21 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | CRUDEOILM only — **not yet cross-validated on CRUDEOIL** (open caveat, see `prometheus_backtest/README.md`'s Phase 3 section) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+
+Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
+entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting
+for that structural difference; Calmar is the fairer cross-phase comparison.
 
 ---
 

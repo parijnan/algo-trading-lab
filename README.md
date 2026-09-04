@@ -462,7 +462,7 @@ off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending its own calibration and char
 | Stop loss | 1.8% of entry — single shared stop protecting whichever lot(s) remain open |
 | Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
 | Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
-| Backtest (Phase 2, above config) | 221 trades · WR 55.2% · ₹42,453 total P&L (152 trading days, refreshed through the latest candle) · Calmar 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
+| Backtest (Phase 2, above config) | 226 trades · WR 55.8% · ₹42,778 total P&L (153 trading days, refreshed through 2026-09-03) · Calmar 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
 | Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). The 1h/15m entry filter (§17) is fully wired, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending calibration. Order-update WebSocket unverified for MCX (Rollout step 2). |
 
 ### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest research, decision made)
@@ -478,7 +478,9 @@ in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.0
 
 | | Mult 2.0 (SL 2.2%/T1 2.0%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|
-| Backtest | 373 trades · WR 44.5% · ₹167,819 total P&L · Calmar 10.09 | 283 trades · WR 48.8% · ₹111,734 total P&L · Calmar 9.96 |
+| Backtest (refreshed 2026-09-04) | 380 trades · WR 44.5% · ₹169,779 total P&L · Calmar 10.21 | 288 trades · WR 48.6% · ₹120,936 total P&L · Calmar 10.78 |
+
+Still essentially tied on Calmar (10.21 vs 10.78, both up modestly from the original 10.09/9.96 with 2 more days of data) — the earlier decision to go with mult 2.0 stands; nothing in the refresh reverses it.
 
 Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
 edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade
@@ -720,7 +722,7 @@ algo-trading-lab/
 │   │   ├── sweep_p2.py
 │   │   ├── data/                   (generated — gitignored)
 │   │   └── data_sweep/             (generated — gitignored)
-│   └── phase3/                     # Phase 3 — positional two-lot scale-out (backtest-only, decision pending)
+│   └── phase3/                     # Phase 3 — positional two-lot scale-out (decided 2026-09-04, mult 2.0 live in production)
 │       ├── configs_p3.py           # ST_MULTIPLIER_GRID (signal itself under test — never calibrated for crude before)
 │       ├── backtest_p3.py          # Raw signal-following state machine (trend_flip-only exit)
 │       ├── trade_paths_p3.py       # Per-trade 1-min MAE/MFE/unrealised-P&L logs — the exit-calibration substrate
