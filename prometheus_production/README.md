@@ -9,19 +9,22 @@ Iris, Prometheus owns its own Angel One session — it is not launched by Leto (
 exchange, different underlying, no VIX coupling; see
 [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
-**Status: Phase 3 build in progress, `DRY_RUN=True` (paper mode). Not yet live-tested.**
+**Status: Phase 3 build complete except the 1h/15m entry filter's actual wiring, `DRY_RUN=True`
+(paper mode). Not yet live-tested.**
 [`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
-current design doc — every section there is `[DECIDED]`. Built so far (2026-09-04): resilient
-order execution (§1), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten
-(§2), the 15-min-boundary deferred-bar fix + the resample day-end-boundary fix that also underlies
-it (§12/§17), opening-bar price-artifact correction (§11), realised/unrealised/total P&L
-reporting (§13), the ST seed skip-list (§14), and the `state.token` invariant fix (§3). **Not yet
-built: the rollover trigger/recovery/execution mechanics, Rule 7's combined order, SL/target
-recalibration, and the rolled-trade log schema (§4–§9)** — elaborate, interdependent, and not
-exercised until the next rollover (~2026-09-15, per the plan's `TENDER_ROLL_TRADING_DAYS=5`
-confirmation), so building them half-wired was judged worse than not building them yet. The 1h/15m
-entry filter (§17) has its resample groundwork built but stays off (`ENTRY_FILTER_1H_ALIGN_ENABLED`
-doesn't exist yet — the filter itself isn't wired into any entry call site).
+current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1,
+2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2),
+the `state.token` invariant fix (§3), the rollover trigger/recovery/execution timeline including
+the ST-disagreement veto (§4/§5/§6, 2026-09-04), Rule 7's combined order with a stuck-partial-fill
+retry marker (§7, 2026-09-04), the historical-basis SL/target recalibration method (§8,
+2026-09-04), the two-linked-rows rolled-trade log schema (§9, 2026-09-04), the 15-min-boundary
+deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), opening-bar
+price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), and the ST seed
+skip-list (§14). **Not yet built: the 1h/15m entry filter's actual wiring (§17)** — only the
+resample-function groundwork landed; `ENTRY_FILTER_1H_ALIGN_ENABLED` doesn't exist yet and the
+filter isn't hooked into any entry call site. The rollover mechanics are code-complete and unit-
+verified (real on-disk historical-basis/ST lookups, mocked-broker Rule 7 reconciliation and
+rollover reopens) but not yet exercised by an actual live rollover (~2026-09-15).
 
 ---
 
@@ -244,10 +247,86 @@ means teardown no longer attempts an exit at all in its normal path — see Proc
 | | |
 |---|---|
 | Instrument | `CRUDEOILM` (default) or `CRUDEOIL` — Slack-switchable (`btn_prometheus_instrument`), writes `data/instrument_override.json` (`symbol` + `margin_per_unit` together, since the two are coupled — different lot sizes, 10 vs 100 barrels) |
-| Lot size | Looked up live from `data_pipeline/data/mcx_instrument_master.csv`, never hardcoded |
-| Roll rule | `resolve_effective_contract()`: the exchange's own front month, **unless** fewer than `TENDER_ROLL_TRADING_DAYS=5` trading days (via `mcx_holidays.csv`) remain until its expiry — then the *next* contract out, re-seeding ST from scratch on that contract's own history |
-| Why roll early | Capital efficiency over strict backtest parity — avoids MCX's elevated tender-margin window on energy contracts in a departing contract's final days (plan §1/§6, explicit user decision) |
+| Lot size / freeze qty | Both looked up live from `data_pipeline/data/mcx_instrument_master.csv`, never hardcoded (§1) |
+| Roll rule | `resolve_effective_contract()`: the exchange's own front month, **unless** fewer than `TENDER_ROLL_TRADING_DAYS=5` trading days (via `mcx_holidays.csv`) remain until its expiry — then the *next* contract out |
+| Why roll early | Capital efficiency over strict backtest parity — avoids MCX's elevated tender-margin window on energy contracts in a departing contract's final days |
 | ST computation | Per-contract only, never spliced across a roll — a raw price-level jump at the roll boundary would otherwise risk a spurious flip driven by nothing but switching instruments |
+
+**Phase 3 (built 2026-09-04): a position can now genuinely span the roll**, not just the contract
+housekeeping above — see Contract Rollover Mechanics below for the full timeline.
+
+---
+
+## Contract Rollover Mechanics (§3–§9, built 2026-09-04)
+
+Phase 2 never had to solve this: positions were always flat by end of day, so whatever
+`resolve_effective_contract()` returned each morning was trivially correct. Phase 3 positions can
+run for days to weeks, so the day the effective contract flips can land in the middle of an open
+trade — nothing above (which only governs *housekeeping* — which contract file/token Prometheus
+tracks) says what happens to a *position* caught mid-roll. This section does.
+
+**`state.token` invariant (§3).** While `status == 'in_trade'`, every price read and every order
+keys off `state.token`/`state.symbol` — never `self._contract`, which is consulted only while
+`watching`/entering and to detect an upcoming roll. `_get_ltp()`'s WebSocket branch and `_setup()`'s
+subscription set (which now also subscribes `state.token`'s feed on a resume, if it differs from
+the freshly-resolved contract) both follow this.
+
+**Evening trigger (§4).** Checked once, at `_setup()`: does *tomorrow's* trading day (walked
+forward via `mcx_holidays.csv`, not a naive `today+1`) resolve to a different contract than
+today's? If so, the roll is confirmed for tonight, and:
+- The recalibrated basis price is precomputed immediately (§8 below) — pure historical lookup, no
+  reason to wait.
+- Fresh and Rule-7 entries are suppressed once the clock reaches `ROLLOVER_TIME` — otherwise a
+  fresh position could open seconds before being flattened straight into the roll.
+
+**Missed-rollover recovery (§5).** If the process wasn't alive at `ROLLOVER_TIME` (a crash, `KILL`,
+`DISABLE`, an MCX holiday), the next `_setup()` finds `state.token != self._contract['token']` and
+rolls **immediately at today's open** rather than walking into the `state.token` problem above with
+a position on a contract `resolve_effective_contract()` no longer returns. Simpler than the evening
+path: `self._contract` and `self._df_15m` are already the new contract's, freshly resolved and
+seeded by the normal startup flow.
+
+**The timeline (§6), evening path:**
+
+| Time | What happens |
+|---|---|
+| As soon as confirmed (well before `ROLLOVER_TIME`) | Basis price precomputed (§8) — refreshed again right before use at `ROLLOVER_TIME`, so it can never go stale if the position closed/reopened/flipped in between |
+| `ROLLOVER_PREFETCH_TIME` (`ROLLOVER_TIME` − 5 min → 23:10) | Bulk-fetch the new contract's *today* series; subscribe its WS feed. Both contracts stay subscribed simultaneously through the window — the old one isn't unsubscribed until its exit is confirmed |
+| `ROLLOVER_PREFETCH_TIME` → `ROLLOVER_TIME` | Both contracts polled every minute — the old one exactly as always (uninterrupted SL/target monitoring), the new one topped up toward a complete series |
+| `ROLLOVER_TIME` (23:15) | New contract's ST computed off its now-complete series; go/no-go veto decided **once** (§8) and cached — retries below only retry *execution*, never re-litigate the decision. Incomplete data here defaults to no-go |
+| — | Old position flattened unconditionally (`exit_reason='rollover'`), fully subject to the fill-confirmation invariant — an unconfirmed exit leaves state as `in_trade` and retries next tick. WS unsubscribed only once confirmed |
+| — | Reopen on the new contract only if go, sized to however many lots actually survived (§8) |
+| — | `self._contract` swapped, rollover state cleared, persisted |
+
+**Rule 7, extended for a stuck partial fill (§7).** The combined-order mechanics (see Rule 7 section
+above) now include a `_pending_flip` marker: if a combined order doesn't fully resolve (`filled` <
+`old_open_lots + new_trade_lots`), the reconciliation applies what *did* fill (lot2 closes before
+lot1 on a partial close — the tie-break decided so the nearer-target lot survives, exiting sooner on
+a favorable reversal) and retries the *remainder* every tick until fully resolved — not gated on a
+fresh 15-min `trend_flip` transition, which only fires once. An immediate CRITICAL alert fires the
+first time it gets stuck, then a debounced re-alert (`PENDING_FLIP_REALERT_DEBOUNCE_SEC=300`) while
+it stays stuck.
+
+**SL/target recalibration — historical-basis method (§8).** The reopened position's SL/targets are
+computed off what the *new* contract was trading at, at the *same historical timestamp* the
+original entry happened on the *old* contract (`historical_basis_price()`) — preserving the trade's
+progress-so-far, at the cost of an accepted, currently-unvalidated basis-drift risk (explicit user
+call). The real fill price and the recalibration basis are two different numbers, both persisted
+separately (`entry_price` vs. `state.recalibration_basis_price`) — P&L always uses the real fill;
+SL/target *levels* are computed once, off the basis, then persist as ordinary absolute levels. If
+only one lot survived to the roll, the reopened position is sized and targeted as a lone lot2 (the
+farther target), not a fresh lot1+lot2 split. Carrying the position at all is conditional on the
+new contract's ST agreeing with the direction being carried (the veto above) — if it disagrees, the
+position is flattened only, no reopen, exactly like `_execute_rollover_decision`'s no-go path.
+
+**Trade-log schema (§9).** A rolled trade is two linked rows in `prometheus_trades.csv`, joined by
+a new `parent_trade_id` column: the old-contract leg closes normally (`exit_reason='rollover'`),
+the new-contract leg is an ordinary row except `parent_trade_id` points at the old leg's `trade_id`
+and `direction` carries a `-rollover` suffix (`bullish-rollover`/`bearish-rollover`) — `state.direction`
+itself never does, it stays the plain binary everywhere it drives real logic. A trade that rolls
+and *doesn't* reopen (the veto fired) is just one row with `exit_reason='rollover'` — no second row,
+since nothing reopened. Summing `total_pnl_rs` naively over the file double-counts a rolled trade's
+continuation unless grouped by `parent_trade_id` — a documented convention, not solved structurally.
 
 ---
 
@@ -261,6 +340,7 @@ State is persisted to `data/prometheus_state.csv` on every change (atomic tmp-re
 | `direction` | `bullish` · `bearish` · `None` |
 | `units` | integer — **persisted verbatim, never recomputed on restart** (a config change between a crash and a restart must not silently change an already-open trade's risk parameters) |
 | `entry_price` / `entry_ts` | fill price / ISO timestamp |
+| `recalibration_basis_price` | §8, rollover reopen only — the historical-basis price SL/target levels were computed off, kept separate from `entry_price` (the real fill). `None` for a never-rolled trade |
 | `signal_ts` / `signal_close` | the 15m bar whose close triggered the flip |
 | `contract_expiry` / `symbol` / `token` | the resolved effective contract at entry |
 | `sl_price` | persisted verbatim, not recomputed |
@@ -344,6 +424,9 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `ST_SEED_SKIP_DATES` | `[]` | §14 — manually populated dates excluded from the daily seed's tail-read (whole bad sessions, e.g. a Budget special session) |
 | `REJECTION_RETRY_ATTEMPTS` / `_COOLDOWN_SEC` | 3 / 1 | §1 — `place_order`'s retry on an actual broker rejection |
 | `GHOST_RECOVERY_COOLDOWN_SEC` / `_LOOKBACK_SEC` | 2 / 60 | §1 — `place_order`'s order-book check on a `DataException`/`NetworkException` |
+| `ROLLOVER_TIME` | 23:15 | §4/§6 — evening cutoff where a confirmed roll actually executes (`CLOSING_TIME` − `ROLLOVER_BEFORE_CLOSE_MIN=15`, same DST caveat as `CLOSING_TIME`) |
+| `ROLLOVER_PREFETCH_TIME` | 23:10 | §6 step 2 — `ROLLOVER_TIME` − `ROLLOVER_PREFETCH_BUFFER_MIN=5`; new contract's today series bulk-fetched + WS subscribed here |
+| `PENDING_FLIP_REALERT_DEBOUNCE_SEC` | 300 | §7 — re-alert cadence for a stuck Rule 7 `_pending_flip`, matches the stale-tick-watchdog's existing convention |
 
 ---
 
@@ -469,8 +552,9 @@ module; see that README's Phase 3 section before assuming Phase 2's parameters a
 - [x] Opening-bar price-artifact correction — built, gated `OPENING_BAR_CORRECTION_ENABLED=False`
       pending chart validation (§11)
 - [x] 2-lot scale-out entry — partial-fill aware, lot 2 never retried if it doesn't fill
-- [x] Three exit conditions — SL, lot1 target, lot2 target, plus trend-flip (rule 7, same-bar
-      re-entry). **No EOD square-off any more** (§2) — a position carries across sessions
+- [x] Three exit conditions — SL, lot1 target, lot2 target, plus trend-flip (Rule 7 — now a single
+      combined net order for the exit+re-entry, not the old two/three-order sequence, §7). **No EOD
+      square-off any more** (§2) — a position carries across sessions
 - [x] Fill-confirmation invariant — no lot is ever marked closed without a genuine confirmed fill
 - [x] Resilient order execution — freeze-limit chunking, rejection retry, ghost-order recovery,
       list-based order IDs aggregated on fill (§1)
@@ -484,12 +568,22 @@ module; see that README's Phase 3 section before assuming Phase 2's parameters a
 - [x] Own circuit breaker — `prometheus_command.flag`, separate from the shared NSE/BSE one
 - [x] DRY_RUN paper mode — LTP-based fills, no real orders
 - [x] Session report — per-trade + session-total Slack summary at teardown
-- [ ] **Rollover trigger/recovery/execution mechanics, Rule 7's combined order, SL/target
-      recalibration, rolled-trade log schema (plan §4–§9)** — not built. Elaborate,
-      deeply interdependent, and not exercised until the next rollover
-      (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21 CRUDEOILM expiry) — shipping
-      them half-wired was judged worse than shipping them later, complete. If a rollover need
-      arose before this lands, it would need manual intervention.
+- [x] **Contract rollover — trigger, recovery, timing, veto, recalibration, trade-log schema
+      (plan §3–§9, built 2026-09-04)**: `state.token` invariant (§3); the evening lookahead +
+      entry suppression near `ROLLOVER_TIME` (§4); missed-rollover recovery at next startup, per
+      the decided "roll immediately, loudly alerted" option (§5); the full `ROLLOVER_PREFETCH_TIME`
+      → dual-poll → `ROLLOVER_TIME` → veto → flatten → reopen timeline, with the old contract's WS
+      only unsubscribed once its exit is confirmed (§6); Rule 7's combined-order mechanics extended
+      with a `_pending_flip` retry-until-resolved marker for a stuck partial fill (§7); the
+      historical-basis recalibration method with its own ST-disagreement veto and a
+      `recalibration_basis_price` field kept separate from the real fill price (§8); and the
+      two-linked-rows trade-log schema (`parent_trade_id`, `bullish-rollover`/`bearish-rollover`
+      direction labels) (§9). Verified against real on-disk CRUDEOILM/CRUDEOIL data (the historical
+      basis lookup, the ST-for-a-not-yet-effective-contract computation) and mocked broker
+      responses (full/partial-fill Rule 7 reconciliation with the lot2-first tie-break, the
+      rollover reopen's basis-vs-fill-price separation) — not yet live-tested end-to-end, since
+      that needs an actual rollover (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21
+      CRUDEOILM expiry) to exercise for real.
 - [ ] **1h/15m entry filter (§17)** — only the resample-function groundwork is built; the filter
       itself (ST_1H computation, the alignment gate at all three `_execute_entry` call sites,
       `ENTRY_FILTER_1H_ALIGN_ENABLED`) isn't wired in yet

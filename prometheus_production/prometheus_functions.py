@@ -196,6 +196,26 @@ def mcx_fully_closed_today(today: date = None) -> tuple:
     return False, None
 
 
+def next_trading_day(today: date) -> date:
+    """
+    §4: the next day after `today` that isn't fully closed (weekend or an
+    MCX holiday where both sessions are closed) — NOT a naive `today + 1`,
+    which only happens to be correct across a weekend by accident of
+    `_count_trading_days_inclusive`'s own separate skip-weekends behavior.
+    Same fully-closed definition as `mcx_fully_closed_today`.
+    """
+    holidays_df = _load_mcx_holidays()
+    fully_closed = set()
+    if not holidays_df.empty:
+        for _, row in holidays_df.iterrows():
+            if bool(row['morning_session_closed']) and bool(row['evening_session_closed']):
+                fully_closed.add(row['date'])
+    d = today + timedelta(days=1)
+    while d.weekday() >= 5 or d in fully_closed:
+        d += timedelta(days=1)
+    return d
+
+
 def _count_trading_days_inclusive(start_date: date, end_date: date,
                                   holidays_df: pd.DataFrame) -> int:
     """
@@ -558,6 +578,73 @@ def _find_15m_gaps(df_15m: pd.DataFrame) -> list:
         if missing:
             gaps.append((day, missing))
     return gaps
+
+
+# ---------------------------------------------------------------------------
+# §6/§8 (2026-09-04): rollover support — ST for a not-yet-effective contract
+# (the veto-check), and the historical-basis price lookup.
+# ---------------------------------------------------------------------------
+
+def compute_st_for_contract(contract: dict, today_1m: pd.DataFrame, now: datetime) -> pd.DataFrame:
+    """
+    §6 step 4: the rollover go/no-go veto needs the NEW contract's own ST,
+    computed the same way seed_st15 would tomorrow morning — past days from
+    the shared pipeline file (tracked as next-month since before today),
+    today from the live-fetched series already assembled during the
+    23:10-23:15 prefetch/poll window (§6 steps 2-3, passed in as
+    `today_1m`). Not routed through seed_st15 itself: that function's
+    private-cache/backfill machinery is specific to self._contract, the
+    CURRENTLY effective one, which this new contract isn't yet. Refuses
+    (returns empty) on any gap, same "no silent staleness" convention as
+    seed_st15 — an empty result here is exactly the "data isn't complete by
+    ROLLOVER_TIME" case, DECIDED to mean no-go.
+    """
+    raw_1m_past = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
+    raw_1m = (pd.concat([raw_1m_past, today_1m], ignore_index=True)
+              .sort_values('time_stamp').reset_index(drop=True))
+    if raw_1m.empty:
+        return pd.DataFrame()
+    df_15m_raw = _resample_1m_to_Nmin(raw_1m, 15, now)
+    if df_15m_raw.empty:
+        return pd.DataFrame()
+    if _find_15m_gaps(df_15m_raw):
+        logger.error(f'compute_st_for_contract: gap(s) in reconstructed 15m series for '
+                     f"{contract['symbol']} — refusing (treated as no-go by the rollover veto).")
+        return pd.DataFrame()
+    return compute_st(df_15m_raw, ST_PERIOD, ST_MULTIPLIER)
+
+
+def historical_basis_price(new_contract: dict, historical_ts: datetime) -> float:
+    """
+    §8: the historical-basis method's core lookup — what the NEW contract
+    was trading at, at the SAME historical timestamp the original entry
+    happened on the OLD contract. Reads the new contract's own on-disk file
+    directly (not a tail-read — this needs one specific historical point,
+    not a recent window; the file has real history because the nightly
+    pipeline has been tracking this contract as next-month since before
+    today, per the plan's prerequisite). Returns None — never a guessed or
+    interpolated price — if nothing is close enough to trust.
+    """
+    import os
+    filepath = new_contract['filepath']
+    if not os.path.exists(filepath):
+        logger.error(f"historical_basis_price: no file for {new_contract['symbol']} at {filepath}.")
+        return None
+    df = pd.read_csv(filepath, parse_dates=['time_stamp'])
+    if df.empty:
+        logger.error(f"historical_basis_price: {filepath} is empty.")
+        return None
+    df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False, errors='coerce').dt.tz_localize(None)
+    target = pd.Timestamp(historical_ts)
+    if target.tzinfo is not None:
+        target = target.tz_localize(None)
+    df['_delta'] = (df['time_stamp'] - target).abs()
+    nearest = df.loc[df['_delta'].idxmin()]
+    if nearest['_delta'] > pd.Timedelta(minutes=5):
+        logger.error(f"historical_basis_price: nearest {new_contract['symbol']} row to "
+                     f"{historical_ts} is {nearest['_delta']} away — too far to trust.")
+        return None
+    return float(nearest['close'])
 
 
 def persist_15m_series(df_15m: pd.DataFrame) -> None:

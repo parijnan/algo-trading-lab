@@ -230,6 +230,26 @@ GHOST_RECOVERY_LOOKBACK_SEC  = 60 # only trust an order-book match updated withi
 SEED_RETRY_ATTEMPTS = 5
 SEED_RETRY_INTERVAL_SEC = 120   # 2 min apart, ~10 min total before giving up
 
+# ── Contract rollover (plan §4/§5/§6/§7/§8/§9, 2026-09-04) ──────────────────
+# ROLLOVER_TIME: the evening cutoff where a confirmed roll actually executes
+# -- derived the same way EOD_SQUAREOFF_TIME was in Phase 2 (CLOSING_TIME
+# minus a buffer), same DST-hand-toggle caveat carried over. Under the
+# current CLOSING_TIME=23:30 this computes to 23:15, matching the plan.
+ROLLOVER_BEFORE_CLOSE_MIN = 15
+ROLLOVER_TIME = _minus_minutes(CLOSING_TIME, ROLLOVER_BEFORE_CLOSE_MIN)
+
+# ROLLOVER_PREFETCH_TIME: 5 min before ROLLOVER_TIME -- bulk-fetch the new
+# contract's today series and subscribe its WS feed ahead of the decision
+# point (§6 step 2), so both are warm by the time ROLLOVER_TIME needs them.
+ROLLOVER_PREFETCH_BUFFER_MIN = 5
+ROLLOVER_PREFETCH_TIME = _minus_minutes(ROLLOVER_TIME, ROLLOVER_PREFETCH_BUFFER_MIN)
+
+# §7: debounce on the re-alert for a stuck _pending_flip -- reuses the
+# stale-tick-watchdog's existing 5-min convention rather than a new cadence,
+# so a genuinely stuck flip doesn't get silently retried with no further
+# visibility, but also doesn't spam Slack every tick.
+PENDING_FLIP_REALERT_DEBOUNCE_SEC = 300
+
 # ── Slack ─────────────────────────────────────────────────────────────────────
 TRADE_UPDATE_SEC = 20      # matches Artemis's/Athena's convention, not Iris's 10s (§5)
 

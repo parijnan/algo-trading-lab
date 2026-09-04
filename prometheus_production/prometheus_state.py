@@ -12,6 +12,13 @@ class PrometheusState:
     direction:           Optional[str]   = None      # bullish | bearish
     units:               Optional[int]   = None      # persisted verbatim, not recomputed (§4)
     entry_price:         Optional[float] = None
+    recalibration_basis_price: Optional[float] = None   # §8: SL/target basis price for a rolled
+                                                          # position's reopen leg, distinct from
+                                                          # entry_price (the real fill) -- SL/target
+                                                          # LEVELS are computed off this once, at
+                                                          # reopen time, then persist as ordinary
+                                                          # absolute levels; P&L always uses entry_price.
+                                                          # None for a never-rolled trade.
     entry_ts:            Optional[str]   = None       # ISO timestamp
     signal_ts:           Optional[str]   = None       # ISO timestamp — bar whose close triggered the flip
     signal_close:        Optional[float] = None
@@ -37,8 +44,8 @@ class PrometheusState:
 
 
 _FLOAT_FIELDS = {
-    'entry_price', 'signal_close', 'sl_price', 'lot1_target', 'lot1_exit_price',
-    'lot2_target', 'lot2_exit_price', 'last_known_ltp',
+    'entry_price', 'recalibration_basis_price', 'signal_close', 'sl_price', 'lot1_target',
+    'lot1_exit_price', 'lot2_target', 'lot2_exit_price', 'last_known_ltp',
 }
 _INT_FIELDS = {'units', 'lot1_lots', 'lot2_lots'}
 

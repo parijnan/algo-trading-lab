@@ -38,6 +38,7 @@ from prometheus_configs import (
     DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
     TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
+    ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -45,7 +46,8 @@ from prometheus_functions import (
     compute_st, resolve_effective_contract, seed_st15, persist_15m_series,
     fetch_one_minute_window, _merge_and_save, clear_today_cache, read_today_cache,
     patch_opening_bar_if_artifact, fetch_crudeoil_opening_bar,
-    resolve_thresholds, resolve_target2,
+    resolve_thresholds, resolve_target2, next_trading_day,
+    compute_st_for_contract, historical_basis_price,
     place_order, get_fill_price_and_qty, OrderFillWatcher, fetch_ltp_rest,
     load_trade_counter, save_trade_counter, append_trade_log_row, append_cumulative_trade,
     check_no_active_strategies, mcx_fully_closed_today,
@@ -128,6 +130,21 @@ class Prometheus:
         self._trade_count = 0
         self._total_pnl_rs = 0.0
 
+        # §4-§9 (2026-09-04): rollover state — all in-memory only, same
+        # precedent as _pending_recovery/_pending_15m_boundary above. A
+        # crash mid-rollover loses this and falls back to §5's missed-
+        # rollover recovery the next morning, never to an unsafe state.
+        self._rollover_new_contract = None   # set once §4's evening lookahead confirms a roll tonight
+        self._rollover_basis = None          # §6 step 1: precomputed {basis_price, sl_price, lot1_target, lot2_target, lot2_target_source, lot2_only}
+        self._rollover_prefetch_done = False # §6 step 2 latch
+        self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._rollover_executed_today = False  # latch so §6 steps 4-7 only ever fire once per evening
+        self._rollover_new_ws_subscribed = False   # §6 step 2 latch, separate from the historical-fetch latch
+        self._rollover_go_decision = None    # §6 step 4: decided ONCE, cached — retries only retry
+                                              # execution (exit confirm / reopen), never re-litigate go/no-go
+
+        self._pending_flip = None   # §7: Rule 7's combined-order retry-until-resolved marker
+
         self._summary = {'strategy': 'Prometheus', 'symbol': SYMBOL, 'traded': False}
 
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -190,6 +207,15 @@ class Prometheus:
                 msg = f'⚠️ {tag}: Slack `Exit Trade` detected. Liquidating...'
                 logger.critical(msg.replace('*', ''))
                 _slack(msg, SLACK_TRADE_ALERTS)
+                if self._pending_flip is not None:
+                    # §7: a Rule 7 flip mid-transition (old side already
+                    # closed, new side not yet opened) would otherwise be
+                    # silently abandoned once the loop exits below -- the
+                    # user asked to stop, not to finish opening a new
+                    # position, so drop it explicitly rather than never.
+                    logger.critical('Rule 7 pending flip abandoned due to !exit command '
+                                    '(re-entry not completed, by design).')
+                    self._pending_flip = None
                 if self.state.status == 'in_trade':
                     self._execute_exit_all('slack_exit')
                 raise RuntimeError('Session terminated by Slack !exit command.')
@@ -207,6 +233,309 @@ class Prometheus:
             raise
         except Exception as e:
             logger.error(f'Error reading command flag: {e}')
+
+    # -----------------------------------------------------------------------
+    # Contract rollover (§4-§9, 2026-09-04)
+    # -----------------------------------------------------------------------
+
+    def _check_rollover_tonight(self) -> None:
+        """§4: checked once, at setup — well before ROLLOVER_TIME, so §6
+        step 1's basis precompute has plenty of lead time. Checks whether
+        tomorrow's *trading* day (not a naive today+1) would resolve to a
+        different contract than today's self._contract; if so, the
+        rollover sequence fires tonight at ROLLOVER_TIME (§6, driven by
+        _check_rollover_timing every 1-min cycle in the main loop)."""
+        tomorrow = next_trading_day(datetime.now().date())
+        tomorrow_contract = resolve_effective_contract(SYMBOL, today=tomorrow)
+        if tomorrow_contract['token'] == self._contract['token']:
+            return
+        self._rollover_new_contract = tomorrow_contract
+        tag = _tag(self._contract['symbol_root'])
+        logger.info(f"Rollover tonight: {self._contract['symbol']} -> "
+                   f"{tomorrow_contract['symbol']} at {ROLLOVER_TIME}.")
+        _slack(f'\U0001f514 {tag}: rolling to {tomorrow_contract["symbol"]} tonight at '
+              f'{ROLLOVER_TIME}.', SLACK_TRADEBOT_CHANNEL)
+        self._precompute_rollover_basis()
+
+    def _precompute_rollover_basis(self) -> None:
+        """§6 step 1 / §8 points 1-2: as soon as tonight's roll is
+        confirmed, precompute the recalibrated basis price — pure
+        historical lookup + arithmetic against already-accumulated data,
+        no live fetch needed, no reason to wait until near ROLLOVER_TIME.
+        No-op if nothing is open (a flat rollover has nothing to
+        recalibrate, no go/no-go stakes)."""
+        if self.state.status != 'in_trade':
+            return
+        nc = self._rollover_new_contract
+        entry_ts = datetime.fromisoformat(self.state.entry_ts)
+        basis_price = historical_basis_price(nc, entry_ts)
+        if basis_price is None:
+            logger.error(f"Rollover basis precompute failed for {nc['symbol']} — historical lookup "
+                        f"came back empty. The ST-disagreement veto at {ROLLOVER_TIME} still runs; "
+                        f"if it says go, the reopen is skipped anyway since no basis is available "
+                        f"(same outcome as a no-go — flatten only).")
+            self._rollover_basis = None
+            return
+
+        lot1_open = self.state.lot1_status == 'open'
+        lot2_open = self.state.lot2_status == 'open'
+        lots_to_reopen = ((self.state.lot1_lots or 0) if lot1_open else 0) + \
+                          ((self.state.lot2_lots or 0) if lot2_open else 0)
+        self._rollover_basis = {
+            'direction': self.state.direction, 'basis_price': basis_price,
+            'signal_ts': self.state.signal_ts, 'signal_close': self.state.signal_close,
+            'units': self.state.units, 'lots_to_reopen': lots_to_reopen,
+            'lot2_only': lot2_open and not lot1_open,
+        }
+        logger.info(f"Rollover basis precomputed: {nc['symbol']} basis={basis_price:.2f} "
+                   f"(from {self.state.symbol}'s entry at {entry_ts}), "
+                   f"lots_to_reopen={lots_to_reopen}, lot2_only={self._rollover_basis['lot2_only']}.")
+
+    def _rollover_entry_suppressed(self, now: datetime) -> bool:
+        """§4's entry-ordering rule: once a rollover is confirmed for
+        tonight, suppress fresh/Rule-7 entries starting at ROLLOVER_TIME —
+        otherwise a fresh position could open seconds before being
+        flattened straight into the roll."""
+        if self._rollover_new_contract is None:
+            return False
+        return now >= pd.Timestamp(f'{now.date()} {ROLLOVER_TIME}')
+
+    def _check_rollover_timing(self, now: datetime) -> None:
+        """§6 steps 2-4, called every 1-min cycle from the main loop
+        (same cadence as _recover_pending_windows). No-op once today's
+        rollover (if any) has already executed."""
+        if self._rollover_new_contract is None or self._rollover_executed_today:
+            return
+        nc = self._rollover_new_contract
+        prefetch_time = pd.Timestamp(f'{now.date()} {ROLLOVER_PREFETCH_TIME}')
+        rollover_time = pd.Timestamp(f'{now.date()} {ROLLOVER_TIME}')
+
+        if not self._rollover_prefetch_done and now >= prefetch_time:
+            self._do_rollover_prefetch(nc, now)
+        elif self._rollover_prefetch_done and now < rollover_time:
+            self._do_rollover_topup_poll(nc, now)
+
+        if now >= rollover_time:
+            self._execute_rollover_decision(now)
+
+    def _do_rollover_prefetch(self, nc: dict, now: datetime) -> None:
+        """§6 step 2: bulk-fetch the new contract's *today* series and
+        subscribe its WS feed — reuses fetch_one_minute_window (the same
+        resilient poller every other 1-min fetch in this file uses), just
+        pointed at the new contract's token. The WS subscribe runs
+        regardless of whether the historical fetch succeeds, so the feed
+        is warm even if the history side is still retrying."""
+        session_start = pd.Timestamp(f'{now.date()} {SESSION_START_TIME}')
+        df = fetch_one_minute_window(self.obj, nc['token'], session_start, now)
+        if df is not None and not df.empty:
+            working = df.copy()
+            if working['time_stamp'].dt.tz is not None:
+                working['time_stamp'] = working['time_stamp'].dt.tz_localize(None)
+            self._df_1m_today_new = working.sort_values('time_stamp').reset_index(drop=True)
+            self._rollover_prefetch_done = True
+            logger.info(f"Rollover prefetch: {len(self._df_1m_today_new)} 1-min row(s) for "
+                       f"{nc['symbol']}.")
+        else:
+            logger.warning(f"Rollover prefetch failed for {nc['symbol']} — will retry next cycle.")
+
+        if not self._rollover_new_ws_subscribed:
+            self.feed.subscribe_options([nc['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+            self._rollover_new_ws_subscribed = True
+            logger.info(f"Rollover: subscribed {nc['symbol']}'s WS feed ahead of {ROLLOVER_TIME}.")
+
+    def _do_rollover_topup_poll(self, nc: dict, now: datetime) -> None:
+        """§6 step 3: per-minute top-up for the new contract, same 5-min
+        lookback shape as the old contract's own poll in run() — catches
+        the prefetched series up to the moment ROLLOVER_TIME arrives."""
+        win_to = now
+        win_from = win_to - timedelta(minutes=5)
+        df = fetch_one_minute_window(self.obj, nc['token'], win_from, win_to)
+        if df is None:
+            logger.warning(f"Rollover top-up poll failed for {nc['symbol']} — will retry next cycle.")
+            return
+        working = df.copy()
+        if working['time_stamp'].dt.tz is not None:
+            working['time_stamp'] = working['time_stamp'].dt.tz_localize(None)
+        today = now.date()
+        new_today = working[working['time_stamp'].dt.date == today]
+        if new_today.empty:
+            return
+        combined = pd.concat([self._df_1m_today_new, new_today], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
+        self._df_1m_today_new = combined.sort_values('time_stamp').reset_index(drop=True)
+
+    def _execute_rollover_decision(self, now: datetime) -> None:
+        """§6 steps 4-7. Safely re-callable every tick past ROLLOVER_TIME
+        until fully resolved — an unconfirmed exit leaves state as
+        in_trade and this returns early, retried on the next call exactly
+        like any other unconfirmed exit in this file."""
+        nc = self._rollover_new_contract
+        tag = _tag(self._contract['symbol_root'])
+
+        if self._rollover_go_decision is None:
+            if self.state.status != 'in_trade':
+                self._rollover_go_decision = True   # flat rollover -- pure housekeeping, nothing to veto
+                self._rollover_basis = None
+            else:
+                # Refresh the basis precompute right before use, not just
+                # once at _setup() time (§6 step 1's early call) — the
+                # position open right NOW might not be the one that was
+                # open then, if it closed/reopened/flipped during the day.
+                # Cheap (pure historical lookup, no broker call), safe to
+                # redo, and this is the only way to guarantee it never goes
+                # stale.
+                self._precompute_rollover_basis()
+                new_st = compute_st_for_contract(nc, self._df_1m_today_new, now)
+                if new_st.empty or pd.isna(new_st.iloc[-1]['trend']):
+                    logger.error(f"Rollover veto: {nc['symbol']}'s ST could not be computed "
+                                f"(incomplete data at {ROLLOVER_TIME}) — DECIDED default: no-go.")
+                    _slack(f'⚠️ {tag}: rollover veto — {nc["symbol"]}\'s ST unavailable at '
+                          f'{ROLLOVER_TIME}, defaulting to no-go (flatten only).', SLACK_ERRORS_CHANNEL)
+                    self._rollover_go_decision = False
+                else:
+                    new_direction = 'bullish' if bool(new_st.iloc[-1]['trend']) else 'bearish'
+                    agree = new_direction == self.state.direction
+                    self._rollover_go_decision = agree
+                    logger.info(f'Rollover veto check: old={self.state.direction} new={new_direction} '
+                               f'-> {"GO" if agree else "NO-GO"}.')
+                    if not agree:
+                        _slack(f'\U0001f504 {tag}: rollover veto — {nc["symbol"]}\'s ST '
+                              f'({new_direction}) disagrees with the carried position '
+                              f'({self.state.direction}) — flatten only, no reopen.', SLACK_TRADEBOT_CHANNEL)
+
+        # Step 5: flatten the old position unconditionally, regardless of go/no-go
+        if self.state.status == 'in_trade':
+            closed = self._execute_exit_all('rollover')
+            if not closed:
+                logger.critical('Rollover exit did not confirm closed — will retry next tick.')
+                return
+            self.feed.unsubscribe_options([self._contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+
+        # Old position (if any) is now confirmed flat -- safe to swap contracts
+        # before attempting a reopen, which needs to target the NEW contract.
+        self._contract = nc
+
+        # Step 6: reopen only if go
+        if self._rollover_go_decision and self._rollover_basis is not None:
+            self._execute_rollover_reopen(nc)
+
+        # Step 7: clear rollover state, persist
+        self._rollover_new_contract = None
+        self._rollover_basis = None
+        self._rollover_prefetch_done = False
+        self._rollover_new_ws_subscribed = False
+        self._rollover_go_decision = None
+        self._df_1m_today = self._df_1m_today_new
+        self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._rollover_executed_today = True
+        save_state(self.state)
+        logger.info(f"Rollover complete: now trading {nc['symbol']}.")
+        _slack(f'{"[PAPER] " if DRY_RUN else ""}✅ {tag}: rolled to {nc["symbol"]}.', SLACK_TRADEBOT_CHANNEL)
+
+    def _execute_rollover_reopen(self, new_contract: dict) -> None:
+        """§6 step 6 / §8: reopen on the new contract using the
+        precomputed basis price, sized to however many lots actually
+        survived to the roll — not blindly both (§8 point 1)."""
+        basis = self._rollover_basis
+        old_trade_id = self._trade_counter   # the just-closed old leg's trade_id (§9 parent_trade_id)
+        lots_to_reopen = basis['lots_to_reopen']
+        tag = _tag(new_contract['symbol_root'])
+
+        order_ids = place_order(self.obj, 'BUY' if basis['direction'] == 'bullish' else 'SELL',
+                                new_contract['symbol'], new_contract['token'], lots_to_reopen,
+                                DRY_RUN, new_contract['freeze_qty'])
+        if not order_ids:
+            logger.critical('Rollover reopen order FAILED to place — no position opened on the new contract.')
+            _slack(f'\U0001f6a8 {tag}: rollover reopen order FAILED to place — no position opened '
+                  f'on {new_contract["symbol"]}. Check manually.', SLACK_ERRORS_CHANNEL)
+            return
+
+        fill_price, filled_lots = get_fill_price_and_qty(
+            self.obj, self.order_watcher, order_ids, new_contract['symbol'], new_contract['token'],
+            lots_to_reopen, DRY_RUN, self.feed)
+        if fill_price is None or filled_lots == 0:
+            logger.critical('Rollover reopen order placed but fill unconfirmed — no position opened.')
+            _slack(f'\U0001f6a8 {tag}: rollover reopen fill unconfirmed on {new_contract["symbol"]}. '
+                  f'Check manually.', SLACK_ERRORS_CHANNEL)
+            return
+
+        self._finalize_new_position(
+            basis['direction'], basis['signal_ts'], basis['signal_close'],
+            fill_price, filled_lots, lots_to_reopen, basis['units'],
+            basis_price=basis['basis_price'], parent_trade_id=old_trade_id,
+            lot2_only=basis['lot2_only'])
+
+    def _recover_missed_rollover(self) -> None:
+        """§5 (DECIDED option a): if a rollover was missed overnight (the
+        process wasn't alive at ROLLOVER_TIME, an MCX holiday, KILL,
+        DISABLE), roll immediately at today's open instead of walking into
+        §3's problem with an open position on a contract
+        resolve_effective_contract() no longer returns.
+
+        Simpler than the evening-triggered path (§6): by this point in
+        _setup(), self._contract is ALREADY the new contract (freshly
+        resolved) and self._df_15m is ALREADY its seeded ST — no separate
+        prefetch/dual-poll window needed, _setup()'s normal flow already
+        did the equivalent work. Must run AFTER self.feed is started and
+        subscribed to state.token (§3's invariant) — the exit below reads
+        LTP off state.token, not self._contract.
+        """
+        if self.state.status != 'in_trade' or not self.state.token:
+            return
+        if self.state.token == self._contract['token']:
+            return   # normal case -- no missed roll
+
+        old_symbol = self.state.symbol
+        old_token = self.state.token
+        tag = _tag(self._contract['symbol_root'])
+        logger.critical(f'Missed rollover detected: open position is on {old_symbol} '
+                        f'(token {old_token}), but the effective contract is now '
+                        f'{self._contract["symbol"]} (token {self._contract["token"]}). '
+                        f"Rolling immediately, per §5's decided safety net.")
+        _slack(f'\U0001f6a8 {tag}: MISSED ROLLOVER detected — {old_symbol} -> '
+              f'{self._contract["symbol"]}. Rolling immediately at today\'s open.', SLACK_ERRORS_CHANNEL)
+
+        entry_ts = datetime.fromisoformat(self.state.entry_ts)
+        basis_price = historical_basis_price(self._contract, entry_ts)
+        lot1_open = self.state.lot1_status == 'open'
+        lot2_open = self.state.lot2_status == 'open'
+        lots_to_reopen = ((self.state.lot1_lots or 0) if lot1_open else 0) + \
+                          ((self.state.lot2_lots or 0) if lot2_open else 0)
+        basis = None
+        if basis_price is not None:
+            basis = {
+                'direction': self.state.direction, 'basis_price': basis_price,
+                'signal_ts': self.state.signal_ts, 'signal_close': self.state.signal_close,
+                'units': self.state.units, 'lots_to_reopen': lots_to_reopen,
+                'lot2_only': lot2_open and not lot1_open,
+            }
+        else:
+            logger.error('Missed-rollover basis precompute failed — reopen (if go) will be skipped.')
+
+        go = False
+        last = self._df_15m.iloc[-1]
+        if pd.isna(last['trend']):
+            logger.error("Missed-rollover veto: new contract's ST is still warming up (NaN trend) — no-go.")
+        else:
+            new_direction = 'bullish' if bool(last['trend']) else 'bearish'
+            go = new_direction == self.state.direction
+            logger.info(f'Missed-rollover veto check: old={self.state.direction} new={new_direction} '
+                       f'-> {"GO" if go else "NO-GO"}.')
+
+        closed = self._execute_exit_all('rollover')
+        if not closed:
+            logger.critical('Missed-rollover exit did not confirm closed — leaving state as '
+                            'in_trade; will retry on the next restart (same fill-confirmation '
+                            'invariant as always).')
+            return
+        self.feed.unsubscribe_options([old_token], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+
+        if go and basis is not None:
+            self._rollover_basis = basis
+            self._execute_rollover_reopen(self._contract)
+            self._rollover_basis = None
+
+        save_state(self.state)
 
     # -----------------------------------------------------------------------
     # Setup / teardown
@@ -280,10 +609,16 @@ class Prometheus:
         # exchange after a WS reconnect. subscribe_options's _subscribed_options
         # bucket tracks {token: exchange_type} per-token and resubscribes
         # correctly — used here for the one-time, permanent-for-the-session
-        # subscription instead. Never paired with unsubscribe_options (see
-        # get_fill_price_and_qty's docstring) — this token stays live the
-        # whole session regardless of trade state.
+        # subscription instead. Never unsubscribed except by the rollover
+        # sequence (§6), once its own exit is confirmed.
         self.feed.subscribe_options([self._contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+        # §3's hard prerequisite: if resuming in_trade on a token that
+        # differs from the freshly-resolved self._contract (a missed
+        # rollover, §5), ALSO subscribe state.token's feed — every price
+        # read while in_trade keys off state.token, not self._contract, and
+        # that only works if it's actually subscribed.
+        if self.state.status == 'in_trade' and self.state.token and self.state.token != self._contract['token']:
+            self.feed.subscribe_options([self.state.token], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
 
         if not DRY_RUN:
             self.order_watcher.start(auth_token=self.auth_token, api_key=self._api_key,
@@ -328,11 +663,33 @@ class Prometheus:
         else:
             self.state.status = 'watching'
         save_state(self.state)
+
+        # §5: fix up today's contract first (if a rollover was missed
+        # overnight), THEN check whether ANOTHER roll is needed tonight —
+        # in that order, so §4's check runs against the now-correct contract.
+        self._recover_missed_rollover()
+        self._check_rollover_tonight()
+
         logger.info('Setup complete — watchdog armed.')
         return True
 
     def _teardown(self) -> None:
         tag = _tag(self._contract['symbol_root']) if self._contract else '*Prometheus*'
+
+        if self._pending_flip is not None:
+            # Rare -- session ended exactly mid-Rule-7-transition. Safe by
+            # construction either way (nothing here was ever fabricated),
+            # but worth a visible note rather than a silently unexplained
+            # 'watching' status the next morning.
+            logger.warning(f"Teardown with a Rule 7 pending flip still unresolved "
+                           f"(direction={self._pending_flip['direction']}, "
+                           f"opened_lots={self._pending_flip['opened_lots']}/"
+                           f"{self._pending_flip['new_trade_lots_target']}) — abandoned, not retried "
+                           f"further. State reflects whatever was actually confirmed.")
+            _slack(f'ℹ️ {tag}: session ended mid-Rule-7-flip — '
+                  f'{self._pending_flip["opened_lots"]}/{self._pending_flip["new_trade_lots_target"]} '
+                  f'of the new {self._pending_flip["direction"]} position opened. Not fabricated, '
+                  f'not retried further this session.', SLACK_TRADEBOT_CHANNEL)
 
         if self._kill_no_exit and self.state.status == 'in_trade':
             # KILL's entire premise (slack_listener.py's own message: "Control
@@ -493,6 +850,13 @@ class Prometheus:
                 self._check_command_flag()
                 now = datetime.now()
 
+                # ── §7: retry a stuck Rule 7 combined order every tick,
+                #    regardless of status -- it can straddle in_trade
+                #    (old lots still closing) and watching (old side
+                #    closed, new side not yet fully open) ─────────────
+                if self._pending_flip is not None:
+                    self._retry_pending_flip()
+
                 # ── In-trade: tight LTP-driven exit loop, every tick ────
                 if self.state.status == 'in_trade':
                     self._check_exit_conditions_ltp(now)
@@ -505,6 +869,7 @@ class Prometheus:
                 if now >= next_boundary:
                     boundary = next_boundary
                     self._recover_pending_windows()
+                    self._check_rollover_timing(now)   # §6 steps 2-4, same 1-min cadence
                     win_to = datetime.now()
                     win_from = win_to - timedelta(minutes=5)
                     df = fetch_one_minute_window(self.obj, self._contract['token'], win_from, win_to)
@@ -699,26 +1064,154 @@ class Prometheus:
 
         if self.state.status == 'in_trade':
             if flip and direction_now != self.state.direction:
-                # Rule 7: this flip closes the remaining lot(s) AND is itself
-                # the entry for the opposite direction — same-moment resolution.
-                # Only fire the re-entry if the exit was genuinely confirmed
-                # closed -- firing a fresh opposite-direction entry while the
-                # exit itself failed to confirm would mean attempting to hold
-                # both directions against a position with an unknown real
-                # state (the exact incident this whole confirmation chain
-                # was added to prevent, 2026-08-31).
-                closed = self._execute_exit_all('trend_flip')
-                if closed and now_after_min_entry():
-                    self._execute_entry(direction_now, window_start, bar['close'])
-                elif not closed:
-                    logger.critical('Rule 7 re-entry SKIPPED — trend-flip exit did not confirm closed.')
+                # Rule 7 (§7, 2026-09-04): one combined net order for the
+                # exit and re-entry together, not the old two/three-order
+                # sequence — see _execute_rule7_flip.
+                self._execute_rule7_flip(direction_now, window_start, bar['close'])
             return
 
         # status == 'watching' — fresh entry detection. §2 (Phase 3): no
         # LAST_ENTRY_TIME cutoff before close any more — configs_p3.py never
         # gated entries near close (positional, nothing to "hold until").
-        if flip and now_after_min_entry():
+        # §4: suppressed once a confirmed rollover reaches ROLLOVER_TIME —
+        # otherwise a fresh position could open seconds before the roll
+        # flattens it straight back out.
+        if flip and now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now()):
             self._execute_entry(direction_now, window_start, bar['close'])
+
+    # -----------------------------------------------------------------------
+    # Rule 7 — combine the flip's exit and re-entry into one net order (§7)
+    # -----------------------------------------------------------------------
+
+    def _execute_rule7_flip(self, direction_now: str, signal_ts, signal_close: float) -> None:
+        """
+        §7 (2026-09-04): a flip's exit and re-entry are always the same
+        instrument, just opposite net direction — one order for the net
+        quantity (`old_open_lots + new_trade_lots`), not two/three separate
+        ones. Degenerates cleanly to a plain entry (both lots already
+        flat — nothing to combine) or a plain exit (`new_trade_lots=0`
+        when re-entry isn't allowed yet, e.g. before MIN_ENTRY_TIME — the
+        same shape §7 flagged for §17's future 1h filter, just a different
+        gate for now).
+        """
+        old_open_lots = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
+                         ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
+        # §4: suppressed once a confirmed rollover reaches ROLLOVER_TIME —
+        # same reasoning as the fresh-entry gate above.
+        reentry_allowed = now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+
+        if old_open_lots == 0:
+            if reentry_allowed:
+                self._execute_entry(direction_now, signal_ts, signal_close)
+            return
+
+        units = self._calculate_units()
+        new_trade_lots = units * LOTS_PER_LEG * 2 if reentry_allowed else 0
+        if new_trade_lots > 0 and not self._check_margin_sufficient(units):
+            new_trade_lots = 0   # can't afford the new leg -- still close the old one below
+
+        self._pending_flip = {
+            'direction': direction_now, 'signal_ts': signal_ts, 'signal_close': signal_close,
+            'units': units, 'new_trade_lots_target': new_trade_lots,
+            'opened_lots': 0, 'opened_price_weighted_sum': 0.0,
+            'first_alert_ts': None, 'last_realert_ts': None,
+        }
+        self._retry_pending_flip()
+
+    def _retry_pending_flip(self) -> None:
+        """
+        Retried every tick of the main loop until fully resolved (§7) —
+        deliberately NOT gated on a fresh 15-min trend_flip transition.
+        Confirmed against the code before this was built: `trend_flip` is
+        a one-shot flag, true only on the bar the flip actually happens —
+        a stuck partial fill on a LATER boundary would never re-trigger
+        _handle_new_15m_bar's old exit-then-entry path, and
+        _check_exit_conditions_ltp doesn't cover it either (it only checks
+        SL/target against the CURRENT state.direction). This is what closes
+        that gap.
+        """
+        if self._pending_flip is None:
+            return
+        pf = self._pending_flip
+
+        old_open_lots = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
+                         ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
+        new_remaining = max(0, pf['new_trade_lots_target'] - pf['opened_lots'])
+        requested = old_open_lots + new_remaining
+
+        if requested == 0:
+            self._pending_flip = None   # defensive -- resolution below should already have cleared this
+            return
+
+        order_ids = place_order(self.obj, 'BUY' if pf['direction'] == 'bullish' else 'SELL',
+                                self._contract['symbol'], self._contract['token'],
+                                requested, DRY_RUN, self._contract['freeze_qty'])
+        if not order_ids:
+            self._alert_pending_flip_stuck(f'combined order FAILED to place (requested {requested} lots).')
+            return
+
+        fill_price, filled = get_fill_price_and_qty(
+            self.obj, self.order_watcher, order_ids, self._contract['symbol'],
+            self._contract['token'], requested, DRY_RUN, self.feed)
+        if fill_price is None or filled == 0:
+            self._alert_pending_flip_stuck(f'combined order placed (orderid(s)={order_ids}) but fill unconfirmed.')
+            return
+
+        # Reconcile: close old lots first (lot2-before-lot1 — DECIDED tie-break,
+        # §7: keeps lot1's nearer target alive, exits sooner on a favorable
+        # reversal), the remainder opens the new position.
+        closed_qty = min(filled, old_open_lots)
+        opened_qty = filled - closed_qty
+
+        remaining_close = closed_qty
+        if remaining_close > 0 and self.state.lot2_status == 'open':
+            take = min(remaining_close, self.state.lot2_lots)
+            self._apply_confirmed_lot_exit(2, fill_price, take, 'trend_flip')
+            remaining_close -= take
+        if remaining_close > 0 and self.state.lot1_status == 'open':
+            take = min(remaining_close, self.state.lot1_lots)
+            self._apply_confirmed_lot_exit(1, fill_price, take, 'trend_flip')
+            remaining_close -= take
+
+        if opened_qty > 0:
+            pf['opened_price_weighted_sum'] += fill_price * opened_qty
+            pf['opened_lots'] += opened_qty
+
+        still_old_open = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
+                          ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
+        still_new_remaining = pf['new_trade_lots_target'] - pf['opened_lots']
+
+        if still_old_open == 0 and still_new_remaining <= 0:
+            if pf['opened_lots'] > 0:
+                avg_open_price = pf['opened_price_weighted_sum'] / pf['opened_lots']
+                self._finalize_new_position(pf['direction'], pf['signal_ts'], pf['signal_close'],
+                                            avg_open_price, pf['opened_lots'],
+                                            pf['new_trade_lots_target'], pf['units'])
+            logger.info('Rule 7 pending flip fully resolved.')
+            self._pending_flip = None
+        else:
+            logger.warning(f'Rule 7 pending flip: {still_old_open} old lot(s) still open, '
+                           f'{max(0, still_new_remaining)} new lot(s) still to open — retrying next tick.')
+
+    def _alert_pending_flip_stuck(self, detail: str) -> None:
+        """§7: immediate CRITICAL alert the first time a pending flip gets
+        stuck, then a debounced re-alert (PENDING_FLIP_REALERT_DEBOUNCE_SEC,
+        matching the stale-tick-watchdog's existing 5-min convention) while
+        it stays stuck — visible without spamming Slack every tick."""
+        pf = self._pending_flip
+        tag = _tag(self._contract['symbol_root'])
+        now = time.time()
+        if pf['first_alert_ts'] is None:
+            pf['first_alert_ts'] = pf['last_realert_ts'] = now
+            logger.critical(f'Rule 7 pending flip stuck: {detail}')
+            _slack(f'\U0001f6a8 {tag}: Rule 7 combined order stuck — {detail} Retrying every tick.',
+                  SLACK_ERRORS_CHANNEL)
+        elif now - pf['last_realert_ts'] >= PENDING_FLIP_REALERT_DEBOUNCE_SEC:
+            pf['last_realert_ts'] = now
+            logger.critical(f'Rule 7 pending flip STILL stuck: {detail}')
+            _slack(f'\U0001f6a8 {tag}: Rule 7 combined order STILL stuck — {detail}', SLACK_ERRORS_CHANNEL)
+        else:
+            logger.warning(f'Rule 7 pending flip stuck (debounced): {detail}')
 
     # -----------------------------------------------------------------------
     # Entry
@@ -751,30 +1244,70 @@ class Prometheus:
             _slack(f'\U0001f6a8 {tag}: entry order failed to fill — no position opened.', SLACK_ERRORS_CHANNEL)
             return
 
-        lot1_lots = min(filled_lots, units * LOTS_PER_LEG)
-        lot2_lots = max(0, filled_lots - lot1_lots)
+        self._finalize_new_position(direction, signal_ts, signal_close, fill_price,
+                                    filled_lots, requested_lots, units)
+
+    def _finalize_new_position(self, direction: str, signal_ts, signal_close: float,
+                               entry_price: float, filled_lots: int, requested_lots: int,
+                               units: int, basis_price: float = None,
+                               parent_trade_id: int = None, lot2_only: bool = False) -> None:
+        """
+        Shared position-construction logic (2026-09-04) — the fill has
+        already happened and been confirmed by the caller; this only builds
+        state/log/Slack from it. Used by a fresh entry (_execute_entry),
+        Rule 7's combined-order reconciliation (§7), and a rollover reopen
+        (§8), which is why it takes more than a plain entry needs:
+
+        `basis_price`: rollover reopen only (§8). SL/target LEVELS are
+        computed off this instead of `entry_price` (the historical-basis
+        method) — `entry_price` itself, and all P&L everywhere else, still
+        use the REAL fill price. None means "use entry_price," i.e. every
+        non-rollover caller.
+        `parent_trade_id`: rollover continuation only (§9) — when set, the
+        trade-log row's `direction` gets the `-rollover` suffix
+        (`state.direction` itself never does — it stays the plain binary
+        everywhere it drives real logic).
+        `lot2_only`: rollover reopen with only one lot surviving to the roll
+        (§8 point 1) — sizes/targets the position as a lone lot2 (the
+        farther target), not a fresh lot1+lot2 split.
+        """
+        tag = _tag(self._contract['symbol_root'])
+        threshold_price = basis_price if basis_price is not None else entry_price
+
+        if lot2_only:
+            lot1_lots, lot2_lots = 0, filled_lots
+            lot1_target = None
+            _, sl_distance = resolve_thresholds(threshold_price)
+            sl_price = (threshold_price - sl_distance if direction == 'bullish'
+                       else threshold_price + sl_distance) if sl_distance is not None else None
+            lot2_target, lot2_source = resolve_target2(threshold_price, direction)
+        else:
+            lot1_lots = min(filled_lots, units * LOTS_PER_LEG)
+            lot2_lots = max(0, filled_lots - lot1_lots)
+            lot1_distance, sl_distance = resolve_thresholds(threshold_price)
+            lot1_target = (threshold_price + lot1_distance if direction == 'bullish'
+                          else threshold_price - lot1_distance)
+            sl_price = (threshold_price - sl_distance if direction == 'bullish'
+                       else threshold_price + sl_distance) if sl_distance is not None else None
+            lot2_target, lot2_source = resolve_target2(threshold_price, direction)
+
         if filled_lots < requested_lots:
             logger.warning(f'Partial fill: requested {requested_lots} lots, filled {filled_lots} '
                           f'(lot1={lot1_lots}, lot2={lot2_lots}).')
             _slack(f'⚠️ {tag}: partial fill — requested {requested_lots} lots, got '
-                  f'{filled_lots}. lot2 {"never opens" if lot2_lots == 0 else "opens at reduced size"}.',
-                  SLACK_ERRORS_CHANNEL)
-
-        entry_price = fill_price
-        lot1_distance, sl_distance = resolve_thresholds(entry_price)
-        lot1_target = entry_price + lot1_distance if direction == 'bullish' else entry_price - lot1_distance
-        sl_price = (entry_price - sl_distance if direction == 'bullish'
-                   else entry_price + sl_distance) if sl_distance is not None else None
-        lot2_target, lot2_source = resolve_target2(entry_price, direction)
+                  f'{filled_lots}.', SLACK_ERRORS_CHANNEL)
 
         now = datetime.now()
         self._trade_counter += 1
         save_trade_counter(self._trade_counter)
 
+        signal_ts_iso = signal_ts.isoformat() if hasattr(signal_ts, 'isoformat') else signal_ts
+
         self.state = PrometheusState(
             status='in_trade', direction=direction, units=units,
             entry_price=entry_price, entry_ts=now.isoformat(),
-            signal_ts=signal_ts.isoformat(), signal_close=signal_close,
+            recalibration_basis_price=basis_price,
+            signal_ts=signal_ts_iso, signal_close=signal_close,
             contract_expiry=self._contract['expiry_date'].strftime('%Y-%m-%d'),
             symbol=self._contract['symbol'], token=self._contract['token'],
             sl_price=sl_price,
@@ -791,21 +1324,25 @@ class Prometheus:
                               'entry_time': now.strftime('%H:%M')})
 
         entry_slippage = (entry_price - signal_close) if direction == 'bullish' else (signal_close - entry_price)
+        log_direction = f'{direction}-rollover' if parent_trade_id is not None else direction
         self._pending_trade_row = {
             'trade_id': self._trade_counter, 'contract_expiry': self.state.contract_expiry,
-            'direction': direction, 'units': units, 'entry_ts': now.isoformat(), 'entry_price': entry_price,
-            'signal_ts': signal_ts.isoformat(), 'signal_close': signal_close,
+            'direction': log_direction, 'units': units, 'entry_ts': now.isoformat(), 'entry_price': entry_price,
+            'signal_ts': signal_ts_iso, 'signal_close': signal_close,
             'entry_slippage_points': round(entry_slippage, 2),
             'sl_price': round(sl_price, 2) if sl_price is not None else None,
-            'lot1_target': round(lot1_target, 2), 'lot2_target': round(lot2_target, 2),
-            'lot2_target_source': lot2_source,
+            'lot1_target': round(lot1_target, 2) if lot1_target is not None else None,
+            'lot2_target': round(lot2_target, 2), 'lot2_target_source': lot2_source,
+            'parent_trade_id': parent_trade_id,
         }
 
         sl_str = f'{sl_price:.2f}' if sl_price is not None else 'n/a'
-        msg = (f'{"[PAPER] " if DRY_RUN else ""}⚡ {tag}: Entered {direction.upper()}\n'
+        lot1_str = f'{lot1_target:.2f}' if lot1_target is not None else 'n/a (lot2-only, §8)'
+        basis_note = f' (recalibration basis {basis_price:.2f})' if basis_price is not None else ''
+        msg = (f'{"[PAPER] " if DRY_RUN else ""}⚡ {tag}: Entered {direction.upper()}{" (rollover)" if parent_trade_id is not None else ""}\n'
               f'{self.state.symbol} | Units: {units} ({filled_lots} lots)\n'
-              f'Entry: {entry_price:.2f} | SL: {sl_str}\n'
-              f'Lot1 target: {lot1_target:.2f} | Lot2 target: {lot2_target:.2f} ({lot2_source})')
+              f'Entry: {entry_price:.2f}{basis_note} | SL: {sl_str}\n'
+              f'Lot1 target: {lot1_str} | Lot2 target: {lot2_target:.2f} ({lot2_source})')
         logger.info(msg.replace('\n', '  '))
         _slack(msg)
 
@@ -903,9 +1440,22 @@ class Prometheus:
                   f'will keep retrying automatically.', SLACK_ERRORS_CHANNEL)
             return False
 
+        self._apply_confirmed_lot_exit(lot_num, fill_price, filled, reason)
+        return True
+
+    def _apply_confirmed_lot_exit(self, lot_num: int, fill_price: float, filled_qty: int,
+                                  reason: str) -> None:
+        """
+        Shared state-mutation for a CONFIRMED lot exit (2026-09-04) — used
+        by both the normal single-lot exit path above and Rule 7's
+        combined-order reconciliation (§7, _retry_pending_flip). Caller is
+        responsible for confirming the fill FIRST; this never fabricates
+        one and is never called speculatively.
+        """
+        tag = _tag(self._contract['symbol_root'])
         entry = self.state.entry_price
         pnl_pts = (fill_price - entry) if self.state.direction == 'bullish' else (entry - fill_price)
-        pnl_rs = round(pnl_pts * lots * LOT_SIZE, 2)
+        pnl_rs = round(pnl_pts * filled_qty * LOT_SIZE, 2)
         self._total_pnl_rs += pnl_rs
         now = datetime.now()
 
@@ -938,7 +1488,6 @@ class Prometheus:
 
         if self.state.lot1_status != 'open' and self.state.lot2_status != 'open':
             self._finalize_trade()
-        return True
 
     def _execute_exit_all(self, reason: str) -> bool:
         """
