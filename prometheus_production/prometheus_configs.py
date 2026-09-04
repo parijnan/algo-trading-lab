@@ -254,13 +254,17 @@ DEFERRED_BAR_CUTOFF_MIN = 1
 # Suppressed entirely during a scheduled/in-progress rollover or an
 # already-stuck Rule 7 transition.
 #
-# OFF by default -- built + unit-tested 2026-09-04 (mock-based, see the
-# session's memory notes), but PROVISIONAL_MARGIN_PCT below is an
-# UNCALIBRATED PLACEHOLDER. Same "shadow-log first, calibrate the toggle on
-# real agreement data" pattern as OPENING_BAR_CORRECTION_ENABLED and
-# ENTRY_FILTER_1H_ALIGN_ENABLED -- do not flip this on without reviewing a
-# few sessions of shadow-log agreement/disagreement first.
-PROVISIONAL_BOUNDARY_ENABLED = False
+# Built + unit-tested 2026-09-04 (mock-based, see the session's memory
+# notes); PROVISIONAL_MARGIN_PCT below is still an UNCALIBRATED PLACEHOLDER.
+# Turned ON 2026-09-04 while DRY_RUN=True specifically to stress-test it
+# live under paper conditions -- deliberate departure from the "shadow-log
+# first" sequencing (OPENING_BAR_CORRECTION_ENABLED/
+# ENTRY_FILTER_1H_ALIGN_ENABLED's pattern), safe here only because DRY_RUN
+# means every action this gates is a simulated fill, not a real order. DO
+# NOT carry this True into a DRY_RUN=False flip without first reviewing how
+# it actually behaved under DRY_RUN -- agreement rate, any disagreement
+# escalations, whether the margin needs recalibrating.
+PROVISIONAL_BOUNDARY_ENABLED = True
 PROVISIONAL_MARGIN_PCT = 0.15   # % of price the provisional close must clear the provisional
                                  # Supertrend band by before acting -- PLACEHOLDER, not calibrated
 
