@@ -41,6 +41,7 @@ from prometheus_configs import (
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
     ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
     PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
+    NO_EXIT_BEFORE_BUFFER_MIN,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -1640,7 +1641,33 @@ class Prometheus:
                 return ltp
         return fetch_ltp_rest(self.obj, self.state.symbol, self.state.token)
 
+    def _past_first_minute_guard(self, now: datetime) -> bool:
+        """
+        §10 (built 2026-09-04): True once today's session has genuinely
+        been open for at least NO_EXIT_BEFORE_BUFFER_MIN minutes — gates
+        _check_exit_conditions_ltp against a first-minute price-discovery
+        print (the 2026-09-02 incident: a 447-point single-minute range
+        that would have been indistinguishable from a real SL/target hit
+        to the continuous LTP check). Keyed off the ACTUAL first 1-min bar
+        seen today (self._df_1m_today's own earliest row), never a
+        hardcoded clock time — most days that's SESSION_START_TIME
+        (09:00), but on the evening-only special sessions the real open
+        is 17:00, and a fixed '09:01' would already be hours in the past
+        by then, guarding nothing. Same anchor-must-be-dynamic principle
+        as the 15m/1h resample's day anchor (data_loader.py's
+        origin=day.index[0], not a hardcoded 09:00).
+        Returns False (guard still active) if no bar has arrived yet at
+        all — nothing to gate against differently in that case; the very
+        first tick IS the one this guard exists to hold off on.
+        """
+        if self._df_1m_today.empty:
+            return False
+        first_bar_ts = self._df_1m_today['time_stamp'].min()
+        return now >= first_bar_ts + timedelta(minutes=NO_EXIT_BEFORE_BUFFER_MIN)
+
     def _check_exit_conditions_ltp(self, now: datetime) -> None:
+        if not self._past_first_minute_guard(now):
+            return
         ltp = self._get_ltp()
         if ltp:
             self.state.last_known_ltp = ltp

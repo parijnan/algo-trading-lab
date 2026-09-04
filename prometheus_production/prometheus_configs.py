@@ -99,6 +99,19 @@ DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a 
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
 MIN_ENTRY_TIME      = '09:15'  # skip first 15 min — thin opening liquidity
 
+# First-minute exit guard (plan §10, built 2026-09-04) — a genuine buffer
+# duration, NOT a clock time. The plan's original proposal (`NO_EXIT_BEFORE
+# = '09:01'`, a fixed clock time) would silently do nothing on the
+# evening-only special sessions (~7/153 days, confirmed against the user's
+# own chart during Phase 4) where the real session open is 17:00, not
+# 09:00 — 09:01 is already hours in the past by the time trading starts on
+# those days. Fixed the same way the 15m/1h resample's day anchor was
+# fixed (`data_loader.py`'s `origin=day.index[0]`, NOT a hardcoded 09:00):
+# keyed off the ACTUAL first 1-min bar seen today
+# (`self._df_1m_today['time_stamp'].min()`), whatever time that turns out
+# to be. See `_past_first_minute_guard` in prometheus.py.
+NO_EXIT_BEFORE_BUFFER_MIN = 1
+
 # CLOSING_TIME is DST-dependent and must be toggled by hand around the US
 # DST changes (~2nd Sun of March -> 23:30, ~1st Sun of Nov -> 23:55) — see
 # plan §3. Current value is correct for 2026-08-30 (DST in force).

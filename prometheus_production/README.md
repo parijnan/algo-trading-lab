@@ -792,6 +792,16 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks) before deploy; live
       behavior not yet observed — the trigger condition is rare (never breached the existing
       1-minute cutoff in ~34 hours of DRY_RUN observation before this was built).
+- [x] **First-minute exit guard (§10, built 2026-09-04)** — `_past_first_minute_guard` gates
+      `_check_exit_conditions_ltp` for `NO_EXIT_BEFORE_BUFFER_MIN` (1 min) after today's session
+      genuinely opens, protecting against a repeat of the 2026-09-02 447-point single-minute
+      price-discovery print. Keyed off the actual first 1-min bar seen today, not a hardcoded
+      clock time — the plan's original `NO_EXIT_BEFORE='09:01'` proposal would have silently done
+      nothing on the ~7/153 evening-only special sessions, where the real open is 17:00, not
+      09:00. Mock-verified (8/8 checks, including the evening-only case). Building this surfaced
+      a related, already-live bug: `MIN_ENTRY_TIME='09:15'` has the identical hardcoded-clock-time
+      flaw and has been gating real entries since Phase 3 went live — not yet fixed, flagged in
+      `plans/prometheus-phase3-production.md` §10 for a separate decision.
 - [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
       `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
       (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same
