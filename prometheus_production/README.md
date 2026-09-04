@@ -9,7 +9,8 @@ Iris, Prometheus owns its own Angel One session — it is not launched by Leto (
 exchange, different underlying, no VIX coupling; see
 [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
-**Status: Phase 3 build complete, `DRY_RUN=True` (paper mode). Not yet live-tested.**
+**Status: Phase 3 build complete, `DRY_RUN=True` (paper mode), live-testing on Delos since
+2026-09-04.**
 [`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
 current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1,
 2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2),
@@ -17,16 +18,30 @@ the `state.token` invariant fix (§3), the rollover trigger/recovery/execution t
 the ST-disagreement veto (§4/§5/§6, 2026-09-04), Rule 7's combined order with a stuck-partial-fill
 retry marker (§7, 2026-09-04), the historical-basis SL/target recalibration method (§8,
 2026-09-04), the two-linked-rows rolled-trade log schema (§9, 2026-09-04), the 15-min-boundary
-deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), opening-bar
+deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), the
+provisional-boundary computation on top of that (§12a, 2026-09-04 — see below), opening-bar
 price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), the ST seed
 skip-list (§14), and the 1h/15m entry filter's full wiring (§17, 2026-09-04). **The 1h filter is
 built and unit-tested but gated off** — `ENTRY_FILTER_1H_ALIGN_ENABLED = False` in
 `prometheus_configs.py`, so it currently has no effect on any entry path; `ST_1H_PERIOD` /
-`ST_1H_MULTIPLIER` are unset placeholders, not calibrated values. Left off deliberately so the
-user can first validate live ST_15 flip accuracy against the chart before adding a second,
-untuned filter on top. The rollover mechanics are code-complete and unit-verified (real on-disk
-historical-basis/ST lookups, mocked-broker Rule 7 reconciliation and rollover reopens) but not
-yet exercised by an actual live rollover (~2026-09-15).
+`ST_1H_MULTIPLIER` were unset placeholders, and Phase 4's full backtest (2026-09-04,
+`prometheus_backtest/phase4/`) then found no (period, multiplier) combination that beats the
+unfiltered baseline — **shelved**, not just deferred; see
+[`prometheus_backtest/README.md`](../prometheus_backtest/README.md)'s Phase 4 section. The
+rollover mechanics are code-complete and unit-verified (real on-disk historical-basis/ST lookups,
+mocked-broker Rule 7 reconciliation and rollover reopens) but not yet exercised by an actual live
+rollover (~2026-09-15).
+
+**Live-test day 1 (2026-09-04) findings, all fixed same day:** a tz-parsing crash on the very
+first live run (`fetch_one_minute_window` returned tz-aware timestamps from a `%z`-suffixed
+broker format, colliding with the rest of the codebase's tz-naive convention — fixed at the
+source, commit `9c46fc6`); the mult-2.0 vs mult-2.5 decision made and deployed (`ST_MULTIPLIER`,
+`SL_PCT`, `TARGET1_PCT`, `TARGET2_FLAT_PCT` all changed together, since the two candidates are
+jointly calibrated, not interchangeable piecemeal — commit `d5872a7`); `_recover_missed_rollover`
+found missing the §17 1h-alignment gate that `_execute_rollover_decision` already had (commit
+`0adb731`); `INNER_RETRY_ATTEMPTS` raised 3→5 after observing frequent AB1021 bursts (commit
+`6ef55b6`); the Slack control panel reordered to put Prometheus's section above the shared
+Leto/Athena/Artemis/Iris block (commit `acd3a26`).
 
 ---
 
@@ -765,12 +780,18 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       `SharedFeed.get_ohlc()`'s genuine tick-aggregated OHLC (not sampled — Apollo already reads
       this for Nifty/VIX), act on it (entry and/or exit, same real order-placement paths as a
       normal flip) only if it clears `PROVISIONAL_MARGIN_PCT` past the band, then reconcile
-      against the real bar once REST recovers. Gated off (`PROVISIONAL_BOUNDARY_ENABLED=False`),
-      shadow-logs the verdict unconditionally so the margin can eventually be calibrated on real
-      agreement data — see `plans/prometheus-phase3-production.md` §12a for the full design and
-      the margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks), not yet
-      live-tested — the trigger condition is rare (never breached the existing 1-minute cutoff in
-      ~34 hours of DRY_RUN observation before this was built).
+      against the real bar once REST recovers. **Enabled** (`PROVISIONAL_BOUNDARY_ENABLED=True`,
+      commit `806aeb0`) specifically to stress-test it under DRY_RUN — deliberate departure from
+      the "shadow-log first, calibrate on real data" pattern used for
+      `OPENING_BAR_CORRECTION_ENABLED`/`ENTRY_FILTER_1H_ALIGN_ENABLED`, safe here only because
+      every action it gates is a DRY_RUN-simulated fill, not a real order; do **not** carry this
+      `True` into a `DRY_RUN=False` flip without reviewing how it actually behaved first. Still
+      shadow-logs the verdict unconditionally regardless, so `PROVISIONAL_MARGIN_PCT` (currently
+      an uncalibrated placeholder) can eventually be sized on real agreement data — see
+      `plans/prometheus-phase3-production.md` §12a for the full design and the
+      margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks) before deploy; live
+      behavior not yet observed — the trigger condition is rare (never breached the existing
+      1-minute cutoff in ~34 hours of DRY_RUN observation before this was built).
 - [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
       `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
       (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same
