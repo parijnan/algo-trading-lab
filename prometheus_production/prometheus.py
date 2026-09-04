@@ -309,13 +309,18 @@ class Prometheus:
         ENTRY_FILTER_1H_ALIGN_ENABLED (default False, values unset until
         Phase 4's own backtest calibrates them) — when off, always returns
         True, matching every entry path's behavior before this existed.
-        Applied uniformly at all three `_execute_entry` call sites (fresh
-        entry, Rule 7 re-entry, rollover reopen) — DECIDED, no per-site
-        exceptions.
+        Applied uniformly at every entry/reopen path — DECIDED, no per-site
+        exceptions: fresh entry, Rule 7 re-entry, and BOTH rollover reopen
+        triggers (§6's evening `_execute_rollover_decision` and §5's
+        `_recover_missed_rollover` — the latter was a real gap, missed on
+        the initial 2026-09-04 wiring pass and fixed the same day once
+        found).
 
-        Defaults to self._contract/self._df_1m_today (fresh entry and
-        Rule 7 both trade the currently-effective contract); the rollover
-        reopen call site passes the NEW contract explicitly, since
+        Defaults to self._contract/self._df_1m_today (fresh entry and Rule 7
+        both trade the currently-effective contract; missed-rollover
+        recovery too, since by that point in _setup() self._contract has
+        already swapped to the new contract). §6's evening rollover reopen
+        is the one exception that passes the NEW contract explicitly, since
         self._contract hasn't swapped to it yet at the point its own veto
         runs (`_execute_rollover_decision`).
         """
@@ -566,9 +571,17 @@ class Prometheus:
             logger.error("Missed-rollover veto: new contract's ST is still warming up (NaN trend) — no-go.")
         else:
             new_direction = 'bullish' if bool(last['trend']) else 'bearish'
-            go = new_direction == self.state.direction
+            st_agree = new_direction == self.state.direction
+            # §17: this is also a rollover reopen (just via the missed-roll
+            # trigger rather than §6's evening one) -- gated the same way,
+            # on top of the 15m ST-disagreement veto above. self._contract
+            # and self._df_1m_today are already the NEW contract's by this
+            # point in _setup() (see this method's own docstring).
+            align_agree = self._check_1h_alignment(new_direction, contract=self._contract,
+                                                    today_1m=self._df_1m_today)
+            go = st_agree and align_agree
             logger.info(f'Missed-rollover veto check: old={self.state.direction} new={new_direction} '
-                       f'-> {"GO" if go else "NO-GO"}.')
+                       f'st_agree={st_agree} align_agree={align_agree} -> {"GO" if go else "NO-GO"}.')
 
         closed = self._execute_exit_all('rollover')
         if not closed:
