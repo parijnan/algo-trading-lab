@@ -567,13 +567,17 @@ def fetch_crudeoil_opening_bar(obj, session_start_ts: datetime) -> dict:
     return {'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close']}
 
 
-def _find_15m_gaps(df_15m: pd.DataFrame) -> list:
+def _find_Nmin_gaps(df: pd.DataFrame, minutes: int = 15) -> list:
     """Same principle as iris_functions.py's _find_5m_gaps — refuse to seed
-    silently over a non-contiguous reconstructed series."""
+    silently over a non-contiguous reconstructed series. Generalized
+    (2026-09-04, §17) from the original 15-min-only _find_15m_gaps so
+    seed_st15 (15m) and the 1h-alignment filter's own ST computation (§17)
+    share one gap-check instead of a second copy that could drift."""
     gaps = []
-    for day, day_df in df_15m.groupby(df_15m['time_stamp'].dt.date):
+    freq = f'{minutes}min'
+    for day, day_df in df.groupby(df['time_stamp'].dt.date):
         ts = day_df['time_stamp'].sort_values()
-        expected = pd.date_range(ts.iloc[0], ts.iloc[-1], freq='15min')
+        expected = pd.date_range(ts.iloc[0], ts.iloc[-1], freq=freq)
         missing = sorted(set(expected) - set(ts))
         if missing:
             gaps.append((day, missing))
@@ -585,33 +589,43 @@ def _find_15m_gaps(df_15m: pd.DataFrame) -> list:
 # (the veto-check), and the historical-basis price lookup.
 # ---------------------------------------------------------------------------
 
-def compute_st_for_contract(contract: dict, today_1m: pd.DataFrame, now: datetime) -> pd.DataFrame:
+def compute_st_for_contract(contract: dict, today_1m: pd.DataFrame, now: datetime,
+                            minutes: int = 15, st_period: int = None,
+                            st_multiplier: float = None) -> pd.DataFrame:
     """
-    §6 step 4: the rollover go/no-go veto needs the NEW contract's own ST,
-    computed the same way seed_st15 would tomorrow morning — past days from
-    the shared pipeline file (tracked as next-month since before today),
-    today from the live-fetched series already assembled during the
-    23:10-23:15 prefetch/poll window (§6 steps 2-3, passed in as
-    `today_1m`). Not routed through seed_st15 itself: that function's
-    private-cache/backfill machinery is specific to self._contract, the
-    CURRENTLY effective one, which this new contract isn't yet. Refuses
-    (returns empty) on any gap, same "no silent staleness" convention as
-    seed_st15 — an empty result here is exactly the "data isn't complete by
-    ROLLOVER_TIME" case, DECIDED to mean no-go.
+    Assembles past-days (shared pipeline file) + today (given,
+    already-fetched live) for a contract, resamples to `minutes`-minute
+    buckets, computes ST from scratch. Not routed through seed_st15
+    itself: that function's private-cache/backfill machinery is specific
+    to self._contract, the CURRENTLY effective one — this can be called
+    against a contract that isn't (yet or ever) that.
+
+    Originally built for §6 step 4's rollover go/no-go veto (15-min,
+    st_period/st_multiplier default to ST_PERIOD/ST_MULTIPLIER) — reused
+    as-is for §17's 1h-alignment filter (minutes=60,
+    st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER) rather than a
+    second copy of this shape, matching the same "generalize, don't
+    duplicate" principle §17 already applied to _resample_1m_to_Nmin.
+
+    Refuses (returns empty) on any gap, same "no silent staleness"
+    convention as seed_st15 — for the rollover veto this means no-go; for
+    the 1h filter it means "can't confirm agreement," treated the same way.
     """
+    st_period = st_period if st_period is not None else ST_PERIOD
+    st_multiplier = st_multiplier if st_multiplier is not None else ST_MULTIPLIER
     raw_1m_past = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
     raw_1m = (pd.concat([raw_1m_past, today_1m], ignore_index=True)
               .sort_values('time_stamp').reset_index(drop=True))
     if raw_1m.empty:
         return pd.DataFrame()
-    df_15m_raw = _resample_1m_to_Nmin(raw_1m, 15, now)
-    if df_15m_raw.empty:
+    df_Nm_raw = _resample_1m_to_Nmin(raw_1m, minutes, now)
+    if df_Nm_raw.empty:
         return pd.DataFrame()
-    if _find_15m_gaps(df_15m_raw):
-        logger.error(f'compute_st_for_contract: gap(s) in reconstructed 15m series for '
-                     f"{contract['symbol']} — refusing (treated as no-go by the rollover veto).")
+    if _find_Nmin_gaps(df_Nm_raw, minutes):
+        logger.error(f"compute_st_for_contract: gap(s) in reconstructed {minutes}m series for "
+                     f"{contract['symbol']} — refusing.")
         return pd.DataFrame()
-    return compute_st(df_15m_raw, ST_PERIOD, ST_MULTIPLIER)
+    return compute_st(df_Nm_raw, st_period, st_multiplier)
 
 
 def historical_basis_price(new_contract: dict, historical_ts: datetime) -> float:
@@ -707,7 +721,7 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
         logger.error('seed_st15: resample produced no 15-min bars.')
         return pd.DataFrame()
 
-    gaps = _find_15m_gaps(df_15m_raw)
+    gaps = _find_Nmin_gaps(df_15m_raw, 15)
     if gaps:
         logger.error(f'seed_st15: gap(s) in reconstructed 15m series, refusing to seed: {gaps}')
         return pd.DataFrame()

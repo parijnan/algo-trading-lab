@@ -449,7 +449,8 @@ for what's been built on top of it — positions now span multiple sessions (no 
 resilient order execution, and a full contract-rollover-under-an-open-position sequence (evening
 trigger, missed-rollover recovery, the ROLLOVER_TIME prefetch/veto/flatten/reopen timeline,
 historical-basis SL/target recalibration, and a two-linked-rows trade-log schema for a rolled
-trade). Only the 1h/15m entry filter's actual wiring remains unbuilt.
+trade). The 1h/15m entry filter (§17) is also now fully wired — built, unit-tested, and gated
+off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending its own calibration and chart validation.
 
 | | |
 |---|---|
@@ -462,7 +463,7 @@ trade). Only the 1h/15m entry filter's actual wiring remains unbuilt.
 | Sizing | "Units" (1 unit = 2 lots) — static (go-live: 1 unit, Rs.1,00,000 margin/unit) or dynamic (Artemis's formula), Slack-switchable |
 | Contract roll | 5 trading days ahead of expiry (avoids MCX's tender-margin window on energy contracts) — its own effective-contract resolution, distinct from the shared data pipeline's expiry-based roll |
 | Backtest (Phase 2, above config) | 221 trades · WR 55.2% · ₹42,453 total P&L (152 trading days, refreshed through the latest candle) · Calmar 2.84 (unitless) / 4.85 (annualized, ₹1L capital basis) |
-| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). Only the 1h/15m entry filter's wiring (§17) remains unbuilt. Order-update WebSocket unverified for MCX (Rollout step 2). |
+| Status | **Backtest complete, cross-validated on CRUDEOIL. Production code built, `DRY_RUN=True` by default — not yet live-tested.** Phase 3 build complete as of 2026-09-04, including contract-rollover-under-an-open-position (§3–§9 of the Phase 3 plan: the `state.token` invariant, the evening trigger, missed-rollover recovery, the full prefetch/veto/flatten/reopen timeline, Rule 7's combined order with a stuck-partial-fill retry, historical-basis SL/target recalibration, and the two-linked-rows trade-log schema) — code-complete and unit-verified, not yet exercised by a real rollover (~2026-09-15). The 1h/15m entry filter (§17) is fully wired, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) pending calibration. Order-update WebSocket unverified for MCX (Rollout step 2). |
 
 ### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest-only, decision pending)
 
@@ -541,7 +542,7 @@ algo-trading-lab/
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── prometheus-phase2-production.md   # [DESIGN ONLY] Prometheus Phase 2 production architecture — standalone, not Leto-routed
-│   ├── prometheus-phase3-production.md   # [DECIDED, BUILT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; every section decided and built 2026-09-04, except §17's 1h/15m entry filter (mechanism decided, wiring not built)
+│   ├── prometheus-phase3-production.md   # [DECIDED, BUILT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; every section decided and built 2026-09-04, including §17's 1h/15m entry filter (wired, unit-tested, gated off pending calibration)
 │   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md

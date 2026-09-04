@@ -133,6 +133,18 @@ SESSION_END_TIME = _minus_minutes(CLOSING_TIME, -SESSION_END_BUFFER_MIN)   # CLO
 ST_PERIOD     = 10
 ST_MULTIPLIER = 3.0
 
+# ── Phase 4 preview: 1h/15m ST alignment entry filter (plan §17) ────────────
+# Only take a 15m ST_15 flip if the 1-hour Supertrend already agrees with
+# the flip's direction. Mechanism built 2026-09-04 and gated off by
+# default -- ST_1H_PERIOD/ST_1H_MULTIPLIER below are PLACEHOLDERS, not
+# calibrated (same starting values as ST_PERIOD/ST_MULTIPLIER, purely so
+# the mechanism computes something sane while off). Real values and the
+# toggle flip are deferred to Phase 4's own backtesting -- do not treat
+# these as tuned.
+ENTRY_FILTER_1H_ALIGN_ENABLED = False
+ST_1H_PERIOD     = 10
+ST_1H_MULTIPLIER = 3.0
+
 # Calendar days of 1-min history tail-read for seeding (15-20 recommended,
 # plan §1 — lands ~975-1,300 fifteen-min bars, same generosity band as
 # Iris's SEED_DAYS=13 relative to its own ST_PERIOD).

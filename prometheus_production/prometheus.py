@@ -39,6 +39,7 @@ from prometheus_configs import (
     TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
+    ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -300,6 +301,42 @@ class Prometheus:
             return False
         return now >= pd.Timestamp(f'{now.date()} {ROLLOVER_TIME}')
 
+    def _check_1h_alignment(self, direction: str, contract: dict = None,
+                            today_1m: pd.DataFrame = None) -> bool:
+        """
+        §17 (2026-09-04): only take a 15m flip if the 1-hour Supertrend
+        already agrees with its direction. Gated off by
+        ENTRY_FILTER_1H_ALIGN_ENABLED (default False, values unset until
+        Phase 4's own backtest calibrates them) — when off, always returns
+        True, matching every entry path's behavior before this existed.
+        Applied uniformly at all three `_execute_entry` call sites (fresh
+        entry, Rule 7 re-entry, rollover reopen) — DECIDED, no per-site
+        exceptions.
+
+        Defaults to self._contract/self._df_1m_today (fresh entry and
+        Rule 7 both trade the currently-effective contract); the rollover
+        reopen call site passes the NEW contract explicitly, since
+        self._contract hasn't swapped to it yet at the point its own veto
+        runs (`_execute_rollover_decision`).
+        """
+        if not ENTRY_FILTER_1H_ALIGN_ENABLED:
+            return True
+        contract = contract if contract is not None else self._contract
+        today_1m = today_1m if today_1m is not None else self._df_1m_today
+        st_1h = compute_st_for_contract(contract, today_1m, datetime.now(),
+                                        minutes=60, st_period=ST_1H_PERIOD,
+                                        st_multiplier=ST_1H_MULTIPLIER)
+        if st_1h.empty or pd.isna(st_1h.iloc[-1]['trend']):
+            logger.warning('1h-alignment filter: ST_1H could not be computed — '
+                           'treating as disagree (no entry).')
+            return False
+        st_1h_direction = 'bullish' if bool(st_1h.iloc[-1]['trend']) else 'bearish'
+        agree = st_1h_direction == direction
+        if not agree:
+            logger.info(f"1h-alignment filter: {direction} blocked — 1h ST is "
+                       f"{st_1h_direction} on {contract['symbol']}.")
+        return agree
+
     def _check_rollover_timing(self, now: datetime) -> None:
         """§6 steps 2-4, called every 1-min cycle from the main loop
         (same cadence as _recover_pending_windows). No-op once today's
@@ -394,14 +431,25 @@ class Prometheus:
                     self._rollover_go_decision = False
                 else:
                     new_direction = 'bullish' if bool(new_st.iloc[-1]['trend']) else 'bearish'
-                    agree = new_direction == self.state.direction
+                    st_agree = new_direction == self.state.direction
+                    # §17: gated the same way as every other entry path, on
+                    # top of §8's own 15m ST-disagreement veto above — either
+                    # one failing lands on the same flatten-and-wait outcome.
+                    align_agree = self._check_1h_alignment(new_direction, contract=nc,
+                                                            today_1m=self._df_1m_today_new)
+                    agree = st_agree and align_agree
                     self._rollover_go_decision = agree
                     logger.info(f'Rollover veto check: old={self.state.direction} new={new_direction} '
+                               f'st_agree={st_agree} align_agree={align_agree} '
                                f'-> {"GO" if agree else "NO-GO"}.')
-                    if not agree:
+                    if not st_agree:
                         _slack(f'\U0001f504 {tag}: rollover veto — {nc["symbol"]}\'s ST '
                               f'({new_direction}) disagrees with the carried position '
                               f'({self.state.direction}) — flatten only, no reopen.', SLACK_TRADEBOT_CHANNEL)
+                    elif not align_agree:
+                        _slack(f'\U0001f504 {tag}: rollover veto — {nc["symbol"]}\'s 1h ST '
+                              f'disagrees with the {new_direction} reopen — flatten only, '
+                              f'no reopen.', SLACK_TRADEBOT_CHANNEL)
 
         # Step 5: flatten the old position unconditionally, regardless of go/no-go
         if self.state.status == 'in_trade':
@@ -1075,8 +1123,10 @@ class Prometheus:
         # gated entries near close (positional, nothing to "hold until").
         # §4: suppressed once a confirmed rollover reaches ROLLOVER_TIME —
         # otherwise a fresh position could open seconds before the roll
-        # flattens it straight back out.
-        if flip and now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now()):
+        # flattens it straight back out. §17: additionally gated on 1h
+        # alignment (inert unless ENTRY_FILTER_1H_ALIGN_ENABLED).
+        if (flip and now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+                and self._check_1h_alignment(direction_now)):
             self._execute_entry(direction_now, window_start, bar['close'])
 
     # -----------------------------------------------------------------------
@@ -1090,15 +1140,17 @@ class Prometheus:
         quantity (`old_open_lots + new_trade_lots`), not two/three separate
         ones. Degenerates cleanly to a plain entry (both lots already
         flat — nothing to combine) or a plain exit (`new_trade_lots=0`
-        when re-entry isn't allowed yet, e.g. before MIN_ENTRY_TIME — the
-        same shape §7 flagged for §17's future 1h filter, just a different
-        gate for now).
+        when re-entry isn't allowed — before MIN_ENTRY_TIME, a suppressed
+        rollover evening, or §17's 1h filter disagreeing).
         """
         old_open_lots = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
                          ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
-        # §4: suppressed once a confirmed rollover reaches ROLLOVER_TIME —
-        # same reasoning as the fresh-entry gate above.
-        reentry_allowed = now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+        # §4: suppressed once a confirmed rollover reaches ROLLOVER_TIME.
+        # §17: additionally gated on 1h alignment (inert unless
+        # ENTRY_FILTER_1H_ALIGN_ENABLED) — the exit half above still always
+        # happens regardless; only the re-entry half is affected.
+        reentry_allowed = (now_after_min_entry() and not self._rollover_entry_suppressed(datetime.now())
+                           and self._check_1h_alignment(direction_now))
 
         if old_open_lots == 0:
             if reentry_allowed:

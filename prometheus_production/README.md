@@ -9,8 +9,7 @@ Iris, Prometheus owns its own Angel One session — it is not launched by Leto (
 exchange, different underlying, no VIX coupling; see
 [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
-**Status: Phase 3 build complete except the 1h/15m entry filter's actual wiring, `DRY_RUN=True`
-(paper mode). Not yet live-tested.**
+**Status: Phase 3 build complete, `DRY_RUN=True` (paper mode). Not yet live-tested.**
 [`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
 current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1,
 2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2),
@@ -19,12 +18,15 @@ the ST-disagreement veto (§4/§5/§6, 2026-09-04), Rule 7's combined order with
 retry marker (§7, 2026-09-04), the historical-basis SL/target recalibration method (§8,
 2026-09-04), the two-linked-rows rolled-trade log schema (§9, 2026-09-04), the 15-min-boundary
 deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), opening-bar
-price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), and the ST seed
-skip-list (§14). **Not yet built: the 1h/15m entry filter's actual wiring (§17)** — only the
-resample-function groundwork landed; `ENTRY_FILTER_1H_ALIGN_ENABLED` doesn't exist yet and the
-filter isn't hooked into any entry call site. The rollover mechanics are code-complete and unit-
-verified (real on-disk historical-basis/ST lookups, mocked-broker Rule 7 reconciliation and
-rollover reopens) but not yet exercised by an actual live rollover (~2026-09-15).
+price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), the ST seed
+skip-list (§14), and the 1h/15m entry filter's full wiring (§17, 2026-09-04). **The 1h filter is
+built and unit-tested but gated off** — `ENTRY_FILTER_1H_ALIGN_ENABLED = False` in
+`prometheus_configs.py`, so it currently has no effect on any entry path; `ST_1H_PERIOD` /
+`ST_1H_MULTIPLIER` are unset placeholders, not calibrated values. Left off deliberately so the
+user can first validate live ST_15 flip accuracy against the chart before adding a second,
+untuned filter on top. The rollover mechanics are code-complete and unit-verified (real on-disk
+historical-basis/ST lookups, mocked-broker Rule 7 reconciliation and rollover reopens) but not
+yet exercised by an actual live rollover (~2026-09-15).
 
 ---
 
@@ -584,9 +586,20 @@ module; see that README's Phase 3 section before assuming Phase 2's parameters a
       rollover reopen's basis-vs-fill-price separation) — not yet live-tested end-to-end, since
       that needs an actual rollover (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21
       CRUDEOILM expiry) to exercise for real.
-- [ ] **1h/15m entry filter (§17)** — only the resample-function groundwork is built; the filter
-      itself (ST_1H computation, the alignment gate at all three `_execute_entry` call sites,
-      `ENTRY_FILTER_1H_ALIGN_ENABLED`) isn't wired in yet
+- [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
+      `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
+      (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same
+      "no silent staleness" gap-refusal as the 15m rollover veto. Wired into all three entry
+      paths uniformly, no per-site exceptions: fresh `watching`→`in_trade` entry, Rule 7
+      re-entry (gates only the re-entry half of the combined order — the exit half always
+      proceeds), and the rollover reopen (ANDed on top of §8's own 15m ST-disagreement veto —
+      either failing lands on the same flatten-and-wait outcome). Unit-tested (toggle on/off,
+      agree/disagree in both directions, empty/NaN ST result treated as disagree, and the
+      toggle-off short-circuit never touching `self`). **Gated off**:
+      `ENTRY_FILTER_1H_ALIGN_ENABLED = False`; `ST_1H_PERIOD`/`ST_1H_MULTIPLIER` are unset
+      placeholders (same starting values as the 15m ST params), not calibrated — left off so
+      live ST_15 flip accuracy can be validated against the chart first, per the same reasoning
+      as §11's opening-bar correction toggle.
 - [ ] **Order-update WebSocket unverified for MCX** — worked during the brief 2026-08-31 live
       window (four real fills resolved via WS), but that window was cut short by the incident
       below before a full session could confirm it under sustained live conditions
