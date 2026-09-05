@@ -41,7 +41,7 @@ from prometheus_configs import (
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
     ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
     PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
-    NO_EXIT_BEFORE_BUFFER_MIN,
+    NO_EXIT_BEFORE_BUFFER_MIN, NEW_CONTRACT_POLL_OFFSET_SEC,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -141,6 +141,9 @@ class Prometheus:
         self._rollover_basis = None          # §6 step 1: precomputed {basis_price, sl_price, lot1_target, lot2_target, lot2_target_source, lot2_only}
         self._rollover_prefetch_done = False # §6 step 2 latch
         self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._df_15m_new = None   # §18 Phase 2: new contract's own independent 15m ST series while
+                                   # in-trade on a rollover-eve -- advisory only, read by Phase 3's
+                                   # coincident-flip check, never drives an order on its own.
         self._rollover_executed_today = False  # latch so §6 steps 4-7 only ever fire once per evening
         self._rollover_new_ws_subscribed = False   # §6 step 2 latch, separate from the historical-fetch latch
         self._rollover_go_decision = None    # §6 step 4: decided ONCE, cached — retries only retry
@@ -285,6 +288,59 @@ class Prometheus:
         _slack(f'\U0001f514 {tag}: rolling to {tomorrow_contract["symbol"]} tonight at '
               f'{ROLLOVER_TIME}.', SLACK_TRADEBOT_CHANNEL)
         self._precompute_rollover_basis()
+        # §18 Phase 2: in-trade -- start full-day dual-tracking now, rather
+        # than waiting for §6's ROLLOVER_PREFETCH_TIME (23:10). The position
+        # itself keeps running entirely off self._contract/state.token (the
+        # OLD contract) until/unless Phase 3's coincident-flip transition
+        # (not yet built) actually switches it.
+        self._start_dual_tracking(tomorrow_contract)
+
+    def _start_dual_tracking(self, new_contract: dict) -> None:
+        """§18 Phase 2: subscribe the new contract's WS feed and seed its
+        own independent "today" 1-min series + 15m ST right now, at setup --
+        not waiting for §6's ROLLOVER_PREFETCH_TIME. Advisory only: this
+        series is read by §18 Phase 3's (not yet built) coincident-flip
+        check, never used to drive an order by itself. The actual position
+        keeps running off self._contract/self.state.token unchanged.
+
+        Also marks §6's own prefetch-done/subscribed latches, so
+        _do_rollover_prefetch doesn't redundantly repeat this same fetch at
+        23:10 if this one succeeded -- harmless either way if it does
+        (§18's Phase 4 note), this just avoids duplicate work/log noise.
+        Deliberately does NOT mark prefetch-done if the fetch itself failed
+        (df is None, a genuine broker failure) -- leaves §6's own retry at
+        23:10 as the safety net for that case, rather than inventing a
+        second one here.
+        """
+        now = datetime.now()
+        session_start = pd.Timestamp(f'{now.date()} {SESSION_START_TIME}')
+        tag = _tag(new_contract['symbol_root'])
+
+        df = fetch_one_minute_window(self.obj, new_contract['token'], session_start, now)
+        if df is not None:
+            working = df.copy()
+            if not working.empty and working['time_stamp'].dt.tz is not None:
+                working['time_stamp'] = working['time_stamp'].dt.tz_localize(None)
+            self._df_1m_today_new = working.sort_values('time_stamp').reset_index(drop=True)
+            self._rollover_prefetch_done = True
+
+        self._df_15m_new = compute_st_for_contract(new_contract, self._df_1m_today_new, now)
+
+        self.feed.subscribe_options([new_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+        self._rollover_new_ws_subscribed = True
+
+        if self._df_15m_new.empty:
+            logger.warning(f"§18 Phase 2: {new_contract['symbol']}'s ST_15 not yet available "
+                           f"(history gap or fetch failure) -- dual-tracking will keep trying "
+                           f"via the per-minute top-up poll through the day.")
+        else:
+            last = self._df_15m_new.iloc[-1]
+            trend_str = ('bullish' if bool(last['trend']) else 'bearish') if not pd.isna(last['trend']) else 'warmup'
+            logger.info(f"§18 Phase 2: dual-tracking {new_contract['symbol']} alongside "
+                       f"{self._contract['symbol']} ({len(self._df_15m_new)} bars, trend={trend_str}).")
+        _slack(f'\U0001f440 {tag}: also tracking {new_contract["symbol"]} today (position open on '
+              f'{self._contract["symbol"]}) — will take over the moment both agree on a flip.',
+              SLACK_TRADEBOT_CHANNEL)
 
     def _switch_to_new_contract_now(self, new_contract: dict) -> None:
         """§18 flat-at-open case: nothing open to protect, so switch
@@ -1165,6 +1221,15 @@ class Prometheus:
         # LTP-dependent logic stay two explicit blocks" requirement).
         next_boundary = datetime.now().replace(second=0, microsecond=0) + timedelta(minutes=1)
 
+        # §18 Phase 2: a second, staggered boundary tracker for the new
+        # contract's dual-tracking poll while in-trade on a rollover-eve --
+        # offset NEW_CONTRACT_POLL_OFFSET_SEC into the minute so it never
+        # competes with next_boundary's own on-the-minute poll above for the
+        # same rate-limit window. Inert (never checked) on any day
+        # self._rollover_new_contract stays None.
+        next_boundary_new = (datetime.now().replace(second=0, microsecond=0)
+                             + timedelta(minutes=1, seconds=NEW_CONTRACT_POLL_OFFSET_SEC))
+
         try:
             while not self._shutdown and FLAG_PATH.exists() and datetime.now() < session_end:
                 self._check_command_flag()
@@ -1263,6 +1328,22 @@ class Prometheus:
 
                     next_boundary += timedelta(minutes=1)
 
+                # ── §18 Phase 2: in-trade rollover-eve dual-tracking --
+                #    offset per-minute poll for the NEW contract, staggered
+                #    away from the old contract's own on-the-minute poll
+                #    above. Independent of that block's own `if` (different
+                #    clock, checked every tick regardless) -- advisory only,
+                #    never drives an order on its own; only read by §18
+                #    Phase 3's (not yet built) coincident-flip check. ──────
+                if (self._rollover_new_contract is not None and self.state.status == 'in_trade'
+                        and now >= next_boundary_new):
+                    boundary_new = next_boundary_new.replace(second=0, microsecond=0)
+                    self._do_rollover_topup_poll(self._rollover_new_contract, datetime.now())
+                    if boundary_new.minute % 15 == 0:
+                        self._df_15m_new, _, _ = self._build_15m_bar(
+                            self._df_1m_today_new, self._df_15m_new, boundary_new)
+                    next_boundary_new += timedelta(minutes=1)
+
                 time.sleep(0.5 if self.state.status == 'in_trade' else 1.0)
 
             if not FLAG_PATH.exists():
@@ -1347,6 +1428,41 @@ class Prometheus:
     # 15-min bar handling — flip detection, fresh entry, trend-flip exit+reentry
     # -----------------------------------------------------------------------
 
+    def _build_15m_bar(self, df_1m: pd.DataFrame, df_15m: pd.DataFrame,
+                       boundary: datetime) -> tuple:
+        """Shared bar-construction logic (§18 Phase 2, 2026-09-05, extracted
+        from _handle_new_15m_bar): builds one 15m OHLCV bar for
+        [boundary-15m, boundary) out of whatever 1-min rows are on hand in
+        df_1m (tolerant of an incomplete window, same as the original
+        inline logic), appends/dedupes into df_15m, recomputes ST from
+        scratch over the full series. Used both by the live old-contract
+        path below (which keeps its own alerting on top) and by Phase 2's
+        parallel new-contract dual-tracking (which doesn't -- an advisory
+        series with no order riding on it doesn't need the same alert
+        volume every 15 minutes all day).
+
+        Returns (updated_df_15m, bar_row_or_None, n_1m_rows_used) --
+        bar_row is None if the window was completely empty, or ST at this
+        bar is still NaN (warmup)."""
+        window_start = boundary - timedelta(minutes=15)
+        window = df_1m[(df_1m['time_stamp'] >= window_start) & (df_1m['time_stamp'] < boundary)]
+        if window.empty:
+            return df_15m, None, 0
+
+        new_bar = pd.DataFrame([{
+            'time_stamp': window_start, 'open': window['open'].iloc[0],
+            'high': window['high'].max(), 'low': window['low'].min(),
+            'close': window['close'].iloc[-1], 'volume': window['volume'].sum(),
+        }])
+        combined = _safe_concat([df_15m, new_bar], ignore_index=True)
+        combined = combined.drop_duplicates(subset=['time_stamp'], keep='last').sort_values('time_stamp')
+        updated = compute_st(combined.reset_index(drop=True), ST_PERIOD, ST_MULTIPLIER)
+
+        row = updated[updated['time_stamp'] == window_start]
+        if row.empty or pd.isna(row.iloc[-1]['trend']):
+            return updated, None, len(window)
+        return updated, row.iloc[-1], len(window)
+
     def _handle_new_15m_bar(self, boundary: datetime) -> None:
         tag = _tag(self._contract['symbol_root'])
         window_start = boundary - timedelta(minutes=15)
@@ -1372,21 +1488,9 @@ class Prometheus:
             _slack(f'⚠️ {tag}: only {len(window)}/15 1-min bars for {window_start:%H:%M}-'
                   f'{boundary:%H:%M} — 15m bar built from incomplete data.', SLACK_ERRORS_CHANNEL)
 
-        new_bar = pd.DataFrame([{
-            'time_stamp': window_start, 'open': window['open'].iloc[0],
-            'high': window['high'].max(), 'low': window['low'].min(),
-            'close': window['close'].iloc[-1], 'volume': window['volume'].sum(),
-        }])
-        combined = _safe_concat([self._df_15m, new_bar], ignore_index=True)
-        combined = combined.drop_duplicates(subset=['time_stamp'], keep='last').sort_values('time_stamp')
-        self._df_15m = compute_st(combined.reset_index(drop=True), ST_PERIOD, ST_MULTIPLIER)
+        self._df_15m, bar, _ = self._build_15m_bar(self._df_1m_today, self._df_15m, boundary)
         persist_15m_series(self._df_15m)
-
-        row = self._df_15m[self._df_15m['time_stamp'] == window_start]
-        if row.empty:
-            return
-        bar = row.iloc[-1]
-        if pd.isna(bar['trend']):
+        if bar is None:
             return
 
         flip = bool(bar['trend_flip'])

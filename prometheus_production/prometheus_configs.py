@@ -324,6 +324,17 @@ ROLLOVER_TIME = _minus_minutes(CLOSING_TIME, ROLLOVER_BEFORE_CLOSE_MIN)
 ROLLOVER_PREFETCH_BUFFER_MIN = 5
 ROLLOVER_PREFETCH_TIME = _minus_minutes(ROLLOVER_TIME, ROLLOVER_PREFETCH_BUFFER_MIN)
 
+# §18 (2026-09-05): in-trade rollover-eve dual-tracking. While an open
+# position is on a contract that's rolling tonight, both contracts are
+# polled all day, but not at the same instant -- the old contract (the one
+# actually being monitored for SL/target/flip) keeps its normal on-the-
+# minute cadence, uninterrupted; the new contract's own per-minute top-up
+# is offset into the same minute so it never competes with the old
+# contract's poll for the same rate-limit window. Chosen mid-minute, not
+# right after :00 (too close to the old contract's own poll) or right
+# before :00 (too close to the NEXT minute's old-contract poll).
+NEW_CONTRACT_POLL_OFFSET_SEC = 27
+
 # §7: debounce on the re-alert for a stuck _pending_flip -- reuses the
 # stale-tick-watchdog's existing 5-min convention rather than a new cadence,
 # so a genuinely stuck flip doesn't get silently retried with no further
