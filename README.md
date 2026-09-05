@@ -449,8 +449,14 @@ for what's been built on top of it — positions now span multiple sessions (no 
 resilient order execution, and a full contract-rollover-under-an-open-position sequence (evening
 trigger, missed-rollover recovery, the ROLLOVER_TIME prefetch/veto/flatten/reopen timeline,
 historical-basis SL/target recalibration, and a two-linked-rows trade-log schema for a rolled
-trade). The 1h/15m entry filter (§17) is also fully wired — built, unit-tested, and gated off
-(`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — its own backtest (Phase 4, below) found no combination
+trade) — **superseded as the primary path by plan §18's event-driven rollover redesign, built
+2026-09-05**: on a rollover-eve, a flat position switches contracts immediately at setup, and an
+in-trade position now exits and switches the moment its own signal flips (with a fresh entry
+following if the new contract independently agrees on the same bar) — the evening mechanism above
+only ever runs as a fallback, if the position survives untouched all the way to `ROLLOVER_TIME`.
+Not yet exercised by an actual live rollover. The 1h/15m entry filter (§17) is also fully wired —
+built, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — its own backtest
+(Phase 4, below) found no combination
 of period/multiplier that beats the unfiltered baseline, so it stays off, not pending further
 calibration.
 
@@ -565,7 +571,7 @@ algo-trading-lab/
 │   ├── orphan-fill-cleanup.md            # [IMPLEMENTED] Detect and square off partial fills on entry legs
 │   ├── phase-4-convergence.md            # [COMPLETED] Unified Nifty ecosystem research — decided against
 │   ├── prometheus-phase2-production.md   # [DESIGN ONLY] Prometheus Phase 2 production architecture — standalone, not Leto-routed
-│   ├── prometheus-phase3-production.md   # [DECIDED, BUILT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; every section decided and built 2026-09-04, including §17's 1h/15m entry filter (wired, unit-tested, gated off pending calibration)
+│   ├── prometheus-phase3-production.md   # [DECIDED, BUILT] Prometheus Phase 3 production architecture — contract-roll-under-open-position handling; every section decided and built 2026-09-04, including §17's 1h/15m entry filter (wired, unit-tested, gated off pending calibration); §18 (2026-09-05, all 3 phases built) redesigns the rollover itself into an event-driven same-day transition, demoting §4/§6/§8/§9's scheduled evening mechanism to a fallback
 │   ├── slack-circuit-breaker.md          # [IMPLEMENTED] Slack-driven emergency halt via interactive buttons
 │   ├── slack-position-sizing.md          # [IMPLEMENTED] Dynamic lot sizing via Slack modal
 │   ├── universal-ltp-websocket.md        # [SUPERSEDED] High-level LTP WS plan — superseded by websocket-ltp-impl.md

@@ -10,7 +10,14 @@ exchange, different underlying, no VIX coupling; see
 [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
 **Status: Phase 3 build complete, `DRY_RUN=True` (paper mode), live-testing on Delos since
-2026-09-04.**
+2026-09-04. Rollover redesign (plan §18, built 2026-09-05, all 3 phases) is also live in this
+codebase — the scheduled evening rollover below (§4/§6/§8/§9) is now a FALLBACK, not the primary
+path. If an in-trade position's contract flips on a rollover-eve day, it now exits immediately and
+switches to the new contract right then (with a fresh entry if the new contract independently
+agrees on the same bar) — the evening mechanism only ever runs if the position survives untouched
+all the way to `ROLLOVER_TIME`. A flat position on a rollover-eve switches contracts at setup,
+same day, rather than waiting for the evening. See `plans/prometheus-phase3-production.md` §18 for
+the full design; not yet exercised by an actual rollover.**
 [`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
 current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1,
 2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2),
@@ -237,7 +244,26 @@ graph TD
     CheckDone -- No --> WaitNextTick([Retried next main-loop tick\nregardless of status, §7 --\nnot gated on a fresh trend_flip])
 ```
 
-### Rollover Timeline (§4/§6/§8/§9, evening-triggered)
+### Rollover Timeline (§4/§6/§8/§9, evening-triggered) — now the FALLBACK, not the primary path
+
+**§18 (2026-09-05) changed what this diagram represents.** The evening-triggered mechanism below
+still exists and is unmodified, but it's no longer the normal way a rollover happens — it's what
+runs ONLY if an in-trade position survives completely untouched, with no flip at all, all the way
+to `ROLLOVER_TIME`. The actual common case now:
+
+- **Flat at setup on a rollover-eve** → switches to the new contract immediately (Phase 1,
+  `_switch_to_new_contract_now`), same morning — this diagram never runs at all for that day.
+- **In-trade on a rollover-eve** → both contracts are tracked all day (Phase 2). The moment the
+  old contract's own signal flips, it exits right then (plain `trend_flip`, unconditional) and, once
+  that exit confirms, switches to the new contract (Phase 3, `_execute_coincident_flip_transition`)
+  — with a fresh entry following immediately if the new contract independently agreed on the same
+  bar. This is a completely separate code path from the diagram below (no Rule 7, no historical-
+  basis recalibration, no `parent_trade_id` — see plan §18).
+- Only if NEITHER of those fires all day — i.e. the position never flips before `ROLLOVER_TIME` —
+  does the timeline below actually execute.
+
+See `plans/prometheus-phase3-production.md` §18 for the full design; a dedicated flowchart for the
+event-driven path hasn't been drawn yet (textual description only, above and in §18).
 
 ```mermaid
 graph TD
@@ -606,8 +632,9 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `REJECTION_RETRY_ATTEMPTS` / `_COOLDOWN_SEC` | 3 / 1 | §1 — `place_order`'s retry on an actual broker rejection |
 | `GHOST_RECOVERY_COOLDOWN_SEC` / `_LOOKBACK_SEC` | 2 / 60 | §1 — `place_order`'s order-book check on a `DataException`/`NetworkException` |
 | `ROLLOVER_TIME` | 23:15 | §4/§6 — evening cutoff where a confirmed roll actually executes (`CLOSING_TIME` − `ROLLOVER_BEFORE_CLOSE_MIN=15`, same DST caveat as `CLOSING_TIME`) |
-| `ROLLOVER_PREFETCH_TIME` | 23:10 | §6 step 2 — `ROLLOVER_TIME` − `ROLLOVER_PREFETCH_BUFFER_MIN=5`; new contract's today series bulk-fetched + WS subscribed here |
-| `PENDING_FLIP_REALERT_DEBOUNCE_SEC` | 300 | §7 — re-alert cadence for a stuck Rule 7 `_pending_flip`, matches the stale-tick-watchdog's existing convention |
+| `ROLLOVER_PREFETCH_TIME` | 23:10 | §6 step 2 — `ROLLOVER_TIME` − `ROLLOVER_PREFETCH_BUFFER_MIN=5`; new contract's today series bulk-fetched + WS subscribed here (now the fallback path only, §18) |
+| `NEW_CONTRACT_POLL_OFFSET_SEC` | 27 | §18 Phase 2 — seconds past the minute the new contract's own dual-tracking poll fires, offset from the old contract's on-the-minute poll so the two never compete for the same rate-limit window |
+| `PENDING_FLIP_REALERT_DEBOUNCE_SEC` | 300 | §7 — re-alert cadence for a stuck Rule 7 `_pending_flip`, matches the stale-tick-watchdog's existing convention; also reused by §18 Phase 3's `_pending_contract_transition` stuck-alert |
 
 ---
 
@@ -837,6 +864,43 @@ for that structural difference; Calmar is the fairer cross-phase comparison.
       placeholders (same starting values as the 15m ST params), not calibrated — left off so
       live ST_15 flip accuracy can be validated against the chart first, per the same reasoning
       as §11's opening-bar correction toggle.
+- [x] **Rollover redesign — event-driven same-day transition, all 3 phases built (§18,
+      2026-09-05)**: collapses the scheduled evening rollover into an event-driven one wherever
+      possible. **Phase 1** (flat at setup on a rollover-eve): switches `self._contract`
+      immediately via `_switch_to_new_contract_now`, rather than waiting for the evening — avoids
+      opening on the old contract only to be rolled the same evening. **Phase 2** (in-trade):
+      `_start_dual_tracking` subscribes the new contract's WS and seeds its own independent 15m ST
+      series right at setup; a new staggered per-minute poll (`NEW_CONTRACT_POLL_OFFSET_SEC=27`,
+      offset from the old contract's own on-the-minute poll to avoid rate-limit collisions) keeps
+      it current all day — advisory only, never drives an order by itself. **Phase 3**: on the old
+      contract's own flip, `_execute_coincident_flip_transition` exits it unconditionally (plain
+      `trend_flip`, no Rule 7 netting — different tokens, the exchange can't net a sell of one
+      against a buy of the other) and, only once that exit is CONFIRMED, switches `self._contract`;
+      if the new contract independently flipped the same direction on the same 15m bar (a genuine
+      15/15-row window required — an incomplete one never claims coincidence), a wholly fresh entry
+      follows on it (real fill price, no `parent_trade_id`/rollover framing at all). A dedicated
+      `_pending_contract_transition` marker retries an unconfirmed exit every tick, same
+      CRITICAL-then-debounced-alert shape as Rule 7's own stuck-flip marker. A second advisor
+      review of the drafted Phase 3 design (before any of it was coded) caught a real bug already
+      in the Phase 2 commit — `_check_rollover_timing`'s topup-poll had no lower time bound once
+      `_rollover_prefetch_done` could be set at setup instead of only at 23:10, firing every minute
+      all day instead of just the intended 5-minute window — fixed. It also surfaced (and all were
+      applied): a window-completeness gate before claiming a coincident flip; a strict
+      `now < ROLLOVER_TIME` ownership boundary so this mechanism and the scheduled evening one can
+      never both act on the same position; refusing to start while a Rule 7 flip is already stuck;
+      draining the new contract's hours-old accumulated tick-OHLC before it becomes the active
+      contract (otherwise the provisional-boundary feature, live, could act on a whole-day-wide
+      range); and a belt-and-suspenders token check on the existing 23:15 fallback so it can never
+      flatten a position it wasn't armed against. A separate post-build advisor pass caught one
+      more real bug (fixed before deploy): the new-contract poll's own clock was only advancing
+      inside the same condition that gated the actual poll — an SL/target exit (not a flip) could
+      leave it frozen for hours, then burst dozens of real broker calls on the next in-trade tick
+      trying to catch up; fixed by decoupling the clock's advance from the poll decision. Mock-
+      verified 24/24 for Phase 3 (coincident/non-coincident outcomes, the completeness gate, the
+      unconfirmed-exit retry, both routing refusals, the `ROLLOVER_TIME` boundary, the fallback
+      token-mismatch refusal) plus dedicated regression tests for both caught bugs. Full suite
+      clean after every phase. **Not yet exercised by an actual live rollover** — needs the next
+      one (~2026-09-15) to observe for real.
 - [ ] **Order-update WebSocket unverified for MCX** — worked during the brief 2026-08-31 live
       window (four real fills resolved via WS), but that window was cut short by the incident
       below before a full session could confirm it under sustained live conditions

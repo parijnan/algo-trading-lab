@@ -141,7 +141,8 @@ class Prometheus:
         self._rollover_basis = None          # §6 step 1: precomputed {basis_price, sl_price, lot1_target, lot2_target, lot2_target_source, lot2_only}
         self._rollover_prefetch_done = False # §6 step 2 latch
         self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
-        self._df_15m_new = None   # §18 Phase 2: new contract's own independent 15m ST series while
+        self._df_15m_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+                                   # §18 Phase 2: new contract's own independent 15m ST series while
                                    # in-trade on a rollover-eve -- advisory only, read by Phase 3's
                                    # coincident-flip check, never drives an order on its own.
         self._rollover_executed_today = False  # latch so §6 steps 4-7 only ever fire once per evening
@@ -1068,7 +1069,7 @@ class Prometheus:
             self._df_15m = self._df_15m_new
             self._rewrite_today_cache_for_switch(self._df_1m_today)   # §18 issue #7
             self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
-            self._df_15m_new = None
+            self._df_15m_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
             self._rollover_new_contract = None
             self._rollover_executed_today = True   # §18 issue #8/#9's latch
             self._rollover_prefetch_done = False
@@ -1567,17 +1568,33 @@ class Prometheus:
                 # ── §18 Phase 2: in-trade rollover-eve dual-tracking --
                 #    offset per-minute poll for the NEW contract, staggered
                 #    away from the old contract's own on-the-minute poll
-                #    above. Independent of that block's own `if` (different
-                #    clock, checked every tick regardless) -- advisory only,
-                #    never drives an order on its own; only read by §18
-                #    Phase 3's coincident-flip check. ──────────────────────
-                if (self._rollover_new_contract is not None and self.state.status == 'in_trade'
-                        and now >= next_boundary_new):
+                #    above. Advisory only, never drives an order on its
+                #    own; only read by §18 Phase 3's coincident-flip check.
+                #
+                #    The clock (next_boundary_new) and the "should I
+                #    actually poll" business condition are DELIBERATELY
+                #    separate (advisor-flagged bug, 2026-09-05, fixed before
+                #    ever deploying): an SL/target exit (not a flip) can
+                #    take status back to 'watching' for a while WITHOUT
+                #    clearing self._rollover_new_contract (that only
+                #    happens via Phase 3's own transition or §6's evening
+                #    path) -- if the clock only advanced inside the same
+                #    `if` as the poll, it would freeze for the whole
+                #    watching stretch, then the instant status flips back
+                #    to 'in_trade' it would be hours stale and fire a
+                #    _do_rollover_topup_poll (a real fetch_one_minute_window
+                #    call) on EVERY 0.5-1s tick until it caught up -- a
+                #    burst of hundreds of broker calls blocking the main
+                #    loop, LTP exit-checks included. Advancing the clock
+                #    unconditionally means catch-up is cheap timestamp
+                #    arithmetic, never a burst of real fetches. ───────────
+                if now >= next_boundary_new:
                     boundary_new = next_boundary_new.replace(second=0, microsecond=0)
-                    self._do_rollover_topup_poll(self._rollover_new_contract, datetime.now())
-                    if boundary_new.minute % 15 == 0:
-                        self._df_15m_new, _, _ = self._build_15m_bar(
-                            self._df_1m_today_new, self._df_15m_new, boundary_new)
+                    if self._rollover_new_contract is not None and self.state.status == 'in_trade':
+                        self._do_rollover_topup_poll(self._rollover_new_contract, datetime.now())
+                        if boundary_new.minute % 15 == 0:
+                            self._df_15m_new, _, _ = self._build_15m_bar(
+                                self._df_1m_today_new, self._df_15m_new, boundary_new)
                     next_boundary_new += timedelta(minutes=1)
 
                 time.sleep(0.5 if self.state.status == 'in_trade' else 1.0)
