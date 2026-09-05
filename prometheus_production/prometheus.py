@@ -148,8 +148,16 @@ class Prometheus:
         self._rollover_new_ws_subscribed = False   # §6 step 2 latch, separate from the historical-fetch latch
         self._rollover_go_decision = None    # §6 step 4: decided ONCE, cached — retries only retry
                                               # execution (exit confirm / reopen), never re-litigate go/no-go
+        self._rollover_old_contract_token = None   # captured when §6's evening path is armed (in-trade
+                                                     # branch) -- §18 issue #9's belt-and-suspenders check:
+                                                     # the 23:15 fallback only ever flattens THIS token,
+                                                     # never a fresh position already opened on the new one.
 
         self._pending_flip = None   # §7: Rule 7's combined-order retry-until-resolved marker
+        self._pending_contract_transition = None   # §18 Phase 3: coincident-flip transition's own
+                                                     # retry-until-resolved marker -- deliberately separate
+                                                     # from _pending_flip (a cross-contract transition can't
+                                                     # be represented by Rule 7's same-instrument marker).
 
         # Provisional boundary computation (2026-09-04, user-directed) —
         # all in-memory only, same precedent as _pending_recovery/
@@ -282,6 +290,7 @@ class Prometheus:
             return
 
         self._rollover_new_contract = tomorrow_contract
+        self._rollover_old_contract_token = self._contract['token']   # §18 issue #9
         tag = _tag(self._contract['symbol_root'])
         logger.info(f"Rollover tonight: {self._contract['symbol']} -> "
                    f"{tomorrow_contract['symbol']} at {ROLLOVER_TIME}.")
@@ -393,6 +402,7 @@ class Prometheus:
         self._contract = new_contract
         self._df_15m = df_15m
         self._df_1m_today = new_today_1m
+        self._rewrite_today_cache_for_switch(new_today_1m)   # §18 issue #7 (advisor-flagged)
         self._rollover_executed_today = True   # nothing left for §6's evening path to do today
 
         last = self._df_15m.iloc[-1]
@@ -660,8 +670,14 @@ class Prometheus:
     def _check_rollover_timing(self, now: datetime) -> None:
         """§6 steps 2-4, called every 1-min cycle from the main loop
         (same cadence as _recover_pending_windows). No-op once today's
-        rollover (if any) has already executed."""
-        if self._rollover_new_contract is None or self._rollover_executed_today:
+        rollover (if any) has already executed. Also no-op while §18
+        Phase 3's coincident-flip transition has an unconfirmed exit still
+        retrying (advisor-flagged, 2026-09-05) -- otherwise this could
+        invoke _execute_rollover_decision on top of that in-flight retry,
+        two independent mechanisms both calling _execute_exit_all on the
+        same position at once."""
+        if (self._rollover_new_contract is None or self._rollover_executed_today
+                or self._pending_contract_transition is not None):
             return
         nc = self._rollover_new_contract
         prefetch_time = pd.Timestamp(f'{now.date()} {ROLLOVER_PREFETCH_TIME}')
@@ -669,7 +685,17 @@ class Prometheus:
 
         if not self._rollover_prefetch_done and now >= prefetch_time:
             self._do_rollover_prefetch(nc, now)
-        elif self._rollover_prefetch_done and now < rollover_time:
+        # §18 Phase 2 bug fix (2026-09-05, caught by advisor before Phase 3):
+        # _rollover_prefetch_done can now already be True from _start_dual_tracking
+        # (set at setup, hours before prefetch_time) -- without this extra
+        # `now >= prefetch_time`, this elif would fire every minute from
+        # session open through ROLLOVER_TIME, doubling up with Phase 2's own
+        # staggered NEW_CONTRACT_POLL_OFFSET_SEC poll in the SAME loop
+        # iteration (this runs a few lines before the old contract's own
+        # fetch, both hitting the same rate-limit window). Restores §6's
+        # original 5-minute time-box; Phase 2's offset poll is the sole
+        # all-day poller outside that window.
+        elif self._rollover_prefetch_done and prefetch_time <= now < rollover_time:
             self._do_rollover_topup_poll(nc, now)
 
         if now >= rollover_time:
@@ -770,6 +796,27 @@ class Prometheus:
                         _slack(f'\U0001f504 {tag}: rollover veto — {nc["symbol"]}\'s 1h ST '
                               f'disagrees with the {new_direction} reopen — flatten only, '
                               f'no reopen.', SLACK_TRADEBOT_CHANNEL)
+
+        # §18 issue #9 (advisor-flagged, 2026-09-05): belt-and-suspenders --
+        # if we're in-trade but on a DIFFERENT token than the one this
+        # evening's roll was armed against, something is already
+        # inconsistent (Phase 3's coincident-flip path should have cleared
+        # _rollover_new_contract/latched _rollover_executed_today the moment
+        # ITS OWN exit confirmed, which alone would have stopped this method
+        # from ever being called again today). Refuse outright rather than
+        # flatten a position this evening's rollover was never armed
+        # against, or silently skip the exit while still running the
+        # switch/reopen/cleanup below on stale assumptions.
+        if self.state.status == 'in_trade' and self.state.token != self._rollover_old_contract_token:
+            logger.critical(f"Rollover fallback: in_trade on {self.state.token}, but this evening's "
+                            f"roll was armed against {self._rollover_old_contract_token} -- refusing "
+                            f"to touch it (should be unreachable; §18's latch should already have "
+                            f"stopped this). Investigate before the next rollover.")
+            _slack(f'\U0001f6a8 {_tag(self._contract["symbol_root"])}: rollover fallback token '
+                  f'mismatch — in_trade on {self.state.token}, armed against '
+                  f'{self._rollover_old_contract_token}. NOT touching the open position. '
+                  f'Investigate.', SLACK_ERRORS_CHANNEL)
+            return
 
         # Step 5: flatten the old position unconditionally, regardless of go/no-go
         if self.state.status == 'in_trade':
@@ -912,6 +959,172 @@ class Prometheus:
             self._rollover_basis = None
 
         save_state(self.state)
+
+    def _rewrite_today_cache_for_switch(self, new_today_1m: pd.DataFrame) -> None:
+        """§18 (2026-09-05, advisor-flagged hardening, applied to every
+        in-session contract switch): TODAY_1M_CACHE_FILE must never end up
+        holding a mix of the old and new contract's rows under one "today"
+        file. Nothing re-reads it THIS session, but a mid-day restart whose
+        own switch attempt then fails would seed off a silently mixed-price
+        series that _find_Nmin_gaps can't catch (timestamps stay contiguous,
+        only prices are wrong)."""
+        clear_today_cache()
+        if new_today_1m is not None and not new_today_1m.empty:
+            _merge_and_save(TODAY_1M_CACHE_FILE, new_today_1m)
+
+    # -----------------------------------------------------------------------
+    # §18 Phase 3 (2026-09-05): coincident-flip transition -- in-trade,
+    # rollover-eve. Called from _handle_new_15m_bar INSTEAD of
+    # _execute_rule7_flip whenever a rollover is armed for tonight and
+    # we're still before ROLLOVER_TIME (past it, §6 owns the transition).
+    # -----------------------------------------------------------------------
+
+    def _execute_coincident_flip_transition(self, direction_now: str, signal_ts, signal_close: float) -> None:
+        """
+        The old contract's flip is ALWAYS an unconditional exit here -- no
+        rollover framing, exactly like an ordinary trend_flip exit (§7's
+        Rule 7 combined order does NOT apply: different tokens, the
+        exchange can't net a sell of one against a buy of the other --
+        §18 issue #1). Whether the new contract ALSO independently flipped
+        on this SAME boundary, to the SAME direction, decides whether a
+        wholly fresh entry follows.
+
+        boundary = signal_ts + 15min, since signal_ts is _handle_new_15m_bar's
+        window_start convention (the same value _execute_rule7_flip receives).
+        """
+        boundary = signal_ts + timedelta(minutes=15)
+        nc = self._rollover_new_contract
+
+        # Force-fetch right now, out of the staggered poll's own cycle
+        # (§18 issues #5/#6) -- the coincident check needs fresh data at
+        # THIS exact moment, not stale-by-up-to-a-minute data.
+        self._do_rollover_topup_poll(nc, datetime.now())
+        self._df_15m_new, new_bar, n_rows_new = self._build_15m_bar(
+            self._df_1m_today_new, self._df_15m_new, boundary)
+
+        # §18 issue #2 (advisor-flagged): an incomplete new-contract window
+        # must never be trusted to claim a coincident flip -- same DECIDED
+        # "incomplete data -> no-go" default §6/§8's own veto already uses
+        # at ROLLOVER_TIME. A short window here just means "no coincidence
+        # claimed," never "claim it anyway" -- the old contract's exit
+        # below is completely unaffected either way.
+        coincident = False
+        if new_bar is not None and n_rows_new >= 15:
+            new_direction = 'bullish' if bool(new_bar['trend']) else 'bearish'
+            coincident = bool(new_bar['trend_flip']) and new_direction == direction_now
+
+        self._pending_contract_transition = {
+            'stage': 'exiting', 'old_contract': dict(self._contract), 'new_contract': dict(nc),
+            'direction_now': direction_now, 'signal_ts': signal_ts, 'signal_close': signal_close,
+            'coincident': coincident, 'first_alert_ts': None, 'last_realert_ts': None,
+        }
+        logger.info(f"§18 Phase 3: {self._contract['symbol']} flipped {direction_now} at "
+                   f"{signal_ts:%H:%M} on rollover-eve -- {nc['symbol']} {'ALSO' if coincident else 'did NOT'} "
+                   f"flip {direction_now} on the same bar ({n_rows_new}/15 rows). "
+                   f"{'Will take over with a fresh entry.' if coincident else 'Exit only, then watching.'}")
+        self._retry_pending_contract_transition()
+
+    def _retry_pending_contract_transition(self) -> None:
+        """Retried every tick until fully resolved, same tick-driven
+        pattern as _retry_pending_flip (§7) -- deliberately a SEPARATE
+        marker, not _pending_flip itself, since a cross-contract transition
+        can't be represented by Rule 7's single-instrument retry shape
+        (§18 issue #2). _execute_exit_all is idempotent on repeat calls
+        (re-checks lot{n}_status=='open'), so no new exit-retry machinery
+        is needed here, same as _execute_rollover_decision already relies
+        on for its own step-5 retry.
+        """
+        pct = self._pending_contract_transition
+        if pct is None:
+            return
+
+        if pct['stage'] == 'exiting':
+            closed = self._execute_exit_all('trend_flip')   # plain flip exit -- no 'rollover' reason,
+                                                              # no Rule 7 framing at all (§18 design)
+            if not closed:
+                self._alert_pending_transition_stuck(
+                    f"old-contract exit ({pct['old_contract']['symbol']}) not yet confirmed.")
+                return
+
+            old_contract = pct['old_contract']
+            new_contract = pct['new_contract']
+            tag = _tag(new_contract['symbol_root'])
+            self.feed.unsubscribe_options([old_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+
+            # §18 issue #5 (advisor-flagged): the new token's WS has been
+            # subscribed (and unread) since this morning's _start_dual_tracking
+            # -- SharedFeed.get_ohlc accumulates from the last call/subscribe
+            # and resets on read, so by now it holds the WHOLE DAY's
+            # high/low. Drain it before this contract ever becomes
+            # self._contract, or the first post-switch _harvest_tick_ohlc()
+            # would seed _tick_ohlc_accum with an hours-wide range that
+            # PROVISIONAL_BOUNDARY_ENABLED=True (live) could act on.
+            self.feed.get_ohlc(new_contract['token'])
+            self._tick_ohlc_accum = {'open': None, 'high': None, 'low': None, 'close': None}
+            self._provisional_pending = None
+
+            self._contract = new_contract
+            self._df_1m_today = self._df_1m_today_new
+            self._df_15m = self._df_15m_new
+            self._rewrite_today_cache_for_switch(self._df_1m_today)   # §18 issue #7
+            self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+            self._df_15m_new = None
+            self._rollover_new_contract = None
+            self._rollover_executed_today = True   # §18 issue #8/#9's latch
+            self._rollover_prefetch_done = False
+            self._rollover_new_ws_subscribed = False
+            self._rollover_basis = None
+            self._rollover_go_decision = None
+            save_state(self.state)
+
+            logger.info(f"§18 Phase 3: {old_contract['symbol']} exit confirmed -- now trading "
+                       f"{new_contract['symbol']}.")
+            _slack(f'{"[PAPER] " if DRY_RUN else ""}\U0001f504 {tag}: rolled early -- '
+                  f'{old_contract["symbol"]} flipped and exited, switched to {new_contract["symbol"]}.',
+                  SLACK_TRADEBOT_CHANNEL)
+
+            if not pct['coincident']:
+                self._pending_contract_transition = None
+                return
+            pct['stage'] = 'entering'
+
+        if pct['stage'] == 'entering':
+            # §18 issue #4 already applied at the START of this transition
+            # (_handle_new_15m_bar's routing refuses to begin one while
+            # _pending_flip is set) -- the guards here are the SAME ones
+            # _execute_rule7_flip's re-entry half already uses.
+            allowed = (self._past_min_entry_guard(datetime.now())
+                      and self._check_1h_alignment(pct['direction_now']))
+            if allowed:
+                # self._contract is already the new contract (switched
+                # above) -- a wholly fresh, ordinary entry: real fill
+                # price, no basis_price, no parent_trade_id (§18 design:
+                # this is NOT a rollover-continuation row).
+                self._execute_entry(pct['direction_now'], pct['signal_ts'], pct['signal_close'])
+            # No retry on an entry failure -- identical to any ordinary
+            # day's failed fresh entry, which this codebase doesn't retry
+            # either (§18 issue: confirmed fine, not a gap to close here).
+            self._pending_contract_transition = None
+
+    def _alert_pending_transition_stuck(self, detail: str) -> None:
+        """Same CRITICAL-then-debounced-re-alert shape as
+        _alert_pending_flip_stuck (§7) -- an unconfirmed exit here leaves a
+        real position on the old contract unmonitored by anything except
+        this same retry, the same severity class as a stuck Rule 7 flip."""
+        pct = self._pending_contract_transition
+        tag = _tag(pct['old_contract']['symbol_root'])
+        now = time.time()
+        if pct['first_alert_ts'] is None:
+            pct['first_alert_ts'] = pct['last_realert_ts'] = now
+            logger.critical(f'§18 Phase 3 pending transition stuck: {detail}')
+            _slack(f'\U0001f6a8 {tag}: coincident-flip transition stuck — {detail} Retrying every tick.',
+                  SLACK_ERRORS_CHANNEL)
+        elif now - pct['last_realert_ts'] >= PENDING_FLIP_REALERT_DEBOUNCE_SEC:
+            pct['last_realert_ts'] = now
+            logger.critical(f'§18 Phase 3 pending transition STILL stuck: {detail}')
+            _slack(f'\U0001f6a8 {tag}: coincident-flip transition STILL stuck — {detail}', SLACK_ERRORS_CHANNEL)
+        else:
+            logger.warning(f'§18 Phase 3 pending transition stuck (debounced): {detail}')
 
     # -----------------------------------------------------------------------
     # Setup / teardown
@@ -1066,6 +1279,22 @@ class Prometheus:
                   f'{self._pending_flip["opened_lots"]}/{self._pending_flip["new_trade_lots_target"]} '
                   f'of the new {self._pending_flip["direction"]} position opened. Not fabricated, '
                   f'not retried further this session.', SLACK_TRADEBOT_CHANNEL)
+
+        if self._pending_contract_transition is not None:
+            # Same shape as the Rule 7 note above -- §18 Phase 3's own
+            # transition. Safe by construction either way: if the exit
+            # never confirmed, state is still in_trade on the OLD contract
+            # (untouched, resumed normally next session); if it confirmed
+            # but the entry attempt never happened, state is already
+            # 'watching' on the NEW contract -- nothing lost but a missed
+            # same-day re-entry opportunity.
+            pct = self._pending_contract_transition
+            logger.warning(f"Teardown with a §18 Phase 3 pending transition still unresolved "
+                           f"(stage={pct['stage']}, {pct['old_contract']['symbol']} -> "
+                           f"{pct['new_contract']['symbol']}) — abandoned, not retried further.")
+            _slack(f'ℹ️ {tag}: session ended mid-rollover-eve-transition (stage={pct["stage"]}) — '
+                  f'not retried further this session. State reflects whatever was actually '
+                  f'confirmed.', SLACK_TRADEBOT_CHANNEL)
 
         if self._kill_no_exit and self.state.status == 'in_trade':
             # KILL's entire premise (slack_listener.py's own message: "Control
@@ -1242,6 +1471,13 @@ class Prometheus:
                 if self._pending_flip is not None:
                     self._retry_pending_flip()
 
+                # ── §18 Phase 3: retry a stuck coincident-flip transition
+                #    every tick, same shape as §7's retry above -- can
+                #    straddle in_trade (old-contract exit still closing)
+                #    and watching (exit confirmed, entry attempt pending) ──
+                if self._pending_contract_transition is not None:
+                    self._retry_pending_contract_transition()
+
                 # ── In-trade: tight LTP-driven exit loop, every tick ────
                 if self.state.status == 'in_trade':
                     self._check_exit_conditions_ltp(now)
@@ -1334,7 +1570,7 @@ class Prometheus:
                 #    above. Independent of that block's own `if` (different
                 #    clock, checked every tick regardless) -- advisory only,
                 #    never drives an order on its own; only read by §18
-                #    Phase 3's (not yet built) coincident-flip check. ──────
+                #    Phase 3's coincident-flip check. ──────────────────────
                 if (self._rollover_new_contract is not None and self.state.status == 'in_trade'
                         and now >= next_boundary_new):
                     boundary_new = next_boundary_new.replace(second=0, microsecond=0)
@@ -1516,10 +1752,31 @@ class Prometheus:
 
         if self.state.status == 'in_trade':
             if flip and direction_now != self.state.direction:
-                # Rule 7 (§7, 2026-09-04): one combined net order for the
-                # exit and re-entry together, not the old two/three-order
-                # sequence — see _execute_rule7_flip.
-                self._execute_rule7_flip(direction_now, window_start, bar['close'])
+                # §18 Phase 3 (issue #6): a coincident-flip transition is
+                # already resolving -- never start a second one on top.
+                # Just ignore; the in-flight retry (main loop, every tick)
+                # already covers this position.
+                if self._pending_contract_transition is not None:
+                    logger.warning('Flip detected while a §18 contract transition is still '
+                                   'resolving -- ignoring until it clears.')
+                    return
+                # §18 issues #3/#4: a coincident-flip transition only ever
+                # starts before ROLLOVER_TIME (past it, §6 owns the
+                # transition -- these two are time-disjoint by
+                # construction) and only while no Rule-7 flip is already
+                # stuck on this same position (§7's _pending_flip can't
+                # represent a cross-contract transition).
+                rollover_window_open = (
+                    self._rollover_new_contract is not None
+                    and datetime.now() < pd.Timestamp(f'{datetime.now().date()} {ROLLOVER_TIME}'))
+                if rollover_window_open and self._pending_flip is None:
+                    self._execute_coincident_flip_transition(direction_now, window_start, bar['close'])
+                else:
+                    # Rule 7 (§7, 2026-09-04): one combined net order for the
+                    # exit and re-entry together, not the old two/three-order
+                    # sequence — see _execute_rule7_flip. Also the path taken
+                    # on any ordinary (non-rollover-eve) day, unchanged.
+                    self._execute_rule7_flip(direction_now, window_start, bar['close'])
             return
 
         # status == 'watching' — fresh entry detection. §2 (Phase 3): no
