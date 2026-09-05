@@ -255,13 +255,29 @@ class Prometheus:
         """§4: checked once, at setup — well before ROLLOVER_TIME, so §6
         step 1's basis precompute has plenty of lead time. Checks whether
         tomorrow's *trading* day (not a naive today+1) would resolve to a
-        different contract than today's self._contract; if so, the
-        rollover sequence fires tonight at ROLLOVER_TIME (§6, driven by
-        _check_rollover_timing every 1-min cycle in the main loop)."""
+        different contract than today's self._contract; if so, a roll is
+        needed. §18 (2026-09-05): the two cases now diverge sharply —
+
+        - Flat (no position to protect): switch to the new contract RIGHT
+          NOW instead of waiting for the scheduled evening mechanism. There
+          is nothing §6's dual-poll/veto machinery is protecting here, and
+          waiting until ROLLOVER_TIME just means any fresh entry today would
+          open on the OLD contract only to be immediately rolled the same
+          evening — pure churn. See _switch_to_new_contract_now.
+        - In-trade: unchanged for now (§6's evening-triggered sequence,
+          driven by _check_rollover_timing every 1-min cycle) — §18's
+          same-day coincident-flip transition for this case is Phase 2/3,
+          not yet built.
+        """
         tomorrow = next_trading_day(datetime.now().date())
         tomorrow_contract = resolve_effective_contract(SYMBOL, today=tomorrow)
         if tomorrow_contract['token'] == self._contract['token']:
             return
+
+        if self.state.status != 'in_trade':
+            self._switch_to_new_contract_now(tomorrow_contract)
+            return
+
         self._rollover_new_contract = tomorrow_contract
         tag = _tag(self._contract['symbol_root'])
         logger.info(f"Rollover tonight: {self._contract['symbol']} -> "
@@ -269,6 +285,67 @@ class Prometheus:
         _slack(f'\U0001f514 {tag}: rolling to {tomorrow_contract["symbol"]} tonight at '
               f'{ROLLOVER_TIME}.', SLACK_TRADEBOT_CHANNEL)
         self._precompute_rollover_basis()
+
+    def _switch_to_new_contract_now(self, new_contract: dict) -> None:
+        """§18 flat-at-open case: nothing open to protect, so switch
+        immediately rather than waiting for §6's scheduled evening
+        mechanism. Deliberately does NOT reuse seed_st15/read_today_cache —
+        those are coupled to a single shared "today" cache file implicitly
+        tied to whichever contract has been trading all day (self._contract);
+        blindly re-reading that cache for a DIFFERENT contract mid-day would
+        silently mix the old contract's price rows into what's supposed to
+        be the new contract's own series (a real, different price level —
+        confirmed ~150-250pt CRUDEOILM calendar spread, not a rounding
+        difference). Instead, fetches the new contract's own "today" 1-min
+        window directly (same live-fetch primitive §6 step 2's
+        _do_rollover_prefetch already uses) and computes ST via
+        compute_st_for_contract — built for exactly this "ST for a contract
+        that isn't self._contract" shape, already exercised by §6/§8's
+        veto and §17's 1h filter.
+
+        On any failure, stays on the OLD contract for the rest of today —
+        safe by construction: tomorrow's fresh _setup() calls
+        resolve_effective_contract() with no override, which independently
+        re-derives the correct contract for that day regardless of whether
+        today's early switch succeeded.
+        """
+        old_contract = self._contract
+        tag = _tag(new_contract['symbol_root'])
+        now = datetime.now()
+        session_start = pd.Timestamp(f'{now.date()} {SESSION_START_TIME}')
+
+        new_today_1m = fetch_one_minute_window(self.obj, new_contract['token'], session_start, now)
+        if new_today_1m is None:
+            new_today_1m = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
+        else:
+            new_today_1m = new_today_1m.copy()
+            if new_today_1m['time_stamp'].dt.tz is not None:
+                new_today_1m['time_stamp'] = new_today_1m['time_stamp'].dt.tz_localize(None)
+
+        df_15m = compute_st_for_contract(new_contract, new_today_1m, now)
+        if df_15m.empty:
+            logger.error(f"§18 flat-switch: could not build {new_contract['symbol']}'s ST_15 "
+                        f"(gap or fetch failure) — staying on {old_contract['symbol']} for today; "
+                        f"tomorrow's fresh setup will resolve the contract correctly regardless.")
+            _slack(f'⚠️ {tag}: could not switch to {new_contract["symbol"]} today (ST build failed) — '
+                  f'staying on {old_contract["symbol"]} for the rest of today.', SLACK_ERRORS_CHANNEL)
+            return
+
+        self.feed.subscribe_options([new_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+        self.feed.unsubscribe_options([old_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
+
+        self._contract = new_contract
+        self._df_15m = df_15m
+        self._df_1m_today = new_today_1m
+        self._rollover_executed_today = True   # nothing left for §6's evening path to do today
+
+        last = self._df_15m.iloc[-1]
+        trend_str = ('bullish' if bool(last['trend']) else 'bearish') if not pd.isna(last['trend']) else 'warmup'
+        logger.info(f"§18: flat -- switched {old_contract['symbol']} -> {new_contract['symbol']} "
+                   f"now, not waiting for {ROLLOVER_TIME} ({len(self._df_15m)} bars, trend={trend_str}).")
+        _slack(f'{"[PAPER] " if DRY_RUN else ""}\U0001f504 {tag}: switched to {new_contract["symbol"]} '
+              f'at open (flat, no position to protect). ST_15 built ({len(self._df_15m)} bars, '
+              f'trend={trend_str}).', SLACK_TRADEBOT_CHANNEL)
 
     def _precompute_rollover_basis(self) -> None:
         """§6 step 1 / §8 points 1-2: as soon as tonight's roll is
