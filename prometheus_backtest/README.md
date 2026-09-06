@@ -232,26 +232,30 @@ every number below reflects it. (The live-production analogue — a known-bad se
 the *daily* ST re-seed window rather than one-time historical data — is tracked as `ST_SEED_SKIP_DATES`
 in `plans/prometheus-phase3-production.md` §10.)
 
-**Raw signal-quality sweep results** (`ST_PERIOD=10`, no SL/target/EOD, refreshed 2026-09-04
-through 2026-09-03):
+**Raw signal-quality sweep results** (`ST_PERIOD=10`, no SL/target/EOD, refreshed 2026-09-06
+through 2026-09-04 — `sweep_p3.py` re-run in full after that session's live trading added a real
+flip, per CLAUDE.md's "one variable changed" convention there's no reason a data refresh alone
+should touch the grid selectively):
 
 | Multiplier | Trades | Win % | Total P&L | Max DD | Calmar |
 |---|---|---|---|---|---|
-| 2.0 | 380 | 41.8% | ₹148,560 | (see sweep_p3_summary.csv) | — |
-| 2.5 | 288 | 42.0% | ₹127,290 | (see sweep_p3_summary.csv) | — |
-| 3.0 | 234 | 39.3% | ₹68,730 | (see sweep_p3_summary.csv) | — |
-| 3.5 | 198 | 37.9% | ₹41,370 | (see sweep_p3_summary.csv) | — |
-| 4.0 | 160 | 38.8% | ₹34,980 | (see sweep_p3_summary.csv) | — |
-| 4.5 | 130 | 40.0% | ₹60,110 | (see sweep_p3_summary.csv) | — |
-| 5.0 | 116 | 39.7% | ₹39,830 | (see sweep_p3_summary.csv) | — |
-| 5.5 | 98 | 40.8% | ₹36,820 | (see sweep_p3_summary.csv) | — |
+| 2.0 | 381 | 42.0% | ₹150,150 | (see sweep_p3_summary.csv) | — |
+| 2.5 | 289 | 42.2% | ₹128,280 | (see sweep_p3_summary.csv) | — |
+| 3.0 | 235 | 39.6% | ₹69,240 | (see sweep_p3_summary.csv) | — |
+| 3.5 | 200 | 38.0% | ₹41,550 | (see sweep_p3_summary.csv) | — |
+| 4.0 | 162 | 38.3% | ₹34,360 | (see sweep_p3_summary.csv) | — |
+| 4.5 | 131 | 39.7% | ₹59,320 | (see sweep_p3_summary.csv) | — |
+| 5.0 | 117 | 39.3% | ₹38,240 | (see sweep_p3_summary.csv) | — |
+| 5.5 | 99 | 40.4% | ₹35,080 | (see sweep_p3_summary.csv) | — |
 
-Pattern held with 2 more days of data: trade counts, win rates, and total P&L all moved by
-small, proportionate amounts (e.g. mult 2.0: 373→380 trades, ₹147,320→₹148,560), no reversal.
-`sweep_p3.py`'s own summary doesn't compute Calmar for the raw (no-SL/target) series — the
-qualitative finding stands regardless: raw Calmar climbed steadily from 5.5 down to 2.5, then
-flattened extending one step further to 2.0 rather than continuing to climb — the signature that
-argues against 2.5 being purely an under-explored grid-edge artifact.
+(Trade counts above are closed trades only — each multiplier also has exactly 1 trade still open
+at data end, the real bullish position entered live 2026-09-04 20:15 that the earlier bearish
+raw trade flipped into.) Pattern held with one more day of data: trade counts, win rates, and
+total P&L all moved by small, proportionate amounts (e.g. mult 2.0: 380→381 trades,
+₹148,560→₹150,150), no reversal. `sweep_p3.py`'s own summary doesn't compute Calmar for the raw
+(no-SL/target) series — the qualitative finding stands regardless: raw Calmar climbed steadily
+from 5.5 down to 2.5, then flattened extending one step further to 2.0 rather than continuing to
+climb — the signature that argues against 2.5 being purely an under-explored grid-edge artifact.
 
 **Exit calibration winners, all multipliers** (SL/target1/target2 grids: 1.0–3.5% / 0.5–2.0% /
 1.5–6.0%, Calmar-selected at each stage, refreshed 2026-09-04):
@@ -291,19 +295,23 @@ first):
 
 | Metric | Mult 2.0 (SL 2.2/T1 2.0/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
 |---|---|---|
-| Total trades | 380 | 288 |
-| Win % | 44.47% | 48.61% |
-| Total P&L | ₹169,779 | ₹120,936 |
-| Avg win / avg loss | ₹3,173 / −₹1,737 | ₹2,341 / −₹1,398 |
+| Total trades | 381 | 288 |
+| Win % | 44.62% | 48.61% |
+| Total P&L | ₹173,102 | ₹120,936 |
+| Avg win / avg loss | ₹3,174 / −₹1,737 | ₹2,341 / −₹1,398 |
 | Max win / max loss | ₹9,376 / −₹6,320 | ₹7,835 / −₹2,160 |
 | Max drawdown | −₹16,625 | −₹11,219 |
-| Calmar | 10.21 | 10.78 |
+| Calmar | 10.41 | 10.78 |
 
-Refreshed 2026-09-04 (through 2026-09-03). Both shown at 1 unit (2 lots) as traded — no capital
-normalisation. Calmar moved slightly for both (10.09→10.21 for 2.0, 9.96→10.78 for 2.5) but the
-two remain essentially tied — the fresh data didn't change the picture enough to revisit the
-decision, and drawdown reproduces the original figures exactly (−16,625/−11,219 unchanged),
-confirming the per-lot-exit-event methodology is applied consistently across both refreshes.
+Mult 2.0 refreshed 2026-09-06 (through 2026-09-04) — `bespoke_2lot_p3.py` re-run against the
+freshly-synced data covering Friday's live session, which included one more raw flip (bearish
+trade 381 closing into the real bullish position entered 20:15). **Mult 2.5's column is still
+the 2026-09-04-vintage figure (through 2026-09-03), NOT re-run this pass** — only mult 2.0 was
+in scope this time. Calmar moved 10.21→10.41 for mult 2.0; drawdown reproduces the original
+figure exactly (−16,625 unchanged), confirming the per-lot-exit-event methodology is applied
+consistently. The two remain essentially tied and the fresh data doesn't change the picture
+enough to revisit the mult-2.0 decision. Re-run mult 2.5 the same way before drawing any
+conclusion that directly compares the two at matching vintage.
 
 **Open caveats on both candidates, not yet resolved:**
 1. **Mult 2.0's `TARGET1_PCT` landed on the edge of its own grid** (0.5%–2.0% tested), with
