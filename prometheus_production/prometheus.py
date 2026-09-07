@@ -1325,15 +1325,35 @@ class Prometheus:
                 'lot1_target': self.state.lot1_target, 'lot2_target': self.state.lot2_target,
                 'lot2_target_source': self.state.lot2_target_source,
             }
+            # 2026-09-07 (found via a live trade's final "Trade closed" total
+            # under-reporting +172 instead of +343): restoring the exit
+            # metadata above without ALSO restoring the pnl_points/pnl_rs
+            # _apply_confirmed_lot_exit originally computed meant
+            # _finalize_trade's `.get('lot1_pnl_points', 0) or 0` silently
+            # dropped that lot's contribution from prometheus_trades.csv's
+            # total_pnl_points/rs and the closure Slack message, for any
+            # trade that survives a restart between one lot booking and the
+            # trade's eventual close — exactly what happened here (lot1
+            # booked 09:02:31, restarted twice, lot2 closed the trade at
+            # 12:45). Recomputed here with the exact same formula
+            # _apply_confirmed_lot_exit uses, from persisted state alone.
             if self.state.lot1_status == 'booked':
+                pnl_pts = ((self.state.lot1_exit_price - self.state.entry_price) if self.state.direction == 'bullish'
+                          else (self.state.entry_price - self.state.lot1_exit_price))
                 self._pending_trade_row.update({
                     'lot1_exit_ts': self.state.lot1_exit_ts, 'lot1_exit_price': self.state.lot1_exit_price,
                     'lot1_exit_reason': self.state.lot1_exit_reason,
+                    'lot1_pnl_points': round(pnl_pts, 2),
+                    'lot1_pnl_rs': round(pnl_pts * (self.state.lot1_lots or 0) * LOT_SIZE, 2),
                 })
             if self.state.lot2_status == 'booked':
+                pnl_pts = ((self.state.lot2_exit_price - self.state.entry_price) if self.state.direction == 'bullish'
+                          else (self.state.entry_price - self.state.lot2_exit_price))
                 self._pending_trade_row.update({
                     'lot2_exit_ts': self.state.lot2_exit_ts, 'lot2_exit_price': self.state.lot2_exit_price,
                     'lot2_exit_reason': self.state.lot2_exit_reason,
+                    'lot2_pnl_points': round(pnl_pts, 2),
+                    'lot2_pnl_rs': round(pnl_pts * (self.state.lot2_lots or 0) * LOT_SIZE, 2),
                 })
             # §4: reconciliation gap flagged in the plan (crash between order
             # placement and fill confirmation) — not built; a resumed in-trade
