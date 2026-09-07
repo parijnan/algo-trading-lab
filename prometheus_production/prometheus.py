@@ -288,10 +288,16 @@ class Prometheus:
           waiting until ROLLOVER_TIME just means any fresh entry today would
           open on the OLD contract only to be immediately rolled the same
           evening — pure churn. See _switch_to_new_contract_now.
-        - In-trade: unchanged for now (§6's evening-triggered sequence,
-          driven by _check_rollover_timing every 1-min cycle) — §18's
-          same-day coincident-flip transition for this case is Phase 2/3,
-          not yet built.
+        - In-trade: §6's evening-triggered sequence (driven by
+          _check_rollover_timing every 1-min cycle) still owns this case by
+          default, but §18 Phase 3 (built 2026-09-05, see
+          _execute_coincident_flip_transition) can pre-empt it same-day: if
+          an ordinary trend flip closes the position on the OLD contract
+          before ROLLOVER_TIME AND the NEW contract's own ST_15 flips to the
+          same direction on the same 15m bar, the switch and a fresh entry
+          on the NEW contract happen right then, at a real fill price —
+          §6's evening sequence only ends up handling this position if no
+          such coincident flip occurs before ROLLOVER_TIME.
         """
         tomorrow = next_trading_day(datetime.now().date())
         tomorrow_contract = resolve_effective_contract(SYMBOL, today=tomorrow)
@@ -314,16 +320,17 @@ class Prometheus:
         # than waiting for §6's ROLLOVER_PREFETCH_TIME (23:10). The position
         # itself keeps running entirely off self._contract/state.token (the
         # OLD contract) until/unless Phase 3's coincident-flip transition
-        # (not yet built) actually switches it.
+        # actually switches it.
         self._start_dual_tracking(tomorrow_contract)
 
     def _start_dual_tracking(self, new_contract: dict) -> None:
         """§18 Phase 2: subscribe the new contract's WS feed and seed its
         own independent "today" 1-min series + 15m ST right now, at setup --
         not waiting for §6's ROLLOVER_PREFETCH_TIME. Advisory only: this
-        series is read by §18 Phase 3's (not yet built) coincident-flip
-        check, never used to drive an order by itself. The actual position
-        keeps running off self._contract/self.state.token unchanged.
+        series is read by §18 Phase 3's coincident-flip check
+        (_execute_coincident_flip_transition), never used to drive an order
+        by itself. The actual position keeps running off
+        self._contract/self.state.token unchanged.
 
         Also marks §6's own prefetch-done/subscribed latches, so
         _do_rollover_prefetch doesn't redundantly repeat this same fetch at
