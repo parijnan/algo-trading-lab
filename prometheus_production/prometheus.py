@@ -35,7 +35,7 @@ from prometheus_configs import (
     REPO_ROOT, SYMBOL, LOT_SIZE, LOTS_PER_LEG, MCX_FO_WS_EXCHANGE_TYPE,
     MIN_ENTRY_BUFFER_MIN, SESSION_START_TIME,
     SESSION_END_TIME, ST_PERIOD, ST_MULTIPLIER,
-    DYNAMIC_SIZING, STATIC_UNITS, MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
+    MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
     TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
@@ -46,7 +46,7 @@ from prometheus_configs import (
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
 from prometheus_functions import (
-    compute_st, resolve_effective_contract, resolve_contract_by_token, seed_st15, persist_15m_series,
+    compute_st, resolve_effective_contract, resolve_contract_by_token, resolve_live_sizing, seed_st15, persist_15m_series,
     fetch_one_minute_window, _merge_and_save, read_today_cache,
     _rewrite_today_cache_file, _safe_concat,
     patch_opening_bar_if_artifact, fetch_crudeoil_opening_bar,
@@ -185,9 +185,20 @@ class Prometheus:
     # -----------------------------------------------------------------------
 
     def _calculate_units(self) -> int:
-        if not DYNAMIC_SIZING:
-            logger.debug(f'Sizing: fixed STATIC_UNITS={STATIC_UNITS}')
-            return STATIC_UNITS
+        """2026-09-07 (user-requested): reads sizing fresh via
+        resolve_live_sizing() every call, NOT the DYNAMIC_SIZING/STATIC_UNITS
+        names imported at the top of this file (those are frozen at process
+        start — see resolve_live_sizing's own docstring for why that's wrong
+        for Prometheus specifically). This is what lets a Slack sizing
+        change or a configs.py edit reach the very next entry — fresh or a
+        Rule 7 flip — without needing a restart, and without needing to be
+        flat first: the live position's own units/lot counts stay exactly
+        as persisted in self.state regardless of what this returns; only a
+        NEW entry's sizing is decided here."""
+        dynamic_sizing, static_units = resolve_live_sizing()
+        if not dynamic_sizing:
+            logger.debug(f'Sizing: fixed STATIC_UNITS={static_units} (live)')
+            return static_units
         try:
             margin = float(self.obj.rmsLimit()['data']['availablecash'])
             units = max(1, int(margin // MARGIN_PER_UNIT))
@@ -195,8 +206,8 @@ class Prometheus:
                         f'Units={units}')
             return units
         except Exception as e:
-            logger.warning(f'rmsLimit() failed ({e}) — falling back to STATIC_UNITS={STATIC_UNITS}')
-            return STATIC_UNITS
+            logger.warning(f'rmsLimit() failed ({e}) — falling back to STATIC_UNITS={static_units}')
+            return static_units
 
     def _check_margin_sufficient(self, units: int) -> bool:
         """§6: general pre-entry margin check regardless of sizing mode — the

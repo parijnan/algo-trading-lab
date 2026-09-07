@@ -38,6 +38,7 @@ from prometheus_configs import (
     GHOST_RECOVERY_COOLDOWN_SEC, GHOST_RECOVERY_LOOKBACK_SEC,
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     TRADES_FILE, TRADE_LOGS_DIR, COUNTER_FILE, SERIES_15M_FILE, SERIES_15M_RETENTION_DAYS,
+    SIZING_OVERRIDE_FILE, DEFAULT_DYNAMIC_SIZING, DEFAULT_STATIC_UNITS,
 )
 
 sys.path.insert(0, str(REPO_ROOT / 'data_pipeline'))
@@ -373,6 +374,38 @@ def resolve_contract_by_token(symbol: str, token: str) -> dict:
                            f'in {INSTRUMENT_MASTER_FILE}.')
     chosen = match.iloc[0]
     return _contract_dict_from_row(symbol, chosen, rolled_early=False, trading_days_left=None)
+
+
+def resolve_live_sizing() -> tuple:
+    """2026-09-07 (user-requested): re-reads SIZING_OVERRIDE_FILE fresh on
+    every call — unlike prometheus_configs.py's DYNAMIC_SIZING/STATIC_UNITS,
+    which resolve once at process import and then stay frozen for the rest
+    of the session, exactly like Artemis/Athena/Iris's own LOT_CALC/LOT_COUNT
+    (their *_configs.py has the identical import-time-frozen pattern). That's
+    fine for those three: Leto restarts them fresh most trading days, so a
+    Slack sizing change or a configs.py edit reaches them within a day
+    regardless. Prometheus is different by design (§2's no-EOD-flatten,
+    positional, near-permanently in-trade) — a restart isn't a routine daily
+    event here, so a sizing change needs to take effect on the very next
+    entry (fresh or a Rule 7 flip), not whenever the next deliberate restart
+    happens to be.
+
+    Returns (dynamic_sizing: bool, static_units: int). Falls back to
+    DEFAULT_DYNAMIC_SIZING/DEFAULT_STATIC_UNITS — the true hardcoded
+    defaults, NOT prometheus_configs.py's DYNAMIC_SIZING/STATIC_UNITS names
+    — if the file is missing or fails to parse. Using the latter as a
+    fallback would be wrong: if the override file existed when the process
+    started, those names are already permanently the override's value from
+    then, so deleting the file later (the documented way to "turn off" an
+    override and revert to configs.py) would silently keep applying it
+    forever instead of actually reverting.
+    """
+    import json
+    try:
+        s = json.loads(SIZING_OVERRIDE_FILE.read_text())
+        return bool(s['lot_calc']), int(s['lot_count'])
+    except Exception:
+        return DEFAULT_DYNAMIC_SIZING, DEFAULT_STATIC_UNITS
 
 
 # ---------------------------------------------------------------------------

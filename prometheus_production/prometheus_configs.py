@@ -222,15 +222,30 @@ SL_PCT           = 2.2
 TENDER_ROLL_TRADING_DAYS = 5
 
 # ── Sizing — "units," not "lots" (§6): 1 unit = 2 lots (1 lot each leg). ────
-DYNAMIC_SIZING  = False
-STATIC_UNITS    = 1
 # Artemis's formula, not Apollo/Athena's dual-constraint one — Prometheus is
 # the only strategy on the MCX side of the account, so availablecash already
 # reflects whatever's genuinely free (no other own position to guard against).
+DEFAULT_DYNAMIC_SIZING = False
+DEFAULT_STATIC_UNITS   = 1
+SIZING_OVERRIDE_FILE   = DATA_DIR / 'sizing_override.json'
 
+# DYNAMIC_SIZING/STATIC_UNITS below are the import-time-resolved values —
+# kept for anything that wants a one-shot snapshot, but prometheus.py's own
+# _calculate_units() (2026-09-07) does NOT read these two names any more.
+# It re-reads SIZING_OVERRIDE_FILE fresh via prometheus_functions.resolve_live_sizing()
+# on every call instead, falling back to DEFAULT_DYNAMIC_SIZING/DEFAULT_STATIC_UNITS
+# (not these two, which would already be stale) — see that function's
+# docstring for why: Prometheus is near-permanently in-trade, unlike
+# Artemis/Athena/Iris (which share this exact same import-time-frozen
+# pattern in their own *_configs.py, and get away with it because Leto
+# restarts them fresh most days) — a Slack sizing change or a configs.py
+# edit needs to take effect on the NEXT entry, not the next restart, which
+# for Prometheus could be days away.
+DYNAMIC_SIZING = DEFAULT_DYNAMIC_SIZING
+STATIC_UNITS   = DEFAULT_STATIC_UNITS
 try:
     import json as _json2
-    _s = _json2.loads((DATA_DIR / 'sizing_override.json').read_text())
+    _s = _json2.loads(SIZING_OVERRIDE_FILE.read_text())
     DYNAMIC_SIZING = bool(_s['lot_calc'])     # same JSON key names as the other 3
     STATIC_UNITS   = int(_s['lot_count'])     # strategies' sizing_override.json (§5)
 except Exception:
