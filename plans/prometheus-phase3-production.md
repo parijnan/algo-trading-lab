@@ -600,3 +600,47 @@ Phase 4 (§6's now-genuinely-time-boxed 23:10 prefetch/topup) stays wired as the
 **Mock-verified 8/8** (multi-day-held trade closing today is included; a trade entirely in a prior day is excluded; same-day open+close still works; a trade whose lot2 never opened — permanently blank `lot2_exit_ts` — doesn't crash the row-wise max; `lot2` exiting before `lot1` — Rule 7's own tie-break order — still resolves to the correct later timestamp; `entry_ts` mixed-precision rows no longer silently vanish; the corrected `entry_ts` still displays correctly; an empty trades file doesn't crash). Full suite clean (80/82, same 2 pre-existing unrelated Iris failures).
 
 **Deployment note**: the process running live on Delos at the time this was found (started 14:25, on commit `65301d3`) does NOT have this fix — it was built and tested locally afterward. Tonight's `SESSION_END_TIME` teardown will fire another session report from that same pre-fix process unless it's restarted again before then. Left as an explicit decision for the user rather than assumed either way.
+
+---
+
+## 21. Position-sizing capacity — volume/participation analysis for scaling on CRUDEOILM [DECIDED 2026-09-07]
+
+**Trigger**: user confirmed the CRUDEOILM-vs-CRUDEOIL cross-validation finding (§20's sibling
+work, `prometheus_backtest/README.md`'s Phase 3 section) settles the primary-instrument question
+in CRUDEOILM's favor — "primarily trade the mini... allows enough room to scale" — and asked for a
+volume analysis to model expected slippage as `STATIC_UNITS` scales up, explicitly deferred out of
+official documentation until reviewed.
+
+**Units check, done first**: `getCandleData`'s `volume` field is confirmed to be lots/contracts,
+not underlying barrels — CRUDEOILM (10 bbl/lot) and CRUDEOIL (100 bbl/lot) print comparable
+per-minute volume magnitudes at identical timestamps, which would not hold if the field were
+barrels (CRUDEOIL's 10x-larger lot would then show ~10x the figure for comparable participation).
+This matters because every downstream participation number is wrong by 10x if the unit is
+misread, and it's a number the user sizes real trades off of.
+
+**Method**: `data_loader.load_futures_1min('CRUDEOILM')`, full 6.5-month series (2026-01-30 to
+2026-09-04, 130,366 1-min bars). Participation measured specifically on the 1-min bar starting at
+each 15-min mark from 09:15 onward (matching `MIN_ENTRY_TIME`) — 8,594 bars — since that's the bar
+an ST_15-triggered Rule 7 order actually fills against; a whole-session average would flatter the
+picture. 8 rows carry a data-pipeline artifact (negative volume); none land on a 15-min boundary,
+so excluded from consideration without further investigation (out of scope for this analysis).
+
+**Finding**: median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin
+minute). At 50 lots, median participation is 32.68% of that minute's volume (p10: 8.40%), and
+5,770 of 8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is
+meaningfully time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median
+(204 vs. 96 lots). No square-root-impact ₹ figure was modeled — an uncalibrated coefficient
+against real volume data produces a number that looks derived without being one; framed in ticks
+instead (tick size confirmed 1.0 → ₹10/lot on CRUDEOILM): past ~20-30% participation, expect to
+reliably cross the spread and likely walk 1-2 ticks beyond on the worse-liquidity minutes.
+
+**Decision**: user's current capital supports scaling `STATIC_UNITS` to 50 lots, to be approached
+gradually rather than in one step; 1-2 ticks of slippage on worst-liquidity minutes explicitly
+accepted as the cost of that size. No code change required by this section — sizing changes
+already take effect live via §19's `resolve_live_sizing()`, so scaling is purely a
+configs/Slack-sizing action from here, not an engineering one.
+
+**Not done / open**: no real slippage model exists (no fill data yet to calibrate one against) —
+this is a capacity/headroom read, not a predictive model. Worth re-cutting against actual fill
+data once trading at meaningful size. Full analysis, methodology, and the participation table live
+in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis" section.

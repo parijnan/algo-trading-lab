@@ -491,6 +491,71 @@ not just this particular grid.
   not pursued, since even the sign-correct region never beat baseline; diminishing-returns
   territory rather than a promising lead.
 
+## Position sizing — volume/participation analysis for scaling on CRUDEOILM (2026-09-07)
+
+**Context.** User's plan is to trade CRUDEOILM as the primary instrument (not CRUDEOIL — see the
+cross-validation finding above; the mini's lower per-lot capital requirement and MCX's 1000-lot
+freeze limit both leave plenty of headroom to scale). Before scaling `STATIC_UNITS` up, the
+question was how much real market depth backs each additional lot, since Prometheus's backtest
+P&L (like every phase above) is deliberately cost-free (`SLIPPAGE_ENABLED = False` throughout) and
+says nothing about fill quality at size.
+
+**Units check, done first.** `getCandleData`'s `volume` field is number of **contracts (lots)**
+traded in the bar, not underlying barrels — confirmed by comparing CRUDEOILM (10 bbl/lot) and
+CRUDEOIL (100 bbl/lot) at identical timestamps: both report comparable per-minute volume
+magnitudes (e.g. 2026-09-04 23:2x: CRUDEOILM 25–566, CRUDEOIL 26–154). If `volume` were in
+barrels, CRUDEOIL's 10x-larger lot would inflate its barrel-count roughly 10x for comparable
+participation; instead the two contracts print the same order of magnitude, consistent with each
+being its own independently-traded pool of lots. Every figure below is in lots, directly
+comparable to an order size in lots. Tick size is 1.0 (all OHLC prints are whole numbers) →
+1 tick = ₹10/lot on CRUDEOILM.
+
+**Method.** Loaded the full CRUDEOILM 1-min series via `data_loader.load_futures_1min` (same
+front-month de-duplication as every backtest phase). Whole-day volume averages flatter the
+picture, so participation was measured on the 1-min bar starting at each 15-min mark (:00/:15/
+:30/:45, from 09:15 onward matching `MIN_ENTRY_TIME`) — 8,594 such bars across 6.5 months
+(2026-01-30 to 2026-09-04) — since that's the bar an ST_15-triggered order actually needs to fill
+against. 8 rows (of 130,366) carry a negative `volume` value, a known data-pipeline artifact; none
+fall on a 15-min boundary, so they don't affect this analysis and weren't otherwise investigated.
+
+**Participation by order size** (share of that boundary-minute's own volume; percentile columns
+read as "in the worst N% of boundary-minutes, participation is at least this"):
+
+| Order size (lots) | Median | p25 | p10 | p5 | Boundary-minutes ≥20% participation |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.65% | 0.32% | 0.17% | 0.12% | 133 / 8,594 |
+| 10 | 6.54% | 3.16% | 1.68% | 1.18% | 1,612 |
+| 20 | 13.07% | 6.33% | 3.36% | 2.37% | 3,077 |
+| 50 | 32.68% | 15.82% | 8.40% | 5.92% | 5,770 |
+| 100 | 65.36% | 31.65% | 16.81% | 11.83% | 7,443 |
+| 200 | 130.72% | 63.29% | 33.61% | 23.67% | 8,294 |
+
+Median boundary-minute volume is 153 lots; the 10th-percentile (a genuinely thin minute) is 29
+lots. Liquidity is meaningfully time-of-day-dependent: 15:00–close boundary minutes run ~2x
+09:15–15:00 ones (median 204 vs. 96 lots) — thin-liquidity risk concentrates in the morning
+session.
+
+**Slippage: framed in ticks, not a modeled ₹ figure.** No square-root-impact coefficient is
+applied — it would need calibration this dataset can't provide, and multiplying real volume data
+by an uncalibrated constant produces a number that looks derived without being one. The backtest's
+existing fill convention (`_target_fill_price`/`_stop_fill_price`) already prices in adverse
+gap-through at the bar open, so this is specifically about *additional* size-driven impact on top
+of that. Grounded read: at single-digit-to-teens lots, comfortably inside the spread most of the
+time. Past ~20-30% participation (roughly 30-50 lots per the table above), expect to reliably
+cross the spread and likely walk 1-2 ticks beyond (₹10-20/lot) on the worse-liquidity minutes;
+past ~100 lots, plan for multi-tick slippage and likely order-splitting well before MCX's 1,000-
+lot freeze limit (`freeze_qty=10000` underlying units / `LOT_SIZE=10` on CRUDEOILM).
+
+**Decision (2026-09-07):** user's current capital supports scaling to 50 lots; plan is to scale up
+gradually, not in one step. 1-2 ticks of slippage on worst-liquidity minutes is acceptable at that
+size. 50 lots sits at the boundary where participation regularly exceeds 20-30% on a meaningful
+minority of boundary-minutes (5,770 / 8,594, i.e. ~67%, at ≥20%) — consistent with "acceptable,
+not free" rather than "negligible," matching the decision.
+
+Not itself a slippage model (no fill data exists yet to calibrate one against) — a starting point
+for judging how much headroom exists before participation, and therefore expected slippage,
+becomes uncomfortable. Worth re-cutting against real fill data once trading at meaningful size.
+
 ## Running
 
 ```bash
