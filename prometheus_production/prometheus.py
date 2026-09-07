@@ -46,8 +46,9 @@ from prometheus_configs import (
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
 from prometheus_functions import (
-    compute_st, resolve_effective_contract, seed_st15, persist_15m_series,
-    fetch_one_minute_window, _merge_and_save, clear_today_cache, read_today_cache, _safe_concat,
+    compute_st, resolve_effective_contract, resolve_contract_by_token, seed_st15, persist_15m_series,
+    fetch_one_minute_window, _merge_and_save, read_today_cache,
+    _rewrite_today_cache_file, _safe_concat,
     patch_opening_bar_if_artifact, fetch_crudeoil_opening_bar,
     resolve_thresholds, resolve_target2, next_trading_day,
     compute_st_for_contract, historical_basis_price,
@@ -842,6 +843,10 @@ class Prometheus:
         self._rollover_new_ws_subscribed = False
         self._rollover_go_decision = None
         self._df_1m_today = self._df_1m_today_new
+        self._rewrite_today_cache_for_switch(self._df_1m_today)   # 2026-09-07: this evening-
+                                                                    # triggered path was missing
+                                                                    # the same cache rewrite §18's
+                                                                    # own switch paths already do
         self._df_1m_today_new = pd.DataFrame(columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
         self._rollover_executed_today = True
         save_state(self.state)
@@ -881,6 +886,58 @@ class Prometheus:
             basis_price=basis['basis_price'], parent_trade_id=old_trade_id,
             lot2_only=basis['lot2_only'])
 
+    def _catch_up_contract_if_already_switched(self) -> None:
+        """§18-followup (2026-09-07, advisor-flagged): must run immediately
+        after self._contract = resolve_effective_contract(SYMBOL), before
+        anything else in _setup() (seed_st15, read_today_cache, feed
+        subscription) reads self._contract.
+
+        resolve_effective_contract() only ever answers "what should
+        TODAY's contract be" from the calendar date alone — it has no
+        memory of a §18 early switch (Phase 1's flat-switch-ahead-of-
+        ROLLOVER_TIME, or Phase 3's coincident-flip transition) that
+        already moved the LIVE position onto a later-expiry contract
+        earlier this same day. A restart after such a switch, still on
+        the same calendar day, would otherwise resolve the OLD contract
+        again here — and _recover_missed_rollover() below would then
+        misread the live position's later-expiry token as a MISSED
+        rollover (backwards, not forwards), forcibly flattening a healthy
+        position and reopening it on the very contract it just correctly
+        left. Worse, seed_st15/read_today_cache would seed off that stale
+        OLD contract while the private cache already holds the NEW
+        contract's rows (the switch path rewrote it) — a silent
+        calendar-spread price discontinuity in the seeded series. Traced
+        via a Phase-1-switch-then-same-day-restart scenario; not yet hit
+        live since Delos hasn't reached a rollover-eve since §18 shipped.
+
+        Catches self._contract up to match the position instead — the
+        position itself is untouched, only which contract dict the rest
+        of _setup() treats as "today's" changes.
+        """
+        if not (self.state.status == 'in_trade' and self.state.token
+                and self.state.token != self._contract['token']):
+            return
+        state_expiry = (datetime.strptime(self.state.contract_expiry, '%Y-%m-%d').date()
+                        if self.state.contract_expiry else None)
+        if state_expiry is None or state_expiry <= self._contract['expiry_date'].date():
+            return   # not a roll-forward -- leave to _recover_missed_rollover's genuine-miss path
+
+        tag = _tag(self._contract['symbol_root'])
+        try:
+            caught_up = resolve_contract_by_token(SYMBOL, self.state.token)
+        except RuntimeError as e:
+            logger.error(f'Contract catch-up failed: {e} — falling back to missed-rollover handling.')
+            _slack(f'\U0001f6a8 {tag}: contract catch-up lookup failed for token {self.state.token} — '
+                  f'falling back to missed-rollover handling, verify manually.', SLACK_ERRORS_CHANNEL)
+            return
+
+        logger.info(f"Contract catch-up: {self._contract['symbol']} -> {caught_up['symbol']} -- "
+                   f"the live position already moved to this contract earlier today (§18); "
+                   f"today's date-driven resolve just hadn't caught up yet. No rollover needed.")
+        _slack(f'ℹ️ {tag}: self._contract caught up to {caught_up["symbol"]} at restart '
+              f'(§18 early switch earlier today, not a missed rollover).', SLACK_TRADEBOT_CHANNEL)
+        self._contract = caught_up
+
     def _recover_missed_rollover(self) -> None:
         """§5 (DECIDED option a): if a rollover was missed overnight (the
         process wasn't alive at ROLLOVER_TIME, an MCX holiday, KILL,
@@ -895,11 +952,36 @@ class Prometheus:
         did the equivalent work. Must run AFTER self.feed is started and
         subscribed to state.token (§3's invariant) — the exit below reads
         LTP off state.token, not self._contract.
+
+        §18-followup (2026-09-07): _catch_up_contract_if_already_switched()
+        already ran earlier in _setup() and resolves the "state is ahead
+        of self._contract" case (a §18 early switch, not a missed roll) --
+        by the time this method runs, a remaining mismatch should only
+        ever be the genuine case (self._contract is ahead of state, i.e.
+        state's contract expiry is EARLIER). The guard below is
+        belt-and-suspenders: if that invariant is somehow violated (the
+        catch-up's lookup failed and silently fell through), refuse to
+        auto-roll a healthy later-expiry position backwards -- alert for
+        manual intervention instead of executing real orders on a guess.
         """
         if self.state.status != 'in_trade' or not self.state.token:
             return
         if self.state.token == self._contract['token']:
             return   # normal case -- no missed roll
+
+        state_expiry = (datetime.strptime(self.state.contract_expiry, '%Y-%m-%d').date()
+                        if self.state.contract_expiry else None)
+        if state_expiry is not None and state_expiry > self._contract['expiry_date'].date():
+            tag = _tag(self._contract['symbol_root'])
+            logger.critical(f"_recover_missed_rollover: state's contract ({self.state.symbol}, "
+                           f"expiry {state_expiry}) is LATER than self._contract's "
+                           f"({self._contract['symbol']}, expiry {self._contract['expiry_date'].date()}) "
+                           f"-- this should have been resolved as a catch-up, not a missed roll. "
+                           f"Refusing to auto-roll backwards. Manual check needed.")
+            _slack(f'\U0001f6a8 {tag}: contract mismatch looks like a roll-FORWARD, not a missed '
+                  f'roll, but catch-up did not resolve it — refusing to auto-roll. Check manually.',
+                  SLACK_ERRORS_CHANNEL)
+            return
 
         old_symbol = self.state.symbol
         old_token = self.state.token
@@ -965,13 +1047,22 @@ class Prometheus:
         """§18 (2026-09-05, advisor-flagged hardening, applied to every
         in-session contract switch): TODAY_1M_CACHE_FILE must never end up
         holding a mix of the old and new contract's rows under one "today"
-        file. Nothing re-reads it THIS session, but a mid-day restart whose
-        own switch attempt then fails would seed off a silently mixed-price
-        series that _find_Nmin_gaps can't catch (timestamps stay contiguous,
-        only prices are wrong)."""
-        clear_today_cache()
-        if new_today_1m is not None and not new_today_1m.empty:
-            _merge_and_save(TODAY_1M_CACHE_FILE, new_today_1m)
+        file. This matters more since 2026-09-07's amendment stopped
+        clearing the cache at every teardown — a same-day restart after a
+        switch now genuinely reuses whatever's on disk, so this rewrite is
+        the only thing preventing it from reusing the OLD contract's rows
+        under the NEW contract's name (read_today_cache's own docstring
+        has the full reasoning, including why the plain date-filter alone
+        doesn't cover this same-day case).
+
+        Stamps every row with self._contract['token'] (2026-09-07,
+        advisor-flagged) — read_today_cache filters on it, and by the time
+        this runs in all three call sites, self._contract has already been
+        reassigned to the new contract, so this is always the correct
+        token to stamp."""
+        stamped = new_today_1m.copy()
+        stamped['token'] = self._contract['token']
+        _rewrite_today_cache_file(stamped)
 
     # -----------------------------------------------------------------------
     # §18 Phase 3 (2026-09-05): coincident-flip transition -- in-trade,
@@ -1135,6 +1226,7 @@ class Prometheus:
         logger.info(f'Prometheus starting [DRY_RUN={DRY_RUN}] SYMBOL={SYMBOL}')
 
         self._contract = resolve_effective_contract(SYMBOL)
+        self._catch_up_contract_if_already_switched()
         tag = _tag(self._contract['symbol_root'])
         roll_note = ' (rolled early, tender-margin window)' if self._contract['rolled_early'] else ''
         logger.info(f'Effective contract: {self._contract["symbol"]} '
@@ -1176,7 +1268,7 @@ class Prometheus:
         # internally (private cache + live gap-fetch) — re-read that same
         # cache rather than the shared pipeline file, which never has
         # today's rows under this design.
-        self._df_1m_today = read_today_cache(datetime.now())
+        self._df_1m_today = read_today_cache(datetime.now(), self._contract['token'])
         self._maybe_check_opening_bar()   # §11: covers both a fresh 09:00 start
                                            # (bar not there yet, no-op) and a
                                            # mid-day restart (bar already
@@ -1330,7 +1422,14 @@ class Prometheus:
             except Exception:
                 pass
 
-        clear_today_cache()   # tomorrow re-fetches fresh regardless of position state (§15)
+        # 2026-09-07: no longer clears TODAY_1M_CACHE_FILE here. A same-day
+        # restart now reuses it (read_today_cache's own docstring has the
+        # full reasoning -- date-filtered + self-pruning on read, plus
+        # every same-day contract-switch path rewrites it explicitly) --
+        # clearing unconditionally on every stop was exactly what made a
+        # routine mid-session restart re-fetch the whole elapsed day from
+        # scratch, which is what stalled seeding ~2 extra minutes with an
+        # open position unmonitored on 2026-09-07's restart.
 
         if self.state.status == 'in_trade':
             save_state(self.state)
@@ -1633,7 +1732,9 @@ class Prometheus:
         cache (TODAY_1M_CACHE_FILE) — NOT the shared file data_downloader_mcx.py
         maintains, which Prometheus never writes to any more — AND updates
         the in-memory today-accumulator used to build 15-min bars."""
-        _merge_and_save(TODAY_1M_CACHE_FILE, new_df)
+        stamped = new_df.copy()
+        stamped['token'] = self._contract['token']   # 2026-09-07: read_today_cache filters on this
+        _merge_and_save(TODAY_1M_CACHE_FILE, stamped)
 
         working = new_df.copy()
         if working['time_stamp'].dt.tz is not None:

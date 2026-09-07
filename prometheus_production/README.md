@@ -574,7 +574,7 @@ actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 
 | `data/prometheus_trades.csv` | Cumulative append-only trade tracker, schema-matched to `trade_summary_p2.csv` plus `units` |
 | `data/trade_logs/trade_NNNN_*.csv` | Per-trade running log — one row per 1-min poll cycle while in-trade, same columns as the backtest's own per-trade logs |
 | `data/trade_counter.txt` | Persistent sequential trade ID counter (Apollo's convention, survives restarts) |
-| `data/prometheus_today_1m.csv` | Private intraday 1-min cache (§15) — Prometheus-only, cleared at every normal teardown, re-fetched fresh each day |
+| `data/prometheus_today_1m.csv` | Private intraday 1-min cache (§15) — Prometheus-only, persists across same-day restarts, self-prunes to today's rows on read (2026-09-07) |
 | `logs/prometheus_YYYYMMDD.log` | Daily rotating log |
 
 **`EXIT`** liquidates any open position and terminates the session. **`KILL`** drops control
@@ -687,15 +687,34 @@ single-source-of-truth reasoning that removed Prometheus's writes to the *shared
 it.
 
 - **Written incrementally**: every 1-min poll (`_merge_1m`) appends to it, same merge-dedup
-  logic (`_merge_and_save`) the shared file uses.
+  logic (`_merge_and_save`) the shared file uses. Every row also carries a `token` column
+  (2026-09-07), stamped with whichever contract wrote it.
 - **Read on startup**: `seed_st15` reads the cache for today's data and only live-fetches the
   *gap* since its last row — a mid-day crash-restart goes from "re-fetch the whole session" to
   "re-fetch a few minutes."
-- **Cleared at every normal teardown** (`clear_today_cache()`) — except the `KILL` path, which
-  explicitly anticipates a same-day restart and shouldn't lose the cache's benefit.
-- **Date-filtered on every read** (`read_today_cache`) as a second line of defense — even an
-  ungraceful crash that skips the clear can't leave a stale prior-day cache silently misread as
-  today's data.
+- **No longer cleared at teardown (amended 2026-09-07)** — it used to be, every normal stop,
+  which meant even a routine mid-session restart had to re-fetch the *whole* elapsed day from
+  scratch instead of a small gap (observed live: a 09:21 restart re-fetching 09:00→09:21 hit the
+  AB1021 rate limit and stalled seeding ~2 more minutes with an open position's exit monitoring
+  not yet subscribed). Now a same-day restart genuinely reuses whatever's on disk.
+- **Self-prunes on read instead** (`read_today_cache`): the first read each day rewrites the file
+  down to just that day's own rows (by date), bounding disk growth now that nothing wipes it
+  nightly. Also filters on `token` — required by every caller — so a restart that re-resolves a
+  *different* contract than what's currently cached (a flat restart after a same-day early
+  rollover switch, see §18) can't silently seed off a mismatched contract's cached prices; a
+  token mismatch just falls back to a live gap-fetch, same as a cold cache, and self-heals within
+  the same setup call once the rollover check re-runs. The prune itself only ever discards rows
+  failing the *date* filter, never the *token* filter — a same-day row for a contract nobody
+  asked for this particular read stays on disk for whoever legitimately wants it next.
+- **Rewritten wholesale on every in-session contract switch** (`_rewrite_today_cache_for_switch`,
+  called by every §18 rollover path plus §6's own evening-triggered one) — the cache must never
+  hold a mix of the old and new contract's rows under one "today" file; a switch replaces it
+  entirely with the new contract's own series, re-tagged with its token.
+- **Date-and-token-filtered on every read** (`read_today_cache`) as the safety net for all of the
+  above — even an ungraceful crash that skips a rewrite can't leave a stale or wrong-contract
+  cache silently misread as today's data. A cache file predating the `token` column has no way to
+  know its rows' provenance and is discarded wholesale on first read (one gap-fetch, same cost as
+  any empty-cache day) — the one-time migration cost of this 2026-09-07 change.
 
 A real, pre-existing bug in `_merge_and_save` was found and fixed while wiring this in: writing
 to the same file twice in a row (on-disk rows re-parsed to a fixed-offset tz, freshly-localized

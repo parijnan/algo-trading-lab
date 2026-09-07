@@ -271,6 +271,26 @@ def _count_trading_days_inclusive(start_date: date, end_date: date,
     return sum(1 for d in days if d.weekday() < 5 and d.date() not in fully_closed)
 
 
+def _contract_dict_from_row(symbol: str, chosen, rolled_early: bool, trading_days_left) -> dict:
+    """Shared dict shape for both resolve_effective_contract (date-driven,
+    front/tender-roll selection) and resolve_contract_by_token (direct
+    token lookup, 2026-09-07) — kept as one place so the two never drift."""
+    expiry_date = chosen['expiry_parsed'].to_pydatetime()
+    return {
+        'symbol_root':          symbol,
+        'symbol':                chosen['symbol'],
+        'token':                 str(chosen['token']),
+        'expiry_date':           expiry_date,
+        'filepath':              dl.get_futures_filepath(symbol, expiry_date),
+        'rolled_early':          rolled_early,
+        'trading_days_to_expiry': trading_days_left if not rolled_early else None,
+        # §1: read live off the instrument master, not a hardcoded constant
+        # like the other four strategies' QTY_FREEZE — MCX freeze quantities
+        # are set per-commodity and could differ or change over time.
+        'freeze_qty':            int(chosen['freeze_qty']),
+    }
+
+
 def resolve_effective_contract(symbol: str = None, today: date = None) -> dict:
     """
     Return the contract Prometheus trades for the ENTIRE session — token,
@@ -280,6 +300,12 @@ def resolve_effective_contract(symbol: str = None, today: date = None) -> dict:
     Applies the tender-margin early roll: the exchange front-month contract,
     unless fewer than TENDER_ROLL_TRADING_DAYS trading days remain until its
     expiry, in which case the next contract out is used instead.
+
+    Purely a function of `today`'s date — has no memory of any in-session
+    contract switch §18 may already have executed earlier the same day.
+    See resolve_contract_by_token for reconstructing a specific contract
+    that's already known (e.g. from persisted state) rather than re-deriving
+    "what should today's contract be" from scratch.
     """
     symbol = symbol or SYMBOL
     today  = today or date.today()
@@ -316,20 +342,37 @@ def resolve_effective_contract(symbol: str = None, today: date = None) -> dict:
     else:
         chosen = front
 
-    expiry_date = chosen['expiry_parsed'].to_pydatetime()
-    return {
-        'symbol_root':          symbol,
-        'symbol':                chosen['symbol'],
-        'token':                 str(chosen['token']),
-        'expiry_date':           expiry_date,
-        'filepath':              dl.get_futures_filepath(symbol, expiry_date),
-        'rolled_early':          rolled_early,
-        'trading_days_to_expiry': trading_days_left if not rolled_early else None,
-        # §1: read live off the instrument master, not a hardcoded constant
-        # like the other four strategies' QTY_FREEZE — MCX freeze quantities
-        # are set per-commodity and could differ or change over time.
-        'freeze_qty':            int(chosen['freeze_qty']),
-    }
+    return _contract_dict_from_row(symbol, chosen, rolled_early, trading_days_left)
+
+
+def resolve_contract_by_token(symbol: str, token: str) -> dict:
+    """§18-followup (2026-09-07, advisor-flagged): reconstruct a specific
+    contract dict by its broker token, independent of
+    resolve_effective_contract's date-driven front/tender-roll selection.
+
+    Needed because resolve_effective_contract only ever answers "what
+    should TODAY's contract be" — it has no memory of a §18 early switch
+    (Phase 1 flat-switch or Phase 3 coincident-flip) that already moved
+    the live position onto a later-expiry contract earlier the same day.
+    A restart after such a switch, on the same calendar day, would
+    otherwise re-resolve the OLD contract and misread the live position's
+    later-expiry token as a MISSED rollover (backwards, not forwards) —
+    see prometheus.py's _catch_up_contract_if_already_switched.
+
+    Raises if the token isn't found — callers should treat that as "can't
+    catch up automatically" and fall back to existing missed-rollover
+    handling rather than guessing a contract.
+    """
+    instruments_df = pd.read_csv(INSTRUMENT_MASTER_FILE)
+    instruments_df['expiry_parsed'] = instruments_df['expiry'].apply(_parse_expiry_from_master)
+    match = instruments_df[
+        (instruments_df['name'] == symbol) & (instruments_df['token'].astype(str) == str(token))
+    ]
+    if match.empty:
+        raise RuntimeError(f'resolve_contract_by_token: token {token} not found for {symbol} '
+                           f'in {INSTRUMENT_MASTER_FILE}.')
+    chosen = match.iloc[0]
+    return _contract_dict_from_row(symbol, chosen, rolled_early=False, trading_days_left=None)
 
 
 # ---------------------------------------------------------------------------
@@ -413,33 +456,119 @@ def backfill_contract_if_needed(obj, contract: dict, seed_days: int = SEED_DAYS)
 
 
 # ---------------------------------------------------------------------------
-# §15 (2026-09-04): private, Prometheus-only intraday cache — TODAY_1M_CACHE_FILE.
-# Nothing else reads or writes this file (unlike the shared per-contract CSV
-# above), so none of the write-race/single-source-of-truth reasoning that
-# removed Prometheus's writes to the shared file applies here. Written
-# incrementally through the day (_merge_and_save, reused as-is — it's
-# already generic over `filepath`), cleared at logoff, and always
-# date-filtered on read as a second line of defense against an ungraceful
-# crash that skipped the clear.
+# §15 (2026-09-04, amended 2026-09-07): private, Prometheus-only intraday
+# cache — TODAY_1M_CACHE_FILE. Nothing else reads or writes this file
+# (unlike the shared per-contract CSV above), so none of the write-race/
+# single-source-of-truth reasoning that removed Prometheus's writes to the
+# shared file applies here. Written incrementally through the day
+# (_merge_and_save, reused as-is — it's already generic over `filepath`).
+#
+# No longer cleared at logoff (2026-09-07 amendment — see read_today_cache's
+# own docstring for why that's now safe): a mid-session restart used to have
+# to re-fetch the ENTIRE elapsed day from scratch every time, since teardown
+# always wiped this file first — observed live 2026-09-07, a routine restart
+# at 09:21 (position already open, needing continuous monitoring) had to
+# re-fetch a 21-minute window and burned through the AB1021 rate limit doing
+# it, stalling seed_st15's retry loop for ~2 more minutes with the WS feed
+# (and therefore LTP-driven exit monitoring) not yet subscribed. Letting a
+# same-day restart reuse what's already cached removes that cost entirely.
 # ---------------------------------------------------------------------------
 
-def read_today_cache(now: datetime) -> pd.DataFrame:
+def read_today_cache(now: datetime, token: str) -> pd.DataFrame:
+    """Date- AND token-filtered on every read. The date filter was always
+    meant as defense-in-depth ("a crash that skips the clear still can't
+    corrupt the next day's seed"), and now that nothing clears the file at
+    all, it's one of two things standing between a leftover row and a
+    wrong seed. Also self-prunes: since the file is no longer wiped at
+    logoff, it would otherwise grow by one full day's rows forever. The
+    first read each day rewrites the file down to just that day's own
+    matching rows, bounding it to at most one day's data at rest — a
+    same-day restart later that same day still finds everything intact,
+    since pruning only ever discards rows that already failed a filter.
+
+    Rollover safety: a plain date-filter only protects the CROSS-DAY case
+    (any leftover rows from a prior session carry a different date, so
+    they're excluded automatically). It does NOT protect a same-day
+    contract switch — every code path that changes self._contract mid-day
+    (§6's evening-triggered rollover, §18 Phase 1's flat-switch, §18 Phase
+    3's coincident-flip transition) rewrites this file for the new
+    contract at the moment of the switch (see
+    _rewrite_today_cache_for_switch), so in steady state the file only
+    ever holds one contract's rows at a time. But that's not exhaustive on
+    its own (2026-09-07, advisor-flagged): a restart while FLAT, later the
+    same day as a Phase 1 early-switch, re-resolves self._contract back to
+    the OLD contract (resolve_effective_contract() has no memory of an
+    early switch — it only answers "what should TODAY's contract be" from
+    the calendar date) while the cache file already holds the NEW
+    contract's rows, same day, so the date filter alone lets them through
+    — silently mixing the NEW contract's cached prices with the OLD
+    contract's raw_1m_past history inside seed_st15 (a real, different
+    price level: confirmed ~150-250pt CRUDEOILM calendar spread). The
+    `token` filter closes that gap regardless of which side of the switch
+    self._contract happens to be re-resolved to on a given restart —
+    whichever one doesn't match just gets treated as "not cached yet" and
+    live-gap-fetched, no different from a cold cache. (The resulting
+    self._contract/cache mismatch on that one restart is itself resolved
+    by the very next thing _setup() does, _check_rollover_tonight() —
+    still flat, so it re-runs the same switch and lands correctly; costs
+    one extra live fetch on that specific restart, not a correctness bug.)
+
+    Migration: a cache file written before this column existed has no
+    `token` column at all — provenance for those rows is unknown (which
+    contract were they for?), so they're all discarded rather than
+    guessed at. Costs one live gap-fetch on the first restart after
+    deploying this change, same as any other empty-cache day; every write
+    from that point on carries the column.
+    """
     import os
     if not os.path.exists(TODAY_1M_CACHE_FILE):
         return pd.DataFrame(columns=dl.OHLCV_HEADERS)
     df = pd.read_csv(TODAY_1M_CACHE_FILE, parse_dates=['time_stamp'])
     if df.empty:
         return df
+    if 'token' not in df.columns:
+        logger.warning('read_today_cache: cache file predates the token column — provenance '
+                       'unknown for all rows, discarding (one-time migration cost).')
+        clear_today_cache()
+        return pd.DataFrame(columns=dl.OHLCV_HEADERS)
     df['time_stamp'] = pd.to_datetime(df['time_stamp'], utc=False, errors='coerce').dt.tz_localize(None)
     today = now.date()
-    return df[df['time_stamp'].dt.date == today].sort_values('time_stamp').reset_index(drop=True)
+    todays_rows = df[df['time_stamp'].dt.date == today]
+    # Prune on the DATE filter only (2026-09-07, advisor-flagged) — never on
+    # the token filter. A token mismatch on this read (e.g. a flat restart
+    # asking for the OLD contract while the cache holds the NEW one, ahead
+    # of _check_rollover_tonight() re-switching later in the same _setup())
+    # must not destroy the OTHER contract's still-valid same-day rows: if
+    # the re-switch's own live re-fetch then fails (AB1021, the exact
+    # failure mode already hit live once this week), those rows would be
+    # gone and the NEXT restart re-fetches the whole day again instead of
+    # reusing them. Pruning is purely cross-day hygiene; same-day rows for
+    # a contract nobody asked for this call just sit there for whoever
+    # legitimately wants them next.
+    if len(todays_rows) < len(df):
+        _rewrite_today_cache_file(todays_rows)
+    return todays_rows[todays_rows['token'].astype(str) == str(token)] \
+                        .sort_values('time_stamp').reset_index(drop=True)
+
+
+def _rewrite_today_cache_file(df: pd.DataFrame) -> None:
+    """Overwrites TODAY_1M_CACHE_FILE with exactly the given rows — used
+    both by read_today_cache's self-prune and by
+    prometheus.py's _rewrite_today_cache_for_switch (§18) to reset the
+    cache to a specific contract's rows after a same-day switch. Same
+    timestamp formatting _merge_and_save already writes, so a later
+    read/merge round-trips identically either way."""
+    if df is None or df.empty:
+        clear_today_cache()
+        return
+    save_df = df.copy()
+    save_df['time_stamp'] = save_df['time_stamp'].apply(lambda ts: dl.format_timestamp(ts, dl.OPTIONS_TS_FMT))
+    save_df.to_csv(TODAY_1M_CACHE_FILE, index=False)
 
 
 def clear_today_cache() -> None:
-    """Called from _teardown() at end of session — the cache only ever
-    represents "today," so it must never survive unfiltered into the next
-    session. Belt-and-suspenders: read_today_cache() also date-filters, so
-    a crash that skips this still can't corrupt the next day's seed."""
+    """No longer called at every _teardown() (2026-09-07 amendment) — only
+    when there's genuinely nothing to keep (see _rewrite_today_cache_file)."""
     import os
     try:
         if os.path.exists(TODAY_1M_CACHE_FILE):
@@ -726,13 +855,15 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
     backfill_contract_if_needed(obj, contract)   # defensive: genuinely missing OLDER history
     raw_1m_past = _tail_read_contract_csv(contract['filepath'], now, SEED_DAYS)
 
-    cached_today = read_today_cache(now)
+    cached_today = read_today_cache(now, contract['token'])
     session_start = pd.Timestamp(f'{now.date()} {SESSION_START_TIME}')
     gap_from = (cached_today['time_stamp'].max() + timedelta(minutes=1)
                 if not cached_today.empty else session_start)
     if gap_from < now:
         gap_df = fetch_one_minute_window(obj, contract['token'], gap_from, now)
         if gap_df is not None and not gap_df.empty:
+            gap_df = gap_df.copy()
+            gap_df['token'] = contract['token']   # 2026-09-07: read_today_cache filters on this
             _merge_and_save(TODAY_1M_CACHE_FILE, gap_df)
             cached_today = (_safe_concat([cached_today, gap_df], ignore_index=True)
                              .drop_duplicates(subset=['time_stamp'], keep='last')
