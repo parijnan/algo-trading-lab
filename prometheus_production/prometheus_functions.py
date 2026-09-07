@@ -737,12 +737,34 @@ def seed_st15(obj, contract: dict, now: datetime) -> pd.DataFrame:
             cached_today = (_safe_concat([cached_today, gap_df], ignore_index=True)
                              .drop_duplicates(subset=['time_stamp'], keep='last')
                              .sort_values('time_stamp').reset_index(drop=True))
-        elif cached_today.empty:
-            logger.error('seed_st15: no cached today data and live gap-fetch failed — cannot seed.')
-            return pd.DataFrame()
+        elif gap_df is None:
+            # Genuine fetch failure -- distinct from a fetch that succeeded
+            # but legitimately found nothing yet (the else branch below).
+            # Only THIS case is actually a problem worth failing loudly over.
+            if cached_today.empty:
+                logger.error('seed_st15: no cached today data and live gap-fetch failed — cannot seed.')
+                return pd.DataFrame()
+            else:
+                logger.warning(f'seed_st15: live gap-fetch failed, proceeding with cached data only '
+                               f'(through {cached_today["time_stamp"].max()}).')
         else:
-            logger.warning(f'seed_st15: live gap-fetch failed, proceeding with cached data only '
-                           f'(through {cached_today["time_stamp"].max()}).')
+            # gap_df is not None but empty: the fetch itself succeeded --
+            # there's just genuinely nothing new in [gap_from, now) yet
+            # (e.g. seeding seconds after session open, before today's
+            # first candle exists). Not an error -- proceed with whatever
+            # cached_today/raw_1m_past already cover; the downstream
+            # `if raw_1m.empty:` check below is the real gate on whether
+            # there's anything usable at all. Confirmed live 2026-09-07:
+            # before this fix, a fresh 09:00 start with zero candles
+            # printed yet fell into the SAME branch as a genuine fetch
+            # failure and discarded raw_1m_past (the already-synced
+            # data_pipeline history) entirely -- stalling the blocking
+            # SEED_RETRY_ATTEMPTS loop ~2 minutes for the first live candle
+            # to exist, with the open position's LTP-driven exit monitoring
+            # blocked the whole time (the WS feed isn't subscribed until
+            # seeding succeeds).
+            logger.info(f'seed_st15: live gap-fetch [{gap_from} -> {now}] found nothing new yet '
+                       f'(0 candles) -- proceeding with existing history.')
 
     raw_1m = (_safe_concat([raw_1m_past, cached_today], ignore_index=True)
               .sort_values('time_stamp').reset_index(drop=True))
