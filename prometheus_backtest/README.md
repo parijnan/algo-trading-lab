@@ -303,6 +303,20 @@ first):
 | Max drawdown | −₹16,625 | −₹11,219 |
 | Calmar | 10.41 | 10.78 |
 
+**CRUDEOIL cross-validation — done 2026-09-07** (`prometheus_backtest/phase3_crudeoil/`, identical pipeline to the CRUDEOILM run above, `SYMBOL` the only change, stored in a separate sibling folder rather than overwriting this one). Same per-lot-exit-event Calmar/drawdown methodology as the table above, computed directly from the refreshed `bespoke_trade_summary.csv` files (matching how the CRUDEOILM figures above were produced, not the coarser per-trade `exit_calib_p3_winners.csv` method):
+
+| Metric | Mult 2.0, CRUDEOIL | Mult 2.5, CRUDEOIL |
+|---|---|---|
+| Total trades | 398 | 288 |
+| Win % | 42.21% | 48.61% |
+| Total P&L | ₹1,476,911 | ₹1,161,011 |
+| Avg win / avg loss | ₹32,099 / −₹17,025 | ₹23,256 / −₹14,154 |
+| Max win / max loss | ₹102,350 / −₹68,800 | ₹88,600 / −₹56,000 |
+| Max drawdown | −₹217,285 | −₹152,737 |
+| Calmar | **6.80** (vs. CRUDEOILM's 10.41) | **7.60** (vs. CRUDEOILM's 10.78) |
+
+**The edge holds directionally on the full-size contract but not at matching risk-adjusted quality.** Both candidates stay clearly profitable — win rates land within ~2.5 points of the mini-contract figures, and mult 2.5 remains the higher-Calmar choice on CRUDEOIL too (consistent ranking). But P&L scales up only ~8.5x while max drawdown scales up ~13x (mult 2.0) / ~13.6x (mult 2.5) relative to CRUDEOILM — noticeably more than the 10x lot-size ratio alone would predict — so CRUDEOIL's drawdowns run proportionally deeper against its own return than CRUDEOILM's do. This is not a like-for-like guarantee that the live strategy (calibrated and risk-managed specifically against CRUDEOILM's own tighter profile) would perform equivalently if traded on the full-size contract instead — it's the reason Prometheus trades CRUDEOILM, not a reason to doubt the calibration.
+
 Mult 2.0 refreshed 2026-09-06 (through 2026-09-04) — `bespoke_2lot_p3.py` re-run against the
 freshly-synced data covering Friday's live session, which included one more raw flip (bearish
 trade 381 closing into the real bullish position entered 20:15). **Mult 2.5's column is still
@@ -340,9 +354,12 @@ conclusion that directly compares the two at matching vintage.
    slowly — a signal-quality issue, not something a different SL fixes. Lot 2's trend_flip, by
    contrast, is genuinely closer to breakeven (−₹124 avg, 36.8% win rate) — the "let it play
    out" framing holds there, just not for lot 1.
-3. **No CRUDEOIL cross-validation yet.** Phase 2 wasn't trusted until every major finding
-   replicated on the full-size contract; Phase 3's multiplier and exit choices are CRUDEOILM-only
-   so far — including the live decision to run mult 2.0 in production.
+3. **CRUDEOIL cross-validation — done 2026-09-07** (see the table above): the edge replicates
+   directionally on the full-size contract, but Calmar drops noticeably for both candidates
+   (10.41→6.80 for mult 2.0, 10.78→7.60 for mult 2.5) — CRUDEOIL's drawdowns run proportionally
+   deeper than CRUDEOILM's, not just larger by the 10x lot-size ratio. Doesn't change the mult-2.0
+   production decision (CRUDEOILM is the live-traded instrument), but means the live strategy's
+   risk profile shouldn't be assumed to carry over unchanged if ever run on CRUDEOIL instead.
 4. **No transaction costs modeled** (same convention as v1/Phase 2) — mult 2.0 has the highest
    trade count of any candidate (380 vs. 2.5's 288), making it the most cost-exposed once
    slippage/brokerage are added.
@@ -371,9 +388,9 @@ conclusion that directly compares the two at matching vintage.
 
 ### Not yet done / open threads
 
-- **CRUDEOIL cross-validation** for mult 2.0 (the decided candidate) — still open; Phase 2 wasn't
-  trusted until this replicated on the full-size contract, and Phase 3 hasn't done it yet for
-  either multiplier.
+- ~~**CRUDEOIL cross-validation** for mult 2.0 (the decided candidate)~~ — done 2026-09-07, see
+  open caveat #3 above and the two-candidate table. Edge replicates, Calmar is meaningfully lower
+  on the full-size contract.
 - **Mult 2.0's `TARGET1_PCT` grid edge** (open caveat #1) — widen the T1 grid past 2.0% to confirm
   the bespoke combo is a genuine optimum, not a cut-off. Live production already runs this combo
   (`prometheus_production/`, decided 2026-09-04), so this is a validate-after-the-fact item, not
@@ -484,12 +501,17 @@ python prometheus_backtest/phase2/sweep_p2.py        # Phase 2 calibration grids
 python prometheus_backtest/phase3/sweep_p3.py        # Phase 3, raw signal-quality sweep (all multipliers)
 python prometheus_backtest/phase3/exit_calib_p3.py   # Phase 3, exit calibration (all multipliers; reuses sweep_p3.py's logs)
 python prometheus_backtest/phase3/bespoke_2lot_p3.py # Phase 3, full per-trade detail for the two candidate combos
+python prometheus_backtest/phase3_crudeoil/sweep_p3.py        # Phase 3 CRUDEOIL cross-validation, raw signal sweep
+python prometheus_backtest/phase3_crudeoil/bespoke_2lot_p3.py # Phase 3 CRUDEOIL cross-validation, the two candidate combos
 python prometheus_backtest/phase4/run_p4.py          # Phase 4, 1h alignment filter grid (shelved finding — SL/exits still fixed at mult-2.0's combo)
 ```
 
 Symbol switch: `SYMBOL` in `configs.py` / `configs_p2.py` / `configs_p3.py` — `'CRUDEOILM'`
 (default, primary calibration target) or `'CRUDEOIL'` (cross-validation, full-size contract).
-Phase 3 has not yet been run against CRUDEOIL (see Phase 3's open threads above).
+Phase 3's CRUDEOIL cross-validation (2026-09-07) lives in its own sibling folder,
+`prometheus_backtest/phase3_crudeoil/` — an exact copy of `phase3/`'s pipeline with only
+`configs_p3.py`'s `SYMBOL` changed, rather than overwriting `phase3/`'s own CRUDEOILM output by
+flipping the constant in place. See Phase 3's own section above for results.
 
 All generated output (`data/`, `data_sweep/`, per-trade logs) is gitignored — every number in
 this README was verified against a fresh run of the current code, not carried over from
