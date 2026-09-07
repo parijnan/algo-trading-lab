@@ -1500,9 +1500,52 @@ class Prometheus:
             today = datetime.now().date()
             trades_today = pd.DataFrame()
             if TRADES_FILE.exists():
-                all_trades = pd.read_csv(TRADES_FILE, parse_dates=['entry_ts'])
+                # 2026-09-07 (user-caught): every row in this file is, by
+                # construction, an already-CLOSED trade (_finalize_trade
+                # only appends once both lots are done) — Phase 3's
+                # positional design means a trade's entry and close can be
+                # different calendar days (Trade #9: entered Fri 2026-09-04,
+                # closed via a trend-flip Mon 2026-09-07), so filtering on
+                # entry_ts silently dropped a trade that genuinely closed
+                # THIS session from THIS session's own report. Filter on
+                # the trade's actual close date instead — the later of its
+                # two lot exit timestamps, same value the per-row Exit
+                # column below already computes for display.
+                # Deliberately NOT parse_dates=[...] here -- read_csv's own
+                # date parsing infers a single format from the first value
+                # in a column and silently coerces every non-matching row
+                # to NaT. entry_ts/lot1_exit_ts/lot2_exit_ts are all written
+                # via Python's .isoformat(), which omits the microseconds
+                # component when it's exactly zero, so each of these
+                # columns genuinely mixes with- and without-microseconds
+                # rows in production. Confirmed this drops otherwise-valid
+                # rows entirely, not a theoretical risk — every column that
+                # matters here is coerced explicitly below instead, with
+                # format='mixed' (parses each value on its own terms).
+                all_trades = pd.read_csv(TRADES_FILE)
                 if not all_trades.empty:
-                    trades_today = all_trades[all_trades['entry_ts'].dt.date == today]
+                    all_trades['entry_ts'] = pd.to_datetime(all_trades['entry_ts'], format='mixed')
+                    # lot1_exit_ts/lot2_exit_ts additionally need
+                    # errors='coerce': a trade whose lot2 never opened
+                    # leaves that column blank forever (not a formatting
+                    # quirk), and a row-wise max() against the other,
+                    # cleanly-parsed exit column raises a raw str-vs-float
+                    # TypeError unless both sides are guaranteed real
+                    # datetime64 first.
+                    lot1_exit = pd.to_datetime(all_trades.get('lot1_exit_ts'), format='mixed', errors='coerce')
+                    lot2_exit = pd.to_datetime(all_trades.get('lot2_exit_ts'), format='mixed', errors='coerce')
+                    last_exit = pd.concat([lot1_exit, lot2_exit], axis=1).max(axis=1)
+                    # 2026-09-07 (user-caught): every row in this file is,
+                    # by construction, an already-CLOSED trade
+                    # (_finalize_trade only appends once both lots are
+                    # done) — Phase 3's positional design means a trade's
+                    # entry and close can be different calendar days (Trade
+                    # #9: entered Fri 2026-09-04, closed via a trend-flip
+                    # Mon 2026-09-07), so filtering on entry_ts silently
+                    # dropped a trade that genuinely closed THIS session
+                    # from THIS session's own report. Filter on the trade's
+                    # actual close date (last_exit) instead.
+                    trades_today = all_trades[last_exit.dt.date == today]
 
             total_rs = 0.0
             traded = not trades_today.empty or self.state.status == 'in_trade'
