@@ -95,6 +95,27 @@ def write_sizing_override(strategy, lot_calc, lot_count):
         return False
 
 
+def clear_sizing_override(strategy):
+    """Delete data/sizing_override.json for the given strategy, reverting it
+    to whatever its own *_configs.py currently hardcodes. Returns
+    (success, existed) — existed=False means there was nothing to clear
+    (already on the configs.py default), not an error worth alarming over.
+    2026-09-07: no prior 'clear' path existed for any of the four strategies
+    (only write_sizing_override, always overwriting) — added specifically
+    so a Slack sizing override, once pushed permanently into configs.py,
+    can be cleanly removed rather than silently continuing to shadow it."""
+    try:
+        path = SIZING_OVERRIDE_PATHS[strategy]
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info(f"Sizing override cleared for {strategy}.")
+            return True, True
+        return True, False
+    except Exception as e:
+        logger.error(f"Failed to clear sizing override for {strategy}: {e}")
+        return False, False
+
+
 def write_instrument_override(symbol, margin_per_unit):
     """Write symbol + margin_per_unit together to Prometheus's
     instrument_override.json (plan §5/§6) — coupled deliberately: CRUDEOILM
@@ -299,6 +320,11 @@ CONTROL_PANEL_BLOCKS = [
                 "type": "button",
                 "text": {"type": "plain_text", "text": "⚙️ Manage Sizing"},
                 "action_id": "btn_pos_sizing"
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🧹 Clear Sizing Override"},
+                "action_id": "btn_clear_sizing"
             }
         ]
     },
@@ -908,6 +934,76 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     else:
         err_msg = f"❌ *Error*: Failed to update configuration for {strategy}. Check daemon logs on VPS."
         client.chat_postMessage(channel=_CH_ERRORS, text=err_msg)
+
+# ---------------------------------------------------------------------------
+# Clear Sizing Override modal (2026-09-07) — the counterpart to Manage
+# Sizing above. Intended use (per the user): a sizing override is set rarely
+# and typically while away from a laptop; once the same change is pushed
+# permanently into that strategy's own configs.py, the override file must be
+# cleared or it keeps silently shadowing the new configs.py value forever.
+# ---------------------------------------------------------------------------
+
+def _clear_sizing_blocks():
+    return [
+        {
+            "type": "input",
+            "block_id": "block_strategy",
+            "label": {"type": "plain_text", "text": "Strategy"},
+            "element": {
+                "type": "static_select",
+                "action_id": "select_strategy",
+                "options": [
+                    {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
+                    {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
+                    {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"},
+                    {"text": {"type": "plain_text", "text": "Prometheus (Crude Oil)"}, "value": "Prometheus"}
+                ]
+            }
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "Deletes the sizing override file — the strategy reverts to whatever "
+                    "its own configs.py currently has. *Prometheus* applies this live, on its very next entry, "
+                    "no restart needed. *Artemis/Athena/Iris* apply it on their next restart, same as any other "
+                    "sizing change for those three today."}
+        }
+    ]
+
+@app.action("btn_clear_sizing")
+def handle_clear_sizing_btn(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "view_clear_sizing",
+            "title": {"type": "plain_text", "text": "Clear Sizing Override"},
+            "submit": {"type": "plain_text", "text": "Clear"},
+            "close": {"type": "plain_text", "text": "Cancel"},
+            "blocks": _clear_sizing_blocks(),
+        }
+    )
+
+@app.view("view_clear_sizing")
+def handle_clear_sizing_submission(ack, body, view, client):
+    strategy = view["state"]["values"]["block_strategy"]["select_strategy"]["selected_option"]["value"]
+    user_id = body["user"]["id"]
+    ack()
+
+    success, existed = clear_sizing_override(strategy)
+    if not success:
+        client.chat_postMessage(channel=_CH_ERRORS,
+                                text=f"❌ *Error*: Failed to clear sizing override for {strategy}. "
+                                     f"Check daemon logs on VPS.")
+    elif existed:
+        client.chat_postMessage(channel=_CH,
+                                text=f"🧹 *Sizing Override Cleared* by <@{user_id}>\n*Strategy:* {strategy}\n"
+                                     f"Reverted to configs.py's own value.")
+        logger.info(f"Sizing override cleared for {strategy} by <@{user_id}>.")
+    else:
+        client.chat_postMessage(channel=_CH,
+                                text=f"ℹ️ No active sizing override found for {strategy} — "
+                                     f"already using configs.py's default.")
 
 # ---------------------------------------------------------------------------
 # Prometheus Instrument Switch Modal (plan §5/§6) — instrument and

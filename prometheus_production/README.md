@@ -608,9 +608,9 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `SYMBOL` | `CRUDEOILM` | Slack-switchable; `CRUDEOIL` for the full-size contract |
 | `LOT_SIZE` | looked up live | 10 barrels (CRUDEOILM) / 100 barrels (CRUDEOIL) |
 | `LOTS_PER_LEG` | 1 | 1 unit = 2 lots (1 lot each leg) |
-| `DYNAMIC_SIZING` | `False` | Static at go-live; Artemis's margin-based formula when enabled |
-| `STATIC_UNITS` | 1 | Starting size |
-| `MARGIN_PER_UNIT` | 100,000 | ₹ — coupled to `SYMBOL`, overridden together via Slack |
+| `DYNAMIC_SIZING` | `False` | Static at go-live; Artemis's margin-based formula when enabled. Read live via `resolve_live_sizing()` (2026-09-07) — see below |
+| `STATIC_UNITS` | 1 | Starting size. Same live-read as `DYNAMIC_SIZING` |
+| `MARGIN_PER_UNIT` | 100,000 | ₹ — coupled to `SYMBOL`, overridden together via Slack. Restart-dependent, unlike the two above (tied to mid-session instrument switching, which isn't supported at all) |
 | `ST_PERIOD` / `ST_MULTIPLIER` | 10 / 2.0 | Phase 3 live-test value (2026-09-04) — Phase 2's calibrated `3.0` was the live-test starting point, changed to `2.0` after confirming `3.0`'s live ST matched the chart |
 | `SL_PCT` | 2.2% | Single shared stop — the mult-2.0 candidate's own calibrated value (2026-09-04), not Phase 2's 1.8%; a wider tail-risk backstop rather than an active trade manager (`prometheus_backtest/README.md`'s Phase 3 section) |
 | `TARGET1_PCT` | 2.0% | Lot 1 — mult-2.0 candidate's value; landed at the top of its own tested grid (0.5–2.0%), a known open caveat |
