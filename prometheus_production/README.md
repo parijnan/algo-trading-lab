@@ -638,6 +638,58 @@ running session). Symmetric with Iris's own guardian check against the other thr
 
 ---
 
+## Position-Sizing Capacity: Liquidity & Slippage (2026-09-07)
+
+Before scaling `STATIC_UNITS`/`DYNAMIC_SIZING` up from go-live's `1`, a volume/participation
+analysis was run against CRUDEOILM's own 1-min history to gauge how much real market depth backs
+each additional lot — the backtest's own P&L is cost-free (`SLIPPAGE_ENABLED=False` throughout,
+`prometheus_backtest/`), so it says nothing about fill quality at size on its own.
+
+**Units check, done first.** `getCandleData`'s `volume` field is confirmed to be lots/contracts,
+not underlying barrels — CRUDEOILM (`LOT_SIZE`=10 bbl) and CRUDEOIL (100 bbl) print comparable
+per-minute volume magnitudes at identical timestamps, which wouldn't hold if the field were
+barrels (the 100-bbl contract's lot would then need to print ~10x the figure for comparable
+participation). Every number below is in lots, directly comparable to `STATIC_UNITS`/an order size.
+
+**Method.** Participation measured on the 1-min bar starting at each 15-min mark (:00/:15/:30/:45,
+from `MIN_ENTRY_BUFFER_MIN`'s effective start onward) — the bar an ST_15-triggered Rule 7 order
+actually fills against — across CRUDEOILM's full 6.5-month history (8,594 boundary-minutes).
+Whole-session averages would flatter the picture; this doesn't.
+
+**Result:** median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin
+minute). At 50 lots, median participation is 32.68% of that minute's own volume, and 5,770 of
+8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is meaningfully
+time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median (204 vs. 96
+lots). Tick size is 1.0 (all OHLC prints are whole numbers) → 1 tick = ₹10/lot on CRUDEOILM.
+
+**Slippage, framed in ticks, not a modeled ₹ figure.** No square-root-impact coefficient is
+applied — an uncalibrated constant against real volume data produces a number that looks derived
+without being one. Grounded read: at single-digit-to-teens lots, comfortably inside the spread
+most of the time. Past ~20-30% participation (roughly 30-50 lots per the table below), expect to
+reliably cross the spread and likely walk 1-2 ticks beyond (₹10-20/lot) on the worse-liquidity
+minutes; past ~100 lots, plan for multi-tick slippage and likely order-splitting well before MCX's
+1,000-lot freeze limit (`freeze_qty=10000` underlying units / `LOT_SIZE=10`).
+
+| Order size (lots) | Median participation | p10 | Boundary-minutes ≥20% participation |
+|---:|---:|---:|---:|
+| 1 | 0.65% | 0.17% | 133 / 8,594 |
+| 10 | 6.54% | 1.68% | 1,612 |
+| 20 | 13.07% | 3.36% | 3,077 |
+| 50 | 32.68% | 8.40% | 5,770 |
+| 100 | 65.36% | 16.81% | 7,443 |
+
+**Decision (2026-09-07):** current capital supports scaling to 50 lots, approached gradually, with
+1-2 ticks of worst-case slippage on thin minutes accepted as the cost of that size. No code change
+was needed to act on this — `resolve_live_sizing()` (below) already applies a `STATIC_UNITS`/
+`DYNAMIC_SIZING` change live on the very next entry, so scaling is purely a configs/Slack action.
+
+Full methodology, the complete participation table, and the Risk-of-Ruin simulation this feeds
+into (40%-drawdown ruin threshold, 0.00% P(ruin) at 50-unit sizing across 20,000 simulated 2-year
+paths) are in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis"
+and "Risk of Ruin at 50-unit sizing" sections.
+
+---
+
 ## Resilient Order Execution (§1)
 
 `place_order()` was ported from Athena's `_place_order` pattern (`athena_engine.py`) 2026-09-04 —
