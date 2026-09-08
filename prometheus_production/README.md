@@ -123,8 +123,10 @@ graph TD
     Teardown --> End([Session terminated])
 
     Loop -- Yes --> CmdFlag{prometheus_command.flag\n== EXIT or KILL?}
-    CmdFlag -- EXIT --> ClearPending1[Drop any pending Rule 7 flip, §7] --> ForceExitAll[_execute_exit_all: slack_exit] --> RaiseStop[Raise -- session terminates]
-    CmdFlag -- KILL --> SetKillFlag[_kill_no_exit = True\nposition left untouched] --> RaiseStop
+    CmdFlag -- EXIT --> ClearPending1[Drop any pending Rule 7 flip, §7] --> ForceExitAll[_execute_exit_all: slack_exit] --> ExitConfirmed{Confirmed fully flat?}
+    ExitConfirmed -- Yes --> ClearFlag[Self-clear command flag\nstatus = watching] --> Loop
+    ExitConfirmed -- No --> LeaveRetry[Leave state + flag untouched --\nnext tick retries automatically] --> Loop
+    CmdFlag -- KILL --> SetKillFlag[_kill_no_exit = True\nposition left untouched] --> RaiseStop[Raise -- session terminates]
     RaiseStop --> Teardown
 
     CmdFlag -- No --> PendingFlip{Rule 7 pending flip\nin progress, §7?}
@@ -577,12 +579,25 @@ actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 
 | `data/prometheus_today_1m.csv` | Private intraday 1-min cache (§15) — Prometheus-only, persists across same-day restarts, self-prunes to today's rows on read (2026-09-07) |
 | `logs/prometheus_YYYYMMDD.log` | Daily rotating log |
 
-**`EXIT`** liquidates any open position and terminates the session. **`KILL`** drops control
-immediately and leaves any open position **untouched** — deliberately, per its own promised
-contract ("Control dropped. Position remains OPEN.") — `_teardown()` checks `_kill_no_exit` and
-skips straight to stopping the feed, no exit attempt, no cache clear (a same-day restart after
-KILL should still get the cache's benefit). **`DISABLE`** is a startup-only gate, checked in
-`main()` before the `Prometheus` object is even constructed.
+**`EXIT`** liquidates any open position and **re-arms to `watching`** — it does NOT terminate the
+session (changed 2026-09-08). The original liquidate-and-terminate design was copied from
+Artemis/Athena, where a manual exit meant waiting days for the next scheduled weekly entry
+regardless, so ending the session cost nothing. Prometheus re-enters continuously off ST_15 flips,
+so an operator who exits a trade on a chart-read judgment call (confident it's about to fail) still
+wants the bot alive and watching for the next signal, not stopped until manually restarted. Once
+`_execute_exit_all` confirms the position is fully flat, `_check_command_flag` self-clears
+`prometheus_command.flag` (nothing else consumes it) and lets the main loop continue; if the exit
+doesn't confirm that tick, state and the flag are both left untouched so the next tick retries
+automatically, the same invariant `_execute_exit_lot` already relies on for the SL/target path.
+
+**`KILL`** drops control immediately and leaves any open position **untouched** — deliberately, per
+its own promised contract ("Control dropped. Position remains OPEN.") — `_teardown()` checks
+`_kill_no_exit` and skips straight to stopping the feed, no exit attempt, no cache clear (a
+same-day restart after KILL should still get the cache's benefit). Unlike `EXIT`, `KILL` still
+terminates the session — its whole point is dropping control for manual handling.
+
+**`DISABLE`** is a startup-only gate, checked in `main()` before the `Prometheus` object is even
+constructed.
 
 **§2, Phase 3: teardown's normal path no longer force-exits an open position at all.** Where
 Phase 2 always flattened at session end, Phase 3 leaves it open — that's the expected shape most

@@ -153,13 +153,13 @@ CONTROL_PANEL_BLOCKS = [
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "⚠️ Exit Prometheus"},
+                "text": {"type": "plain_text", "text": "⚠️ Exit Trade"},
                 "style": "danger",
                 "action_id": "btn_prometheus_exit",
                 "confirm": {
                     "title": {"type": "plain_text", "text": "Are you sure?"},
-                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position and halt it."},
-                    "confirm": {"type": "plain_text", "text": "Yes, Exit Prometheus"},
+                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position. The bot keeps running and watches for the next entry — it does NOT stop the session (use Kill for that)."},
+                    "confirm": {"type": "plain_text", "text": "Yes, Exit Trade"},
                     "deny": {"type": "plain_text", "text": "Cancel"}
                 }
             },
@@ -518,7 +518,7 @@ def handle_prometheus_exit(ack, body, say):
     ack()
     user_id = body["user"]["id"]
     if write_prometheus_flag("EXIT", user_id):
-        say(channel=_CH, text=f"⚠️ *PROMETHEUS EXIT INITIATED* by <@{user_id}>. Liquidating and halting...")
+        say(channel=_CH, text=f"⚠️ *PROMETHEUS EXIT INITIATED* by <@{user_id}>. Liquidating — bot stays up, watching for the next entry.")
 
 @app.action("btn_prometheus_kill")
 def handle_prometheus_kill(ack, body, say):

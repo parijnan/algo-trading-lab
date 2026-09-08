@@ -284,6 +284,25 @@ class Prometheus:
             tag = _tag(self._contract['symbol_root']) if self._contract else '*Prometheus*'
 
             if command == 'EXIT':
+                # 2026-09-08: EXIT liquidates and RE-ARMS to 'watching' --
+                # it does NOT end the session. This button's original design
+                # (liquidate + terminate) came from Artemis/Athena, where a
+                # manual exit meant waiting days for the next scheduled
+                # weekly entry regardless, so ending the session cost
+                # nothing. Prometheus re-enters continuously off ST_15
+                # flips -- an operator exiting a trade they're sure will
+                # fail (chart-read judgment call) still wants the bot alive
+                # and watching for the next signal, not stopped until
+                # manually restarted. KILL, below, keeps the
+                # drop-control-for-manual-handling behavior unchanged --
+                # only EXIT's terminate-the-session step is removed.
+                if self.state.status != 'in_trade':
+                    logger.info('Slack `Exit Trade` detected but no open position — nothing to do.')
+                    _slack(f'ℹ️ {tag}: `Exit Trade` received but no open position. '
+                          f'Still watching for the next entry.', SLACK_TRADE_ALERTS)
+                    COMMAND_FLAG_PATH.unlink(missing_ok=True)
+                    return
+
                 msg = f'⚠️ {tag}: Slack `Exit Trade` detected. Liquidating...'
                 logger.critical(msg.replace('*', ''))
                 _slack(msg, SLACK_TRADE_ALERTS)
@@ -291,14 +310,27 @@ class Prometheus:
                     # §7: a Rule 7 flip mid-transition (old side already
                     # closed, new side not yet opened) would otherwise be
                     # silently abandoned once the loop exits below -- the
-                    # user asked to stop, not to finish opening a new
+                    # user asked to exit now, not to finish opening a new
                     # position, so drop it explicitly rather than never.
                     logger.critical('Rule 7 pending flip abandoned due to !exit command '
                                     '(re-entry not completed, by design).')
                     self._pending_flip = None
-                if self.state.status == 'in_trade':
-                    self._execute_exit_all('slack_exit')
-                raise RuntimeError('Session terminated by Slack !exit command.')
+
+                if self._execute_exit_all('slack_exit'):
+                    # Confirmed fully flat (state is back to 'watching').
+                    # Self-clear the flag now -- otherwise the next tick's
+                    # _check_command_flag would see 'EXIT' still on disk and
+                    # re-fire this whole branch forever, since nothing here
+                    # consumes/clears the flag file itself.
+                    COMMAND_FLAG_PATH.unlink(missing_ok=True)
+                    _slack(f'✅ {tag}: Position liquidated. Still watching for the next entry.',
+                          SLACK_TRADE_ALERTS)
+                # else: exit order/fill didn't confirm this tick -- state
+                # AND the flag are both left untouched on purpose, so the
+                # very next tick retries the same liquidation automatically
+                # (the same invariant _execute_exit_lot already relies on
+                # for the SL/target path -- never silently give up on a
+                # requested exit).
 
             elif command == 'KILL':
                 msg = f'\U0001f6a8 {tag}: Slack `Kill Switch` detected. Dropping control immediately.'
