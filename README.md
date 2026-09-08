@@ -506,6 +506,18 @@ slippage modeled. Read as how the sizing mechanics compound, not a realistic for
 scale. [Chart + table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162);
 detailed CSVs in `phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
 
+**Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08): same 381
+trades, but each fill's slippage is now `0.3·√(participation_%)` ticks — participation measured
+against real CRUDEOILM 1-min volume at that fill's own timestamp, coefficient anchored to the
+liquidity analysis's own stated number (25% participation → 1.5 ticks) — and, critically, fed back
+into capital before the next trade's units are sized, so a worse fill this trade damps how big the
+next one gets. Result: peak units drops from 247 to 173, final capital ₹1.60Cr (+219%) vs. the
+no-slippage ₹2.36Cr, Calmar 11.98 vs. 23.23. Ranking holds across a 0.5×–2× coefficient sensitivity
+sweep. Same [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162),
+appended below the no-slippage results; CSVs alongside the originals in
+`phase3/data_sweep/mult_2.0/` as `dynamic_sizing_trades_slippage.csv` /
+`dynamic_sizing_equity_curve_slippage.csv`.
+
 ### Prometheus's own Phase 4 (`prometheus_backtest/phase4/` — backtest research, SHELVED)
 
 Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but
@@ -766,6 +778,7 @@ algo-trading-lab/
 │       ├── exit_calib_p3.py        # Staged SL/target1/target2 calibration, reuses sweep_p3.py's logs
 │       ├── bespoke_2lot_p3.py      # Full per-trade detail for a chosen combo, schema-matched to trade_summary_p2.csv
 │       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: DYNAMIC_SIZING=True, Rs 50L start, compounding from 2026-01-30
+│       ├── dynamic_sizing_sim_slippage.py  # Same sim + participation-based slippage, fed back into unit sizing
 │       └── data_sweep/             (generated — gitignored)
 │   └── phase4/                     # Phase 4 — 1h/15m alignment entry filter (tested, SHELVED 2026-09-04 — no beat vs. baseline)
 │       ├── configs_p4.py           # ST_15/exits fixed at Phase 3's mult-2.0; ST_1H_PERIOD_GRID/ST_1H_MULTIPLIER_GRID under test
