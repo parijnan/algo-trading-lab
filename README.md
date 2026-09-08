@@ -518,6 +518,18 @@ appended below the no-slippage results; CSVs alongside the originals in
 `phase3/data_sweep/mult_2.0/` as `dynamic_sizing_trades_slippage.csv` /
 `dynamic_sizing_equity_curve_slippage.csv`.
 
+**Same simulation on CRUDEOIL, the main contract** (`phase3_crudeoil/dynamic_sizing_sim.py` +
+`dynamic_sizing_sim_slippage.py`, 2026-09-08): same question, asked of CRUDEOIL instead of the
+mini, using CRUDEOIL's own checked margin (`MARGIN_PER_UNIT`=₹10,00,000, starting capital
+₹55,00,000, both user-supplied). No-slippage: 398 trades, ₹55L → ₹1.94Cr (+252%), max drawdown
+−19.8%, Calmar 12.77, units 5→20 — a far more modest range than CRUDEOILM's 50→247, since
+CRUDEOIL's 10x-larger per-unit margin means the same rupee P&L moves units far less. Slippage-
+adjusted (same model, same 0.3·√(participation_%) anchor, carried over from the CRUDEOIL liquidity
+comparison rather than re-fit): final capital ₹1.59Cr (+190%), Calmar 8.97, peak units damped from
+20 to 17. [Chart + table](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef)
+(separate artifact, same structure as the CRUDEOILM one); CSVs in
+`phase3_crudeoil/data_sweep/mult_2.0/` (gitignored).
+
 ### Prometheus's own Phase 4 (`prometheus_backtest/phase4/` — backtest research, SHELVED)
 
 Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but
@@ -779,6 +791,13 @@ algo-trading-lab/
 │       ├── bespoke_2lot_p3.py      # Full per-trade detail for a chosen combo, schema-matched to trade_summary_p2.csv
 │       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: DYNAMIC_SIZING=True, Rs 50L start, compounding from 2026-01-30
 │       ├── dynamic_sizing_sim_slippage.py  # Same sim + participation-based slippage, fed back into unit sizing
+│       └── data_sweep/             (generated — gitignored)
+│   ├── phase3_crudeoil/            # Phase 3, SYMBOL flipped to CRUDEOIL (main contract) — cross-validation, 2026-09-07
+│       ├── configs_p3.py           # Only SYMBOL differs from phase3/'s own — same combo, unchanged parameters
+│       ├── backtest_p3.py, trade_paths_p3.py, sweep_p3.py, exit_calib_p3.py, bespoke_2lot_p3.py
+│       │                          # Same pipeline as phase3/, run against CRUDEOIL's own price series
+│       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: Rs 55L start, Rs 10L margin/unit (both user-checked against CRUDEOIL's real margin)
+│       ├── dynamic_sizing_sim_slippage.py  # Same sim + participation-based slippage (same model as phase3/'s, own real 1-min volume)
 │       └── data_sweep/             (generated — gitignored)
 │   └── phase4/                     # Phase 4 — 1h/15m alignment entry filter (tested, SHELVED 2026-09-04 — no beat vs. baseline)
 │       ├── configs_p4.py           # ST_15/exits fixed at Phase 3's mult-2.0; ST_1H_PERIOD_GRID/ST_1H_MULTIPLIER_GRID under test

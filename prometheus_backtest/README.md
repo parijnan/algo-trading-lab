@@ -652,6 +652,42 @@ been pulled from a live source here and isn't assumed to scale linearly with lot
 **Not done here, by design** (this pass was scoped to liquidity/slippage only): no equity curve,
 drawdown, or trade-performance re-simulation using CRUDEOIL-based sizing — queued as the next step.
 
+**Follow-up, done 2026-09-08**: the equity curve / drawdown / trade-performance re-simulation
+queued above is now done — see the CRUDEOIL dynamic-sizing simulation below, in its own artifact.
+
+## Dynamic-sizing equity simulation — CRUDEOIL (main contract) (2026-09-08)
+
+Same question as the CRUDEOILM dynamic-sizing simulation earlier in this README, asked of the main
+contract: what if Prometheus had gone live on 2026-01-30 with `DYNAMIC_SIZING=True` on CRUDEOIL
+instead, using CRUDEOIL's own checked margin requirement — `MARGIN_PER_UNIT` = Rs 10,00,000 (10x
+CRUDEOILM's, tracking the contract's 10x lot size) and starting capital Rs 55,00,000, both
+user-supplied. Same live production combo (mult 2.0, SL 2.2%/T1 2.0%/T2 5.0%), run against
+CRUDEOIL's own 398-trade backtest (`phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv`
+— 17 more trades than CRUDEOILM's 381, same signal/exit logic against a different price series).
+Same per-lot-exit-event equity/drawdown methodology, and — from the start this time, not as a
+follow-up — both a no-slippage run and a slippage-adjusted run using the identical participation
+model from the CRUDEOIL liquidity comparison above (same A=0.3 anchor, carried over rather than
+re-fit, since a tick costs the same Rs/barrel on either contract).
+
+**No-slippage result**: 398 trades, Rs 55L → Rs 1.94Cr (+252.3%), max drawdown −19.8%, Calmar
+12.77. Units grow from 5 to a peak of 20 — a far more modest range than CRUDEOILM's 50→247, because
+CRUDEOIL's 10x-larger per-unit margin means the same rupee P&L moves units far less. Even so, an
+entry at peak size (20 units = 40 lots) runs ~83% median participation per the liquidity comparison
+above — past the "1-2 tick" comfort zone, though nowhere near CRUDEOILM's equivalent-scaling
+extreme.
+
+**Slippage-adjusted result** (same feedback-loop mechanics as the CRUDEOILM slippage run — units
+resized from post-slippage capital every trade): final capital Rs 1.59Cr (+189.8%), max drawdown
+−21.2%, Calmar 8.97, peak units damped from 20 to 17. Coefficient sensitivity (0.5x/1x/2x anchor)
+holds the same ranking: Rs 1.73Cr → Rs 1.59Cr → Rs 1.28Cr final capital.
+
+[Chart + table (both runs, comparison charts, sensitivity table)](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef)
+— structured identically to the CRUDEOILM artifact. Scripts:
+`phase3_crudeoil/dynamic_sizing_sim.py` and `phase3_crudeoil/dynamic_sizing_sim_slippage.py`, both
+committed. Detailed CSVs (`dynamic_sizing_trades.csv`, `dynamic_sizing_equity_curve.csv`, and their
+`_slippage` counterparts) in `phase3_crudeoil/data_sweep/mult_2.0/` (gitignored, run the scripts to
+regenerate).
+
 ## Risk of Ruin at 50-unit sizing (2026-09-08)
 
 **Why 40% drawdown is the ruin threshold, not an arbitrary number.** MCX's actual required margin
