@@ -21,6 +21,14 @@ def get_logger(name: str) -> logging.Logger:
         return logger
 
     logger.setLevel(logging.DEBUG)
+    # 2026-09-08: prometheus_functions.py imports data_downloader_mcx, whose
+    # own module-level logging.basicConfig() attaches a StreamHandler to the
+    # ROOT logger (different format: "%(asctime)s [%(levelname)s] %(message)s").
+    # Without this, every record logged here ALSO propagates to that root
+    # handler, so anything redirected to stdout (cron's/a manual restart's
+    # log file) gets each line twice, in two different formats. This logger's
+    # own two handlers (below) are unaffected either way.
+    logger.propagate = False
 
     fh = logging.FileHandler(log_file)
     fh.setLevel(logging.DEBUG)
