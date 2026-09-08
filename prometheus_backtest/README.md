@@ -556,6 +556,102 @@ Not itself a slippage model (no fill data exists yet to calibrate one against) �
 for judging how much headroom exists before participation, and therefore expected slippage,
 becomes uncomfortable. Worth re-cutting against real fill data once trading at meaningful size.
 
+## Position sizing — CRUDEOIL (main contract) liquidity comparison (2026-09-08)
+
+**Context.** The dynamic-sizing simulation above (both the no-slippage and slippage-adjusted runs)
+sizes purely in CRUDEOILM lots and reaches units the 2026-09-07 analysis already flagged as past
+comfortable participation. Question: would switching to CRUDEOIL (the main/full-size contract, 100
+bbl/lot vs. CRUDEOILM's 10) buy meaningfully more headroom to scale, at least beyond some exposure
+level? Same method as the 2026-09-07 analysis, extended to CRUDEOIL and cross-compared on a
+barrel-equivalent basis — a raw lot count means 10x different things on the two contracts, so lots
+alone aren't a fair comparison.
+
+**Method.** Identical to the CRUDEOILM analysis: participation measured on the 1-min bar at each
+15-min mark (:00/:15/:30/:45, 09:15 onward) across the full available history (2026-01-30 to
+2026-09-07 — three days further than the original cut). CRUDEOILM: 8,651 boundary-minutes;
+CRUDEOIL: 8,570 (a handful fewer — gaps in the raw feed, not investigated, immaterial at this
+sample size). Zero negative-volume rows land on a boundary minute on either contract. Units
+re-confirmed with a fresh timestamp sample (both print comparable per-minute *lot* counts at
+matching moments, e.g. 2026-01-30 23:2x: CRUDEOILM 27–92, CRUDEOIL 11–63) — volume is lots on both,
+consistent with the original check.
+
+**CRUDEOIL's own participation table** (lots, same shape as the CRUDEOILM table above):
+
+| Order size (lots) | Median | p25 | p10 | p5 | Boundary-minutes ≥20% participation |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 2.08% | 0.93% | 0.48% | 0.33% | 487 / 8,570 |
+| 10 | 20.83% | 9.35% | 4.78% | 3.26% | 4,412 |
+| 20 | 41.67% | 18.69% | 9.57% | 6.52% | 6,265 |
+| 50 | 104.17% | 46.73% | 23.92% | 16.31% | 7,934 |
+| 100 | 208.33% | 93.46% | 47.85% | 32.62% | 8,401 |
+| 200 | 416.67% | 186.92% | 95.69% | 65.24% | 8,528 |
+
+Median boundary-minute volume is 48 lots (vs. CRUDEOILM's 153) — CRUDEOIL trades roughly a third as
+many *lots*, unsurprising for a contract with 10x the lot size and (presumably) a smaller retail
+base. Read alone, this table looks worse than CRUDEOILM's — it isn't, once lots are converted to
+the exposure they actually represent.
+
+**Barrels, not lots, are the fair comparison unit.** Re-expressed at matched underlying exposure
+(a CRUDEOILM lot is 10 bbl, a CRUDEOIL lot is 100 bbl):
+
+| Barrels | CRUDEOILM lots | CRUDEOILM median part. | CRUDEOIL lots | CRUDEOIL median part. |
+|---:|---:|---:|---:|---:|
+| 10 | 1 | 0.65% | 0.10 | 0.21% |
+| 100 | 10 | 6.54% | 1.00 | 2.08% |
+| 200 | 20 | 13.07% | 2.00 | 4.17% |
+| 500 | 50 | 32.68% | 5.00 | 10.42% |
+| 1,000 | 100 | 65.36% | 10.00 | 20.83% |
+| 2,000 | 200 | 130.72% | 20.00 | 41.67% |
+
+CRUDEOIL's participation runs at roughly **a third** of CRUDEOILM's for the same barrel exposure,
+consistently — checked at the tails too, not just the median: at 1,000 bbl, CRUDEOILM's p10/p5 are
+16.81%/11.90% against CRUDEOIL's 4.78%/3.26%, the same ~3x gap. This isn't lots being re-sliced —
+CRUDEOIL's real underlying pool is deeper: median boundary-minute volume in barrel terms is 4,800
+bbl (CRUDEOIL) vs. 1,530 bbl (CRUDEOILM), a 3.14x ratio, and that ratio is what drives every
+barrel-equivalent comparison above.
+
+**Where the "1-2 tick" crossover sits, in barrels.** The 2026-09-07 analysis put CRUDEOILM's
+crossover into the "expect to reliably cross the spread, walk 1-2 ticks" 20-30%-participation band
+at roughly 30-50 lots — 300-500 bbl. CRUDEOIL's median participation crosses that same band around
+10 lots — 1,000 bbl — call it 2-3x the barrel exposure before hitting the same qualitative
+slippage zone, consistent with the 3.14x pool-size ratio. Per-barrel, a tick of slippage costs the
+same on either contract (both quote the same underlying commodity price, tick size 1.0 on both) —
+what changes is how much barrel exposure a given participation band tolerates, not the cost of a
+tick itself. No calibrated ₹ coefficient here either, for the same reason the 2026-09-07 analysis
+declined one — this is a real-volume-grounded qualitative read, not a fitted model.
+
+**Checked against where the simulation already is.** The dynamic-sizing runs above reached peak
+units of 247 (no-slippage) and 173 (slippage-adjusted, anchor coefficient) — 494 and 346 CRUDEOILM
+lots respectively (2 lots/unit), i.e. 4,940 bbl and 3,460 bbl of exposure:
+
+| Simulation | CRUDEOILM lots | CRUDEOILM median part. | CRUDEOIL-equivalent lots | CRUDEOIL median part. |
+|---|---:|---:|---:|---:|
+| No-slippage peak (247 units) | 494 | 322.9% | 49.4 | 102.9% |
+| Slippage-adjusted peak (173 units) | 346 | 226.1% | 34.6 | 72.1% |
+
+CRUDEOIL is a consistent ~3.1x better at both points — but neither point is actually *comfortable*
+on either contract at this exposure; CRUDEOIL just pushes the same problem out roughly 3x in
+barrel terms, it doesn't remove it. The genuinely comfortable (<20-30%) CRUDEOIL zone tops out
+around 1,000 bbl (≈10 CRUDEOIL lots ≈ 100 CRUDEOILM-lot-equivalent) — both simulations' sizing has
+already run well past that by the time units reach the 150-250 range.
+
+**Freeze-limit parity.** MCX's `freeze_qty` is 10,000 underlying units for both contracts —
+1,000-lot ceiling on CRUDEOILM, 100-lot ceiling on CRUDEOIL, identical in barrel terms (10,000 bbl
+either way). Order-splitting risk kicks in at the same total exposure regardless of which contract
+carries it.
+
+**Reading this.** CRUDEOIL offers meaningfully more room to scale the *same* capital-equivalent
+exposure than CRUDEOILM does — roughly 3x, consistently, across the whole size range and both
+tails checked — but "more room" isn't "unlimited room": past ~1,000 bbl (~10 CRUDEOIL lots), the
+same qualitative slippage concerns reappear, just later. Whether switching (or splitting exposure
+across both contracts) is actually worth it also depends on the strategy's own edge holding up
+equally well on CRUDEOIL — already cross-validated 2026-09-07 above, with Calmar running lower
+there (6.80-7.60 vs. CRUDEOILM's 10.21-10.78) — and on CRUDEOIL's own margin-per-lot, which hasn't
+been pulled from a live source here and isn't assumed to scale linearly with lot size.
+
+**Not done here, by design** (this pass was scoped to liquidity/slippage only): no equity curve,
+drawdown, or trade-performance re-simulation using CRUDEOIL-based sizing — queued as the next step.
+
 ## Risk of Ruin at 50-unit sizing (2026-09-08)
 
 **Why 40% drawdown is the ruin threshold, not an arbitrary number.** MCX's actual required margin
