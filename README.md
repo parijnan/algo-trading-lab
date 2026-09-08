@@ -497,6 +497,15 @@ manager — structurally different strategies, not the same one at a different s
 open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3
 section.
 
+**Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08): what if
+Prometheus had gone live on 2026-01-30 with ₹50,00,000 and `DYNAMIC_SIZING=True` the whole way,
+letting units compound with realised P&L exactly as `_calculate_units()` would live. Result: 381
+trades, ₹50L → ₹2.36Cr (+372%), max drawdown −16.0%, Calmar 23.23 — but units grow to a peak of
+247, far past the ~50-lot range the liquidity analysis found already uncomfortable, with zero
+slippage modeled. Read as how the sizing mechanics compound, not a realistic forecast at that
+scale. [Chart + table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162);
+detailed CSVs in `phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
+
 ### Prometheus's own Phase 4 (`prometheus_backtest/phase4/` — backtest research, SHELVED)
 
 Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but
@@ -756,6 +765,7 @@ algo-trading-lab/
 │       ├── sweep_p3.py             # Raw signal-quality sweep across the multiplier grid
 │       ├── exit_calib_p3.py        # Staged SL/target1/target2 calibration, reuses sweep_p3.py's logs
 │       ├── bespoke_2lot_p3.py      # Full per-trade detail for a chosen combo, schema-matched to trade_summary_p2.csv
+│       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: DYNAMIC_SIZING=True, Rs 50L start, compounding from 2026-01-30
 │       └── data_sweep/             (generated — gitignored)
 │   └── phase4/                     # Phase 4 — 1h/15m alignment entry filter (tested, SHELVED 2026-09-04 — no beat vs. baseline)
 │       ├── configs_p4.py           # ST_15/exits fixed at Phase 3's mult-2.0; ST_1H_PERIOD_GRID/ST_1H_MULTIPLIER_GRID under test
