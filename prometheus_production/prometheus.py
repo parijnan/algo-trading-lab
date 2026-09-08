@@ -20,8 +20,10 @@ Set DRY_RUN=False only after Rollout steps 2-4 (plan) are complete:
   3. DRY_RUN paper mode under real market conditions
 """
 import os
+import queue
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -83,22 +85,44 @@ def _tag(symbol_root: str) -> str:
     return f'*Prometheus [{symbol_root}]*'
 
 
+# Slack sends are dispatched off the main loop (so a slow/hung API call
+# never delays exit-condition checks) but through a SINGLE worker thread
+# draining a FIFO queue, not one throwaway thread per message — fixes a
+# real bug (2026-09-08) where a lot1/lot2/total sequence of messages fired
+# within the same tick raced independently over the network and could
+# arrive at Slack in any order (observed: lot1, total, lot2). One worker
+# processing the queue in submission order guarantees delivery order
+# matches call order, since each message waits for the previous one's
+# chat_postMessage to return before the next is sent.
+_slack_queue: "queue.Queue" = queue.Queue()
+_slack_worker_started = False
+
+
+def _slack_worker() -> None:
+    from slack_sdk import WebClient
+    client = WebClient(token=_SLACK_TOKEN)
+    while True:
+        msg, channel = _slack_queue.get()
+        try:
+            client.chat_postMessage(channel=channel, text=msg)
+        except Exception:
+            pass
+
+
 def _slack(msg: str, channel=None) -> None:
+    global _slack_worker_started
     if channel is None:
         channel = SLACK_TRADE_ALERTS
     if not channel or not _SLACK_TOKEN:
         return
     try:
-        from slack_sdk import WebClient
-        import threading
-        def _send():
-            try:
-                WebClient(token=_SLACK_TOKEN).chat_postMessage(channel=channel, text=msg)
-            except Exception:
-                pass
-        threading.Thread(target=_send, daemon=True).start()
+        import slack_sdk  # noqa: F401 -- availability check only; _slack_worker does the real import
     except ImportError:
-        pass
+        return
+    if not _slack_worker_started:
+        threading.Thread(target=_slack_worker, daemon=True).start()
+        _slack_worker_started = True
+    _slack_queue.put((msg, channel))
 
 
 class Prometheus:
