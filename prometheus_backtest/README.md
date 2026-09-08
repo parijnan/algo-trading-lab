@@ -385,8 +385,42 @@ conclusion that directly compares the two at matching vintage.
   this artifact's methodology (verified: drawdown figures match exactly) but were computed
   directly from the refreshed `bespoke_trade_summary.csv` files, not from a re-published
   artifact.
+- **Early MFE as a predictor of trade outcome (2026-09-08)** — prompted by watching a live trade
+  stall at only ~2 points of MFE. Ad-hoc analysis (not a committed script) against all 381 mult-2.0
+  bespoke trades: for each, measured running MFE at fixed early checkpoints (15/30/60/120/240 min
+  since entry) using only trades still genuinely open at that checkpoint — no lookahead, a trade
+  already closed before a given checkpoint is excluded from that checkpoint's cohort — then
+  correlated against the trade's eventual `total_pnl_rs`.
+
+  | Checkpoint | corr(MFE, P&L) | Low-MFE tercile win rate | High-MFE tercile win rate |
+  |---|---:|---:|---:|
+  | 15 min | +0.25 | 34% | 54% |
+  | 30 min | +0.35 | 31% | 60% |
+  | 60 min | +0.38 | 27% | 68% |
+  | 120 min | +0.39 | 28% | 74% |
+  | 240 min | +0.40 | 37% | 92% |
+
+  Correlation strengthens the longer the trade survives; the bottom MFE tercile is net-negative in
+  mean P&L at every checkpoint. The user's own trigger case checks out: trades with ≤2 points of
+  MFE within the first 60 minutes (n=21) went on to a 33.3% win rate and −₹652 mean P&L, vs.
+  46.1%/+₹576 for the rest. Stop-loss trades also have much lower final MFE (median 42 pts) than
+  non-stop trades (median 112 pts). Moderate correlation, not a hard rule — even the worst bucket
+  still has a quarter-to-a-third of eventual winners, so this isn't grounds to override SL/exit
+  logic on its own. Purely descriptive/correlational so far — see the open-threads entry below for
+  where this could go next.
 
 ### Not yet done / open threads
+
+- **Early-MFE signal (above): worth watching, not yet turned into a rule.** Open questions before
+  this becomes anything actionable: (1) does the same early-MFE/outcome relationship hold on
+  CRUDEOIL's own 398 trades, or is it a CRUDEOILM-specific artifact of this particular price
+  history? (2) if a live rule were built on it (e.g. an early tightened stop, or an alert rather
+  than an auto-action, when MFE stays below some threshold past a fixed time), what's the
+  false-positive cost — the ~30% of low-MFE trades that still win would be the ones a premature
+  exit gives up? (3) is there a cleaner single early-checkpoint to standardize on (60min looks like
+  a reasonable point where the signal is already fairly strong without waiting too long) rather
+  than reporting all five? None of this has been tested as an actual rule change yet — currently
+  just a live-monitoring signal to watch, per the user's request, not a backtested optimization.
 
 - ~~**CRUDEOIL cross-validation** for mult 2.0 (the decided candidate)~~ — done 2026-09-07, see
   open caveat #3 above and the two-candidate table. Edge replicates, Calmar is meaningfully lower
