@@ -608,6 +608,16 @@ Not committed to any script in the repo (ad-hoc analysis, run once per this sess
 — re-run if the underlying trade sample changes materially (a re-calibration, a longer backtest
 window, or once real fill/slippage data exists to replace the linear-scaling assumption).
 
+## Side project: WTI 5-minute approximation (2026-09-08)
+
+`prometheus_backtest/side_wti_5m/` — tests the already-decided Phase 3 combo(s) unchanged against
+14.6 years of WTI crude 5-min data (Kaggle), as a loose cross-market sanity check. **Not a
+validation like `phase3_crudeoil/`** — different exchange, different data source/quality, kept
+deliberately out of the numbered phases and out of the production go-live decision chain.
+**Result: the edge does not clearly transfer** (Calmar 0.05 / −0.29 vs. CRUDEOILM's own 10.21/10.78
+on the same combos) — full methodology, the real data-quality finding behind it (weekend
+synthetic-fill contamination), and caveats in `side_wti_5m/README.md`.
+
 ## Running
 
 ```bash
