@@ -556,6 +556,58 @@ Not itself a slippage model (no fill data exists yet to calibrate one against) �
 for judging how much headroom exists before participation, and therefore expected slippage,
 becomes uncomfortable. Worth re-cutting against real fill data once trading at meaningful size.
 
+## Risk of Ruin at 50-unit sizing (2026-09-08)
+
+**Why 40% drawdown is the ruin threshold, not an arbitrary number.** MCX's actual required margin
+for CRUDEOILM is ₹50,000/unit. `MARGIN_PER_UNIT` in `prometheus_configs.py` is set to ₹1,00,000 —
+double the raw requirement — by design: the user allocates capital per unit so that a 40% drawdown
+plus a further 10% negative MTM swing (50 percentage points of adverse capital use, together) can
+be absorbed without ever touching the raw margin itself (`raw_margin / (1 − 0.40 − 0.10) =
+50,000 / 0.50 = 1,00,000`). So "ruin" at 40% drawdown isn't a round-number risk tolerance pulled
+from convention — it's the exact point at which the strategy starts eating into the 10%-MTM-swing
+reserve that sits between the drawdown allowance and an actual margin call. A drawdown beyond 40%
+that doesn't recover quickly is the scenario the sizing was explicitly built to avoid.
+
+**Method.** Monte Carlo bootstrap over the 381 real backtested trades from Phase 3's live
+production combo (mult 2.0, `phase3/data_sweep/mult_2.0/bespoke_trade_summary.csv`), resampled
+with replacement (each trade's `total_pnl_rs` treated as one atomic outcome — lot1+lot2 combined,
+appropriate for synthesizing new orderings rather than reconstructing the original timeline, where
+the finer per-lot-exit-event method matters instead). Scaled to 50-unit sizing (linear ×50 on
+each trade's 1-unit P&L). Capital base: ₹50,00,000 (50 units × `MARGIN_PER_UNIT`'s ₹1,00,000 —
+the fully-buffered allocation per unit, not the raw ₹50,000 margin). 20,000 simulated paths, each
+~1,288 trades (2 years, at the backtest's own observed pace of ~644 trades/year over its 216-day
+span). Ruin defined as: max drawdown > 40% at any point, **and** equity has not recovered back to
+its pre-drawdown peak by the end of the 2-year horizon.
+
+**Result: P(ruin) = 0.00%** — 0 of 20,000 simulated paths met the full definition.
+- P(max drawdown > 40% at any point): 2.5% (499/20,000 paths).
+- Of those 499, every single one recovered within the 2-year horizon — 26.9% within 1 month, 89.6%
+  within 3 months, 99.8% within 6 months, 100% within a year. None qualified as a "long recovery."
+- P(equity ever negative — literal wipeout): 0.00%.
+- Max drawdown distribution: p50 17.1%, p90 29.5%, p95 34.6%, p99 46.9% — even the 99th-percentile
+  bad-luck path is only borderline past the 40% mark, not blown through it.
+- Median terminal equity after 2 years: ₹3.43 crore, from a ₹50,00,000 base — reflects the
+  combo's real historical edge (win rate 44.6%, avg win ₹3,174 vs. avg loss ₹1,737 per unit at
+  1-unit sizing), which is exactly why ruin is this rare in the simulation.
+
+**Why this "0%" shouldn't be read as a guarantee.**
+- Bootstrap resampling treats the 381-trade sample as a fixed, stationary distribution — it cannot
+  model the edge decaying or the strategy meeting a genuinely different regime than the last 6.5
+  months produced.
+- No slippage or execution cost is modeled here, consistent with every backtest phase
+  (`SLIPPAGE_ENABLED=False` throughout) — but the volume/participation analysis above already
+  found 50 lots sees ~33% median participation at the moments Prometheus fills, so real P&L at
+  this size runs somewhat worse than a clean ×50 linear scale-up assumes.
+- Resampling destroys whatever serial correlation the real historical sequence has (trending
+  periods clustering, say) — trades are treated as independent draws, which is unlikely to be
+  exactly true of the real market.
+- The capital-base assumption (bare `MARGIN_PER_UNIT` × units, no further buffer beyond what's
+  already built into that constant) is the single biggest lever on this number.
+
+Not committed to any script in the repo (ad-hoc analysis, run once per this session's convention)
+— re-run if the underlying trade sample changes materially (a re-calibration, a longer backtest
+window, or once real fill/slippage data exists to replace the linear-scaling assumption).
+
 ## Running
 
 ```bash
