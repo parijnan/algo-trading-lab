@@ -644,3 +644,66 @@ configs/Slack-sizing action from here, not an engineering one.
 this is a capacity/headroom read, not a predictive model. Worth re-cutting against actual fill
 data once trading at meaningful size. Full analysis, methodology, and the participation table live
 in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis" section.
+
+---
+
+## 22. Two bugs surfaced by the same evening: session report silently failed again, and an isolated getRMS blip [FIXED 2026-09-08]
+
+**Trigger**: user noticed no session report arrived at last night's (2026-09-07) teardown, and
+asked to investigate both that and the isolated `AB1007 Invalid Token` margin-fetch warning from
+the 16:30 Rule 7 re-entry (§21's memory note).
+
+**Bug A — `prometheus_trades.csv` was ragged, a THIRD distinct bug in this pipeline (after §20's
+two).** The teardown log showed `_send_session_report failed: Error tokenizing data. C error:
+Expected 23 fields in line 3, saw 25` — `pd.read_csv` failing before §20's date-parsing logic ever
+ran. Root cause: `append_cumulative_trade` (`prometheus_functions.py`) only ever writes the header
+once, the first time the file doesn't exist (`write_header = not os.path.exists(TRADES_FILE)`),
+using whatever keys that first row's `_pending_trade_row` happened to have — not a fixed schema.
+Trade #9 was that first row, written mid-restart with `lot1_pnl_points`/`lot1_pnl_rs` missing (the
+exact §20/pnl-restoration-fix-era bug), permanently fixing the on-disk header at 23 columns. Trade
+#10's row, closed after the restart that picked up the pnl-restoration fix, carried those two
+fields anyway (25 fields) — ragged against the frozen 23-column header. Neither row had
+`parent_trade_id` either (both spanned a restart and were rebuilt via `_setup()`'s resume path,
+which never sets it) — a fourth, latent version of the same class of gap, not yet manifested as a
+visible failure only because no genuinely-rolled trade has closed yet.
+
+**Fix**: `prometheus_functions.py` gained an explicit `TRADE_LOG_COLUMNS` constant (26 columns —
+the original 23 plus `parent_trade_id`, `lot1_pnl_points`, `lot1_pnl_rs`) and
+`append_cumulative_trade` now does `pd.DataFrame([row]).reindex(columns=TRADE_LOG_COLUMNS)` before
+every write — the file's shape can no longer depend on `_pending_trade_row`'s incidental keys for
+a given trade. Logs a warning (doesn't crash) if a row ever carries a key outside this list, as an
+early-warning tripwire for future schema drift. Mock-verified 9/9 (mixed-shape rows, an
+unexpected-key row, column order, exact values all round-trip through `pd.read_csv` cleanly).
+
+**Data migration, done on Delos with explicit user approval (the harness's auto-mode classifier
+blocked the SSH write even after in-chat approval — user ran it directly).** A generic (not
+trade-#9-hardcoded) migration script backed up the original file
+(`prometheus_trades.csv.bak-preschema-migration`) and rewrote both existing rows into the correct
+26-column shape, backfilling trade #9's `lot1_pnl_points`/`lot1_pnl_rs` as `171.0`/`1710.0` —
+derived exactly as `total_pnl − lot2_pnl` (guaranteed exact by `_finalize_trade`'s own formula),
+never guessed. `parent_trade_id` left blank for both (neither was a genuine rolled trade). Verified
+post-migration: 26 columns, `pd.read_csv` parses clean, totals unchanged (343.0/3430.0,
+−36.0/−360.0).
+
+**Bug B — isolated `getRMS` `AB1007 Invalid Token`, one occurrence, no recurrence.** Investigated
+against AngelOne's own SmartAPI error documentation: AB1007 is a generic code, and "Invalid Token"
+under it is documented as *"almost always a routine daily session expiry"* — doesn't fit here
+(surrounding calls succeeded before and after, ~2h into the session). No documented transient
+cause (rate-limit, concurrent-request race) matches a single self-resolving blip like this; their
+own guidance amounts to "retry."
+
+**Fix, per explicit user instruction ("add a retry... if the retry fails, position sizing should
+fall back to whatever is defined in the static position sizing")**: new shared
+`_fetch_available_margin()` (`prometheus.py`) wraps the `rmsLimit()` call with one retry (1s pause)
+before raising to the caller. Used by both `_calculate_units` (dynamic-sizing path — on a second
+failure, falls back to `resolve_live_sizing()`'s own static value, exactly the existing behavior,
+now reached only after two real attempts) and `_check_margin_sufficient` (the separate
+defense-in-depth pre-entry check — on a second failure, still fails open/proceeds, unchanged
+behavior, same reasoning as before: the primary tender-margin defense is the early roll, §1).
+Mock-verified 7/7 against a `FakeObj` simulating retry-then-succeed, double-fail, and no-failure-
+at-all paths for both call sites, using the real `prometheus.py` code (not a reimplementation).
+
+**Status: both fixed 2026-09-08, before market open. Full suite clean (80/82, same 2 pre-existing
+unrelated Iris failures throughout).** Not yet exercised by a live `AB1007` retry in production
+(no way to force AngelOne's API to fail on demand) — the mock coverage is the only verification
+until it happens again, if it does.

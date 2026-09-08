@@ -1469,15 +1469,48 @@ def append_trade_log_row(trade_id: int, entry_ts: datetime, row: dict) -> None:
     pd.DataFrame([row]).to_csv(path, mode='a', header=write_header, index=False)
 
 
+# 2026-09-08: fixed, explicit column order for prometheus_trades.csv. Found
+# via a real production failure: _pending_trade_row's actual key set varies
+# call to call (a fresh _execute_entry includes parent_trade_id; a crash/
+# restart resume rebuilds the dict from scratch and may or may not include
+# lot1_pnl_points/lot1_pnl_rs depending on whether that lot had already
+# booked before the restart — see _setup()'s "Resuming in-trade state"
+# block) — but append_cumulative_trade only ever wrote the header once, the
+# very first time the file didn't exist, using whatever keys that FIRST row
+# happened to have. Trade #9 was that first row, written mid-restart with
+# lot1_pnl_points/lot1_pnl_rs missing, so the on-disk header permanently
+# lacked those two columns; Trade #10's row (closed after a later restart
+# picked up the pnl-restoration fix) carried them anyway, producing a
+# ragged file _send_session_report's own pd.read_csv couldn't tokenize.
+# Reindexing every row against this fixed list, every write, makes the
+# file's shape independent of whatever _pending_trade_row happens to
+# contain on a given call — the only way to guarantee this can't recur.
+TRADE_LOG_COLUMNS = [
+    'trade_id', 'contract_expiry', 'direction', 'units', 'entry_ts', 'entry_price',
+    'signal_ts', 'signal_close', 'entry_slippage_points', 'sl_price',
+    'lot1_target', 'lot2_target', 'lot2_target_source', 'parent_trade_id',
+    'lot1_exit_ts', 'lot1_exit_price', 'lot1_exit_reason', 'lot1_pnl_points', 'lot1_pnl_rs',
+    'lot2_exit_ts', 'lot2_exit_price', 'lot2_exit_reason', 'lot2_pnl_points', 'lot2_pnl_rs',
+    'total_pnl_points', 'total_pnl_rs',
+]
+
+
 def append_cumulative_trade(row: dict) -> None:
     """§4: prometheus_trades.csv — one row per completed trade, append-only,
     identical columns to trade_summary_p2.csv plus `units` (direct diffability
-    against the backtest, per Rollout step 3's parity check)."""
+    against the backtest, per Rollout step 3's parity check). Reindexed
+    against TRADE_LOG_COLUMNS (2026-09-08) so the file's shape never depends
+    on _pending_trade_row's incidental key set for a given trade — see that
+    constant's own docstring for the real corruption this fixes."""
     import os
     from prometheus_configs import DATA_DIR
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    extra = set(row.keys()) - set(TRADE_LOG_COLUMNS)
+    if extra:
+        logger.warning(f'append_cumulative_trade: dropping keys not in TRADE_LOG_COLUMNS: {extra}')
     write_header = not os.path.exists(TRADES_FILE)
-    pd.DataFrame([row]).to_csv(TRADES_FILE, mode='a', header=write_header, index=False)
+    out = pd.DataFrame([row]).reindex(columns=TRADE_LOG_COLUMNS)
+    out.to_csv(TRADES_FILE, mode='a', header=write_header, index=False)
 
 
 # ---------------------------------------------------------------------------

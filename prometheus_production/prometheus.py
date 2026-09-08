@@ -184,6 +184,24 @@ class Prometheus:
     # Sizing (§6) — Artemis's formula, not Apollo/Athena's dual-constraint one
     # -----------------------------------------------------------------------
 
+    def _fetch_available_margin(self) -> float:
+        """Shared by _calculate_units and _check_margin_sufficient. 2026-09-08:
+        an isolated getRMS AB1007 "Invalid Token" blip (one occurrence in an
+        otherwise clean multi-hour session, no other errors before or after)
+        — AngelOne's own SmartAPI docs describe AB1007 as a generic code and
+        recommend simply retrying for a case that isn't a genuine session
+        expiry. One immediate retry (short pause, not back-to-back — a
+        one-tick server hiccup is exactly the kind of thing a bare instant
+        retry can still catch) before letting the caller's own fallback take
+        over. Raises on a second failure; this function has no fallback
+        opinion of its own."""
+        try:
+            return float(self.obj.rmsLimit()['data']['availablecash'])
+        except Exception as e:
+            logger.warning(f'rmsLimit() failed ({e}) — retrying once.')
+            time.sleep(1)
+            return float(self.obj.rmsLimit()['data']['availablecash'])
+
     def _calculate_units(self) -> int:
         """2026-09-07 (user-requested): reads sizing fresh via
         resolve_live_sizing() every call, NOT the DYNAMIC_SIZING/STATIC_UNITS
@@ -200,13 +218,14 @@ class Prometheus:
             logger.debug(f'Sizing: fixed STATIC_UNITS={static_units} (live)')
             return static_units
         try:
-            margin = float(self.obj.rmsLimit()['data']['availablecash'])
+            margin = self._fetch_available_margin()
             units = max(1, int(margin // MARGIN_PER_UNIT))
             logger.info(f'Sizing: Available margin={margin:,.0f}  MARGIN_PER_UNIT={MARGIN_PER_UNIT:,}  '
                         f'Units={units}')
             return units
         except Exception as e:
-            logger.warning(f'rmsLimit() failed ({e}) — falling back to STATIC_UNITS={static_units}')
+            logger.warning(f'rmsLimit() failed after retry ({e}) — falling back to '
+                           f'STATIC_UNITS={static_units} (static position sizing).')
             return static_units
 
     def _check_margin_sufficient(self, units: int) -> bool:
@@ -214,7 +233,7 @@ class Prometheus:
         primary defense against the tender-margin window is the early roll
         (§1), this is defense-in-depth against any other margin shift."""
         try:
-            margin = float(self.obj.rmsLimit()['data']['availablecash'])
+            margin = self._fetch_available_margin()
             required = units * MARGIN_PER_UNIT
             if margin < required:
                 logger.error(f'Insufficient margin: available={margin:,.0f} required={required:,.0f} '
@@ -225,7 +244,7 @@ class Prometheus:
                 return False
             return True
         except Exception as e:
-            logger.warning(f'Margin check failed ({e}) — proceeding without it.')
+            logger.warning(f'Margin check failed after retry ({e}) — proceeding without it.')
             return True
 
     # -----------------------------------------------------------------------
