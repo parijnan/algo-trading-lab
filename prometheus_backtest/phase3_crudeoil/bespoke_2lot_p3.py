@@ -125,9 +125,12 @@ def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: floa
 
 
 if __name__ == '__main__':
-    # The two bespoke-calibrated combos established this session (2026-09-01).
+    # The two bespoke-calibrated combos. Mult 2.0's T1 changed 2.0 -> 2.2 on
+    # 2026-09-09, mirroring the CRUDEOILM update (prometheus_backtest/README.md's
+    # Phase 3 caveat #1) -- CRUDEOIL cross-validation re-run at the same T1 as
+    # production so the two stay comparable.
     runs = [
-        (2.0, 2.2, 2.0, 5.0),
+        (2.0, 2.2, 2.2, 5.0),
         (2.5, 1.0, 1.25, 4.0),
     ]
     for mult, sl, t1, t2 in runs:

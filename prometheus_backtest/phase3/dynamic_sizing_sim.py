@@ -7,7 +7,9 @@ compound with realised P&L exactly as _calculate_units() would live
 (units = max(1, capital // MARGIN_PER_UNIT), recomputed once per trade at
 entry -- not mid-trade).
 
-Data: the live production combo (mult 2.0, SL 2.2%/T1 2.0%/T2 5.0%),
+Data: the live production combo (mult 2.0, SL 2.2%/T1 2.2%/T2 5.0%,
+T1 changed from 2.0% on 2026-09-09 -- see prometheus_backtest/README.md's
+Phase 3 caveat #1),
 data_sweep/mult_2.0/bespoke_trade_summary.csv, 381 trades, computed at a
 1-unit (1 lot/leg, LOT_SIZE=10) basis -- scaling each trade's
 lot1_pnl_rs/lot2_pnl_rs by that trade's own entry-time units reproduces

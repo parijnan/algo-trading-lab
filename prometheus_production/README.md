@@ -830,17 +830,20 @@ rm prometheus_production/data/prometheus_active.flag
 See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration
 journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate**
 (`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`,
-`TARGET1_PCT=2.0`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
+`TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
+`TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase
+3 caveat #1) — this is Prometheus's final exit configuration for now; table below refreshed the
+same day.
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
-| Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 380 (refreshed 2026-09-04, through 2026-09-03) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 44.5% | 55.8% |
-| Total P&L | ₹169,779 | ₹42,778 |
-| Max drawdown | −₹16,235 (per-trade series) / −₹16,625 (per-lot-exit-event series) | −₹14,943 |
-| Calmar | 10.21 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | CRUDEOILM only — **not yet cross-validated on CRUDEOIL** (open caveat, see `prometheus_backtest/README.md`'s Phase 3 section) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
+| Trades | 381 (refreshed 2026-09-09) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 44.62% | 55.8% |
+| Total P&L | ₹179,726 | ₹42,778 |
+| Max drawdown | −₹14,364 (per-trade series) / −₹15,267 (per-lot-exit-event series) | −₹14,943 |
+| Calmar | 12.51 (per-trade series) / 11.77 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, **re-validated 2026-09-09 at T1=2.2%** — Calmar 7.17 (was 6.80), edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
 entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting

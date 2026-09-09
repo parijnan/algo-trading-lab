@@ -482,8 +482,10 @@ EOD square-off — a genuine architectural departure from the session-bound Phas
 the entry signal's own Supertrend multiplier itself put under test for the first time (Phase 2's
 `ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated for crude). Two calibrated
 candidates were under consideration as of 2026-09-01 — **decided 2026-09-04: mult 2.0**, now live
-in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.0`,
-`TARGET2_FLAT_PCT=5.0`):
+in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`,
+`TARGET2_FLAT_PCT=5.0`; `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 after widening the
+exit-calibration grid past its original edge — see `prometheus_backtest/README.md`'s Phase 3
+caveat #1):
 
 | | Mult 2.0 (SL 2.2%/T1 2.0%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|

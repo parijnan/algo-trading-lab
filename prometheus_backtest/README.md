@@ -291,77 +291,132 @@ against the 2026-09-04 refresh either), so treat it as directional, not current.
 
 **Two calibrated candidates — DECIDED 2026-09-04: mult 2.0** (adopted live in
 `prometheus_production/` the same day, after confirming mult 3.0's live ST matched the chart
-first):
+first). **Mult 2.0's `TARGET1_PCT` updated 2.0 → 2.2 on 2026-09-09** (caveat #1 below) — this is
+now Prometheus's final exit configuration; table refreshed the same day
+(`two_candidate_stats_p3.py`, new script, `data_sweep/two_candidate_stats.csv`), mult 2.5 column
+also refreshed against current data as a same-vintage sanity check (289 vs previous 288 trades,
+one more raw flip since the last refresh — figures otherwise match closely, confirming the
+methodology reproduces correctly):
 
-| Metric | Mult 2.0 (SL 2.2/T1 2.0/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
+| Metric | Mult 2.0 (SL 2.2/T1 2.2/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
 |---|---|---|
-| Total trades | 381 | 288 |
-| Win % | 44.62% | 48.61% |
-| Total P&L | ₹173,102 | ₹120,936 |
-| Avg win / avg loss | ₹3,174 / −₹1,737 | ₹2,341 / −₹1,398 |
+| Total trades | 381 | 289 |
+| Win % | 44.62% | 48.79% |
+| Total P&L | ₹179,726 | ₹123,010 |
+| Avg win / avg loss | ₹3,248 / −₹1,765 | ₹2,340 / −₹1,398 |
 | Max win / max loss | ₹9,376 / −₹6,320 | ₹7,835 / −₹2,160 |
-| Max drawdown | −₹16,625 | −₹11,219 |
-| Calmar | 10.41 | 10.78 |
+| Max drawdown | −₹15,267 | −₹11,219 |
+| Calmar | 11.77 | 10.96 |
 
-**CRUDEOIL cross-validation — done 2026-09-07** (`prometheus_backtest/phase3_crudeoil/`, identical pipeline to the CRUDEOILM run above, `SYMBOL` the only change, stored in a separate sibling folder rather than overwriting this one). Same per-lot-exit-event Calmar/drawdown methodology as the table above, computed directly from the refreshed `bespoke_trade_summary.csv` files (matching how the CRUDEOILM figures above were produced, not the coarser per-trade `exit_calib_p3_winners.csv` method):
+**CRUDEOIL cross-validation — done 2026-09-07, re-run 2026-09-09 at T1=2.2%** (`prometheus_backtest/phase3_crudeoil/`, identical pipeline to the CRUDEOILM run above, `SYMBOL` the only change, stored in a separate sibling folder rather than overwriting this one; new `two_candidate_stats_p3.py` script mirrored into this folder to compute the table below). Same per-lot-exit-event Calmar/drawdown methodology as the table above, computed directly from the refreshed `bespoke_trade_summary.csv` files (matching how the CRUDEOILM figures above were produced, not the coarser per-trade `exit_calib_p3_winners.csv` method). Mult 2.5's column reproduces the 2026-09-07 figures exactly (unchanged inputs), confirming the methodology is applied consistently:
 
 | Metric | Mult 2.0, CRUDEOIL | Mult 2.5, CRUDEOIL |
 |---|---|---|
 | Total trades | 398 | 288 |
-| Win % | 42.21% | 48.61% |
-| Total P&L | ₹1,476,911 | ₹1,161,011 |
-| Avg win / avg loss | ₹32,099 / −₹17,025 | ₹23,256 / −₹14,154 |
+| Win % | 41.96% | 48.61% |
+| Total P&L | ₹1,573,300 | ₹1,161,011 |
+| Avg win / avg loss | ₹33,130 / −₹17,140 | ₹23,256 / −₹14,154 |
 | Max win / max loss | ₹102,350 / −₹68,800 | ₹88,600 / −₹56,000 |
-| Max drawdown | −₹217,285 | −₹152,737 |
-| Calmar | **6.80** (vs. CRUDEOILM's 10.41) | **7.60** (vs. CRUDEOILM's 10.78) |
+| Max drawdown | −₹219,408 | −₹152,737 |
+| Calmar | **7.17** (vs. CRUDEOILM's 11.77) | **7.60** (vs. CRUDEOILM's 10.96) |
 
-**The edge holds directionally on the full-size contract but not at matching risk-adjusted quality.** Both candidates stay clearly profitable — win rates land within ~2.5 points of the mini-contract figures, and mult 2.5 remains the higher-Calmar choice on CRUDEOIL too (consistent ranking). But P&L scales up only ~8.5x while max drawdown scales up ~13x (mult 2.0) / ~13.6x (mult 2.5) relative to CRUDEOILM — noticeably more than the 10x lot-size ratio alone would predict — so CRUDEOIL's drawdowns run proportionally deeper against its own return than CRUDEOILM's do. This is not a like-for-like guarantee that the live strategy (calibrated and risk-managed specifically against CRUDEOILM's own tighter profile) would perform equivalently if traded on the full-size contract instead — it's the reason Prometheus trades CRUDEOILM, not a reason to doubt the calibration.
+**The edge holds directionally on the full-size contract but not at matching risk-adjusted quality.** Both candidates stay clearly profitable — win rates land within ~2.7 points of the mini-contract figures, and mult 2.5 remains the higher-Calmar choice on CRUDEOIL too (consistent ranking). But P&L scales up only ~8.8x (mult 2.0) / ~9.4x (mult 2.5) while max drawdown scales up ~14.4x (mult 2.0) / ~13.6x (mult 2.5) relative to CRUDEOILM — noticeably more than the 10x lot-size ratio alone would predict — so CRUDEOIL's drawdowns run proportionally deeper against its own return than CRUDEOILM's do. This is not a like-for-like guarantee that the live strategy (calibrated and risk-managed specifically against CRUDEOILM's own tighter profile) would perform equivalently if traded on the full-size contract instead — it's the reason Prometheus trades CRUDEOILM, not a reason to doubt the calibration.
 
-Mult 2.0 refreshed 2026-09-06 (through 2026-09-04) — `bespoke_2lot_p3.py` re-run against the
-freshly-synced data covering Friday's live session, which included one more raw flip (bearish
-trade 381 closing into the real bullish position entered 20:15). **Mult 2.5's column is still
-the 2026-09-04-vintage figure (through 2026-09-03), NOT re-run this pass** — only mult 2.0 was
-in scope this time. Calmar moved 10.21→10.41 for mult 2.0; drawdown reproduces the original
-figure exactly (−16,625 unchanged), confirming the per-lot-exit-event methodology is applied
-consistently. The two remain essentially tied and the fresh data doesn't change the picture
-enough to revisit the mult-2.0 decision. Re-run mult 2.5 the same way before drawing any
-conclusion that directly compares the two at matching vintage.
+*(Historical, superseded by the 2026-09-09 refresh in the table above — kept for the refresh
+trail.)* Mult 2.0 refreshed 2026-09-06 (through 2026-09-04) — `bespoke_2lot_p3.py` re-run against
+the freshly-synced data covering Friday's live session, which included one more raw flip
+(bearish trade 381 closing into the real bullish position entered 20:15). Mult 2.5's column was
+still the 2026-09-04-vintage figure (through 2026-09-03) at that point, not re-run that pass.
+Calmar moved 10.21→10.41 for mult 2.0 (at the then-current T1=2.0%); drawdown reproduced the
+original figure exactly (−16,625 unchanged), confirming the per-lot-exit-event methodology was
+applied consistently. Both columns are now on the same current vintage (see table above) and
+mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply.
 
 **Open caveats on both candidates, not yet resolved:**
-1. **Mult 2.0's `TARGET1_PCT` landed on the edge of its own grid** (0.5%–2.0% tested), with
-   Calmar still climbing at the top of that range (6.47 → 6.80 → 7.96 → 7.88 → **8.81** at
-   0.5%/1.0%/1.25%/1.75%/2.0%, refreshed 2026-09-04; was 5.73 → 6.46 → 7.66 → 7.77 → 8.73) — the
-   same edge-of-grid problem flagged for multiplier selection itself, one level down. The grid
-   needs widening past 2.0% before 2.0's combo can be trusted as a genuine optimum rather than a
-   cut-off.
+1. **Mult 2.0's `TARGET1_PCT` grid-edge caveat — RESOLVED 2026-09-09**, see
+   `exit_calib_p3_t1_widen.py` (new script, `data_sweep/exit_calib_p3_t1_widen_mult20.csv`).
+   Widened the T1 grid from the original 0.5%–2.0% out to 4.0% (0.25% spacing throughout),
+   381-trade current vintage. One methodology change was forced: the original grid pinned
+   `target2` at `T2_STARTING_DEFAULT=2.3%` while searching T1, but `_simulate_trade`'s own
+   `target2_dist > target1_dist` assertion makes 2.3% infeasible once T1 is tested past 2.3% —
+   so the widened sweep pins `target2` at the actual production value (5.0%) instead, across the
+   *full* 0.5%–4.0% range (not spliced at 2.0%), answering the more relevant question directly:
+   given the real decided SL/T2, is T1=2.0% still the best T1? Under this pin, Calmar at T1=2.0%
+   reads 10.66 (not the original grid's 8.81 — different T2 pin, not a contradiction).
+
+   Result: Calmar climbs 0.5%→2.25% (7.03 → 6.93 → 7.65 → 9.03 → 8.78 → 9.36 → 10.66 → **12.31**),
+   then drops sharply at 2.50% (9.62) and stays in the 7–9 range out to 4.0% (max 190,642 total
+   P&L at 4.0%, but Calmar never returns above ~9.6). **This is not a cut-off — the curve
+   genuinely peaks and reverses just past the old edge, confirming the edge-of-grid concern was
+   legitimate but resolvable.** Re-running Stage 3 (T2 grid) at the new T1=2.25% winner confirms
+   T2=5.0% is still the joint optimum (unchanged). Full joint-optimum comparison, same 381-trade
+   set, same methodology:
+
+   | Combo | Total P&L | Max DD | Calmar |
+   |---|---|---|---|
+   | Current production: SL 2.2 / T1 2.0 / T2 5.0 | ₹173,102 | −₹16,235 | 10.66 |
+   | New candidate: SL 2.2 / **T1 2.25** / T2 5.0 | ₹176,884 | **−₹14,364** | **12.31** |
+
+   T1=2.25% beats production on every metric — higher P&L, shallower drawdown, +15.5% Calmar.
+
+   **Fine-grid follow-up, same day** (`exit_calib_p3_t1_fine.py`,
+   `data_sweep/exit_calib_p3_t1_fine_mult20.csv`) — 0.05% steps from 2.00% to 2.50%, same
+   SL=2.2%/T2=5.0% pins, to check whether the 12.31 peak was a single-grid-point noise artifact.
+   **It is not.** Calmar sits in an 8-point *plateau* from 2.05% to 2.45% (11.80–12.77, one mild
+   dip at 2.30%), and — tellingly — max drawdown is pinned at *exactly* −₹14,364 for 8 of those
+   11 points (2.05, 2.10, 2.15, 2.20, 2.25, 2.35, 2.40, 2.45), meaning the same worst losing
+   sequence governs the whole plateau and only total P&L wobbles mildly (₹173k–₹183k) within it
+   — the opposite of what single-point grid noise would look like. Then a genuine **structural
+   cliff** at 2.50% exactly: drawdown jumps to −₹18,587 and Calmar falls to 9.62, a discrete
+   break, not a gradual taper — some specific trade's outcome flips right at that threshold.
+
+   | T1 | Total P&L | Max DD | Calmar |
+   |---|---|---|---|
+   | 2.00% (production) | ₹173,102 | −₹16,235 | 10.66 |
+   | 2.05%–2.45% (plateau, 8/11 pts share max DD) | ₹175,928–₹183,402 | −₹14,364 (mostly) | 11.80–12.77 |
+   | 2.50% (cliff) | ₹178,854 | −₹18,587 | 9.62 |
+
+   **Conclusion: the T1=2.0%→2.25%+ edge is real, not noise** — any value roughly 2.05%–2.45%
+   outperformed the prior production value (2.0%) by a similar margin, which is much stronger
+   evidence than one isolated best point would have been. The single best fine-grid point
+   (T1=2.45%, Calmar 12.77) sits right next to the 2.50% cliff, so picking the exact grid maximum
+   would mean choosing the riskiest point in the plateau if live conditions shift even slightly —
+   **T1=2.2% was adopted instead** (2026-09-09, central-plateau pick, `prometheus_production/prometheus_configs.py`), trading a little backtested Calmar for distance from the cliff. This is
+   now Prometheus's final exit configuration. CRUDEOIL cross-validation of T1=2.2% — done
+   2026-09-09, see the CRUDEOIL table above and caveat #3; the edge held. Still open: the
+   in-sample-everywhere limitation (caveat #5) — this whole exercise, cliff included, was fit and
+   evaluated on the same 381-trade window it's judged against.
 2. **The two candidates are structurally different strategies, not the same mechanism at
    different scale.** Exit-reason mix (lot1 / lot2, of trades reaching each outcome, refreshed
-   2026-09-04):
+   2026-09-09 for mult 2.0's new T1=2.2%; mult 2.5 refreshed to the same 289-trade vintage):
 
    | | Mult 2.0 lot 1 | Mult 2.0 lot 2 | Mult 2.5 lot 1 | Mult 2.5 lot 2 |
    |---|---|---|---|---|
-   | trend_flip | 209 (55.0%) | 299 (78.7%) | 42 (14.6%) | 109 (37.8%) |
-   | target | 143 (37.6%) | 47 (12.4%) | 138 (47.9%) | 51 (17.7%) |
-   | stop_loss | 28 (7.4%) | 34 (8.9%) | 108 (37.5%) | 128 (44.4%) |
+   | trend_flip | 217 (57.0%) | 300 (78.7%) | 42 (14.5%) | 110 (38.1%) |
+   | target | 134 (35.2%) | 47 (12.3%) | 139 (48.1%) | 51 (17.6%) |
+   | stop_loss | 30 (7.9%) | 34 (8.9%) | 108 (37.4%) | 128 (44.3%) |
 
    At 2.5, the tight 1.0% SL does most of the work (largest single exit-reason bucket for both
    lots). At 2.0, the wide 2.2% SL barely intervenes — most trades just ride to the raw
-   trend_flip exit. **That trend_flip bucket is not benign for mult 2.0's lot 1**: 209 trades,
-   only 15.3% win rate, −₹120,820 in aggregate — the single biggest loss center in the whole
-   2.0 system, bigger than the SL bucket itself (−₹54,794). The SL is correctly sized to catch
-   *extreme* individual losers (mean −₹1,957/trade vs. trend_flip's −₹578), but the real drag on
+   trend_flip exit. **That trend_flip bucket is not benign for mult 2.0's lot 1**: 217 trades,
+   only 18.4% win rate, −₹116,900 in aggregate — the single biggest loss center in the whole
+   2.0 system, bigger than the SL bucket itself (−₹58,402). The SL is correctly sized to catch
+   *extreme* individual losers (mean −₹1,947/trade vs. trend_flip's −₹539), but the real drag on
    2.0's lot 1 is a large population of trades that never reach either target and bleed out
-   slowly — a signal-quality issue, not something a different SL fixes. Lot 2's trend_flip, by
-   contrast, is genuinely closer to breakeven (−₹124 avg, 36.8% win rate) — the "let it play
+   slowly — a signal-quality issue, not something a different SL or T1 fixes (T1=2.2% moved a
+   handful of borderline trades from lot1-target into lot1-trend_flip relative to the T1=2.0%
+   figures above — 209→217 — but the qualitative picture is unchanged). Lot 2's trend_flip, by
+   contrast, is genuinely closer to breakeven (−₹119 avg, 37.0% win rate) — the "let it play
    out" framing holds there, just not for lot 1.
-3. **CRUDEOIL cross-validation — done 2026-09-07** (see the table above): the edge replicates
-   directionally on the full-size contract, but Calmar drops noticeably for both candidates
-   (10.41→6.80 for mult 2.0, 10.78→7.60 for mult 2.5) — CRUDEOIL's drawdowns run proportionally
-   deeper than CRUDEOILM's, not just larger by the 10x lot-size ratio. Doesn't change the mult-2.0
-   production decision (CRUDEOILM is the live-traded instrument), but means the live strategy's
-   risk profile shouldn't be assumed to carry over unchanged if ever run on CRUDEOIL instead.
+3. **CRUDEOIL cross-validation — done 2026-09-07, re-run 2026-09-09 at T1=2.2%** (see the table
+   above): the edge replicates directionally on the full-size contract, but Calmar drops
+   noticeably for both candidates (11.77→7.17 for mult 2.0, 10.96→7.60 for mult 2.5) — CRUDEOIL's
+   drawdowns run proportionally deeper than CRUDEOILM's, not just larger by the 10x lot-size
+   ratio. Doesn't change the mult-2.0 production decision (CRUDEOILM is the live-traded
+   instrument), but means the live strategy's risk profile shouldn't be assumed to carry over
+   unchanged if ever run on CRUDEOIL instead.
 4. **No transaction costs modeled** (same convention as v1/Phase 2) — mult 2.0 has the highest
-   trade count of any candidate (380 vs. 2.5's 288), making it the most cost-exposed once
+   trade count of any candidate (381 vs. 2.5's 289), making it the most cost-exposed once
    slippage/brokerage are added.
 5. **In-sample selection throughout** — both the multiplier grid and every exit-parameter grid
    were selected on the same window they're evaluated against; no train/test split or
@@ -425,10 +480,15 @@ conclusion that directly compares the two at matching vintage.
 - ~~**CRUDEOIL cross-validation** for mult 2.0 (the decided candidate)~~ — done 2026-09-07, see
   open caveat #3 above and the two-candidate table. Edge replicates, Calmar is meaningfully lower
   on the full-size contract.
-- **Mult 2.0's `TARGET1_PCT` grid edge** (open caveat #1) — widen the T1 grid past 2.0% to confirm
-  the bespoke combo is a genuine optimum, not a cut-off. Live production already runs this combo
-  (`prometheus_production/`, decided 2026-09-04), so this is a validate-after-the-fact item, not
-  a blocker that was resolved before deciding.
+- ~~**Mult 2.0's `TARGET1_PCT` grid edge** (open caveat #1)~~ — done 2026-09-09, see caveat #1
+  above, including same-day fine-grid follow-up and CRUDEOIL re-validation. Confirmed a genuine
+  ~2.05-2.45% plateau (not a single noisy point, not a cut-off), beating the prior T1=2.0% on
+  P&L, drawdown, and Calmar across the whole plateau, bounded by a real structural cliff exactly
+  at 2.50%. **T1=2.2% adopted as Prometheus's final exit configuration** (central-plateau pick,
+  not the exact grid maximum) and cross-validated on CRUDEOIL the same day — edge held (Calmar
+  7.17 vs. mult 2.5's 7.60, consistent ranking with CRUDEOILM). Still open: a train/test split
+  given caveat #5's in-sample-everywhere limitation still applies here too — this whole exercise,
+  cliff included, was fit and evaluated on the same 381-trade window it's judged against.
 - Re-run the robustness check (fixed combo across the whole multiplier grid) against the
   2026-09-04 data — the version quoted above predates the 2026-09-01 refresh and multiplier
   2.0's existence, and hasn't been re-run since.
@@ -654,14 +714,19 @@ what changes is how much barrel exposure a given participation band tolerates, n
 tick itself. No calibrated ₹ coefficient here either, for the same reason the 2026-09-07 analysis
 declined one — this is a real-volume-grounded qualitative read, not a fitted model.
 
-**Checked against where the simulation already is.** The dynamic-sizing runs above reached peak
-units of 247 (no-slippage) and 173 (slippage-adjusted, anchor coefficient) — 494 and 346 CRUDEOILM
-lots respectively (2 lots/unit), i.e. 4,940 bbl and 3,460 bbl of exposure:
+**Checked against where the simulation already is.** *(Peak-units figures refreshed 2026-09-09
+after `TARGET1_PCT` changed 2.0→2.2 — participation percentages rescaled linearly from the
+2026-09-08 base run rather than re-pulled from raw volume data, which is exact for this purpose:
+participation_pct = order_size / that_minute's_volume × 100 is linear in order_size for any fixed
+minute, so every quantile of the distribution — median, p10, p5 — scales by the same ratio as the
+lot count itself. No approximation, just algebra.)* The dynamic-sizing runs above now reach peak
+units of 260 (no-slippage) and 181 (slippage-adjusted, anchor coefficient) — 520 and 362 CRUDEOILM
+lots respectively (2 lots/unit), i.e. 5,200 bbl and 3,620 bbl of exposure:
 
 | Simulation | CRUDEOILM lots | CRUDEOILM median part. | CRUDEOIL-equivalent lots | CRUDEOIL median part. |
 |---|---:|---:|---:|---:|
-| No-slippage peak (247 units) | 494 | 322.9% | 49.4 | 102.9% |
-| Slippage-adjusted peak (173 units) | 346 | 226.1% | 34.6 | 72.1% |
+| No-slippage peak (260 units) | 520 | 340.0% | 52.0 | 108.3% |
+| Slippage-adjusted peak (181 units) | 362 | 236.5% | 36.2 | 75.4% |
 
 CRUDEOIL is a consistent ~3.1x better at both points — but neither point is actually *comfortable*
 on either contract at this exposure; CRUDEOIL just pushes the same problem out roughly 3x in
@@ -679,9 +744,10 @@ exposure than CRUDEOILM does — roughly 3x, consistently, across the whole size
 tails checked — but "more room" isn't "unlimited room": past ~1,000 bbl (~10 CRUDEOIL lots), the
 same qualitative slippage concerns reappear, just later. Whether switching (or splitting exposure
 across both contracts) is actually worth it also depends on the strategy's own edge holding up
-equally well on CRUDEOIL — already cross-validated 2026-09-07 above, with Calmar running lower
-there (6.80-7.60 vs. CRUDEOILM's 10.21-10.78) — and on CRUDEOIL's own margin-per-lot, which hasn't
-been pulled from a live source here and isn't assumed to scale linearly with lot size.
+equally well on CRUDEOIL — already cross-validated 2026-09-07, re-validated 2026-09-09 at T1=2.2%
+above, with Calmar running lower there (7.17-7.60 vs. CRUDEOILM's 10.96-11.77) — and on
+CRUDEOIL's own margin-per-lot, which hasn't been pulled from a live source here and isn't
+assumed to scale linearly with lot size.
 
 **Not done here, by design** (this pass was scoped to liquidity/slippage only): no equity curve,
 drawdown, or trade-performance re-simulation using CRUDEOIL-based sizing — queued as the next step.
@@ -695,28 +761,33 @@ Same question as the CRUDEOILM dynamic-sizing simulation earlier in this README,
 contract: what if Prometheus had gone live on 2026-01-30 with `DYNAMIC_SIZING=True` on CRUDEOIL
 instead, using CRUDEOIL's own checked margin requirement — `MARGIN_PER_UNIT` = Rs 10,00,000 (10x
 CRUDEOILM's, tracking the contract's 10x lot size) and starting capital Rs 55,00,000, both
-user-supplied. Same live production combo (mult 2.0, SL 2.2%/T1 2.0%/T2 5.0%), run against
-CRUDEOIL's own 398-trade backtest (`phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv`
-— 17 more trades than CRUDEOILM's 381, same signal/exit logic against a different price series).
-Same per-lot-exit-event equity/drawdown methodology, and — from the start this time, not as a
-follow-up — both a no-slippage run and a slippage-adjusted run using the identical participation
-model from the CRUDEOIL liquidity comparison above (same A=0.3 anchor, carried over rather than
-re-fit, since a tick costs the same Rs/barrel on either contract).
+user-supplied. Same live production combo (mult 2.0, SL 2.2%/T1 2.2%/T2 5.0% — T1 updated 2026-09-09, see Phase
+3 caveat #1), run against CRUDEOIL's own 398-trade backtest
+(`phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv` — 17 more trades than
+CRUDEOILM's 381, same signal/exit logic against a different price series). Same per-lot-exit-event
+equity/drawdown methodology, and — from the start this time, not as a follow-up — both a
+no-slippage run and a slippage-adjusted run using the identical participation model from the
+CRUDEOIL liquidity comparison above (same A=0.3 anchor, carried over rather than re-fit, since a
+tick costs the same Rs/barrel on either contract).
 
-**No-slippage result**: 398 trades, Rs 55L → Rs 1.94Cr (+252.3%), max drawdown −19.8%, Calmar
-12.77. Units grow from 5 to a peak of 20 — a far more modest range than CRUDEOILM's 50→247, because
-CRUDEOIL's 10x-larger per-unit margin means the same rupee P&L moves units far less. Even so, an
-entry at peak size (20 units = 40 lots) runs ~83% median participation per the liquidity comparison
-above — past the "1-2 tick" comfort zone, though nowhere near CRUDEOILM's equivalent-scaling
-extreme.
+**No-slippage result, refreshed 2026-09-09 at T1=2.2%** (was Rs 55L → Rs 1.94Cr, Calmar 12.77,
+peak 20 units at T1=2.0%): 398 trades, Rs 55L → Rs 2.08Cr (+278.3%), max drawdown −20.6%, Calmar
+13.52. Units grow from 5 to a peak of 21 — a far more modest range than CRUDEOILM's 50→260,
+because CRUDEOIL's 10x-larger per-unit margin means the same rupee P&L moves units far less. Even
+so, an entry at peak size (21 units = 42 lots) runs ~87% median participation (linearly rescaled
+from the liquidity comparison's 83%-at-40-lots figure above) — past the "1-2 tick" comfort zone,
+though nowhere near CRUDEOILM's equivalent-scaling extreme.
 
-**Slippage-adjusted result** (same feedback-loop mechanics as the CRUDEOILM slippage run — units
-resized from post-slippage capital every trade): final capital Rs 1.59Cr (+189.8%), max drawdown
-−21.2%, Calmar 8.97, peak units damped from 20 to 17. Coefficient sensitivity (0.5x/1x/2x anchor)
-holds the same ranking: Rs 1.73Cr → Rs 1.59Cr → Rs 1.28Cr final capital.
+**Slippage-adjusted result, refreshed 2026-09-09** (same feedback-loop mechanics as the CRUDEOILM
+slippage run — units resized from post-slippage capital every trade; was Rs 1.59Cr/Calmar 8.97/peak
+17 units at T1=2.0%): final capital Rs 1.64Cr (+198.9%), max drawdown −23.8%, Calmar 8.35, peak
+units damped from 21 to 17. Coefficient sensitivity (0.5x/1x/2x anchor) holds the same ranking:
+Rs 1.87Cr → Rs 1.64Cr → Rs 1.33Cr final capital.
 
 [Chart + table (both runs, comparison charts, sensitivity table)](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef)
-— structured identically to the CRUDEOILM artifact. Scripts:
+— structured identically to the CRUDEOILM artifact. **Note: this published artifact is from the
+2026-09-08 T1=2.0% run and has not been rebuilt against the 2026-09-09 T1=2.2% figures above** —
+the numbers in this section are current, the linked chart/table page is not. Scripts:
 `phase3_crudeoil/dynamic_sizing_sim.py` and `phase3_crudeoil/dynamic_sizing_sim_slippage.py`, both
 committed. Detailed CSVs (`dynamic_sizing_trades.csv`, `dynamic_sizing_equity_curve.csv`, and their
 `_slippage` counterparts) in `phase3_crudeoil/data_sweep/mult_2.0/` (gitignored, run the scripts to
@@ -741,20 +812,26 @@ appropriate for synthesizing new orderings rather than reconstructing the origin
 the finer per-lot-exit-event method matters instead). Scaled to 50-unit sizing (linear ×50 on
 each trade's 1-unit P&L). Capital base: ₹50,00,000 (50 units × `MARGIN_PER_UNIT`'s ₹1,00,000 —
 the fully-buffered allocation per unit, not the raw ₹50,000 margin). 20,000 simulated paths, each
-~1,288 trades (2 years, at the backtest's own observed pace of ~644 trades/year over its 216-day
+~1,289 trades (2 years, at the backtest's own observed pace of ~644 trades/year over its 216-day
 span). Ruin defined as: max drawdown > 40% at any point, **and** equity has not recovered back to
 its pre-drawdown peak by the end of the 2-year horizon.
 
+**Refreshed 2026-09-09** against the new T1=2.2% `bespoke_trade_summary.csv` (original script was
+ad-hoc/ephemeral, not checked in — reconstructed faithfully from this section's own method
+description above, fixed seed for reproducibility). Directionally unchanged, modestly better:
+
 **Result: P(ruin) = 0.00%** — 0 of 20,000 simulated paths met the full definition.
-- P(max drawdown > 40% at any point): 2.5% (499/20,000 paths).
-- Of those 499, every single one recovered within the 2-year horizon — 26.9% within 1 month, 89.6%
-  within 3 months, 99.8% within 6 months, 100% within a year. None qualified as a "long recovery."
+- P(max drawdown > 40% at any point): 2.43% (486/20,000 paths).
+- Of those 486, every single one recovered within the 2-year horizon — 29.4% within 1 month, 91.2%
+  within 3 months, 99.4% within 6 months, 100% within a year. None qualified as a "long recovery."
 - P(equity ever negative — literal wipeout): 0.00%.
-- Max drawdown distribution: p50 17.1%, p90 29.5%, p95 34.6%, p99 46.9% — even the 99th-percentile
-  bad-luck path is only borderline past the 40% mark, not blown through it.
-- Median terminal equity after 2 years: ₹3.43 crore, from a ₹50,00,000 base — reflects the
-  combo's real historical edge (win rate 44.6%, avg win ₹3,174 vs. avg loss ₹1,737 per unit at
-  1-unit sizing), which is exactly why ruin is this rare in the simulation.
+- Max drawdown distribution: p50 17.2%, p90 29.2%, p95 34.2%, p99 46.6% — essentially unchanged
+  from the T1=2.0% run; even the 99th-percentile bad-luck path is only borderline past the 40%
+  mark, not blown through it.
+- Median terminal equity after 2 years: ₹3.54 crore (up from ₹3.43 crore at T1=2.0%), from a
+  ₹50,00,000 base — reflects the combo's improved historical edge (win rate 44.6% unchanged, avg
+  win ₹3,248 vs. avg loss ₹1,765 per unit at 1-unit sizing, both up slightly from T1=2.0%'s
+  ₹3,174/₹1,737), which is exactly why ruin is this rare in the simulation.
 
 **Why this "0%" shouldn't be read as a guarantee.**
 - Bootstrap resampling treats the 381-trade sample as a fixed, stationary distribution — it cannot
@@ -781,8 +858,9 @@ window, or once real fill/slippage data exists to replace the linear-scaling ass
 validation like `phase3_crudeoil/`** — different exchange, different data source/quality, kept
 deliberately out of the numbered phases and out of the production go-live decision chain.
 **Result: the edge does not clearly transfer** (Calmar 0.05 / −0.29 vs. CRUDEOILM's own 10.21/10.78
-on the same combos) — full methodology, the real data-quality finding behind it (weekend
-synthetic-fill contamination), and caveats in `side_wti_5m/README.md`.
+at the time this side project ran — mult 2.0's T1 has since changed to 2.2%, not re-tested here)
+— full methodology, the real data-quality finding behind it (weekend synthetic-fill
+contamination), and caveats in `side_wti_5m/README.md`.
 
 ## Running
 

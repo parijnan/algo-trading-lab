@@ -14,8 +14,10 @@ CRUDEOIL's 100 bbl/lot is 10x CRUDEOILM's, so both the per-unit margin and
 the starting capital are correspondingly larger; this is NOT the same
 scale as the CRUDEOILM simulation's Rs 50L/Rs 1L pair, deliberately.
 
-Data: the live production combo (mult 2.0, SL 2.2%/T1 2.0%/T2 5.0%) run
-against CRUDEOIL, phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv,
+Data: the live production combo (mult 2.0, SL 2.2%/T1 2.2%/T2 5.0%, T1
+changed from 2.0% on 2026-09-09 -- see prometheus_backtest/README.md's
+Phase 3 caveat #1) run against CRUDEOIL,
+phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv,
 398 trades (17 more than CRUDEOILM's 381 -- same signal/exit logic, different
 underlying price series), computed at a 1-unit (1 lot/leg, LOT_SIZE=100 on
 CRUDEOIL) basis -- scaling each trade's lot1_pnl_rs/lot2_pnl_rs by that

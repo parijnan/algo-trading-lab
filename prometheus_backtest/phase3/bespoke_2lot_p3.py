@@ -125,9 +125,14 @@ def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: floa
 
 
 if __name__ == '__main__':
-    # The two bespoke-calibrated combos established this session (2026-09-01).
+    # The two bespoke-calibrated combos. Mult 2.0's T1 changed 2.0 -> 2.2 on
+    # 2026-09-09 (prometheus_backtest/README.md's Phase 3 caveat #1: the
+    # original T1 grid landed on its own edge; widened + fine-grid follow-up
+    # found a genuine plateau 2.05-2.45% bounded by a real cliff at 2.50%,
+    # with 2.2% as the plateau's best point) -- this is now Prometheus's
+    # final configuration, matching prometheus_production/prometheus_configs.py.
     runs = [
-        (2.0, 2.2, 2.0, 5.0),
+        (2.0, 2.2, 2.2, 5.0),
         (2.5, 1.0, 1.25, 4.0),
     ]
     for mult, sl, t1, t2 in runs:

@@ -210,7 +210,18 @@ CRUDEOIL_REFERENCE_SYMBOL       = 'CRUDEOIL'   # full-size contract, reference o
 # ST_MULTIPLIER=2.0 above, not mixed with the old exits: mult 2.0's stop is a
 # true tail-risk backstop (SL 2.2%, wider than Phase 2's), not an active
 # trade manager like Phase 2's 1.8% was. ────────────────────────────────────
-TARGET1_PCT      = 2.0
+# TARGET1_PCT changed 2.0 -> 2.2 on 2026-09-09: the original T1 grid
+# (0.5-2.0%) landed on its own edge with Calmar still climbing, so the grid
+# was widened past 2.0% and then re-run at 0.05% resolution around 2.0-2.5%
+# (prometheus_backtest/README.md's Phase 3 caveat #1, exit_calib_p3_t1_widen.py
+# / exit_calib_p3_t1_fine.py). Found a genuine plateau (not a single noisy
+# point) from 2.05-2.45%, 8 of 11 fine-grid points sharing the exact same
+# -Rs.14,364 max drawdown, bounded by a real structural cliff exactly at
+# 2.50%. 2.2% is the plateau's own best point (Calmar 12.51 vs production's
+# prior 10.66 at T1=2.0, same 381-trade set/SL/T2), chosen over the
+# single-grid-point maximum (2.45%, Calmar 12.77) for distance from the cliff.
+# Still in-sample/CRUDEOILM-only — see caveat #1 for what's still open.
+TARGET1_PCT      = 2.2
 TARGET2_MODE     = 'flat_pct'
 TARGET2_FLAT_PCT = 5.0
 SL_PCT           = 2.2
