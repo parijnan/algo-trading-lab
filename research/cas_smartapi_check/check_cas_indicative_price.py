@@ -30,6 +30,7 @@ Usage:
 
 import csv
 import json
+import logging
 import os
 import sys
 import threading
@@ -65,6 +66,10 @@ REST_OUT = os.path.join(OUT_DIR, f"rest_polls_{today}.jsonl")
 def login():
     creds = pd.read_csv(CREDS_FILE).iloc[0]
     obj = SmartConnect(api_key=creds["api_key"])
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     totp = TOTP(creds["qr_code"]).now()
     data = obj.generateSession(creds["user_name"], str(creds["password"]), totp)
     auth_token = data["data"]["jwtToken"]

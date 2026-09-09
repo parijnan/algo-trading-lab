@@ -12,6 +12,7 @@ Lifecycle:
 DRY_RUN is ON by default (DRY_RUN=True in configs.py).
 Set DRY_RUN=False only after paper-trading parity is confirmed.
 """
+import logging
 import os
 import sys
 import csv
@@ -889,6 +890,10 @@ def _login() -> tuple:
     client_code = str(row['client_id'])
 
     obj  = SmartConnect(api_key=api_key)
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     totp = pyotp.TOTP(str(row['totp_token'])).now()
     resp = obj.generateSession(client_code, str(row['password']), totp)
     if not resp.get('status'):

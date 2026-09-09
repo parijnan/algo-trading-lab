@@ -19,6 +19,7 @@ Set DRY_RUN=False only after Rollout steps 2-4 (plan) are complete:
   2. backtest/live parity check
   3. DRY_RUN paper mode under real market conditions
 """
+import logging
 import os
 import queue
 import signal
@@ -2703,6 +2704,10 @@ def _login() -> tuple:
     client_code = str(row['user_name'])
 
     obj = SmartConnect(api_key=api_key)
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     totp = pyotp.TOTP(str(row['qr_code'])).now()
     resp = obj.generateSession(client_code, str(row['password']), totp)
     if not resp.get('status'):

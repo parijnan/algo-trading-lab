@@ -19,6 +19,7 @@ Requires:
 """
 
 import ctypes
+import logging
 import threading
 import time
 from datetime import datetime
@@ -223,6 +224,10 @@ def login():
 
     print(f"[{_ts()}] Logging in as {user_name}...")
     obj = SmartConnect(api_key=api_key)
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     while True:
         try:
             totp = TOTP(qr_code).now()

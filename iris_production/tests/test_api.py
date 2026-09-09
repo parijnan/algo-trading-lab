@@ -14,6 +14,7 @@ Usage (from repo root):
 Place user_credentials.csv in iris_production/data/ first.
 Columns: api_key, client_id, password, totp_token
 """
+import logging
 import sys, time, json
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -42,6 +43,10 @@ try:
     creds = pd.read_csv(CREDS_FILE)
     row   = creds.iloc[0]
     obj   = SmartConnect(api_key=str(row['api_key']))
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     totp  = pyotp.TOTP(str(row['totp_token'])).now()
     resp  = obj.generateSession(str(row['client_id']), str(row['password']), totp)
 

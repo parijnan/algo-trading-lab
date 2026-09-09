@@ -442,6 +442,10 @@ if __name__ == "__main__":
     # --- Authentication ---
     try:
         obj  = SmartConnect(api_key=user_credentials_df.iloc[0].loc["api_key"])
+        # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+        # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+        # construction, not before, or this is silently overridden back to ERROR.
+        logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
         totp = TOTP(user_credentials_df.iloc[0].loc["qr_code"]).now()
         data = obj.generateSession(
                    user_credentials_df.iloc[0].loc["user_name"],

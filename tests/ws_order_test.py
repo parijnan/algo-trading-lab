@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import sys
 import threading
 import time
@@ -48,6 +49,10 @@ def load_credentials():
 
 def login(api_key, user_name, password, qr_code):
     obj = SmartConnect(api_key=api_key)
+    # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+    # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+    # construction, not before, or this is silently overridden back to ERROR.
+    logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
     totp = TOTP(qr_code).now()
     data = obj.generateSession(user_name, password, totp)
     if not data.get("status"):
