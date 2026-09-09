@@ -817,8 +817,10 @@ span). Ruin defined as: max drawdown > 40% at any point, **and** equity has not 
 its pre-drawdown peak by the end of the 2-year horizon.
 
 **Refreshed 2026-09-09** against the new T1=2.2% `bespoke_trade_summary.csv` (original script was
-ad-hoc/ephemeral, not checked in — reconstructed faithfully from this section's own method
-description above, fixed seed for reproducibility). Directionally unchanged, modestly better:
+ad-hoc/ephemeral; now checked in as `phase3/risk_of_ruin_p3.py`, fixed seed 20260909 for
+reproducibility — re-running it against the current data reproduces the numbers below exactly, so
+future refreshes no longer need to reconstruct this from scratch). Directionally unchanged,
+modestly better:
 
 **Result: P(ruin) = 0.00%** — 0 of 20,000 simulated paths met the full definition.
 - P(max drawdown > 40% at any point): 2.43% (486/20,000 paths).

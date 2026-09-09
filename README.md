@@ -499,26 +499,27 @@ manager — structurally different strategies, not the same one at a different s
 open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3
 section.
 
-**Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08): what if
-Prometheus had gone live on 2026-01-30 with ₹50,00,000 and `DYNAMIC_SIZING=True` the whole way,
-letting units compound with realised P&L exactly as `_calculate_units()` would live. Result: 381
-trades, ₹50L → ₹2.36Cr (+372%), max drawdown −16.0%, Calmar 23.23 — but units grow to a peak of
-247, far past the ~50-lot range the liquidity analysis found already uncomfortable, with zero
-slippage modeled. Read as how the sizing mechanics compound, not a realistic forecast at that
-scale. [Chart + table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162);
-detailed CSVs in `phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
+**Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08, refreshed
+2026-09-09 at `TARGET1_PCT=2.2%`): what if Prometheus had gone live on 2026-01-30 with ₹50,00,000
+and `DYNAMIC_SIZING=True` the whole way, letting units compound with realised P&L exactly as
+`_calculate_units()` would live. Result: 381 trades, ₹50L → ₹2.50Cr (+400.0%), max drawdown
+−14.7%, Calmar 27.31 — but units grow to a peak of 260 (was 247 at T1=2.0%), far past the ~50-lot
+range the liquidity analysis found already uncomfortable, with zero slippage modeled. Read as how
+the sizing mechanics compound, not a realistic forecast at that scale. [Chart +
+table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162); detailed CSVs in
+`phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
 
-**Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08): same 381
-trades, but each fill's slippage is now `0.3·√(participation_%)` ticks — participation measured
-against real CRUDEOILM 1-min volume at that fill's own timestamp, coefficient anchored to the
-liquidity analysis's own stated number (25% participation → 1.5 ticks) — and, critically, fed back
-into capital before the next trade's units are sized, so a worse fill this trade damps how big the
-next one gets. Result: peak units drops from 247 to 173, final capital ₹1.60Cr (+219%) vs. the
-no-slippage ₹2.36Cr, Calmar 11.98 vs. 23.23. Ranking holds across a 0.5×–2× coefficient sensitivity
-sweep. Same [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162),
-appended below the no-slippage results; CSVs alongside the originals in
-`phase3/data_sweep/mult_2.0/` as `dynamic_sizing_trades_slippage.csv` /
-`dynamic_sizing_equity_curve_slippage.csv`.
+**Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08, refreshed
+2026-09-09): same 381 trades, but each fill's slippage is now `0.3·√(participation_%)` ticks —
+participation measured against real CRUDEOILM 1-min volume at that fill's own timestamp,
+coefficient anchored to the liquidity analysis's own stated number (25% participation → 1.5
+ticks) — and, critically, fed back into capital before the next trade's units are sized, so a
+worse fill this trade damps how big the next one gets. Result: peak units drops from 260 to 181,
+final capital ₹1.68Cr (+235.8%) vs. the no-slippage ₹2.50Cr, Calmar 13.19 vs. 27.31. Ranking holds
+across a 0.5×–2× coefficient sensitivity sweep. Same
+[artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162), appended below
+the no-slippage results; CSVs alongside the originals in `phase3/data_sweep/mult_2.0/` as
+`dynamic_sizing_trades_slippage.csv` / `dynamic_sizing_equity_curve_slippage.csv`.
 
 **Same simulation on CRUDEOIL, the main contract** (`phase3_crudeoil/dynamic_sizing_sim.py` +
 `dynamic_sizing_sim_slippage.py`, 2026-09-08): same question, asked of CRUDEOIL instead of the
