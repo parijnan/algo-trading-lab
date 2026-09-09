@@ -495,6 +495,26 @@ mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply
   still has a quarter-to-a-third of eventual winners, so this isn't grounds to override SL/exit
   logic on its own. Purely descriptive/correlational so far — see the open-threads entry below for
   where this could go next.
+- **Lot 2's trend_flip win rate is a blend of two structurally different populations, not one
+  uniform 37.4% (2026-09-09)** — prompted by noticing lot2's overall trend_flip win rate (37.4%)
+  sits suspiciously close to lot1's target1 hit rate (35.2%). Cross-tabulated lot1's own exit
+  reason against lot2's, for the 305 trades where lot2 exits via trend_flip:
+
+  | Lot1's own fate | Lot2 trend_flip win rate | Share of lot2's trend_flip trades |
+  |---|---:|---:|
+  | Lot1 also trend_flipped (never reached target1) | 18.6% | 220 / 305 (72%) |
+  | Lot1 hit target1 first | **85.9%** (avg +₹997) | 85 / 305 (28%) |
+
+  The first row isn't a separate finding — when lot1 and lot2 exit at the same simultaneous
+  trend-flip event (neither having reached a target), they share the same entry and exit price, so
+  their win/loss outcome is identical by construction; that row's 18.6% matches lot1's own overall
+  trend_flip win rate exactly, as it must. The second row is the real signal: once lot1 has already
+  banked +2.2%, the Supertrend has clearly trailed up enough that a *later* flip still leaves lot2
+  net-positive 86% of the time. Zooming out further — given lot1 hits target1 at all (136 trades),
+  lot2 wins **88.2%** of the time regardless of how it eventually exits (target2: 47, trend_flip-
+  and-still-winning: 73, stop_loss: only 4). So "lot1 reaching T1" is a genuine forward signal for
+  lot2's eventual outcome, not a coincidence in the aggregate stats. See the open-threads entry
+  below — this turned out to be actionable, though not via the first (breakeven) rule tried.
 
 ### Not yet done / open threads
 
@@ -508,6 +528,70 @@ mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply
   a reasonable point where the signal is already fairly strong without waiting too long) rather
   than reporting all five? None of this has been tested as an actual rule change yet — currently
   just a live-monitoring signal to watch, per the user's request, not a backtested optimization.
+
+- ~~**Lot2 stop-trailing after lot1's target1** (2026-09-09) — DECIDED: documented, not adopted.~~
+  Breakeven rejected, a genuine-looking improvement found at a shallower trail, but it didn't
+  survive CRUDEOIL cross-validation. Candidate rule: once lot1 exits via target1, move lot2's own
+  stop-loss up from the original wide `SL_PCT` distance to some level between breakeven and target1
+  itself. Three stages:
+
+  1. **Exact breakeven, `phase3/lot2_breakeven_after_t1_p3.py`** — full minute-by-minute
+     re-simulation (not just the categorical cross-tab above), same 386 trades. **The qualitative
+     reasoning going in was wrong in one respect, caught only by actually simulating it**: a
+     breakeven stop can still fire on a trade that later goes on to a big win (price dips to
+     breakeven, the stop fires, price then recovers and would have hit target2) — 7 of 386 trades
+     lost upside this way, one of them a −₹4,782.5 hit (a trade that would have reached target2;
+     walked through in detail as trade #111 in this session's conversation — a bearish trade
+     during a real overnight volatility spike). Against that, 13 trades improved (previously-losing
+     post-target1 cases correctly converted to scratches). Net: total P&L improves modestly
+     (₹184,892 → ₹186,480, +0.9%) but max drawdown worsens (−₹15,267 → −₹16,247) and **Calmar
+     drops** (12.11 → 11.48) — on this project's own primary decision metric, exact breakeven is a
+     net negative. **Rejected as a candidate.**
+  2. **Was it a gap problem?** Checked whether the retracements that punish a tight trail are
+     mostly rare gap events (which a rule could special-case around) or routine continuous-trading
+     moves. Of the 136 lot1-booked trades, 25 ever retraced back through breakeven; only **6 were
+     preceded by a real time/session gap**, the other **19 (76%) retraced through breakeven during
+     perfectly ordinary continuous trading**. So this isn't a tail-event problem — Supertrend's own
+     ATR-based trailing band (mult 2.0, 15-min bars) is routinely wider than the fixed 2.2%
+     breakeven/SL levels, independent of gaps. Trade #111 itself breached breakeven gradually
+     (26 minutes after T1, ordinary 1-minute bar spacing) — the dramatic overnight move happened
+     *after* a breakeven stop would already have fired, so it isn't actually a gap-driven
+     counterexample to this rule despite the eye-catching magnitude.
+  3. **Grid search over the trail level, `phase3/lot2_trail_after_t1_grid_p3.py` (0.2% steps, 2.2%
+     down to breakeven) then `phase3/lot2_trail_after_t1_fine_p3.py` (0.05% steps, 0.6–1.8%,
+     covering the coarse grid's apparent plateau)** — same noise-vs-genuine-structure check already
+     applied to the `TARGET1_PCT` grid (caveat #1). Result: a genuine, broad plateau from
+     **0.85% to 1.75%** (18 consecutive 0.05%-spaced points sharing the exact same −₹14,364 max
+     drawdown — not a single lucky point), peaking at **trail=0.90%**: total P&L ₹200,073, max
+     drawdown −₹14,364, **Calmar 13.93** — beating the no-rule baseline (₹184,892 / −₹15,267 /
+     12.11) on *every* metric simultaneously, and sitting comfortably mid-plateau rather than at a
+     fragile edge.
+
+  4. **CRUDEOIL cross-validation — done 2026-09-09, result: does NOT replicate.**
+     `phase3_crudeoil/lot2_trail_after_t1_grid_p3.py` then `_fine_p3.py`, identical grids and
+     methodology, CRUDEOIL's own 403-trade `bespoke_trade_summary.csv`. **No trail level in either
+     grid beats the no-rule baseline** (Calmar 7.40, ₹1,624,376, −₹219,408). The coarse grid's best
+     point (trail=2.0%, Calmar 7.11) already falls short; the fine grid confirms it — best point
+     trail=1.8% at Calmar 6.94, still below baseline. Worse, max drawdown *deepens* to −₹243,776
+     (an 11% deeper drawdown than baseline) across nearly the entire 0.0%–1.75% range on CRUDEOIL,
+     the opposite of the shallower drawdown found on CRUDEOILM's own plateau. This is a real,
+     decisive negative cross-check, not a marginal one — the edge that looked robust on CRUDEOILM
+     (broad plateau, both metrics improving together) is CRUDEOILM-specific, not a property of the
+     underlying signal/mechanism that should be expected to transfer.
+
+  **Decision (user, 2026-09-09): leave documented, not adopted for now.** CRUDEOILM is the
+  live-traded instrument, so the negative CRUDEOIL result doesn't mechanically block using the
+  rule there — but it materially weakens confidence that the CRUDEOILM plateau reflects a genuine,
+  general mechanism (lot2 stop-trailing after a T1 hit) rather than a pattern specific to
+  CRUDEOILM's own price history. The stated reasoning for not pursuing it further right now: even
+  CRUDEOILM's own sample is too small to call this decisively — the plateau's *shape* looks real
+  (18 fine-grid points sharing an identical max drawdown, not one lucky point), but only 136 of
+  386 trades ever have lot1 reach target1 at all, and only ~20 of those are where the different
+  trail levels actually diverge from each other — a genuinely small base to build a new,
+  not-yet-existing production mechanism on top of, on top of the usual in-sample caveat (fit and
+  evaluated on the same window it's judged against, no train/test split). Revisit if a
+  substantially longer backtest window becomes available, or if this pattern reappears
+  independently in a future data refresh.
 
 - ~~**CRUDEOIL cross-validation** for mult 2.0 (the decided candidate)~~ — done 2026-09-07, see
   open caveat #3 above and the two-candidate table. Edge replicates, Calmar is meaningfully lower
