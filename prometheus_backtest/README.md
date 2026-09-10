@@ -579,6 +579,34 @@ mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply
      (broad plateau, both metrics improving together) is CRUDEOILM-specific, not a property of the
      underlying signal/mechanism that should be expected to transfer.
 
+  5. **Why it fails on CRUDEOIL — trade-level investigation, done 2026-09-09/10, at CRUDEOILM's
+     own chosen trail=0.90% for direct comparability.** Of CRUDEOIL's 139 lot1-hit-target1 trades,
+     50 had lot2's outcome changed by the trail; net effect −₹20,825, matching the grid's negative
+     result. But that net hides a sharp concentration: **5 single trades account for −₹203,712
+     (73%) of all lost upside**, and all 5 share the same shape — lot2 was already on track for the
+     full **target2** win (the strategy's biggest payoff) and got stopped out early instead, with no
+     credit for the move it was already going to complete. Two sub-mechanisms:
+     - **Gap-driven (2 of 5).** Trade #114: a 3-day weekend gap bar opened *below* the trail level
+       entirely (open 8867 vs. trail 9099), forcing a same-bar exit near the gap price — then that
+       same bar rallied to a high of 9610, clearing target2 (9468.9). The original 2.2% SL
+       (8819.6) survived the gap by 0.4 points and banked +₹45,090; the trail turned it into
+       −₹15,100 — a −₹60,190 swing from one trade. Trade #5 is a same-bar T1-then-trail-check
+       variant at a holiday reopen.
+     - **Ordinary, no-gap retracements (3 of 5 — the more important case).** Trades #165, #128, #94
+       show no gap at all (`gap_min=1.0` throughout). Trade #94 walked in detail: 20 minutes after
+       T1, price pulled back a routine ~120 points (1.4% of entry) — overshooting the 0.90% trail
+       by just 8 points — then reversed immediately and rallied 350+ more points to clear target2
+       comfortably the same session. The trail wasn't defending against a crash; ordinary noise
+       clipped it.
+     Across all 50 affected trades, only 20% (10/50) are gap-preceded — close to the 24% found for
+     CRUDEOILM's trade #111 (stage 2 above), so this isn't "CRUDEOIL is gappier." The real
+     mechanism: CRUDEOIL's typical post-target1 pullback depth, as a % of entry price, runs deeper
+     than what a trail fitted to CRUDEOILM's own pullback distribution can survive — so it
+     repeatedly stops out CRUDEOIL's biggest winners (the target2 trades) before they complete,
+     which is exactly why max drawdown *worsens* rather than improves across nearly the whole
+     CRUDEOIL grid. This is the concrete mechanism behind the CRUDEOILM-specificity concern raised
+     in the decision below.
+
   **Decision (user, 2026-09-09): leave documented, not adopted for now.** CRUDEOILM is the
   live-traded instrument, so the negative CRUDEOIL result doesn't mechanically block using the
   rule there — but it materially weakens confidence that the CRUDEOILM plateau reflects a genuine,
