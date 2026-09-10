@@ -253,7 +253,31 @@ Consumers doing a naive `sum(total_pnl_rs)` over `prometheus_trades.csv` will do
 
 **Every non-opening-bar large-range event has CRUDEOIL moving in near-lockstep with CRUDEOILM (ratio 0.88–1.06) — these are real market moves.** Every session-*opening*-bar large-range event but one has CRUDEOIL's range at a fraction of CRUDEOILM's (ratio 0.04–0.38) — CRUDEOIL barely moved while CRUDEOILM spiked. Today's incident is the **sixth** confirmed instance of this exact pattern over ~7 months, not a one-off.
 
-**2026-03-09's opening bar (ratio 0.70) is excluded from that pattern, not a partial exception to it.** User's own external research: that date had MCX-side backend changes that may have corrupted data independent of anything about price discovery — a separate, unrelated data-quality issue, not a milder version of the same artifact. Whatever caused it is out of scope here; it shouldn't be forced into the "opening bar" story just because it happened to also be an opening bar, and it shouldn't inform the fix below (its data is potentially unreliable on both instruments, so CRUDEOIL isn't a trustworthy reference for that specific date either).
+**2026-03-09's opening bar (ratio 0.70) is excluded from that pattern, not a partial exception to it — but the original reason given was wrong, corrected 2026-09-10.** This was NOT "MCX-side backend changes that may have corrupted data," as originally guessed. Direct inspection of the raw 1-min data (both instruments, full 09:00-11:00 window) shows a real, fully-explained mechanism instead: **MCX's Daily Price Limit (DPL) circuit-breaker relaxation ladder**, firing repeatedly through the whole morning session:
+
+| Time | Price | Event |
+|---|---|---|
+| 09:00 | 8339→8864 in 1 min | opening jump, +525 (~6.3%) — matches DPL's "first level relaxes instantly to 6%" |
+| 09:01-09:15 | frozen at 8864 | 15 min — matches the mandatory cooling-off period |
+| 09:16 | →9115 | +251 (~2.7%) |
+| 09:17-09:30 | frozen at 9115 | ~14 min |
+| 09:31 | →9366 | +251 |
+| 09:32-09:45 | frozen at 9366 | ~14 min |
+| 09:46 | →9617 | +251 |
+| 09:47-10:00/01 | frozen at 9617 | ~14 min |
+| 10:01/02 | →9868 | +251 |
+| 10:02-10:15/16 | frozen at 9868 | ~14 min |
+| 10:16/17 | →10119 | +251 |
+| 10:17-10:30/31 | frozen at 10119 | ~14 min |
+| 10:31/33 | →10370 | +251 |
+| 10:33-10:45/47 | frozen at 10370 | ~14 min |
+| 10:46-11:00 | real trading resumes | spikes to ~10600, then reverses hard, crashing back to ~9860-9980 |
+
+Every step after the opening jump is **exactly +251 points** — a fixed increment, not organic price discovery. **CRUDEOILM and CRUDEOIL hit the identical price levels at the identical times throughout** (only their own pre-freeze opening ticks differ slightly, which is why the two instruments' 09:00 TR isn't identical — 525 vs. 365 — even though both land on and freeze at the same 8864 ceiling) — the clearest possible signal this is an exchange-wide regulatory mechanism, not a contract-specific liquidity quirk. The later same-day large-TR entries in the table above (2026-03-09 10:45/11:15) are the release-and-reversal continuation of this exact same sequence, not separate events; 15:00/19:30 that day may be further recurrences, not independently checked.
+
+**Independently confirmed live, 2026-09-10 21:18-21:32**: CRUDEOILM pinned at exactly 9644.0 for 14 straight minutes (real, varying volume throughout — 5 to 116 lots/min — not a quiet market, trades genuinely queuing at the ceiling), then released in one minute to a high of 9704 (close 9701) on a 1,458-lot volume spike — same signature, same ~14-minute freeze duration, at a completely ordinary time of day (not the session open). This is the second confirmed instance, not a one-off historical curiosity — see §11a below for the production-risk implications.
+
+This remains correctly excluded from the thin-liquidity opening-bar pattern above — it's a genuinely different mechanism (both instruments affected identically, vs. CRUDEOILM alone spiking while CRUDEOIL stays flat) — just for the right reason now, not "unreliable data." Nothing about the fix below needs to change; §11a covers what (if anything) production should do about the circuit-breaker mechanism itself.
 
 **Decided: cross-instrument substitution, not filtering.** Since all six confirmed artifacts land in the same single bar (09:00, the very first candle of the session) and CRUDEOIL is confirmed reliable at that exact moment every time, the fix doesn't need to guess at a magnitude threshold or discard information — it can directly replace the bad print with a known-good one. Runs once per session, right after the 09:00 candle downloads; no comparison for any other bar, any other time:
 
@@ -297,6 +321,21 @@ def patch_opening_bar_if_artifact(m_bar: dict, o_bar: dict, threshold: float = 0
 **Status: built, gated off.** `patch_opening_bar_if_artifact`/`fetch_crudeoil_opening_bar`/`_maybe_check_opening_bar` are live in `prometheus_functions.py`/`prometheus.py`, patching `self._df_1m_today` at ingestion time as designed. `OPENING_BAR_CORRECTION_ENABLED=False` in `prometheus_configs.py` — confirmed still off during the 2026-09-04 live-test session, per the user's explicit request that day (wanted to track ST accuracy against the raw, uncorrected chart, since 2026-09-04 itself had another first-minute price-discovery event on CRUDEOIL). Still logs what it *would* have done either way. Not yet flipped to `True`.
 
 **Confirmed 2026-09-04: an uncorrected bad bar does NOT meaningfully distort ST the next day.** The correction (even once enabled) only ever patches `self._df_1m_today` live, in memory, for that one session — it never gets written back to the shared `data_pipeline` file (§15), so the raw artifact sits on disk unmodified for the full `SEED_DAYS=18`-day window it stays in a future tail-read. That's fine: ATR's rolling window is exactly `ST_PERIOD=10` bars (2.5 hours), so the distortion is fully contained and dissipates well within the *same session* it occurred in — the mult 2.0 case above already shows this directly (frozen exactly at 09:00, already creeping again by 09:15, further by 09:30). Since `seed_st15` recomputes ST from scratch every morning with no state carried across days, each fresh recomputation just re-lives that same self-correcting 2.5-hour window as it walks through yesterday's history, fully resolved long before it reaches today's bars — no compounding across the 18 days the bar stays in the window. This is also why the artifact doesn't belong in §14's `ST_SEED_SKIP_DATES` — that tool is for a whole *session* distorted (the Budget-day WTI outage), a different, heavier class of problem than one self-correcting bar.
+
+---
+
+## 11a. MCX Daily Price Limit (DPL) circuit-breaker ladder — a distinct, now-confirmed risk, NOT YET DECIDED
+
+**Not the same problem as §11 above.** §11's fix covers exactly one candle (the 09:00 session-open bar) and exactly one cause (CRUDEOILM's own thin-liquidity first print). The DPL mechanism documented in the corrected 2026-03-09 writeup above is different on every axis that matters for a fix: it can span **multiple consecutive 15-min bars** (six-plus stepped freeze/release cycles on 2026-03-09, ~1h46m total), it can happen **at any time of day** (tonight's live instance fired at 21:18, nowhere near the open), and it affects **both instruments identically**, not CRUDEOILM alone — so §11's cross-instrument-substitution fix doesn't apply; there's no "known-good" reference contract to substitute from when both are pinned at the same artificial level.
+
+**Two separate risk surfaces, confirmed by mechanism, not yet exercised against a real open Prometheus position:**
+
+1. **The ST_15 signal.** A multi-bar circuit ladder is a far worse version of exactly the problem §11 already documented for one bad bar (§11's own mechanism section: ATR's rolling window carries a distorted reading forward for ~`ST_PERIOD` bars). Six-plus consecutive artificially-stepped 15-min bars would badly corrupt ATR for a correspondingly longer stretch — plausibly hours, not the ~2.5-hour single-bar case already confirmed self-correcting. A `trend_flip` computed off that corrupted series would be spurious — a real risk of Rule 7 firing an exit+re-entry off a regulatory artifact rather than a genuine reversal.
+2. **LTP-driven SL/target monitoring (`_check_exit_conditions_ltp`).** During a freeze, LTP is genuinely pinned — not stale, not disconnected, just mechanically fixed at the band edge for ~14-15 minutes. A level (SL or target) that the *unconstrained* price path would have crossed can be skipped entirely if it falls strictly between two circuit steps (price jumps in discrete ~251-point increments, not continuously) — the same class of "gap-through-a-level" event the existing fill-price logic already handles for an ordinary gap, so this may not need new code, just confirmation that the existing gap-fill path behaves sanely when the "gap" is itself a circuit step rather than a session boundary. Not independently verified either way yet.
+
+**Detection signature, confirmed twice now (2026-03-09 historically, 2026-09-10 live) and specific enough to detect reliably**: three or more consecutive 1-minute bars where `open == high == low == close` at the identical price, with genuinely nonzero (if reduced) volume throughout — distinguishing it from a simply-quiet market (near-zero volume) or a feed/connectivity stall (which wouldn't show fresh, varying volume prints at a frozen price).
+
+**Not yet decided what (if anything) to build.** Given the same pattern this repo has followed for every other novel edge case (§11's own opening-bar fix, §17's 1h filter, §12a's provisional boundary) — build cautiously, observe-and-log before changing live behavior, validate against real occurrences before trusting an automated response — the lowest-risk starting point would be **detection + Slack alert only**: recognize the freeze signature live, log it clearly, alert `#error-alerts` so a human is aware a circuit event may be affecting the signal/monitoring, without suppressing or altering any existing SL/target/ST behavior yet. Whether to go further (e.g., pausing `trend_flip`-driven Rule 7 execution while a freeze is active and recently-active) is a separate, harder call — deliberately not proposed here, since suppressing a *real* exit signal because it's mistaken for a circuit artifact is its own failure mode, arguably worse than doing nothing. Two confirmed instances in ~7.5 months of data is not much to calibrate a detector's false-positive rate against yet.
 
 ---
 
