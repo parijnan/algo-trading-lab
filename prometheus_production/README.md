@@ -605,6 +605,17 @@ days (§3 of the plan: positions can span a contract roll). The only exits that 
 ones already firing during `run()` itself (SL/target/trend-flip); teardown just stops the feed,
 clears the private cache, saves state as-is, and reports.
 
+**Slack delivery on shutdown, `_slack_flush()`.** `_slack()` only enqueues a message; a single
+daemon worker thread (`_slack_worker`, 2026-09-08 — replaced one throwaway thread per message to
+fix a lot1/lot2/total delivery-order race) actually sends it. Being daemon means nothing keeps
+that thread alive once the main thread finishes, so a message still queued or mid-send at that
+instant is silently dropped — and `_send_session_report()` is always the LAST `_slack()` call in
+`_teardown()`, itself the last thing `run()` does before `main()`'s `finally` block exits the
+process. Bug caught 2026-09-10: the session report never arrived one night, lost to exactly this
+race. `main()`'s `finally` now calls `_slack_flush()` — blocks (up to 10s) via `queue.join()`
+until every queued send has actually returned — right before the process exits, on every shutdown
+path (session end, SIGTERM/KILL, unhandled exception).
+
 ---
 
 ## Guardian Check

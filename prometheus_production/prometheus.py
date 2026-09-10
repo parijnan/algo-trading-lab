@@ -108,6 +108,32 @@ def _slack_worker() -> None:
             client.chat_postMessage(channel=channel, text=msg)
         except Exception:
             pass
+        finally:
+            _slack_queue.task_done()
+
+
+def _slack_flush(timeout: float = 10.0) -> None:
+    """Block until the worker has drained the queue (all sends actually
+    returned), up to `timeout` seconds. The worker thread is daemon (so a
+    slow/hung API call never delays exit-condition checks or blocks
+    process shutdown) — but that same property means nothing keeps it
+    alive once the main thread finishes, so anything still queued or
+    in-flight at that instant is silently dropped. _send_session_report()
+    is always the LAST _slack() call in _teardown(), which itself is the
+    last thing run() does before the process exits in main() -- exactly
+    the shutdown race this was hitting (2026-09-10, user-caught: the
+    session report never arrived on Slack one night). Call this once,
+    right before the process actually exits."""
+    if not _slack_worker_started:
+        return
+    done = threading.Event()
+
+    def _waiter():
+        _slack_queue.join()
+        done.set()
+
+    threading.Thread(target=_waiter, daemon=True).start()
+    done.wait(timeout)
 
 
 def _slack(msg: str, channel=None) -> None:
@@ -2775,6 +2801,13 @@ def main():
                 obj.terminateSession(str(pd.read_csv(CREDS_FILE).iloc[0]['user_name']))
             except Exception:
                 pass
+        # Drain the Slack queue before the process actually exits -- the
+        # worker is a daemon thread with no other join anywhere, so
+        # without this the final _send_session_report() (always the last
+        # _slack() call, queued right at the end of _teardown()) can be
+        # silently dropped by a shutdown race. See _slack_flush()'s own
+        # docstring.
+        _slack_flush()
         logger.info('Session terminated.')
 
 
