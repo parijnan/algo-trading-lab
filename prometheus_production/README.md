@@ -844,18 +844,18 @@ journey, both phases. **This production module now runs Phase 3's mult-2.0 candi
 `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
 `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase
 3 caveat #1) — this is Prometheus's final exit configuration for now; table below refreshed
-2026-09-09 through 2026-09-08's data (routine refresh, `prometheus_backtest/refresh_pipeline.py` —
+2026-09-10 through 2026-09-09's data (routine refresh, `prometheus_backtest/refresh_pipeline.py` —
 see that repo's "Routine backtest refresh" section for how to re-run this on demand).
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
 | Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 386 (refreshed 2026-09-09, through 2026-09-08) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 44.82% | 55.8% |
-| Total P&L | ₹184,892 | ₹42,778 |
+| Trades | 388 (refreshed 2026-09-10, through 2026-09-09) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 44.85% | 55.8% |
+| Total P&L | ₹184,586 | ₹42,778 |
 | Max drawdown | −₹15,267 (per-lot-exit-event series) | −₹14,943 |
-| Calmar | 12.11 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again through 2026-09-08's data** — Calmar 7.40, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Calmar | 12.09 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again through 2026-09-09's data** — Calmar 7.38, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
 entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting
