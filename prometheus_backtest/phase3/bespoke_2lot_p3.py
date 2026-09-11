@@ -19,12 +19,13 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import configs_p3 as configs  # noqa: E402
 from exit_calib_p3 import (  # noqa: E402
-    SWEEP_DIR, _load_multiplier_data, _target_fill_price, _stop_fill_price,
+    SWEEP_DIR, _load_multiplier_data, _target_fill_price, _stop_fill_price, first_bar_by_day,
 )
 
 
 def _simulate_trade_detailed(trade_row: pd.Series, path_df: pd.DataFrame,
-                              sl_pct: float, t1_pct: float, t2_pct: float) -> dict:
+                              sl_pct: float, t1_pct: float, t2_pct: float,
+                              fbbd: dict = None) -> dict:
     direction = trade_row['direction']
     entry_price = float(trade_row['entry_price'])
 
@@ -51,6 +52,14 @@ def _simulate_trade_detailed(trade_row: pd.Series, path_df: pd.DataFrame,
         if not lot1_open and not lot2_open:
             break
         bar_open, bar_high, bar_low, ts = bar['open'], bar['high'], bar['low'], bar['ts']
+
+        if fbbd is not None:
+            fb = fbbd.get(ts.normalize())
+            if fb is not None and (ts - fb).total_seconds() / 60.0 < configs.NO_EXIT_BEFORE_BUFFER_MIN:
+                # Production's NO_EXIT_BEFORE_BUFFER_MIN guard: no LTP-driven
+                # SL/target check happens this early into the session, on
+                # ANY day the trade is still open on -- not just entry day.
+                continue
 
         sl_hit = (bar_low <= sl_price) if direction == 'bullish' else (bar_high >= sl_price)
         if sl_hit:
@@ -115,14 +124,15 @@ def _simulate_trade_detailed(trade_row: pd.Series, path_df: pd.DataFrame,
     }
 
 
-def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: float) -> str:
+def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: float,
+                          fbbd: dict = None) -> str:
     trades, paths = _load_multiplier_data(mult)
     rows = []
     for _, t in trades.iterrows():
         tid = int(t['trade_id'])
         if tid not in paths:
             continue
-        result = _simulate_trade_detailed(t, paths[tid], sl_pct, t1_pct, t2_pct)
+        result = _simulate_trade_detailed(t, paths[tid], sl_pct, t1_pct, t2_pct, fbbd)
         if result is None:
             continue
         rows.append(result)
@@ -144,8 +154,9 @@ if __name__ == '__main__':
         (2.0, 2.2, 2.2, 5.0),
         (2.5, 1.0, 1.25, 4.0),
     ]
+    fbbd = first_bar_by_day()
     for mult, sl, t1, t2 in runs:
-        path = save_bespoke_summary(mult, sl, t1, t2)
+        path = save_bespoke_summary(mult, sl, t1, t2, fbbd)
         df = pd.read_csv(path)
         wins = int((df['total_pnl_rs'] > 0).sum())
         print(f"mult {mult}: SL={sl}% T1={t1}% T2={t2}%  "

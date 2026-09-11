@@ -71,6 +71,26 @@ def _stop_fill_price(direction: str, level: float, bar_open: float) -> float:
     return bar_open if bar_open > level else level
 
 
+def first_bar_by_day() -> dict:
+    """
+    date -> timestamp of that trading day's own first 1-min bar, across the
+    FULL price series (not just one trade's own path) -- mirrors
+    prometheus.py's _minutes_since_session_open. Used to replicate
+    NO_EXIT_BEFORE_BUFFER_MIN: production blocks all LTP-driven SL/target
+    checks until that many minutes have elapsed since this timestamp, which
+    at 1-min-bar granularity means the session's own first bar (and any
+    further bars still inside the buffer, for a buffer > 1) is exempt from
+    SL/target checks entirely. Computed once per script run and threaded
+    through the calibration/bespoke call chain -- reloading the full 1-min
+    series per multiplier or per bar would be wasteful.
+    """
+    sys.path.insert(0, configs.PROMETHEUS_DIR)
+    from data_loader import load_futures_1min  # noqa: E402
+    df = load_futures_1min(configs.SYMBOL).reset_index()
+    day = df['time_stamp'].dt.normalize()
+    return df.groupby(day)['time_stamp'].min().to_dict()
+
+
 def _load_multiplier_data(mult: float) -> tuple:
     label = f'mult_{mult:.1f}'
     run_dir = os.path.join(SWEEP_DIR, label)
@@ -94,7 +114,8 @@ def _load_multiplier_data(mult: float) -> tuple:
     return trades, paths
 
 
-def _simulate_trade(trade_row: pd.Series, path_df: pd.DataFrame, sl_pct, t1_pct: float, t2_pct: float) -> dict:
+def _simulate_trade(trade_row: pd.Series, path_df: pd.DataFrame, sl_pct, t1_pct: float, t2_pct: float,
+                     first_bar_by_day: dict = None) -> dict:
     direction = trade_row['direction']
     entry_price = float(trade_row['entry_price'])
 
@@ -123,6 +144,15 @@ def _simulate_trade(trade_row: pd.Series, path_df: pd.DataFrame, sl_pct, t1_pct:
     for _, bar in rows.iterrows():
         if not lot1_open and not lot2_open:
             break
+
+        if first_bar_by_day is not None:
+            fb = first_bar_by_day.get(bar['ts'].normalize())
+            if fb is not None and (bar['ts'] - fb).total_seconds() / 60.0 < configs.NO_EXIT_BEFORE_BUFFER_MIN:
+                # Production's NO_EXIT_BEFORE_BUFFER_MIN guard: no LTP-driven
+                # SL/target check happens this early into the session, on
+                # ANY day the trade is still open on -- not just entry day.
+                continue
+
         bar_open, bar_high, bar_low = bar['open'], bar['high'], bar['low']
 
         if sl_price is not None:
@@ -172,13 +202,14 @@ def _simulate_trade(trade_row: pd.Series, path_df: pd.DataFrame, sl_pct, t1_pct:
     }
 
 
-def _run_variant(trades: pd.DataFrame, paths: dict, sl_pct, t1_pct: float, t2_pct: float) -> pd.DataFrame:
+def _run_variant(trades: pd.DataFrame, paths: dict, sl_pct, t1_pct: float, t2_pct: float,
+                  fbbd: dict = None) -> pd.DataFrame:
     rows = []
     for _, t in trades.iterrows():
         tid = int(t['trade_id'])
         if tid not in paths:
             continue
-        result = _simulate_trade(t, paths[tid], sl_pct, t1_pct, t2_pct)
+        result = _simulate_trade(t, paths[tid], sl_pct, t1_pct, t2_pct, fbbd)
         if result is None:
             continue
         result['trade_id'] = tid
@@ -217,14 +248,14 @@ def _best_by_calmar(rows: list) -> dict:
     return max(rows, key=lambda r: (r['calmar'] if pd.notna(r['calmar']) else float('-inf')))
 
 
-def calibrate_multiplier(mult: float) -> tuple:
+def calibrate_multiplier(mult: float, fbbd: dict = None) -> tuple:
     trades, paths = _load_multiplier_data(mult)
     detail_rows = []
 
     # --- Stage 1: SL grid, target1/target2 pinned at starting defaults ---
     stage1 = []
     for sl in SL_GRID:
-        sim = _run_variant(trades, paths, sl, T1_STARTING_DEFAULT, T2_STARTING_DEFAULT)
+        sim = _run_variant(trades, paths, sl, T1_STARTING_DEFAULT, T2_STARTING_DEFAULT, fbbd)
         row = _summarize(sim, mult, 'sl_grid', 'sl_pct', sl)
         stage1.append(row)
     detail_rows.extend(stage1)
@@ -233,7 +264,7 @@ def calibrate_multiplier(mult: float) -> tuple:
     # --- Stage 2: target1 grid, SL pinned at stage-1 winner, target2 pinned ---
     stage2 = []
     for t1 in T1_GRID:
-        sim = _run_variant(trades, paths, best_sl, t1, T2_STARTING_DEFAULT)
+        sim = _run_variant(trades, paths, best_sl, t1, T2_STARTING_DEFAULT, fbbd)
         row = _summarize(sim, mult, 'target1_grid', 'target1_pct', t1)
         stage2.append(row)
     detail_rows.extend(stage2)
@@ -245,13 +276,13 @@ def calibrate_multiplier(mult: float) -> tuple:
     valid_t2_grid = [t2 for t2 in T2_GRID if t2 > best_t1]
     stage3 = []
     for t2 in valid_t2_grid:
-        sim = _run_variant(trades, paths, best_sl, best_t1, t2)
+        sim = _run_variant(trades, paths, best_sl, best_t1, t2, fbbd)
         row = _summarize(sim, mult, 'target2_grid', 'target2_pct', t2)
         stage3.append(row)
     detail_rows.extend(stage3)
     best_t2 = _best_by_calmar(stage3)['value']
 
-    winner = _summarize(_run_variant(trades, paths, best_sl, best_t1, best_t2), mult, 'final', 'combo',
+    winner = _summarize(_run_variant(trades, paths, best_sl, best_t1, best_t2, fbbd), mult, 'final', 'combo',
                          f'sl{best_sl}_t1{best_t1}_t2{best_t2}')
     winner['sl_pct'] = best_sl
     winner['target1_pct'] = best_t1
@@ -264,10 +295,11 @@ def main():
     os.makedirs(SWEEP_DIR, exist_ok=True)
     all_detail = []
     winners = []
+    fbbd = first_bar_by_day()
 
     for mult in configs.ST_MULTIPLIER_GRID:
         print(f'Calibrating multiplier {mult}...')
-        detail_rows, winner = calibrate_multiplier(mult)
+        detail_rows, winner = calibrate_multiplier(mult, fbbd)
         all_detail.extend(detail_rows)
         winners.append(winner)
         print(f"  best: SL={winner['sl_pct']}%  T1={winner['target1_pct']}%  T2={winner['target2_pct']}%  "

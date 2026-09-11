@@ -844,18 +844,20 @@ journey, both phases. **This production module now runs Phase 3's mult-2.0 candi
 `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
 `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase
 3 caveat #1) — this is Prometheus's final exit configuration for now; table below refreshed
-2026-09-11 through 2026-09-10's data (routine refresh, `prometheus_backtest/refresh_pipeline.py` —
-see that repo's "Routine backtest refresh" section for how to re-run this on demand).
+2026-09-11 under a corrected backtest simulator (`prometheus_backtest/refresh_pipeline.py` plus a
+same-day fix — see that repo's "Backtest/production timing-guard parity fix" for what changed and
+why; T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the fix,
+not overturned).
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
 | Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 390 (refreshed 2026-09-11, through 2026-09-10 — corrected count, a trailing-trade-drop bug in the calibration pipeline was found and fixed the same day, see `prometheus_backtest/README.md`'s "Routine backtest refresh") | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 45.13% | 55.8% |
-| Total P&L | ₹193,494 | ₹42,778 |
-| Max drawdown | −₹15,267 (per-lot-exit-event series) | −₹14,943 |
-| Calmar | 12.67 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again through 2026-09-10's data** — Calmar 7.13, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Trades | 389 (refreshed 2026-09-11, corrected — the backtest previously lacked production's own dynamic session-open entry/exit guards, see `prometheus_backtest/README.md`'s "Backtest/production timing-guard parity fix") | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 45.24% | 55.8% |
+| Total P&L | ₹205,862 | ₹42,778 |
+| Max drawdown | −₹15,347 (per-lot-exit-event series) | −₹14,943 |
+| Calmar | 13.41 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-11 under the corrected simulator** — Calmar 9.47, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
 entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting

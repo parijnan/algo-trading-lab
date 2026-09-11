@@ -20,8 +20,18 @@ import pandas as pd
 import configs_p3 as configs
 
 
-def _time_lt(ts: pd.Timestamp, hhmm: str) -> bool:
-    return ts.time() < pd.Timestamp(f'2000-01-01 {hhmm}').time()
+def _first_bar_by_day(df_15m: pd.DataFrame) -> pd.Series:
+    """
+    date -> timestamp of that trading day's own first 15-min bar -- never a
+    hardcoded clock time. resample_ohlcv anchors each day's resample to
+    origin=day.index[0] (data_loader.py), so a day's first 15m bar's start
+    always equals its true session open (09:00 on a normal day, 17:00 on an
+    evening-only special session). Mirrors prometheus.py's
+    _minutes_since_session_open -- same dynamic-anchor principle used for
+    the exit-side NO_EXIT_BEFORE_BUFFER_MIN guard in exit_calib_p3.py.
+    """
+    idx = df_15m.index
+    return pd.Series(idx, index=idx.normalize()).groupby(level=0).min()
 
 
 @dataclass
@@ -43,6 +53,7 @@ def run_backtest(df_15m: pd.DataFrame) -> pd.DataFrame:
     state = TradeState()
     trades: list = []
     trade_id = 0
+    first_bar_by_day = _first_bar_by_day(df_15m)
 
     pending_close: bool = False
     pending_entry_direction: Optional[str] = None
@@ -65,9 +76,18 @@ def run_backtest(df_15m: pd.DataFrame) -> pd.DataFrame:
             pending_close = False
 
         if pending_entry_direction is not None and state.status == 'watching':
-            if _time_lt(ts, configs.MIN_ENTRY_TIME):
-                # Fill would land before MIN_ENTRY_TIME -- drop rather than
-                # open early (same discipline as Phase 2, see its comment).
+            fb = first_bar_by_day.get(ts.normalize())
+            elapsed = (ts - fb).total_seconds() / 60.0 if fb is not None else None
+            if elapsed is None or elapsed < configs.MIN_ENTRY_BUFFER_MIN:
+                # Fill would land before the session has been open
+                # MIN_ENTRY_BUFFER_MIN minutes -- drop rather than open
+                # early. A clock-time check ('09:15') coincidentally works
+                # on a normal 09:00 session but does nothing on an
+                # evening-only special session (real open 17:00, already
+                # past 09:15 on the clock) -- same bug class production
+                # fixed 2026-09-04 (commit a483c7d, _past_min_entry_guard),
+                # found here 2026-09-11 via a real affected trade (entry
+                # 2026-05-01 17:00, zero minutes elapsed).
                 pending_entry_direction = None
             else:
                 direction = pending_entry_direction

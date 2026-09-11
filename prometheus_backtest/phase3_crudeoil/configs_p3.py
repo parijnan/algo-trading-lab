@@ -73,12 +73,31 @@ LOT_SIZE = _lookup_lot_size(SYMBOL)
 LOTS     = 1   # single position, no scale-out (user-specified)
 
 # ---------------------------------------------------------------------------
-# Session / entry window. Only MIN_ENTRY_TIME survives from Phase 2 -- there
-# is no EOD square-off to derive a "runway before close" cutoff from, and a
-# positional strategy has no reason to avoid entries late in the session
-# (there's no longer anything to hold "until" within the day).
+# Session / entry window. There is no EOD square-off to derive a "runway
+# before close" cutoff from, and a positional strategy has no reason to
+# avoid entries late in the session (there's no longer anything to hold
+# "until" within the day).
 # ---------------------------------------------------------------------------
-MIN_ENTRY_TIME = '09:15'   # skip first 15 min — thin opening liquidity
+# Minutes since the session's own first bar (dynamic anchor, not a
+# hardcoded clock time -- see backtest_p3.py's _first_bar_by_day) before a
+# fresh entry is allowed to fill; skips thin opening liquidity/first-minute
+# price discovery. Matches prometheus_production/prometheus_configs.py's
+# MIN_ENTRY_BUFFER_MIN. Replaced the old hardcoded MIN_ENTRY_TIME='09:15'
+# clock-time check 2026-09-11 -- it coincidentally worked on a normal
+# 09:00 session but did nothing on an evening-only special session (real
+# open 17:00, already past 09:15 on the clock), same bug class production
+# itself fixed 2026-09-04 (commit a483c7d).
+MIN_ENTRY_BUFFER_MIN = 15
+
+# Minutes since the session's own first bar before a managed SL/target
+# check is allowed to act on a bar's high/low -- the exit-side analogue of
+# the entry gate above. Matches prometheus_production/prometheus_configs.py's
+# NO_EXIT_BEFORE_BUFFER_MIN. Used by exit_calib_p3.py/bespoke_2lot_p3.py's
+# bar-walking simulators, added 2026-09-11 after a confirmed case (trade
+# 389, CRUDEOILM) where the backtest credited a target1 fill off a single
+# wild opening-bar print that production's own NO_EXIT_BEFORE_BUFFER_MIN
+# guard would never have acted on.
+NO_EXIT_BEFORE_BUFFER_MIN = 1
 
 # ---------------------------------------------------------------------------
 # Signal — the thing actually under test this phase.

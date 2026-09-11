@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import configs_p3 as configs  # noqa: E402
 from exit_calib_p3 import (  # noqa: E402
     _load_multiplier_data, _run_variant, _summarize, _best_by_calmar,
-    SL_GRID, T2_GRID, T2_STARTING_DEFAULT,
+    SL_GRID, T2_GRID, T2_STARTING_DEFAULT, first_bar_by_day,
 )
 
 # T2_STARTING_DEFAULT (2.3%) is what the ORIGINAL 0.5-2.0% Stage 2 grid used
@@ -61,6 +61,7 @@ T1_GRID_WIDENED = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
 
 def main():
     trades, paths = _load_multiplier_data(MULT)
+    fbbd = first_bar_by_day()
     print(f'Loaded {len(trades)} closed trades for mult {MULT} '
           f'(vintage: trade_summary.csv last entry_ts {trades["entry_ts"].max()})')
 
@@ -69,7 +70,7 @@ def main():
     # with the latest refresh, rather than assuming the README's 2.2%.
     stage1 = []
     for sl in SL_GRID:
-        sim = _run_variant(trades, paths, sl, 1.0, T2_STARTING_DEFAULT)
+        sim = _run_variant(trades, paths, sl, 1.0, T2_STARTING_DEFAULT, fbbd)
         row = _summarize(sim, MULT, 'sl_grid', 'sl_pct', sl)
         stage1.append(row)
     best_sl = _best_by_calmar(stage1)['value']
@@ -80,7 +81,7 @@ def main():
     # T2_STARTING_DEFAULT=2.3%, which can't support T1 > 2.3%). ---
     stage2 = []
     for t1 in T1_GRID_WIDENED:
-        sim = _run_variant(trades, paths, best_sl, t1, T2_PIN)
+        sim = _run_variant(trades, paths, best_sl, t1, T2_PIN, fbbd)
         row = _summarize(sim, MULT, 'target1_grid_widened', 'target1_pct', t1)
         stage2.append(row)
 
@@ -106,15 +107,15 @@ def main():
     valid_t2_grid = [t2 for t2 in T2_GRID if t2 > best_t1]
     stage3 = []
     for t2 in valid_t2_grid:
-        sim = _run_variant(trades, paths, best_sl, best_t1, t2)
+        sim = _run_variant(trades, paths, best_sl, best_t1, t2, fbbd)
         row = _summarize(sim, MULT, 'target2_grid_rerun', 'target2_pct', t2)
         stage3.append(row)
     best_t2 = _best_by_calmar(stage3)['value']
 
-    final_sim = _run_variant(trades, paths, best_sl, best_t1, best_t2)
+    final_sim = _run_variant(trades, paths, best_sl, best_t1, best_t2, fbbd)
     final = _summarize(final_sim, MULT, 'final_widened', 'combo', f'sl{best_sl}_t1{best_t1}_t2{best_t2}')
 
-    baseline_sim = _run_variant(trades, paths, 2.2, 2.0, 5.0)
+    baseline_sim = _run_variant(trades, paths, 2.2, 2.0, 5.0, fbbd)
     baseline = _summarize(baseline_sim, MULT, 'baseline_production', 'combo', 'sl2.2_t1_2.0_t25.0')
 
     print(f"\nStage 3 (T2 grid re-run at T1={best_t1}%): best_t2 = {best_t2}%\n")

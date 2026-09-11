@@ -22,7 +22,9 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import configs_p3 as configs  # noqa: E402
-from exit_calib_p3 import _load_multiplier_data, _run_variant, _summarize, _best_by_calmar  # noqa: E402
+from exit_calib_p3 import (  # noqa: E402
+    _load_multiplier_data, _run_variant, _summarize, _best_by_calmar, first_bar_by_day,
+)
 
 OUT_FILE = os.path.join(configs.DATA_SWEEP_DIR, 'exit_calib_p3_t1_fine_mult20.csv')
 
@@ -37,13 +39,14 @@ T1_GRID_FINE = [round(2.00 + 0.05 * i, 2) for i in range(11)]
 
 def main():
     trades, paths = _load_multiplier_data(MULT)
+    fbbd = first_bar_by_day()
     print(f'Loaded {len(trades)} closed trades for mult {MULT} '
           f'(vintage: trade_summary.csv last entry_ts {trades["entry_ts"].max()})')
     print(f'SL pinned at {SL_PIN}%, T2 pinned at {T2_PIN}% (both unchanged from the widened script)\n')
 
     rows = []
     for t1 in T1_GRID_FINE:
-        sim = _run_variant(trades, paths, SL_PIN, t1, T2_PIN)
+        sim = _run_variant(trades, paths, SL_PIN, t1, T2_PIN, fbbd)
         row = _summarize(sim, MULT, 'target1_grid_fine', 'target1_pct', t1)
         rows.append(row)
 
