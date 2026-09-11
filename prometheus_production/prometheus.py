@@ -3046,6 +3046,44 @@ def _seconds_until_time(time_str: str, now: datetime) -> float:
     return max(0.0, (target - now).total_seconds())
 
 
+# 2026-09-11 incident: a fixed 3s sleep after SIGTERM assumed teardown is
+# always fast (~1s normally) -- but that day, the old process's own
+# shutdown got dragged out well past 3s by Slack calls repeatedly failing/
+# retrying against a workspace-level message_limit_exceeded condition. The
+# new process, seeing 3s elapse, assumed the old one was gone and wrote a
+# fresh PID_FILE/FLAG_PATH -- but the OLD process was still alive, still
+# mid-shutdown, and its own `finally` block later unlinked FLAG_PATH as
+# routine self-cleanup, deleting the NEW process's fresh flag out from
+# under it. The new process's main loop read that as an operator-pulled
+# circuit breaker and shut itself down too -- both processes exited, and
+# nothing was left running for the rest of the day. Fixed by polling for
+# the old PID to actually disappear (os.kill(pid, 0), a liveness probe
+# that sends no signal) instead of trusting a fixed sleep -- since a PID
+# only vanishes from the OS process table after the process (including
+# its own `finally` cleanup) has fully exited, a confirmed disappearance
+# means it's safe for the new process to write its own files.
+_STALE_PID_WAIT_TIMEOUT_SEC = 30
+_STALE_PID_POLL_INTERVAL_SEC = 0.3
+
+
+def _wait_for_pid_exit(pid: int, timeout: float = _STALE_PID_WAIT_TIMEOUT_SEC) -> bool:
+    """Poll until `pid` is confirmed gone from the process table, or
+    `timeout` elapses. Returns True once confirmed gone, False on timeout
+    (still alive). PermissionError (the PID exists but is owned by a
+    different user) is treated as "gone" too -- on this box every
+    Prometheus process runs as the same user, so a PID we can't signal is
+    almost certainly a stale PID number the OS already reassigned to some
+    unrelated process, not our old one still running."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        time.sleep(_STALE_PID_POLL_INTERVAL_SEC)
+    return False
+
+
 def _seconds_until_evening_open(now: datetime) -> float:
     """_seconds_until_time(EVENING_SESSION_OPEN_TIME, now), minus
     EVENING_SESSION_WAKE_BUFFER_MIN worth of early-wake margin -- see that
@@ -3111,8 +3149,16 @@ def main():
         try:
             old_pid = int(PID_FILE.read_text().strip())
             os.kill(old_pid, signal.SIGTERM)
-            logger.info(f'Sent SIGTERM to existing Prometheus process (PID {old_pid}); waiting...')
-            time.sleep(3)
+            logger.info(f'Sent SIGTERM to existing Prometheus process (PID {old_pid}); '
+                       f'waiting up to {_STALE_PID_WAIT_TIMEOUT_SEC}s for it to actually exit...')
+            if not _wait_for_pid_exit(old_pid):
+                logger.warning(f'PID {old_pid} still alive after {_STALE_PID_WAIT_TIMEOUT_SEC}s -- '
+                               f'SIGKILL to avoid racing it for PID_FILE/FLAG_PATH.')
+                try:
+                    os.kill(old_pid, signal.SIGKILL)
+                    _wait_for_pid_exit(old_pid, timeout=5)
+                except ProcessLookupError:
+                    pass
         except (ProcessLookupError, ValueError):
             pass
         PID_FILE.unlink(missing_ok=True)
