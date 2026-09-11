@@ -101,15 +101,31 @@ _slack_queue: "queue.Queue" = queue.Queue()
 _slack_worker_started = False
 
 
+# 2026-09-11 incident: this worker's own chat_postMessage call hung with no
+# bound -- the bare `except Exception: pass` below meant a stuck call left
+# the thread parked forever inside client.chat_postMessage, never reaching
+# except/finally, never looping back to dequeue the next message. The main
+# loop kept ticking fine (queuing is non-blocking), so nothing detected it;
+# ~300 messages silently piled up in the unbounded queue over ~95 minutes,
+# discovered only because the user noticed Slack had gone quiet. Restarting
+# the process did NOT clear it -- the fresh process's own worker also failed
+# to deliver anything, pointing at something more persistent than a one-off
+# hang (or a second, undiagnosed failure). Two fixes: an explicit timeout so
+# a stuck call can never block the worker forever, and error logging so a
+# failure is visible in the log immediately instead of requiring a live
+# Slack-channel comparison to even notice.
+_SLACK_TIMEOUT_SEC = 10
+
+
 def _slack_worker() -> None:
     from slack_sdk import WebClient
-    client = WebClient(token=_SLACK_TOKEN)
+    client = WebClient(token=_SLACK_TOKEN, timeout=_SLACK_TIMEOUT_SEC)
     while True:
         msg, channel = _slack_queue.get()
         try:
             client.chat_postMessage(channel=channel, text=msg)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f'Slack delivery failed (channel={channel}): {e}')
         finally:
             _slack_queue.task_done()
 
