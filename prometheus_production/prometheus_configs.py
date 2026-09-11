@@ -57,7 +57,28 @@ MCX_HOLIDAYS_FILE       = REPO_ROOT / 'data_pipeline' / 'data' / 'mcx_holidays.c
 # ── Instrument (Slack-switchable — §5/§6) ────────────────────────────────────
 SYMBOL          = 'CRUDEOILM'
 MARGIN_PER_UNIT = 100000   # Rs — coupled to SYMBOL; overridden together via
-                           # btn_prometheus_instrument (instrument_override.json)
+                           # btn_prometheus_instrument (instrument_override.json).
+                           # 2026-09-11: no longer THE margin figure used live —
+                           # Prometheus._calculate_margin_per_unit() computes it
+                           # fresh from LTP*LOT_SIZE every call (see the two
+                           # constants below). This one now only serves as the
+                           # fallback when a live LTP can't be fetched, so keep
+                           # it in the right order of magnitude for SYMBOL when
+                           # switching instruments via Slack, but it no longer
+                           # needs day-to-day recalibration.
+
+# §26, 2026-09-11 (user-specified): dynamic MARGIN_PER_UNIT formula —
+# LTP * LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER.
+# Divisor: LTP*LOT_SIZE is contract value; the broker/exchange's actual
+# margin fraction is ~1/3.1 of that, but 3 is used to slightly overstate
+# the requirement (the conservative direction) — the user's own hedge:
+# "the actual approximation is 3.1, but 3 feels safer." Revisit this
+# against what the broker actually quotes for one lot if it ever drifts.
+# Multiplier: reproduces the original sizing calibration (2 lots + 40%
+# drawdown allowance + 10% -ve MTM allowance) — the same *4 that produced
+# the original static MARGIN_PER_UNIT=100000 from a ~25000/lot margin.
+MARGIN_CONTRACT_VALUE_DIVISOR = 3
+MARGIN_SIZING_MULTIPLIER      = 4
 
 try:
     import json as _json

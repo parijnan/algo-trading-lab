@@ -41,7 +41,7 @@ Slippage model (explicit assumptions):
     robustness, not because it fires here.
   - THE key mechanic this script adds over the base sim: slippage feeds
     back into capital before the next trade's units are sized (units =
-    max(1, post_slippage_capital // MARGIN_PER_UNIT), recomputed at every
+    max(1, post_slippage_capital // margin_per_unit), recomputed at every
     entry) -- exactly like _calculate_units() would live. This is what lets
     the simulation show self-damping: worse fills at bigger size reduce
     capital, which reduces the next trade's units, which reduces
@@ -49,6 +49,18 @@ Slippage model (explicit assumptions):
     the existing (frozen-units) dynamic_sizing_trades.csv after the fact
     would overstate the damage, since post-slippage capital would never
     have reached the same units level in the first place.
+
+Sizing formula updated 2026-09-11 (§26 of the production plan), same change
+as dynamic_sizing_sim.py: margin_per_unit is no longer a frozen constant,
+it's recomputed PER TRADE as entry_price * LOT_SIZE /
+MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER, mirroring
+Prometheus._calculate_margin_per_unit(). Sized off entry_price (the FILLED
+price, not a pre-slippage price) in both this script and the base sim --
+production sizes off live LTP immediately before order placement, a price
+a fraction of a tick from the eventual fill on a ~9000 underlying, so using
+the filled price here is not a meaningful approximation error, and building
+a separate pre-slippage sizing price would be spurious precision for no
+real difference in the result.
 
 Equity/drawdown event granularity: per-trade (lot1+lot2 combined into one
 cash-flow event, credited at the later exit timestamp), changed 2026-09-11
@@ -66,10 +78,11 @@ from math import sqrt
 import pandas as pd
 
 STARTING_CAPITAL = 5_000_000
-MARGIN_PER_UNIT = 100_000
 LOT_SIZE = 10          # CRUDEOILM, barrels/lot
 LOTS_PER_LEG = 1        # 1 unit = 2 lots total at entry (1 lot/leg)
 VOLUME_FLOOR_LOTS = 1    # guard against non-positive-volume minutes
+MARGIN_CONTRACT_VALUE_DIVISOR = 3   # keep in sync with prometheus_configs.py
+MARGIN_SIZING_MULTIPLIER = 4        # keep in sync with prometheus_configs.py
 
 A_ANCHOR = 0.3           # pinned: 25% participation -> 1.5 ticks (README, 2026-09-07)
 
@@ -105,7 +118,8 @@ def run_sim(a_coeff):
     total_slippage_rs = 0.0
 
     for _, t in df.iterrows():
-        units = max(1, int(capital // MARGIN_PER_UNIT))
+        margin_per_unit = t['entry_price'] * LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER
+        units = max(1, int(capital // margin_per_unit))
         capital_before = capital
 
         entry_lots = units * LOTS_PER_LEG * 2
@@ -130,7 +144,8 @@ def run_sim(a_coeff):
         trade_rows.append({
             'trade_id': int(t['trade_id']), 'direction': t['direction'],
             'entry_ts': t['entry_ts'], 'entry_price': t['entry_price'],
-            'capital_before_rs': round(capital_before, 2), 'units': units,
+            'capital_before_rs': round(capital_before, 2),
+            'margin_per_unit_rs': round(margin_per_unit, 2), 'units': units,
             'entry_slippage_ticks': round(entry_slip, 3),
             'lot1_exit_ts': t['lot1_exit_ts'], 'lot1_exit_reason': t['lot1_exit_reason'],
             'lot1_exit_slippage_ticks': round(lot1_exit_slip, 3),
@@ -174,6 +189,8 @@ def run_sim(a_coeff):
         'total_return_pct': total_return_pct, 'cagr': cagr,
         'max_dd_pct': max_dd_pct, 'max_dd_rs': max_dd_rs, 'calmar': calmar,
         'peak_units': int(trades_out['units'].max()),
+        'margin_per_unit_min': trades_out['margin_per_unit_rs'].min(),
+        'margin_per_unit_max': trades_out['margin_per_unit_rs'].max(),
         'total_slippage_rs': round(total_slippage_rs, 2),
         'volume_floor_hits': floor_hits[0],
     }
@@ -199,6 +216,7 @@ if __name__ == '__main__':
     no_slip_peak = (int(pd.read_csv(no_slip_peak_path)['units'].max())
                      if os.path.exists(no_slip_peak_path) else 'n/a — run dynamic_sizing_sim.py first')
     print(f"Peak units:       {stats['peak_units']}  (no-slippage run peaked at {no_slip_peak})")
+    print(f"Margin/unit range: Rs {stats['margin_per_unit_min']:,.0f} to Rs {stats['margin_per_unit_max']:,.0f}")
     print(f"Total slippage cost (this run's own sizing path): Rs {stats['total_slippage_rs']:,.0f}")
     print(f"Volume-floor guard hit: {stats['volume_floor_hits']} of {stats['n_trades'] * 3} fills")
     print()

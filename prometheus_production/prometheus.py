@@ -38,7 +38,8 @@ from prometheus_configs import (
     REPO_ROOT, SYMBOL, LOT_SIZE, LOTS_PER_LEG, MCX_FO_WS_EXCHANGE_TYPE,
     MIN_ENTRY_BUFFER_MIN, SESSION_START_TIME,
     SESSION_END_TIME, ST_PERIOD, ST_MULTIPLIER,
-    MARGIN_PER_UNIT, TRADE_UPDATE_SEC, TRADES_FILE,
+    MARGIN_PER_UNIT, MARGIN_CONTRACT_VALUE_DIVISOR, MARGIN_SIZING_MULTIPLIER,
+    TRADE_UPDATE_SEC, TRADES_FILE,
     TODAY_1M_CACHE_FILE, DEFERRED_BAR_CUTOFF_MIN,
     SEED_RETRY_ATTEMPTS, SEED_RETRY_INTERVAL_SEC,
     ROLLOVER_TIME, ROLLOVER_PREFETCH_TIME, PENDING_FLIP_REALERT_DEBOUNCE_SEC,
@@ -280,6 +281,41 @@ class Prometheus:
             time.sleep(1)
             return float(self.obj.rmsLimit()['data']['availablecash'])
 
+    def _calculate_margin_per_unit(self) -> float:
+        """2026-09-11 (user-requested): MARGIN_PER_UNIT recomputed fresh from
+        live LTP instead of read as a frozen prometheus_configs.py constant.
+        Actual per-lot margin tracks the underlying's price directly (MCX
+        margin is ~a fixed fraction of contract value), so a constant
+        calibrated when crude was cheaper drifts stale as price rises —
+        confirmed by the user: ~Rs.25,000/lot when MARGIN_PER_UNIT=100000 was
+        set (100000 = 25000 * 4), ~Rs.30,000/lot now.
+
+        Formula (user-specified, deliberately conservative):
+          1. LTP * LOT_SIZE           -> contract value
+          2. / 3                      -> approx. actual per-lot margin (the
+                                          real broker/exchange fraction is
+                                          ~1/3.1; 3 slightly overstates it,
+                                          which is the conservative side)
+          3. * 4                      -> reproduces the original sizing
+                                          calibration: 2 lots + 40% drawdown
+                                          allowance + 10% -ve MTM allowance,
+                                          i.e. the same *4 that produced the
+                                          original 25000 -> 100000.
+
+        Falls back to the static MARGIN_PER_UNIT (prometheus_configs.py, or
+        the Slack instrument-override file) if a live LTP can't be fetched —
+        same fallback shape as _fetch_available_margin's own rmsLimit()
+        retry-then-give-up pattern."""
+        ltp = self._get_contract_ltp()
+        if not ltp:
+            # not just `is None` -- a bad/zero print must fall back too
+            # (§11: a single bad print is a known live failure mode here;
+            # 0.0 would otherwise silently zero out the margin requirement).
+            logger.warning(f'Live LTP unavailable for margin calc — falling back to static '
+                           f'MARGIN_PER_UNIT={MARGIN_PER_UNIT:,}.')
+            return MARGIN_PER_UNIT
+        return (ltp * LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR) * MARGIN_SIZING_MULTIPLIER
+
     def _calculate_units(self) -> int:
         """2026-09-07 (user-requested): reads sizing fresh via
         resolve_live_sizing() every call, NOT the DYNAMIC_SIZING/STATIC_UNITS
@@ -297,8 +333,9 @@ class Prometheus:
             return static_units
         try:
             margin = self._fetch_available_margin()
-            units = max(1, int(margin // MARGIN_PER_UNIT))
-            logger.info(f'Sizing: Available margin={margin:,.0f}  MARGIN_PER_UNIT={MARGIN_PER_UNIT:,}  '
+            margin_per_unit = self._calculate_margin_per_unit()
+            units = max(1, int(margin // margin_per_unit))
+            logger.info(f'Sizing: Available margin={margin:,.0f}  MARGIN_PER_UNIT={margin_per_unit:,.0f} (live)  '
                         f'Units={units}')
             return units
         except Exception as e:
@@ -309,10 +346,20 @@ class Prometheus:
     def _check_margin_sufficient(self, units: int) -> bool:
         """§6: general pre-entry margin check regardless of sizing mode — the
         primary defense against the tender-margin window is the early roll
-        (§1), this is defense-in-depth against any other margin shift."""
+        (§1), this is defense-in-depth against any other margin shift.
+
+        2026-09-11: required margin is now always the LIVE-computed
+        per-unit figure (_calculate_margin_per_unit), not the static
+        MARGIN_PER_UNIT constant — deliberately independent of whether
+        DYNAMIC_SIZING is on. This check answers "can we actually afford
+        this order right now," which is a fact about current LTP, not
+        about which sizing mode picked the unit count; keeping it on the
+        frozen constant would let it silently under-check real affordability
+        whenever DYNAMIC_SIZING=False (today's live default)."""
         try:
             margin = self._fetch_available_margin()
-            required = units * MARGIN_PER_UNIT
+            margin_per_unit = self._calculate_margin_per_unit()
+            required = units * margin_per_unit
             if margin < required:
                 logger.error(f'Insufficient margin: available={margin:,.0f} required={required:,.0f} '
                             f'for {units} unit(s) — skipping entry.')

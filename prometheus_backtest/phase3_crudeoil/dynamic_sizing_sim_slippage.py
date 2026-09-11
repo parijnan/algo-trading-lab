@@ -37,13 +37,22 @@ contract, since both quote the same underlying commodity price):
     set's 1,194 fills for both that and the one missing-minute case.
   - THE key mechanic carried over unchanged: slippage feeds back into
     capital before the next trade's units are sized (units = max(1,
-    post_slippage_capital // MARGIN_PER_UNIT)) -- the self-damping effect
+    post_slippage_capital // margin_per_unit)) -- the self-damping effect
     is the point, not a frozen-units deduction bolted onto the no-slippage
     run after the fact.
 
-MARGIN_PER_UNIT=Rs 10,00,000 and STARTING_CAPITAL=Rs 55,00,000, both
-user-supplied (see dynamic_sizing_sim.py's own docstring for why these
-differ from the CRUDEOILM pair).
+STARTING_CAPITAL=Rs 55,00,000, user-supplied (see dynamic_sizing_sim.py's
+own docstring for why this differs from the CRUDEOILM pair).
+
+Sizing formula updated 2026-09-11 (§26 of the production plan), same change
+as dynamic_sizing_sim.py and the CRUDEOILM slippage script: margin_per_unit
+is no longer a frozen constant, it's recomputed PER TRADE as entry_price *
+LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER,
+mirroring Prometheus._calculate_margin_per_unit(). Sized off entry_price
+(the FILLED price) in both this script and the base sim -- see the
+CRUDEOILM slippage script's own docstring for why that's not a meaningful
+approximation error against the pre-fill LTP production actually sizes
+from.
 
 Equity/drawdown event granularity: per-trade (lot1+lot2 combined into one
 cash-flow event, credited at the later exit timestamp), changed 2026-09-11
@@ -61,10 +70,11 @@ from math import sqrt
 import pandas as pd
 
 STARTING_CAPITAL = 5_500_000
-MARGIN_PER_UNIT = 1_000_000
 LOT_SIZE = 100          # CRUDEOIL, barrels/lot
 LOTS_PER_LEG = 1         # 1 unit = 2 lots total at entry (1 lot/leg)
 VOLUME_FLOOR_LOTS = 1     # guard against non-positive/missing-volume minutes
+MARGIN_CONTRACT_VALUE_DIVISOR = 3   # keep in sync with prometheus_configs.py
+MARGIN_SIZING_MULTIPLIER = 4        # keep in sync with prometheus_configs.py
 
 A_ANCHOR = 0.3            # pinned: 25% participation -> 1.5 ticks (same anchor as CRUDEOILM)
 
@@ -100,7 +110,8 @@ def run_sim(a_coeff):
     total_slippage_rs = 0.0
 
     for _, t in df.iterrows():
-        units = max(1, int(capital // MARGIN_PER_UNIT))
+        margin_per_unit = t['entry_price'] * LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER
+        units = max(1, int(capital // margin_per_unit))
         capital_before = capital
 
         entry_lots = units * LOTS_PER_LEG * 2
@@ -125,7 +136,8 @@ def run_sim(a_coeff):
         trade_rows.append({
             'trade_id': int(t['trade_id']), 'direction': t['direction'],
             'entry_ts': t['entry_ts'], 'entry_price': t['entry_price'],
-            'capital_before_rs': round(capital_before, 2), 'units': units,
+            'capital_before_rs': round(capital_before, 2),
+            'margin_per_unit_rs': round(margin_per_unit, 2), 'units': units,
             'entry_slippage_ticks': round(entry_slip, 3),
             'lot1_exit_ts': t['lot1_exit_ts'], 'lot1_exit_reason': t['lot1_exit_reason'],
             'lot1_exit_slippage_ticks': round(lot1_exit_slip, 3),
@@ -169,6 +181,8 @@ def run_sim(a_coeff):
         'total_return_pct': total_return_pct, 'cagr': cagr,
         'max_dd_pct': max_dd_pct, 'max_dd_rs': max_dd_rs, 'calmar': calmar,
         'peak_units': int(trades_out['units'].max()),
+        'margin_per_unit_min': trades_out['margin_per_unit_rs'].min(),
+        'margin_per_unit_max': trades_out['margin_per_unit_rs'].max(),
         'total_slippage_rs': round(total_slippage_rs, 2),
         'volume_floor_hits': floor_hits[0],
     }
@@ -190,6 +204,7 @@ if __name__ == '__main__':
     print(f"Max drawdown:     {stats['max_dd_pct']:.1%}  (Rs {stats['max_dd_rs']:,.0f})")
     print(f"Calmar:           {stats['calmar']:.2f}")
     print(f"Peak units:       {stats['peak_units']}")
+    print(f"Margin/unit range: Rs {stats['margin_per_unit_min']:,.0f} to Rs {stats['margin_per_unit_max']:,.0f}")
     print(f"Total slippage cost (this run's own sizing path): Rs {stats['total_slippage_rs']:,.0f}")
     print(f"Volume-floor guard hit: {stats['volume_floor_hits']} of {stats['n_trades'] * 3} fills")
     print()
