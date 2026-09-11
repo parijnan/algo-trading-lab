@@ -1,11 +1,12 @@
 """
-Prometheus - Phase 3, CRUDEOIL cross-validation: per-lot-exit-event
-Calmar/drawdown/P&L stats for the CRUDEOIL cross-validation table in
-prometheus_backtest/README.md -- mirrors phase3/two_candidate_stats_p3.py
-exactly (same methodology: each lot's P&L credited at its own exit
-timestamp as a separate chronological cash-flow event, not bundled at
-trade completion), pointed at this folder's own bespoke_trade_summary.csv
-files (CRUDEOIL, not CRUDEOILM).
+Prometheus - Phase 3, CRUDEOIL cross-validation: per-trade Calmar/drawdown/
+P&L stats for the CRUDEOIL cross-validation table in prometheus_backtest/
+README.md -- mirrors phase3/two_candidate_stats_p3.py exactly (each trade's
+lot1+lot2 P&L combined into ONE cash-flow event, credited at the later of
+the two lots' own exit timestamps -- see that script's own docstring for
+why this replaced the earlier per-lot-exit-event methodology 2026-09-11),
+pointed at this folder's own bespoke_trade_summary.csv files (CRUDEOIL, not
+CRUDEOILM).
 
 Usage: python two_candidate_stats_p3.py
 """
@@ -23,14 +24,14 @@ CANDIDATES = [
 ]
 
 
-def per_lot_exit_stats(mult_label: str) -> dict:
+def per_trade_stats(mult_label: str) -> dict:
     path = os.path.join(SWEEP_DIR, f'mult_{mult_label}', 'bespoke_trade_summary.csv')
     df = pd.read_csv(path, parse_dates=['entry_ts', 'lot1_exit_ts', 'lot2_exit_ts'])
 
     events = []
     for _, t in df.iterrows():
-        events.append((t['lot1_exit_ts'], t['lot1_pnl_rs']))
-        events.append((t['lot2_exit_ts'], t['lot2_pnl_rs']))
+        trade_exit_ts = max(t['lot1_exit_ts'], t['lot2_exit_ts'])
+        events.append((trade_exit_ts, t['total_pnl_rs']))
     ev = pd.DataFrame(events, columns=['ts', 'delta_rs']).sort_values('ts').reset_index(drop=True)
     ev['equity'] = ev['delta_rs'].cumsum()
     ev['peak'] = ev['equity'].cummax()
@@ -58,7 +59,7 @@ def per_lot_exit_stats(mult_label: str) -> dict:
 def main():
     rows = []
     for mult_label, name in CANDIDATES:
-        stats = per_lot_exit_stats(mult_label)
+        stats = per_trade_stats(mult_label)
         stats['candidate'] = name
         rows.append(stats)
         print(f"{name}:")

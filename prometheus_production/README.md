@@ -847,7 +847,9 @@ journey, both phases. **This production module now runs Phase 3's mult-2.0 candi
 2026-09-11 under a corrected backtest simulator (`prometheus_backtest/refresh_pipeline.py` plus a
 same-day fix — see that repo's "Backtest/production timing-guard parity fix" for what changed and
 why; T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the fix,
-not overturned).
+not overturned), then again the same day under a deliberate drawdown-methodology change (per-trade
+instead of per-lot-exit — see `prometheus_backtest/README.md`'s "Drawdown methodology: per-trade,
+not per-lot-exit" for the reasoning).
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
@@ -855,9 +857,9 @@ not overturned).
 | Trades | 389 (refreshed 2026-09-11, corrected — the backtest previously lacked production's own dynamic session-open entry/exit guards, see `prometheus_backtest/README.md`'s "Backtest/production timing-guard parity fix") | 226 (refreshed 2026-09-04, through 2026-09-03) |
 | Win rate | 45.24% | 55.8% |
 | Total P&L | ₹205,862 | ₹42,778 |
-| Max drawdown | −₹15,347 (per-lot-exit-event series) | −₹14,943 |
-| Calmar | 13.41 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-11 under the corrected simulator** — Calmar 9.47, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Max drawdown | −₹13,944 (per-trade series) | −₹14,943 |
+| Calmar | 14.76 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-11 under the per-trade drawdown methodology** — Calmar 9.47, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
 entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting

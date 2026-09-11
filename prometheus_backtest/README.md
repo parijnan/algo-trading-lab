@@ -42,7 +42,7 @@ To refresh everything for both CRUDEOILM and CRUDEOIL in one pass:
 python prometheus_backtest/refresh_pipeline.py
 ```
 
-This re-runs the full deterministic chain (raw signal sweep → bespoke exit overlay → per-lot-exit
+This re-runs the full deterministic chain (raw signal sweep → bespoke exit overlay → per-trade
 stats → dynamic sizing ×2 → risk of ruin) against whatever data currently exists. It's a full
 recompute, not a literal incremental append — but because Supertrend is a purely causal, trailing
 indicator, extending the tail of the price history never changes a decision made earlier in it, so
@@ -389,13 +389,36 @@ across the grid vs. 0.20 for a combo built around 2.5's own bespoke values — b
 predates the 2026-09-01 data refresh and multiplier 2.0's existence (and hasn't been re-run
 against the 2026-09-04 refresh either), so treat it as directional, not current.
 
+**Drawdown methodology: per-trade, not per-lot-exit (changed 2026-09-11).** Every Calmar/max-
+drawdown figure below, in the dynamic-sizing sections, and in Risk of Ruin now credits each
+trade's lot1+lot2 P&L as ONE combined cash-flow event at the later of the two lots' own exit
+timestamps — not, as before, each lot as its own separate chronological event. Reasoning (user
+decision): the whole point of this drawdown figure is to inform base-capital sizing and capital
+efficiency, and the actual sizing mechanism (`_calculate_units()`, mirrored in
+`dynamic_sizing_sim.py`) only ever reads capital **once per trade, at entry** — using capital
+*after* the prior trade's both lots have already closed, never a lot1-only intermediate value
+(confirmed directly in `dynamic_sizing_sim.py`: `capital = capital_after` only updates once, after
+both lots' P&L is summed). Per-lot-exit was capturing something real — lot1 and lot2 genuinely
+settle at different timestamps, so real account equity does step through an intermediate value —
+but that intermediate step is only relevant to a different question (real-time margin-call risk,
+which this project doesn't currently model at all — no intraday mark-to-market is tracked either
+way), not to the capital-sizing question this metric exists to answer. `exit_calib_p3.py`'s own
+calibration grid (the "Exit calibration winners" table above and the T1 fine-grid re-run) was
+**already** per-trade — it never needed changing; this brings `two_candidate_stats_p3.py` and both
+`dynamic_sizing_sim*.py` scripts into line with it. **Risk of Ruin was also already per-trade**
+(bootstrap-resamples `total_pnl_rs`, which was always lot1+lot2 combined) — confirmed by re-running
+it and getting byte-identical output, so its own section below is unaffected by this change.
+Numbers move by varying amounts depending on whether a given max-drawdown episode happened to
+contain an intra-trade lot1-then-lot2 (or lot2-then-lot1) offsetting pattern — CRUDEOILM mult 2.0's
+trough did, CRUDEOIL mult 2.0's didn't (Calmar unchanged there), illustrating that this is a real,
+data-dependent effect, not a uniform correction factor.
+
 **Two calibrated candidates — DECIDED 2026-09-04: mult 2.0** (adopted live in
 `prometheus_production/` the same day, after confirming mult 3.0's live ST matched the chart
 first). **Mult 2.0's `TARGET1_PCT` updated 2.0 → 2.2 on 2026-09-09** (caveat #1 below) — this is
-now Prometheus's final exit configuration. **Refreshed 2026-09-11 through 2026-09-10's data, under
-the corrected simulator** (see "Backtest/production timing-guard parity fix" above — this
-replaces both the original 2026-09-09 vintage and the same-day trailing-trade-only fix that
-preceded this correction):
+now Prometheus's final exit configuration. **Refreshed 2026-09-11, per-trade drawdown methodology**
+(see immediately above — this replaces every earlier vintage of this table, including the
+same-day parity-fix refresh that still used per-lot-exit events):
 
 | Metric | Mult 2.0 (SL 2.2/T1 2.2/T2 5.0) | Mult 2.5 (SL 1.0/T1 1.25/T2 4.0) |
 |---|---|---|
@@ -404,15 +427,15 @@ preceded this correction):
 | Total P&L | ₹205,862 | ₹138,466 |
 | Avg win / avg loss | ₹3,354 / −₹1,805 | ₹2,467 / −₹1,426 |
 | Max win / max loss | ₹14,120 / −₹6,440 | ₹13,220 / −₹6,860 |
-| Max drawdown | −₹15,347 | −₹12,573 |
-| Calmar | 13.41 | 11.01 |
+| Max drawdown | −₹13,944 | −₹11,973 |
+| Calmar | 14.76 | 11.56 |
 
 **CRUDEOIL cross-validation — done 2026-09-07, re-run 2026-09-09 at T1=2.2%, refreshed again
-2026-09-11 under the same corrected simulator** (`prometheus_backtest/phase3_crudeoil/`, identical
-pipeline to the CRUDEOILM run above, `SYMBOL` the only change, stored in a separate sibling folder
-rather than overwriting this one). Same per-lot-exit-event Calmar/drawdown methodology as the
+2026-09-11 under the same per-trade methodology** (`prometheus_backtest/phase3_crudeoil/`,
+identical pipeline to the CRUDEOILM run above, `SYMBOL` the only change, stored in a separate
+sibling folder rather than overwriting this one). Same per-trade Calmar/drawdown methodology as the
 table above, computed directly from the refreshed `bespoke_trade_summary.csv` files (matching how
-the CRUDEOILM figures above were produced, not the coarser per-trade `exit_calib_p3_winners.csv`
+the CRUDEOILM figures above were produced, not the coarser `exit_calib_p3_winners.csv`
 method):
 
 | Metric | Mult 2.0, CRUDEOIL | Mult 2.5, CRUDEOIL |
@@ -422,10 +445,10 @@ method):
 | Total P&L | ₹1,900,683 | ₹1,393,729 |
 | Avg win / avg loss | ₹34,226 / −₹17,036 | ₹24,146 / −₹14,117 |
 | Max win / max loss | ₹140,200 / −₹64,600 | ₹131,400 / −₹69,000 |
-| Max drawdown | −₹200,752 | −₹151,137 |
-| Calmar | **9.47** (vs. CRUDEOILM's 13.41) | **9.22** (vs. CRUDEOILM's 11.01) |
+| Max drawdown | −₹200,752 | −₹145,437 |
+| Calmar | **9.47** (vs. CRUDEOILM's 14.76) | **9.58** (vs. CRUDEOILM's 11.56) |
 
-**The edge holds directionally on the full-size contract but not at matching risk-adjusted quality.** Both candidates stay clearly profitable — win rates land within ~3 points of the mini-contract figures. Unlike every prior refresh, mult 2.0 is now the higher-Calmar choice on CRUDEOIL too (9.47 vs. 9.22) — under the parity-fixed simulator the two candidates' CRUDEOIL Calmar values sit close enough (both ~9.2-9.5) that this isn't read as a ranking reversal worth chasing, just the two candidates converging once the artifact-driven noise is removed from both. P&L scales up only ~9.2x (mult 2.0) / ~10.1x (mult 2.5) while max drawdown scales up ~13.1x (mult 2.0) / ~12.0x (mult 2.5) relative to CRUDEOILM — noticeably more than the 10x lot-size ratio alone would predict — so CRUDEOIL's drawdowns still run proportionally deeper against its own return than CRUDEOILM's do. This is not a like-for-like guarantee that the live strategy (calibrated and risk-managed specifically against CRUDEOILM's own tighter profile) would perform equivalently if traded on the full-size contract instead — it's the reason Prometheus trades CRUDEOILM, not a reason to doubt the calibration.
+**The edge holds directionally on the full-size contract but not at matching risk-adjusted quality.** Both candidates stay clearly profitable — win rates land within ~3 points of the mini-contract figures. On CRUDEOIL specifically the two candidates' Calmar values are close enough (9.47 vs. 9.58) that neither is read as the clear winner there — mult 2.0's own max drawdown happened not to contain an intra-trade offsetting pattern (unchanged by the per-trade methodology switch above), while mult 2.5's did, so the gap that favored mult 2.0 before has narrowed to a coin flip; the production decision doesn't depend on the CRUDEOIL ranking either way, since CRUDEOILM is what's actually traded and there mult 2.0 leads clearly (14.76 vs 11.56). P&L scales up only ~9.2x (mult 2.0) / ~10.1x (mult 2.5) while max drawdown scales up ~14.4x (mult 2.0) / ~12.1x (mult 2.5) relative to CRUDEOILM — noticeably more than the 10x lot-size ratio alone would predict for mult 2.0 — so CRUDEOIL's drawdowns still run proportionally deeper against its own return than CRUDEOILM's do. This is not a like-for-like guarantee that the live strategy (calibrated and risk-managed specifically against CRUDEOILM's own tighter profile) would perform equivalently if traded on the full-size contract instead — it's the reason Prometheus trades CRUDEOILM, not a reason to doubt the calibration.
 
 **One-day flip-frequency anomaly checked and cleared, 2026-09-11.** CRUDEOIL picked up 5 new trades this refresh (405→410) against CRUDEOILM's 1 (388→389) from the identical single day of new data (2026-09-10) — all 5 exiting via `trend_flip` within 1.25-3.25 hours each, a rapid-whipsaw shape worth checking given CRUDEOILM's own real production log that same day showed exactly one flip all session. Checked the raw 1-min data at all 5 flip timestamps directly for the DPL circuit-freeze signature (§11a-style: `open==high==low==close` for 3+ consecutive minutes) — found none; every window shows ordinary, continuous, real trading. (CRUDEOIL *did* have a real circuit freeze that day, 21:18-21:31 at the same 9644 level as CRUDEOILM's — but that's hours after all 5 of these trades had already closed, so it isn't the cause.) Read as CRUDEOIL's already-documented choppier character, not a new artifact.
 
@@ -515,12 +538,13 @@ mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply
    by contrast, is genuinely closer to breakeven (−₹101 avg, 37.7% win rate) — the "let it play
    out" framing holds there, just not for lot 1.
 3. **CRUDEOIL cross-validation — done 2026-09-07, re-run 2026-09-09 at T1=2.2%, refreshed again
-   2026-09-11 under the corrected simulator** (see the table above): the edge replicates
-   directionally on the full-size contract, but Calmar drops for both candidates (13.41→9.47 for
-   mult 2.0, 11.01→9.22 for mult 2.5) — CRUDEOIL's drawdowns run proportionally deeper than
+   2026-09-11 under the per-trade drawdown methodology** (see the table above): the edge replicates
+   directionally on the full-size contract, but Calmar drops for both candidates (14.76→9.47 for
+   mult 2.0, 11.56→9.58 for mult 2.5) — CRUDEOIL's drawdowns run proportionally deeper than
    CRUDEOILM's, not just larger by the 10x lot-size ratio. Doesn't change the mult-2.0 production
-   decision (CRUDEOILM is the live-traded instrument), but means the live strategy's risk profile
-   shouldn't be assumed to carry over unchanged if ever run on CRUDEOIL instead.
+   decision (CRUDEOILM is the live-traded instrument, where mult 2.0 leads clearly), but means the
+   live strategy's risk profile shouldn't be assumed to carry over unchanged if ever run on
+   CRUDEOIL instead.
 4. **No transaction costs modeled** (same convention as v1/Phase 2) — mult 2.0 has the highest
    trade count of any candidate (389 vs. 2.5's 296), making it the most cost-exposed once
    slippage/brokerage are added.
@@ -536,16 +560,17 @@ mult 2.0 runs T1=2.2%, not 2.0% — this paragraph's own numbers no longer apply
   curves, full per-trade comparison tables, all three as separate sections on one page) —
   published artifact (private, **2026-09-01 data, not refreshed**):
   `https://claude.ai/code/artifact/624f0f27-8c12-4d5a-9e3a-9f050b34e087`. Originated the
-  per-lot-exit-event equity/Calmar methodology — a finer-grained cash-flow series than
-  `exit_calib_p3.py`'s own per-trade summary, treating each lot's own exit as its own
-  chronological cash-flow event rather than bundling both lots' P&L at the trade's completion,
-  so its max-DD figures read a little deeper (e.g. mult 2.5: −₹11,219 vs. −₹10,619 in the
-  refreshed `exit_calib_p3_winners.csv`) because it can see a dip that opens and closes entirely
-  between one trade's lot 1 exit and its lot 2 exit. Not a contradiction, just more precision.
-  The 2026-09-04-refreshed per-lot-exit-event numbers in the two-candidate table above reproduce
-  this artifact's methodology (verified: drawdown figures match exactly) but were computed
-  directly from the refreshed `bespoke_trade_summary.csv` files, not from a re-published
-  artifact.
+  per-lot-exit-event equity/Calmar methodology (as it stood at the time) — a finer-grained
+  cash-flow series than `exit_calib_p3.py`'s own per-trade summary, treating each lot's own exit
+  as its own chronological cash-flow event rather than bundling both lots' P&L at the trade's
+  completion, so its max-DD figures read a little deeper (e.g. mult 2.5: −₹11,219 vs. −₹10,619 in
+  the then-current `exit_calib_p3_winners.csv`) because it can see a dip that opens and closes
+  entirely between one trade's lot 1 exit and its lot 2 exit. **Superseded 2026-09-11**: the
+  two-candidate table above switched to per-trade (lot1+lot2 combined) for a reasoned, deliberate
+  capital-sizing reason — see "Drawdown methodology: per-trade, not per-lot-exit" — so this
+  artifact's own methodology (and its stale 2026-09-01 data) no longer matches the live table;
+  kept here as the historical record of where per-lot-exit-event originated, not as a
+  cross-reference to trust for current figures.
 - **Early MFE as a predictor of trade outcome (2026-09-08)** — prompted by watching a live trade
   stall at only ~2 points of MFE. Ad-hoc analysis (not a committed script) against all 381 mult-2.0
   bespoke trades: for each, measured running MFE at fixed early checkpoints (15/30/60/120/240 min
@@ -967,8 +992,8 @@ tails checked — but "more room" isn't "unlimited room": past ~1,000 bbl (~10 C
 same qualitative slippage concerns reappear, just later. Whether switching (or splitting exposure
 across both contracts) is actually worth it also depends on the strategy's own edge holding up
 equally well on CRUDEOIL — already cross-validated 2026-09-07, re-validated 2026-09-09 at T1=2.2%,
-refreshed again 2026-09-11 under the corrected simulator — above, with Calmar running lower there
-(9.22-9.47 vs. CRUDEOILM's 11.01-13.41) — and on
+refreshed again 2026-09-11 under the per-trade drawdown methodology — above, with Calmar running
+lower there (9.47-9.58 vs. CRUDEOILM's 11.56-14.76) — and on
 CRUDEOIL's own margin-per-lot, which hasn't been pulled from a live source here and isn't
 assumed to scale linearly with lot size.
 
@@ -988,9 +1013,10 @@ user-supplied. Same live production combo (mult 2.0, SL 2.2%/T1 2.2%/T2 5.0% —
 3 caveat #1), run against CRUDEOIL's own 409-trade backtest
 (`phase3_crudeoil/data_sweep/mult_2.0/bespoke_trade_summary.csv`, refreshed 2026-09-11 under the
 corrected simulator — see "Backtest/production timing-guard parity fix" above — 20 more trades
-than CRUDEOILM's 389, same signal/exit logic against a different price series). Same
-per-lot-exit-event equity/drawdown methodology, and — from the start this time, not as a
-follow-up — both a no-slippage run and a slippage-adjusted run using the identical participation
+than CRUDEOILM's 389, same signal/exit logic against a different price series). Same per-trade
+equity/drawdown methodology (see "Drawdown methodology: per-trade, not per-lot-exit" above), and
+— from the start this time, not as a follow-up — both a no-slippage run and a slippage-adjusted
+run using the identical participation
 model from the CRUDEOIL liquidity comparison above (same A=0.3 anchor, carried over rather than
 re-fit, since a tick costs the same Rs/barrel on either contract).
 
@@ -1005,7 +1031,7 @@ CRUDEOILM's equivalent-scaling extreme.
 
 **Slippage-adjusted result, refreshed 2026-09-11 under the corrected simulator** (same
 feedback-loop mechanics as the CRUDEOILM slippage run — units resized from post-slippage capital
-every trade): final capital Rs 2.18Cr (+296.9%), max drawdown −19.5%, Calmar 15.19, peak units
+every trade): final capital Rs 2.18Cr (+296.9%), max drawdown −19.2%, Calmar 15.49, peak units
 damped from 30 to 24 (the slippage feedback loop still caps growth well below the no-slippage
 peak). Coefficient sensitivity (0.5x/1x/2x anchor) holds the same ranking: Rs 2.53Cr → Rs 2.18Cr
 → Rs 1.69Cr final capital.
@@ -1033,8 +1059,12 @@ that doesn't recover quickly is the scenario the sizing was explicitly built to 
 **Method.** Monte Carlo bootstrap over the real backtested trades from Phase 3's live production
 combo (mult 2.0, `phase3/data_sweep/mult_2.0/bespoke_trade_summary.csv`), resampled with
 replacement (each trade's `total_pnl_rs` treated as one atomic outcome — lot1+lot2 combined,
-appropriate for synthesizing new orderings rather than reconstructing the original timeline, where
-the finer per-lot-exit-event method matters instead). Scaled to 50-unit sizing (linear ×50 on
+appropriate for synthesizing new orderings rather than reconstructing the original timeline).
+This was already the per-trade methodology now used everywhere else in this README too (see
+"Drawdown methodology: per-trade, not per-lot-exit" in the Phase 3 section above) — resampling
+independently drawn trades can't preserve a finer lot-level chronology anyway, so this section's
+own numbers are unaffected by that 2026-09-11 change; confirmed by re-running and getting
+byte-identical output. Scaled to 50-unit sizing (linear ×50 on
 each trade's 1-unit P&L). Capital base: ₹50,00,000 (50 units × `MARGIN_PER_UNIT`'s ₹1,00,000 —
 the fully-buffered allocation per unit, not the raw ₹50,000 margin). 20,000 simulated paths, each
 ~2 years long at the backtest's own observed trade pace. Ruin defined as: max drawdown > 40% at
@@ -1091,7 +1121,7 @@ at the previous, still-artifact-contaminated refresh; that one path was already 
 consistent with bootstrap noise on a low-probability tail event rather than a regime change, and
 this refresh confirms it):
 - P(max drawdown > 40% at any point): 3.40% (679/20,000 paths) — still meaningfully higher than
-  CRUDEOILM's 2.33%, consistent with CRUDEOIL's own lower Calmar (9.47 vs. CRUDEOILM's 13.41) and
+  CRUDEOILM's 2.33%, consistent with CRUDEOIL's own lower Calmar (9.47 vs. CRUDEOILM's 14.76) and
   proportionally deeper drawdowns already found in the cross-validation above.
 - Of those 679, all recovered within the 2-year horizon (100%, matching CRUDEOILM) — 28.4% within
   1 month, 91.2% within 3 months, 99.7% within 6 months, 100% within a year.

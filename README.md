@@ -489,9 +489,9 @@ caveat #1):
 
 | | Mult 2.0 (SL 2.2%/T1 2.2%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|
-| Backtest (refreshed 2026-09-11, under a corrected simulator — the backtest previously lacked production's own dynamic session-open entry/exit guards, see `prometheus_backtest/README.md`'s "Backtest/production timing-guard parity fix") | 389 trades · WR 45.2% · ₹205,862 total P&L · Calmar 13.41 | 296 trades · WR 48.7% · ₹138,466 total P&L · Calmar 11.01 |
+| Backtest (refreshed 2026-09-11 — a real backtest/production parity fix plus a deliberate drawdown-methodology change to per-trade, see `prometheus_backtest/README.md`'s "Backtest/production timing-guard parity fix" and "Drawdown methodology: per-trade, not per-lot-exit") | 389 trades · WR 45.2% · ₹205,862 total P&L · Calmar 14.76 | 296 trades · WR 48.7% · ₹138,466 total P&L · Calmar 11.56 |
 
-Mult 2.0 leads on Calmar (13.41 vs 11.01) — the mult-2.0 decision stands, and T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the corrected simulator (14.76, the single highest value in the re-run grid), not just a plateau pick as the original finding had it.
+Mult 2.0 leads on Calmar (14.76 vs 11.56) — the mult-2.0 decision stands, and T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the corrected simulator (14.76, the single highest value in the re-run grid), not just a plateau pick as the original finding had it.
 
 Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
 edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade
@@ -504,7 +504,7 @@ section.
 timing-guard parity fix"): what if Prometheus had gone live on 2026-01-30 with ₹50,00,000 and
 `DYNAMIC_SIZING=True` the whole way, letting units compound with realised P&L exactly as
 `_calculate_units()` would live. Result: 389 trades, ₹50L → ₹3.17Cr (+533.6%), max drawdown
-−14.4%, Calmar 37.01 — but units grow to a peak of 308, far past the ~50-lot range the liquidity
+−14.0%, Calmar 38.14 — but units grow to a peak of 308, far past the ~50-lot range the liquidity
 analysis found already uncomfortable, with zero slippage modeled. Read as how the sizing
 mechanics compound, not a realistic forecast at that scale. [Chart +
 table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162); detailed CSVs in
@@ -517,7 +517,7 @@ that fill's own timestamp, coefficient anchored to the liquidity analysis's own 
 (25% participation → 1.5 ticks) — and, critically, fed back into capital before the next trade's
 units are sized, so a worse fill this trade damps how big the next one gets. Result: peak units
 drops from 308 to 204, final capital ₹2.05Cr (+310.6%) vs. the no-slippage ₹3.17Cr, Calmar 16.73
-vs. 37.01. Ranking holds across a 0.5×–2× coefficient sensitivity sweep. Same
+vs. 38.14. Ranking holds across a 0.5×–2× coefficient sensitivity sweep. Same
 [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162), appended below
 the no-slippage results; CSVs alongside the originals in `phase3/data_sweep/mult_2.0/` as
 `dynamic_sizing_trades_slippage.csv` / `dynamic_sizing_equity_curve_slippage.csv`.
@@ -530,7 +530,7 @@ trades, ₹55L → ₹2.80Cr (+408.2%), max drawdown −18.2%, Calmar 22.37, uni
 modest range than CRUDEOILM's 50→308, since CRUDEOIL's 10x-larger per-unit margin means the same
 rupee P&L moves units far less. Slippage-adjusted (same model, same 0.3·√(participation_%) anchor,
 carried over from the CRUDEOIL liquidity comparison rather than re-fit): final capital ₹2.18Cr
-(+296.9%), Calmar 15.19, peak units damped from 30 to 24. [Chart +
+(+296.9%), Calmar 15.49, peak units damped from 30 to 24. [Chart +
 table](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef) (separate artifact,
 same structure as the CRUDEOILM one); CSVs in `phase3_crudeoil/data_sweep/mult_2.0/` (gitignored).
 

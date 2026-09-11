@@ -16,10 +16,13 @@ lot1_pnl_rs/lot2_pnl_rs by that trade's own entry-time units reproduces
 production's real per-trade P&L exactly (both columns are already
 points*LOT_SIZE at 1 unit).
 
-Equity/drawdown curve uses the per-lot-exit-event methodology already
-established for this repo's headline CRUDEOILM/CRUDEOIL Calmar tables --
-each lot's P&L credited at its own exit timestamp as a separate
-chronological cash-flow event, not bundled at trade completion.
+Equity/drawdown curve uses the per-trade methodology established for this
+repo's headline CRUDEOILM/CRUDEOIL Calmar tables (changed 2026-09-11 from
+the earlier per-lot-exit-event convention -- see two_candidate_stats_p3.py's
+docstring for the reasoning) -- each trade's lot1+lot2 P&L combined into ONE
+cash-flow event, credited at the later of the two lots' own exit
+timestamps, matching what _calculate_units() actually reads (capital at
+trade boundaries, never a lot1-only intermediate value).
 
 Output CSVs (dynamic_sizing_trades.csv, dynamic_sizing_equity_curve.csv)
 are written alongside bespoke_trade_summary.csv in data_sweep/mult_2.0/ --
@@ -63,8 +66,9 @@ for _, t in df.iterrows():
         'total_pnl_rs': round(total_pnl_rs, 2), 'capital_after_rs': round(capital_after, 2),
     })
 
-    events.append((t['lot1_exit_ts'], lot1_pnl_rs, f"T{int(t['trade_id'])} lot1 {t['lot1_exit_reason']}"))
-    events.append((t['lot2_exit_ts'], lot2_pnl_rs, f"T{int(t['trade_id'])} lot2 {t['lot2_exit_reason']}"))
+    trade_exit_ts = max(t['lot1_exit_ts'], t['lot2_exit_ts'])
+    events.append((trade_exit_ts, total_pnl_rs,
+                    f"T{int(t['trade_id'])} ({t['lot1_exit_reason']}/{t['lot2_exit_reason']})"))
 
     capital = capital_after
 

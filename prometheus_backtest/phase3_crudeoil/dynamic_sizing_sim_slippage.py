@@ -45,6 +45,11 @@ MARGIN_PER_UNIT=Rs 10,00,000 and STARTING_CAPITAL=Rs 55,00,000, both
 user-supplied (see dynamic_sizing_sim.py's own docstring for why these
 differ from the CRUDEOILM pair).
 
+Equity/drawdown event granularity: per-trade (lot1+lot2 combined into one
+cash-flow event, credited at the later exit timestamp), changed 2026-09-11
+from the earlier per-lot-exit-event convention -- see
+two_candidate_stats_p3.py's docstring for the reasoning.
+
 Output: dynamic_sizing_trades_slippage.csv, dynamic_sizing_equity_curve_slippage.csv,
 written alongside the base (no-slippage) CSVs in data_sweep/mult_2.0/ --
 generated data, gitignored like everything else in that folder.
@@ -135,8 +140,9 @@ def run_sim(a_coeff):
             'total_pnl_rs': round(total_pnl_rs, 2), 'capital_after_rs': round(capital_after, 2),
         })
 
-        events.append((t['lot1_exit_ts'], lot1_pnl_rs, f"T{int(t['trade_id'])} lot1 {t['lot1_exit_reason']}"))
-        events.append((t['lot2_exit_ts'], lot2_pnl_rs, f"T{int(t['trade_id'])} lot2 {t['lot2_exit_reason']}"))
+        trade_exit_ts = max(t['lot1_exit_ts'], t['lot2_exit_ts'])
+        events.append((trade_exit_ts, total_pnl_rs,
+                        f"T{int(t['trade_id'])} ({t['lot1_exit_reason']}/{t['lot2_exit_reason']})"))
 
         capital = capital_after
 

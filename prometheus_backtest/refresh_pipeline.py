@@ -2,7 +2,7 @@
 Prometheus - Phase 3: full backtest-refresh pipeline, both instruments.
 
 Runs the full deterministic re-backtest chain (raw signal sweep -> bespoke
-exit overlay -> per-lot-exit-event stats -> dynamic sizing x2 -> risk of
+exit overlay -> per-trade stats -> dynamic sizing x2 -> risk of
 ruin) against whatever data currently sits in data_pipeline/data/mcx/, for
 both CRUDEOILM (phase3/) and CRUDEOIL (phase3_crudeoil/) -- production's
 live config (SL 2.2% / T1 2.2% / T2 5.0%, mult 2.0) plus mult 2.5 for
