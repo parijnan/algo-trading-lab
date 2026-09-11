@@ -1,54 +1,12 @@
 # Prometheus Production — MCX Crude Oil Intraday Trend-Following (Standalone)
 
-Live execution module for the Prometheus strategy.
-Part of the **Algo Trading Lab** project.
+Live execution module for the Prometheus strategy. Part of the **Algo Trading Lab** project.
 
-Prometheus watches for ST_15 (single-timeframe, 15-min Supertrend) flips on CRUDEOILM futures
-and auto-enters a 2-lot scale-out position on signal. Unlike Artemis/Athena/Apollo, and like
-Iris, Prometheus owns its own Angel One session — it is not launched by Leto (different
-exchange, different underlying, no VIX coupling; see
-[`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
+Prometheus watches for ST_15 (single-timeframe, 15-min Supertrend) flips on CRUDEOILM futures and auto-enters a 2-lot scale-out position on signal. Unlike Artemis/Athena/Apollo, and like Iris, Prometheus owns its own Angel One session — it is not launched by Leto (different exchange, different underlying, no VIX coupling; see [`plans/prometheus-phase2-production.md`](../plans/prometheus-phase2-production.md) §0).
 
-**Status: Phase 3 build complete, `DRY_RUN=True` (paper mode), live-testing on Delos since
-2026-09-04. Rollover redesign (plan §18, built 2026-09-05, all 3 phases) is also live in this
-codebase — the scheduled evening rollover below (§4/§6/§8/§9) is now a FALLBACK, not the primary
-path. If an in-trade position's contract flips on a rollover-eve day, it now exits immediately and
-switches to the new contract right then (with a fresh entry if the new contract independently
-agrees on the same bar) — the evening mechanism only ever runs if the position survives untouched
-all the way to `ROLLOVER_TIME`. A flat position on a rollover-eve switches contracts at setup,
-same day, rather than waiting for the evening. See `plans/prometheus-phase3-production.md` §18 for
-the full design; not yet exercised by an actual rollover.**
-[`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the
-current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1,
-2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2),
-the `state.token` invariant fix (§3), the rollover trigger/recovery/execution timeline including
-the ST-disagreement veto (§4/§5/§6, 2026-09-04), Rule 7's combined order with a stuck-partial-fill
-retry marker (§7, 2026-09-04), the historical-basis SL/target recalibration method (§8,
-2026-09-04), the two-linked-rows rolled-trade log schema (§9, 2026-09-04), the 15-min-boundary
-deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), the
-provisional-boundary computation on top of that (§12a, 2026-09-04 — see below), opening-bar
-price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), the ST seed
-skip-list (§14), and the 1h/15m entry filter's full wiring (§17, 2026-09-04). **The 1h filter is
-built and unit-tested but gated off** — `ENTRY_FILTER_1H_ALIGN_ENABLED = False` in
-`prometheus_configs.py`, so it currently has no effect on any entry path; `ST_1H_PERIOD` /
-`ST_1H_MULTIPLIER` were unset placeholders, and Phase 4's full backtest (2026-09-04,
-`prometheus_backtest/phase4/`) then found no (period, multiplier) combination that beats the
-unfiltered baseline — **shelved**, not just deferred; see
-[`prometheus_backtest/README.md`](../prometheus_backtest/README.md)'s Phase 4 section. The
-rollover mechanics are code-complete and unit-verified (real on-disk historical-basis/ST lookups,
-mocked-broker Rule 7 reconciliation and rollover reopens) but not yet exercised by an actual live
-rollover (~2026-09-15).
+**Status: Phase 3 build complete, `DRY_RUN=True` (paper mode), live-testing on Delos since 2026-09-04. Rollover redesign (plan §18, built 2026-09-05, all 3 phases) is also live in this codebase — the scheduled evening rollover below (§4/§6/§8/§9) is now a FALLBACK, not the primary path. If an in-trade position's contract flips on a rollover-eve day, it now exits immediately and switches to the new contract right then (with a fresh entry if the new contract independently agrees on the same bar) — the evening mechanism only ever runs if the position survives untouched all the way to `ROLLOVER_TIME`. A flat position on a rollover-eve switches contracts at setup, same day, rather than waiting for the evening. See `plans/prometheus-phase3-production.md` §18 for the full design; not yet exercised by an actual rollover.** [`plans/prometheus-phase3-production.md`](../plans/prometheus-phase3-production.md) is the current design doc — every section there is `[DECIDED]`. Built: resilient order execution (§1, 2026-09-04), private intraday cache + write-removal + startup retry (§15), no-EOD-flatten (§2), the `state.token` invariant fix (§3), the rollover trigger/recovery/execution timeline including the ST-disagreement veto (§4/§5/§6, 2026-09-04), Rule 7's combined order with a stuck-partial-fill retry marker (§7, 2026-09-04), the historical-basis SL/target recalibration method (§8, 2026-09-04), the two-linked-rows rolled-trade log schema (§9, 2026-09-04), the 15-min-boundary deferred-bar fix + the resample day-end-boundary fix that also underlies it (§12/§17), the provisional-boundary computation on top of that (§12a, 2026-09-04 — see below), opening-bar price-artifact correction (§11), realised/unrealised/total P&L reporting (§13), the ST seed skip-list (§14), and the 1h/15m entry filter's full wiring (§17, 2026-09-04). **The 1h filter is built and unit-tested but gated off** — `ENTRY_FILTER_1H_ALIGN_ENABLED = False` in `prometheus_configs.py`, so it currently has no effect on any entry path; `ST_1H_PERIOD` / `ST_1H_MULTIPLIER` were unset placeholders, and Phase 4's full backtest (2026-09-04, `prometheus_backtest/phase4/`) then found no (period, multiplier) combination that beats the unfiltered baseline — **shelved**, not just deferred; see [`prometheus_backtest/README.md`](../prometheus_backtest/README.md)'s Phase 4 section. The rollover mechanics are code-complete and unit-verified (real on-disk historical-basis/ST lookups, mocked-broker Rule 7 reconciliation and rollover reopens) but not yet exercised by an actual live rollover (~2026-09-15).
 
-**Live-test day 1 (2026-09-04) findings, all fixed same day:** a tz-parsing crash on the very
-first live run (`fetch_one_minute_window` returned tz-aware timestamps from a `%z`-suffixed
-broker format, colliding with the rest of the codebase's tz-naive convention — fixed at the
-source, commit `9c46fc6`); the mult-2.0 vs mult-2.5 decision made and deployed (`ST_MULTIPLIER`,
-`SL_PCT`, `TARGET1_PCT`, `TARGET2_FLAT_PCT` all changed together, since the two candidates are
-jointly calibrated, not interchangeable piecemeal — commit `d5872a7`); `_recover_missed_rollover`
-found missing the §17 1h-alignment gate that `_execute_rollover_decision` already had (commit
-`0adb731`); `INNER_RETRY_ATTEMPTS` raised 3→5 after observing frequent AB1021 bursts (commit
-`6ef55b6`); the Slack control panel reordered to put Prometheus's section above the shared
-Leto/Athena/Artemis/Iris block (commit `acd3a26`).
+**Live-test day 1 (2026-09-04) findings, all fixed same day:** a tz-parsing crash on the very first live run (`fetch_one_minute_window` returned tz-aware timestamps from a `%z`-suffixed broker format, colliding with the rest of the codebase's tz-naive convention — fixed at the source, commit `9c46fc6`); the mult-2.0 vs mult-2.5 decision made and deployed (`ST_MULTIPLIER`, `SL_PCT`, `TARGET1_PCT`, `TARGET2_FLAT_PCT` all changed together, since the two candidates are jointly calibrated, not interchangeable piecemeal — commit `d5872a7`); `_recover_missed_rollover` found missing the §17 1h-alignment gate that `_execute_rollover_decision` already had (commit `0adb731`); `INNER_RETRY_ATTEMPTS` raised 3→5 after observing frequent AB1021 bursts (commit `6ef55b6`); the Slack control panel reordered to put Prometheus's section above the shared Leto/Athena/Artemis/Iris block (commit `acd3a26`).
 
 ---
 
@@ -66,15 +24,9 @@ Leto/Athena/Artemis/Iris block (commit `acd3a26`).
 
 ## Execution Flow
 
-Five diagrams: startup/setup, the main loop (exits + 15m bar handling), Rule 7's combined-order
-mechanism in detail, the evening-triggered rollover timeline, and missed-rollover recovery at
-startup. Split from a single chart because Phase 3's rollover mechanics and Rule 7's combined
-order make one diagram unreadable — each is referenced from where it's called.
+Five diagrams: startup/setup, the main loop (exits + 15m bar handling), Rule 7's combined-order mechanism in detail, the evening-triggered rollover timeline, and missed-rollover recovery at startup. Split from a single chart because Phase 3's rollover mechanics and Rule 7's combined order make one diagram unreadable — each is referenced from where it's called.
 
-Every gate touched by the §17 1h-alignment filter is labeled `inert unless
-ENTRY_FILTER_1H_ALIGN_ENABLED` — as of this writing that flag is `False` in
-`prometheus_configs.py`, so every one of those decision nodes always resolves to its "agrees"
-branch. Read them as dormant, not active.
+Every gate touched by the §17 1h-alignment filter is labeled `inert unless ENTRY_FILTER_1H_ALIGN_ENABLED` — as of this writing that flag is `False` in `prometheus_configs.py`, so every one of those decision nodes always resolves to its "agrees" branch. Read them as dormant, not active.
 
 ### Startup & Setup
 
@@ -201,10 +153,7 @@ graph TD
 
 ### Rule 7: Combined-Order Detail (§7, 2026-09-04)
 
-A trend-flip against an open position no longer fires two or three separate orders (old
-Phase 2 shape: exit, confirm, then a separate entry). One order for the net quantity
-(`old_open_lots + new_trade_lots`) — partial fills reconciled explicitly, retried every main
-loop tick until fully resolved, independent of whether a fresh 15m flip is still "current."
+A trend-flip against an open position no longer fires two or three separate orders (old Phase 2 shape: exit, confirm, then a separate entry). One order for the net quantity (`old_open_lots + new_trade_lots`) — partial fills reconciled explicitly, retried every main loop tick until fully resolved, independent of whether a fresh 15m flip is still "current."
 
 ```mermaid
 graph TD
@@ -248,24 +197,13 @@ graph TD
 
 ### Rollover Timeline (§4/§6/§8/§9, evening-triggered) — now the FALLBACK, not the primary path
 
-**§18 (2026-09-05) changed what this diagram represents.** The evening-triggered mechanism below
-still exists and is unmodified, but it's no longer the normal way a rollover happens — it's what
-runs ONLY if an in-trade position survives completely untouched, with no flip at all, all the way
-to `ROLLOVER_TIME`. The actual common case now:
+**§18 (2026-09-05) changed what this diagram represents.** The evening-triggered mechanism below still exists and is unmodified, but it's no longer the normal way a rollover happens — it's what runs ONLY if an in-trade position survives completely untouched, with no flip at all, all the way to `ROLLOVER_TIME`. The actual common case now:
 
-- **Flat at setup on a rollover-eve** → switches to the new contract immediately (Phase 1,
-  `_switch_to_new_contract_now`), same morning — this diagram never runs at all for that day.
-- **In-trade on a rollover-eve** → both contracts are tracked all day (Phase 2). The moment the
-  old contract's own signal flips, it exits right then (plain `trend_flip`, unconditional) and, once
-  that exit confirms, switches to the new contract (Phase 3, `_execute_coincident_flip_transition`)
-  — with a fresh entry following immediately if the new contract independently agreed on the same
-  bar. This is a completely separate code path from the diagram below (no Rule 7, no historical-
-  basis recalibration, no `parent_trade_id` — see plan §18).
-- Only if NEITHER of those fires all day — i.e. the position never flips before `ROLLOVER_TIME` —
-  does the timeline below actually execute.
+- **Flat at setup on a rollover-eve** → switches to the new contract immediately (Phase 1, `_switch_to_new_contract_now`), same morning — this diagram never runs at all for that day.
+- **In-trade on a rollover-eve** → both contracts are tracked all day (Phase 2). The moment the old contract's own signal flips, it exits right then (plain `trend_flip`, unconditional) and, once that exit confirms, switches to the new contract (Phase 3, `_execute_coincident_flip_transition`) — with a fresh entry following immediately if the new contract independently agreed on the same bar. This is a completely separate code path from the diagram below (no Rule 7, no historical- basis recalibration, no `parent_trade_id` — see plan §18).
+- Only if NEITHER of those fires all day — i.e. the position never flips before `ROLLOVER_TIME` — does the timeline below actually execute.
 
-See `plans/prometheus-phase3-production.md` §18 for the full design; a dedicated flowchart for the
-event-driven path hasn't been drawn yet (textual description only, above and in §18).
+See `plans/prometheus-phase3-production.md` §18 for the full design; a dedicated flowchart for the event-driven path hasn't been drawn yet (textual description only, above and in §18).
 
 ```mermaid
 graph TD
@@ -316,11 +254,7 @@ graph TD
 
 ### Missed-Rollover Recovery (§5, at startup)
 
-Same veto shape as the evening timeline above, triggered instead when the process wasn't alive
-at `ROLLOVER_TIME` (crash, MCX holiday, KILL, DISABLE) and resumes to find `state.token` no
-longer matches the freshly-resolved effective contract. By this point in `_setup()`,
-`self._contract` and `self._df_15m` are already the new contract's — no separate prefetch/poll
-needed, `_setup()`'s own normal flow already did that work.
+Same veto shape as the evening timeline above, triggered instead when the process wasn't alive at `ROLLOVER_TIME` (crash, MCX holiday, KILL, DISABLE) and resumes to find `state.token` no longer matches the freshly-resolved effective contract. By this point in `_setup()`, `self._contract` and `self._df_15m` are already the new contract's — no separate prefetch/poll needed, `_setup()`'s own normal flow already did that work.
 
 ```mermaid
 graph TD
@@ -352,119 +286,30 @@ graph TD
 
 ### Missed-Flip Reconciliation (at startup, added 2026-09-11)
 
-`SESSION_END_TIME` now equals `CLOSING_TIME` exactly (no buffer — see the
-Key Parameters table above), so the process is never alive past the real
-close and deliberately never live-processes the day's last, possibly-
-truncated 15m bar via `_handle_new_15m_bar`. `seed_st15()` still recomputes
-that bar's `trend`/`trend_flip` correctly on the next `_setup()` (`compute_st`
-runs over the *whole* series, not just "new" rows) — but nothing used to act
-on it: `_execute_entry`/`_execute_rule7_flip` are only ever called from
-`_handle_new_15m_bar`'s own live boundary-tick path, which never revisits a
-boundary from a prior session. A flip in that unprocessed last bar was
-silently lost — `watching` never entered a position the signal called for,
-or an `in_trade` position sat stale/wrong-direction until some unrelated
-later flip.
+`SESSION_END_TIME` now equals `CLOSING_TIME` exactly (no buffer — see the Key Parameters table above), so the process is never alive past the real close and deliberately never live-processes the day's last, possibly- truncated 15m bar via `_handle_new_15m_bar`. `seed_st15()` still recomputes that bar's `trend`/`trend_flip` correctly on the next `_setup()` (`compute_st` runs over the *whole* series, not just "new" rows) — but nothing used to act on it: `_execute_entry`/`_execute_rule7_flip` are only ever called from `_handle_new_15m_bar`'s own live boundary-tick path, which never revisits a boundary from a prior session. A flip in that unprocessed last bar was silently lost — `watching` never entered a position the signal called for, or an `in_trade` position sat stale/wrong-direction until some unrelated later flip.
 
-Fixed with a persisted watermark, `state.last_processed_boundary` (the
-timestamp of the last 15m boundary `_handle_new_15m_bar` actually processed
-live, advanced unconditionally — flip or not), and `_reconcile_missed_flip()`,
-called from `_setup()` right after the WS feed is subscribed and after
-`_recover_missed_rollover()`:
+Fixed with a persisted watermark, `state.last_processed_boundary` (the timestamp of the last 15m boundary `_handle_new_15m_bar` actually processed live, advanced unconditionally — flip or not), and `_reconcile_missed_flip()`, called from `_setup()` right after the WS feed is subscribed and after `_recover_missed_rollover()`:
 
-- Scans `self._df_15m` for any `trend_flip == True` bar after the watermark.
-  None found (the ordinary case, most restarts) → no-op.
-- One or more found (coalesced to the *latest* only — same "resolve to the
-  correct end state, don't replay every intermediate event" pattern as
-  missed-rollover recovery above; matters for a multi-day gap, e.g. an MCX
-  holiday) → replays exactly the action `_handle_new_15m_bar` would have
-  taken: `in_trade` + opposing direction → `_execute_rule7_flip` (no
-  `_past_min_entry_guard` gate here either, matching the live `in_trade`
-  path); `watching` + entry guards already clear → `_execute_entry`
-  immediately.
-- `watching` but `_past_min_entry_guard` not yet clear (the common case —
-  reconciliation runs at minute zero of the new session) → deferred, not
-  dropped: parked in `self._pending_missed_flip` and retried every tick of
-  `run()`'s main loop by `_retry_pending_missed_flip()` (same shape as §7's
-  `_pending_flip` retry) until the guard clears, or dropped if a fresher
-  live flip already moved `state.status` off `'watching'` without it (no
-  double-entry). The watermark only advances once the entry actually fires.
-- No watermark yet (first run on a fresh state file) → establishes the
-  baseline off the freshly-seeded series' own last bar, takes no retroactive
-  action on however much history `seed_st15` happened to pull.
+- Scans `self._df_15m` for any `trend_flip == True` bar after the watermark. None found (the ordinary case, most restarts) → no-op.
+- One or more found (coalesced to the *latest* only — same "resolve to the correct end state, don't replay every intermediate event" pattern as missed-rollover recovery above; matters for a multi-day gap, e.g. an MCX holiday) → replays exactly the action `_handle_new_15m_bar` would have taken: `in_trade` + opposing direction → `_execute_rule7_flip` (no `_past_min_entry_guard` gate here either, matching the live `in_trade` path); `watching` + entry guards already clear → `_execute_entry` immediately.
+- `watching` but `_past_min_entry_guard` not yet clear (the common case — reconciliation runs at minute zero of the new session) → deferred, not dropped: parked in `self._pending_missed_flip` and retried every tick of `run()`'s main loop by `_retry_pending_missed_flip()` (same shape as §7's `_pending_flip` retry) until the guard clears, or dropped if a fresher live flip already moved `state.status` off `'watching'` without it (no double-entry). The watermark only advances once the entry actually fires.
+- No watermark yet (first run on a fresh state file) → establishes the baseline off the freshly-seeded series' own last bar, takes no retroactive action on however much history `seed_st15` happened to pull.
 
-`place_order()` (`prometheus_functions.py`) independently refuses any
-order — paper or live — once `now` is at/after `CLOSING_TIME`, as the actual
-enforcement point for "never trades after close" (the loop's own hard stop
-above is reinforcement, not the only thing preventing it — DRY_RUN's paper
-fill used to have zero market-hours awareness of its own).
+`place_order()` (`prometheus_functions.py`) independently refuses any order — paper or live — once `now` is at/after `CLOSING_TIME`, as the actual enforcement point for "never trades after close" (the loop's own hard stop above is reinforcement, not the only thing preventing it — DRY_RUN's paper fill used to have zero market-hours awareness of its own).
 
-Tests: `tests/test_prometheus_market_close.py`,
-`tests/test_state_roundtrip.py::TestPrometheusStateRoundtrip`. Full design
-trace: `plans/prometheus-market-close-timing-and-reconciliation.md`.
+Tests: `tests/test_prometheus_market_close.py`, `tests/test_state_roundtrip.py::TestPrometheusStateRoundtrip`. Full design trace: `plans/prometheus-market-close-timing-and-reconciliation.md`.
 
 ---
 
 ## Signal: ST_15
 
-- **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=2.0`) — no regime gate,
-  unlike Iris's dual-timeframe design. `ST_MULTIPLIER` was `3.0` (Phase 2's value, inherited from
-  Iris, never itself calibrated for crude) through Phase 3's first live-test start on 2026-09-04;
-  after confirming that value's live ST matched the chart correctly, changed to `2.0` the same
-  day — Phase 3 was designed for a 2.0-vs-2.5 multiplier, and the user chose 2.0.
-  `prometheus_backtest/phase2/backtest_p2.py`'s own calibration used `3.0`; `2.0` is untested by
-  that backtest.
-- **Seed at startup**: `seed_st15()` combines two sources (§15) — past calendar days from the
-  *shared* MCX data pipeline file (`data_pipeline/data_downloader_mcx.py`, never written by
-  Prometheus), and *today* from Prometheus's own private intraday cache plus a live gap-fetch for
-  whatever the cache doesn't already cover. Resampled to 15-min, gap-checked, ST computed from
-  scratch — refuses to seed across a hole rather than silently computing over one. Wrapped in a
-  bounded retry (`SEED_RETRY_ATTEMPTS=5`, `SEED_RETRY_INTERVAL_SEC=120`) — see Private Intraday
-  Cache below for why this is safe to block on here specifically.
-- **Opening-bar artifact correction** (§11): CRUDEOILM's very first 1-min candle of the session
-  has shown a recurring thin-liquidity price-discovery artifact (7 confirmed instances,
-  2026-03 through 2026-09) that distorts ST's ATR for ~`ST_PERIOD` bars afterward.
-  `_maybe_check_opening_bar()` runs once per session, the first time today's 09:00 row is
-  available, and compares it against a live poll of CRUDEOIL's own 09:00 print (confirmed
-  reliable at that exact minute every time). Gated by `OPENING_BAR_CORRECTION_ENABLED`
-  (**default `False`**) — the check always runs and logs what it would have done, but only
-  patches `self._df_1m_today` in place (before any resample reads it) when the toggle is on.
-  Left off by default so ST accuracy can be validated against the raw, uncorrected broker chart
-  first — not a temporary flag with a removal date, a validation gate.
-- **Live update**: every 1-min boundary, the last 5 minutes are polled and merged into the
-  in-memory today-accumulator (and the private cache, §15); on each 15-min boundary
-  (`minute % 15 == 0`), a fresh 15m bar is built from that window — **but not necessarily
-  immediately** (§12, see below) — appended to the full series, and ST is recomputed over the
-  whole thing (`compute_st`, not incremental — matches the backtest's own computation exactly).
-  Persisted to `data/prometheus_15m_series.csv` after every bar — for inspection/restart-recovery
-  visibility only, never resumed from directly on restart (ST always recomputes fresh from the
-  seeded + accumulated 1-min history).
-- **Deferred-bar computation** (§12): a 15-min boundary tick doesn't compute the bar the instant
-  it arrives — it waits (re-checking every 1-min cycle) until `self._df_1m_today` genuinely has
-  all 15 minutes for that window, up to `DEFERRED_BAR_CUTOFF_MIN=1` minute, before falling back to
-  building it from whatever's on hand with a loud warning. Confirmed live 2026-09-03: an AB1021
-  stretch can span ~60s, and building a bar from a merely-short tail (14/15 present) previously
-  triggered no warning at all — the old `< 8/15` check only caught a much worse case. SL/target
-  monitoring is completely unaffected by the wait either way (`_check_exit_conditions_ltp` runs
-  every tick regardless of whether a 15m bar is pending). Also fixed the underlying resample
-  function's day-end boundary handling in the same pass (§17) — see that section below.
-- **Missing-bar handling**: if the window has zero 1-min bars even after the deferred-bar cutoff,
-  the 15m bar is skipped outright (a gap in the ST series, alerted loudly); if it has fewer than
-  8 of the expected 15, the bar is still built from what's available, also alerted — "no silent
-  staleness."
-- **DPL circuit-limit detection** (§11a, 2026-09-11): MCX's Daily Price Limit mechanism can freeze
-  CRUDEOILM at a fixed price for several minutes, then jump a fixed increment, repeating for
-  several steps (confirmed three times historically: 2026-03-09 a 7-step ladder, 2026-04-08 a
-  4-step ladder, 2026-09-10 a single-step freeze) — badly distorts ST's ATR across the affected
-  bars while it holds. Reads MCX's own live circuit limits directly from AngelOne's REST Quote API
-  (`getMarketData(mode='FULL')` → `upperCircuit`/`lowerCircuit`, confirmed live against real
-  CRUDEOILM data and cross-checked against the WS SNAP_QUOTE fields — exact agreement) rather than
-  inferring a freeze from price patterns — exchange-authoritative, self-updates through every
-  relaxation step, and catches an isolated single-step freeze that an earlier pattern-based
-  approach explicitly could not. `_check_dpl_circuit_hit()` runs every main-loop tick regardless of
-  `state.status`, comparing live LTP against the cached band; `_refresh_dpl_circuit_limits()`
-  re-fetches at startup, on freeze release, and periodically if no band is known yet. **Detect +
-  Slack-alert only** (`#tradebot-updates`) — zero change to any SL/target/ST/entry/exit behavior.
-  `DPL_CIRCUIT_POLL_ENABLED` is a kill switch. Full writeup: `plans/prometheus-phase3-production.md` §11a.
+- **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=2.0`) — no regime gate, unlike Iris's dual-timeframe design. `ST_MULTIPLIER` was `3.0` (Phase 2's value, inherited from Iris, never itself calibrated for crude) through Phase 3's first live-test start on 2026-09-04; after confirming that value's live ST matched the chart correctly, changed to `2.0` the same day — Phase 3 was designed for a 2.0-vs-2.5 multiplier, and the user chose 2.0. `prometheus_backtest/phase2/backtest_p2.py`'s own calibration used `3.0`; `2.0` is untested by that backtest.
+- **Seed at startup**: `seed_st15()` combines two sources (§15) — past calendar days from the *shared* MCX data pipeline file (`data_pipeline/data_downloader_mcx.py`, never written by Prometheus), and *today* from Prometheus's own private intraday cache plus a live gap-fetch for whatever the cache doesn't already cover. Resampled to 15-min, gap-checked, ST computed from scratch — refuses to seed across a hole rather than silently computing over one. Wrapped in a bounded retry (`SEED_RETRY_ATTEMPTS=5`, `SEED_RETRY_INTERVAL_SEC=120`) — see Private Intraday Cache below for why this is safe to block on here specifically.
+- **Opening-bar artifact correction** (§11): CRUDEOILM's very first 1-min candle of the session has shown a recurring thin-liquidity price-discovery artifact (7 confirmed instances, 2026-03 through 2026-09) that distorts ST's ATR for ~`ST_PERIOD` bars afterward. `_maybe_check_opening_bar()` runs once per session, the first time today's 09:00 row is available, and compares it against a live poll of CRUDEOIL's own 09:00 print (confirmed reliable at that exact minute every time). Gated by `OPENING_BAR_CORRECTION_ENABLED` (**default `False`**) — the check always runs and logs what it would have done, but only patches `self._df_1m_today` in place (before any resample reads it) when the toggle is on. Left off by default so ST accuracy can be validated against the raw, uncorrected broker chart first — not a temporary flag with a removal date, a validation gate.
+- **Live update**: every 1-min boundary, the last 5 minutes are polled and merged into the in-memory today-accumulator (and the private cache, §15); on each 15-min boundary (`minute % 15 == 0`), a fresh 15m bar is built from that window — **but not necessarily immediately** (§12, see below) — appended to the full series, and ST is recomputed over the whole thing (`compute_st`, not incremental — matches the backtest's own computation exactly). Persisted to `data/prometheus_15m_series.csv` after every bar — for inspection/restart-recovery visibility only, never resumed from directly on restart (ST always recomputes fresh from the seeded + accumulated 1-min history).
+- **Deferred-bar computation** (§12): a 15-min boundary tick doesn't compute the bar the instant it arrives — it waits (re-checking every 1-min cycle) until `self._df_1m_today` genuinely has all 15 minutes for that window, up to `DEFERRED_BAR_CUTOFF_MIN=1` minute, before falling back to building it from whatever's on hand with a loud warning. Confirmed live 2026-09-03: an AB1021 stretch can span ~60s, and building a bar from a merely-short tail (14/15 present) previously triggered no warning at all — the old `< 8/15` check only caught a much worse case. SL/target monitoring is completely unaffected by the wait either way (`_check_exit_conditions_ltp` runs every tick regardless of whether a 15m bar is pending). Also fixed the underlying resample function's day-end boundary handling in the same pass (§17) — see that section below.
+- **Missing-bar handling**: if the window has zero 1-min bars even after the deferred-bar cutoff, the 15m bar is skipped outright (a gap in the ST series, alerted loudly); if it has fewer than 8 of the expected 15, the bar is still built from what's available, also alerted — "no silent staleness."
+- **DPL circuit-limit detection** (§11a, 2026-09-11): MCX's Daily Price Limit mechanism can freeze CRUDEOILM at a fixed price for several minutes, then jump a fixed increment, repeating for several steps (confirmed three times historically: 2026-03-09 a 7-step ladder, 2026-04-08 a 4-step ladder, 2026-09-10 a single-step freeze) — badly distorts ST's ATR across the affected bars while it holds. Reads MCX's own live circuit limits directly from AngelOne's REST Quote API (`getMarketData(mode='FULL')` → `upperCircuit`/`lowerCircuit`, confirmed live against real CRUDEOILM data and cross-checked against the WS SNAP_QUOTE fields — exact agreement) rather than inferring a freeze from price patterns — exchange-authoritative, self-updates through every relaxation step, and catches an isolated single-step freeze that an earlier pattern-based approach explicitly could not. `_check_dpl_circuit_hit()` runs every main-loop tick regardless of `state.status`, comparing live LTP against the cached band; `_refresh_dpl_circuit_limits()` re-fetches at startup, on freeze release, and periodically if no band is known yet. **Detect + Slack-alert only** (`#tradebot-updates`) — zero change to any SL/target/ST/entry/exit behavior. `DPL_CIRCUIT_POLL_ENABLED` is a kill switch. Full writeup: `plans/prometheus-phase3-production.md` §11a.
 
 ---
 
@@ -479,42 +324,19 @@ Checked in this order on every loop tick while `status == in_trade` (`_check_exi
 | 3 | Lot 2 target | `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3%` of entry |
 | — | Trend flip | Checked separately, only on a 15-min boundary — closes whichever lot(s) remain open AND is itself the entry for the opposite direction, resolved at the same bar ("rule 7") |
 
-**§2, Phase 3: no EOD square-off tier any more.** `configs_p3.py` was never calibrated with one —
-a position is expected to carry across sessions (and, once §4–§9 are built, a contract roll), not
-force-flattened at close.
+**§2, Phase 3: no EOD square-off tier any more.** `configs_p3.py` was never calibrated with one — a position is expected to carry across sessions (and, once §4–§9 are built, a contract roll), not force-flattened at close.
 
-Entries (fresh or rule-7 re-entry) require the session to have genuinely been open for at least
-`MIN_ENTRY_BUFFER_MIN` (15) minutes — **no cutoff before close any more** (§2:
-`LAST_ENTRY_TIME`/`MAX_ENTRY_BEFORE_CLOSE_MIN` are gone, not renamed, matching `configs_p3.py`).
-Fixed 2026-09-04: this used to be a hardcoded `MIN_ENTRY_TIME='09:15'` clock-time check, which
-silently gave zero minutes of protection on the evening-only special sessions (real open 17:00,
-already past 09:15 on the clock) — now keyed off the actual first 1-min bar of today's session
-(`_past_min_entry_guard`), same fix as the first-minute exit guard below.
+Entries (fresh or rule-7 re-entry) require the session to have genuinely been open for at least `MIN_ENTRY_BUFFER_MIN` (15) minutes — **no cutoff before close any more** (§2: `LAST_ENTRY_TIME`/`MAX_ENTRY_BEFORE_CLOSE_MIN` are gone, not renamed, matching `configs_p3.py`). Fixed 2026-09-04: this used to be a hardcoded `MIN_ENTRY_TIME='09:15'` clock-time check, which silently gave zero minutes of protection on the evening-only special sessions (real open 17:00, already past 09:15 on the clock) — now keyed off the actual first 1-min bar of today's session (`_past_min_entry_guard`), same fix as the first-minute exit guard below.
 
-**Rule 7's re-entry is gated on confirmed exit.** `_execute_exit_all` returns `True` only if the
-position ended up genuinely flat; a same-bar opposite-direction entry only fires if that's
-`True`. Firing a fresh entry while the exit itself failed to confirm would mean attempting to
-hold both directions at once against a position with an unknown real state — the exact class of
-bug behind the 2026-08-31 incident (see Status).
+**Rule 7's re-entry is gated on confirmed exit.** `_execute_exit_all` returns `True` only if the position ended up genuinely flat; a same-bar opposite-direction entry only fires if that's `True`. Firing a fresh entry while the exit itself failed to confirm would mean attempting to hold both directions at once against a position with an unknown real state — the exact class of bug behind the 2026-08-31 incident (see Status).
 
 ---
 
 ## Fill-Confirmation Invariant (hard rule, added after a real incident)
 
-`_execute_exit_lot` returns `True` **only** if the exit is genuinely confirmed: a real order ID,
-a real fill, filled quantity > 0. On any failure, that lot's status is left untouched (still
-`open`) — no fabricated fill price, no P&L, no Slack success message. The next tick's exit-check
-(every 0.5–1s) retries automatically; no separate retry loop is needed, and no lie enters the
-state file or trade log.
+`_execute_exit_lot` returns `True` **only** if the exit is genuinely confirmed: a real order ID, a real fill, filled quantity > 0. On any failure, that lot's status is left untouched (still `open`) — no fabricated fill price, no P&L, no Slack success message. The next tick's exit-check (every 0.5–1s) retries automatically; no separate retry loop is needed, and no lie enters the state file or trade log.
 
-This exists because of a real 2026-08-31 incident: a trend-flip exit order failed at the broker
-(`orderid=None`) with no guard against it, and the prior code fabricated a fill from LTP anyway
-— both lots marked closed internally while the real 2-lot long stayed open and unmonitored at
-the broker for ~28 minutes until caught manually. Fixed via a confirmation check that this
-invariant and rule 7's re-entry gate both share. `DRY_RUN` was reverted to `True` the same day
-and has not been flipped back — see Status. (`_teardown()`'s own exit-confirmation check from
-that fix is gone now, not because the invariant weakened, but because §2's no-EOD-flatten change
-means teardown no longer attempts an exit at all in its normal path — see Process Lifecycle.)
+This exists because of a real 2026-08-31 incident: a trend-flip exit order failed at the broker (`orderid=None`) with no guard against it, and the prior code fabricated a fill from LTP anyway — both lots marked closed internally while the real 2-lot long stayed open and unmonitored at the broker for ~28 minutes until caught manually. Fixed via a confirmation check that this invariant and rule 7's re-entry gate both share. `DRY_RUN` was reverted to `True` the same day and has not been flipped back — see Status. (`_teardown()`'s own exit-confirmation check from that fix is gone now, not because the invariant weakened, but because §2's no-EOD-flatten change means teardown no longer attempts an exit at all in its normal path — see Process Lifecycle.)
 
 ---
 
@@ -528,39 +350,21 @@ means teardown no longer attempts an exit at all in its normal path — see Proc
 | Why roll early | Capital efficiency over strict backtest parity — avoids MCX's elevated tender-margin window on energy contracts in a departing contract's final days |
 | ST computation | Per-contract only, never spliced across a roll — a raw price-level jump at the roll boundary would otherwise risk a spurious flip driven by nothing but switching instruments |
 
-**Phase 3 (built 2026-09-04): a position can now genuinely span the roll**, not just the contract
-housekeeping above — see Contract Rollover Mechanics below for the full timeline.
+**Phase 3 (built 2026-09-04): a position can now genuinely span the roll**, not just the contract housekeeping above — see Contract Rollover Mechanics below for the full timeline.
 
 ---
 
 ## Contract Rollover Mechanics (§3–§9, built 2026-09-04)
 
-Phase 2 never had to solve this: positions were always flat by end of day, so whatever
-`resolve_effective_contract()` returned each morning was trivially correct. Phase 3 positions can
-run for days to weeks, so the day the effective contract flips can land in the middle of an open
-trade — nothing above (which only governs *housekeeping* — which contract file/token Prometheus
-tracks) says what happens to a *position* caught mid-roll. This section does.
+Phase 2 never had to solve this: positions were always flat by end of day, so whatever `resolve_effective_contract()` returned each morning was trivially correct. Phase 3 positions can run for days to weeks, so the day the effective contract flips can land in the middle of an open trade — nothing above (which only governs *housekeeping* — which contract file/token Prometheus tracks) says what happens to a *position* caught mid-roll. This section does.
 
-**`state.token` invariant (§3).** While `status == 'in_trade'`, every price read and every order
-keys off `state.token`/`state.symbol` — never `self._contract`, which is consulted only while
-`watching`/entering and to detect an upcoming roll. `_get_ltp()`'s WebSocket branch and `_setup()`'s
-subscription set (which now also subscribes `state.token`'s feed on a resume, if it differs from
-the freshly-resolved contract) both follow this.
+**`state.token` invariant (§3).** While `status == 'in_trade'`, every price read and every order keys off `state.token`/`state.symbol` — never `self._contract`, which is consulted only while `watching`/entering and to detect an upcoming roll. `_get_ltp()`'s WebSocket branch and `_setup()`'s subscription set (which now also subscribes `state.token`'s feed on a resume, if it differs from the freshly-resolved contract) both follow this.
 
-**Evening trigger (§4).** Checked once, at `_setup()`: does *tomorrow's* trading day (walked
-forward via `mcx_holidays.csv`, not a naive `today+1`) resolve to a different contract than
-today's? If so, the roll is confirmed for tonight, and:
-- The recalibrated basis price is precomputed immediately (§8 below) — pure historical lookup, no
-  reason to wait.
-- Fresh and Rule-7 entries are suppressed once the clock reaches `ROLLOVER_TIME` — otherwise a
-  fresh position could open seconds before being flattened straight into the roll.
+**Evening trigger (§4).** Checked once, at `_setup()`: does *tomorrow's* trading day (walked forward via `mcx_holidays.csv`, not a naive `today+1`) resolve to a different contract than today's? If so, the roll is confirmed for tonight, and:
+- The recalibrated basis price is precomputed immediately (§8 below) — pure historical lookup, no reason to wait.
+- Fresh and Rule-7 entries are suppressed once the clock reaches `ROLLOVER_TIME` — otherwise a fresh position could open seconds before being flattened straight into the roll.
 
-**Missed-rollover recovery (§5).** If the process wasn't alive at `ROLLOVER_TIME` (a crash, `KILL`,
-`DISABLE`, an MCX holiday), the next `_setup()` finds `state.token != self._contract['token']` and
-rolls **immediately at today's open** rather than walking into the `state.token` problem above with
-a position on a contract `resolve_effective_contract()` no longer returns. Simpler than the evening
-path: `self._contract` and `self._df_15m` are already the new contract's, freshly resolved and
-seeded by the normal startup flow.
+**Missed-rollover recovery (§5).** If the process wasn't alive at `ROLLOVER_TIME` (a crash, `KILL`, `DISABLE`, an MCX holiday), the next `_setup()` finds `state.token != self._contract['token']` and rolls **immediately at today's open** rather than walking into the `state.token` problem above with a position on a contract `resolve_effective_contract()` no longer returns. Simpler than the evening path: `self._contract` and `self._df_15m` are already the new contract's, freshly resolved and seeded by the normal startup flow.
 
 **The timeline (§6), evening path:**
 
@@ -574,35 +378,11 @@ seeded by the normal startup flow.
 | — | Reopen on the new contract only if go, sized to however many lots actually survived (§8) |
 | — | `self._contract` swapped, rollover state cleared, persisted |
 
-**Rule 7, extended for a stuck partial fill (§7).** The combined-order mechanics (see Rule 7 section
-above) now include a `_pending_flip` marker: if a combined order doesn't fully resolve (`filled` <
-`old_open_lots + new_trade_lots`), the reconciliation applies what *did* fill (lot2 closes before
-lot1 on a partial close — the tie-break decided so the nearer-target lot survives, exiting sooner on
-a favorable reversal) and retries the *remainder* every tick until fully resolved — not gated on a
-fresh 15-min `trend_flip` transition, which only fires once. An immediate CRITICAL alert fires the
-first time it gets stuck, then a debounced re-alert (`PENDING_FLIP_REALERT_DEBOUNCE_SEC=300`) while
-it stays stuck.
+**Rule 7, extended for a stuck partial fill (§7).** The combined-order mechanics (see Rule 7 section above) now include a `_pending_flip` marker: if a combined order doesn't fully resolve (`filled` < `old_open_lots + new_trade_lots`), the reconciliation applies what *did* fill (lot2 closes before lot1 on a partial close — the tie-break decided so the nearer-target lot survives, exiting sooner on a favorable reversal) and retries the *remainder* every tick until fully resolved — not gated on a fresh 15-min `trend_flip` transition, which only fires once. An immediate CRITICAL alert fires the first time it gets stuck, then a debounced re-alert (`PENDING_FLIP_REALERT_DEBOUNCE_SEC=300`) while it stays stuck.
 
-**SL/target recalibration — historical-basis method (§8).** The reopened position's SL/targets are
-computed off what the *new* contract was trading at, at the *same historical timestamp* the
-original entry happened on the *old* contract (`historical_basis_price()`) — preserving the trade's
-progress-so-far, at the cost of an accepted, currently-unvalidated basis-drift risk (explicit user
-call). The real fill price and the recalibration basis are two different numbers, both persisted
-separately (`entry_price` vs. `state.recalibration_basis_price`) — P&L always uses the real fill;
-SL/target *levels* are computed once, off the basis, then persist as ordinary absolute levels. If
-only one lot survived to the roll, the reopened position is sized and targeted as a lone lot2 (the
-farther target), not a fresh lot1+lot2 split. Carrying the position at all is conditional on the
-new contract's ST agreeing with the direction being carried (the veto above) — if it disagrees, the
-position is flattened only, no reopen, exactly like `_execute_rollover_decision`'s no-go path.
+**SL/target recalibration — historical-basis method (§8).** The reopened position's SL/targets are computed off what the *new* contract was trading at, at the *same historical timestamp* the original entry happened on the *old* contract (`historical_basis_price()`) — preserving the trade's progress-so-far, at the cost of an accepted, currently-unvalidated basis-drift risk (explicit user call). The real fill price and the recalibration basis are two different numbers, both persisted separately (`entry_price` vs. `state.recalibration_basis_price`) — P&L always uses the real fill; SL/target *levels* are computed once, off the basis, then persist as ordinary absolute levels. If only one lot survived to the roll, the reopened position is sized and targeted as a lone lot2 (the farther target), not a fresh lot1+lot2 split. Carrying the position at all is conditional on the new contract's ST agreeing with the direction being carried (the veto above) — if it disagrees, the position is flattened only, no reopen, exactly like `_execute_rollover_decision`'s no-go path.
 
-**Trade-log schema (§9).** A rolled trade is two linked rows in `prometheus_trades.csv`, joined by
-a new `parent_trade_id` column: the old-contract leg closes normally (`exit_reason='rollover'`),
-the new-contract leg is an ordinary row except `parent_trade_id` points at the old leg's `trade_id`
-and `direction` carries a `-rollover` suffix (`bullish-rollover`/`bearish-rollover`) — `state.direction`
-itself never does, it stays the plain binary everywhere it drives real logic. A trade that rolls
-and *doesn't* reopen (the veto fired) is just one row with `exit_reason='rollover'` — no second row,
-since nothing reopened. Summing `total_pnl_rs` naively over the file double-counts a rolled trade's
-continuation unless grouped by `parent_trade_id` — a documented convention, not solved structurally.
+**Trade-log schema (§9).** A rolled trade is two linked rows in `prometheus_trades.csv`, joined by a new `parent_trade_id` column: the old-contract leg closes normally (`exit_reason='rollover'`), the new-contract leg is an ordinary row except `parent_trade_id` points at the old leg's `trade_id` and `direction` carries a `-rollover` suffix (`bullish-rollover`/`bearish-rollover`) — `state.direction` itself never does, it stays the plain binary everywhere it drives real logic. A trade that rolls and *doesn't* reopen (the veto fired) is just one row with `exit_reason='rollover'` — no second row, since nothing reopened. Summing `total_pnl_rs` naively over the file double-counts a rolled trade's continuation unless grouped by `parent_trade_id` — a documented convention, not solved structurally.
 
 ---
 
@@ -626,10 +406,7 @@ State is persisted to `data/prometheus_state.csv` on every change (atomic tmp-re
 | `lot1_exit_*` / `lot2_exit_*` | price, timestamp, reason — set only on a confirmed fill |
 | `last_known_ltp` | most recent LTP, for restart recovery and session-report fallback |
 
-**On restart mid-trade**: `_setup()` reconstructs `_pending_trade_row` from the persisted state
-(so a crash doesn't lose `trade_id`/entry fields when the trade eventually closes) and posts a
-loud Slack notice — the resumed state is trusted as-is, **not** reconciled against the broker's
-actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 discussion).
+**On restart mid-trade**: `_setup()` reconstructs `_pending_trade_row` from the persisted state (so a crash doesn't lose `trade_id`/entry fields when the trade eventually closes) and posts a loud Slack notice — the resumed state is trusted as-is, **not** reconciled against the broker's actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 discussion).
 
 ---
 
@@ -647,73 +424,27 @@ actual order book (a flagged gap, same as Iris/Athena today; see the plan's §4 
 | `data/prometheus_today_1m.csv` | Private intraday 1-min cache (§15) — Prometheus-only, persists across same-day restarts, self-prunes to today's rows on read (2026-09-07) |
 | `logs/prometheus_YYYYMMDD.log` | Daily rotating log |
 
-**`EXIT`** liquidates any open position and **re-arms to `watching`** — it does NOT terminate the
-session (changed 2026-09-08). The original liquidate-and-terminate design was copied from
-Artemis/Athena, where a manual exit meant waiting days for the next scheduled weekly entry
-regardless, so ending the session cost nothing. Prometheus re-enters continuously off ST_15 flips,
-so an operator who exits a trade on a chart-read judgment call (confident it's about to fail) still
-wants the bot alive and watching for the next signal, not stopped until manually restarted. Once
-`_execute_exit_all` confirms the position is fully flat, `_check_command_flag` self-clears
-`prometheus_command.flag` (nothing else consumes it) and lets the main loop continue; if the exit
-doesn't confirm that tick, state and the flag are both left untouched so the next tick retries
-automatically, the same invariant `_execute_exit_lot` already relies on for the SL/target path.
+**`EXIT`** liquidates any open position and **re-arms to `watching`** — it does NOT terminate the session (changed 2026-09-08). The original liquidate-and-terminate design was copied from Artemis/Athena, where a manual exit meant waiting days for the next scheduled weekly entry regardless, so ending the session cost nothing. Prometheus re-enters continuously off ST_15 flips, so an operator who exits a trade on a chart-read judgment call (confident it's about to fail) still wants the bot alive and watching for the next signal, not stopped until manually restarted. Once `_execute_exit_all` confirms the position is fully flat, `_check_command_flag` self-clears `prometheus_command.flag` (nothing else consumes it) and lets the main loop continue; if the exit doesn't confirm that tick, state and the flag are both left untouched so the next tick retries automatically, the same invariant `_execute_exit_lot` already relies on for the SL/target path.
 
-**`KILL`** drops control immediately and leaves any open position **untouched** — deliberately, per
-its own promised contract ("Control dropped. Position remains OPEN.") — `_teardown()` checks
-`_kill_no_exit` and skips straight to stopping the feed, no exit attempt, no cache clear (a
-same-day restart after KILL should still get the cache's benefit). Unlike `EXIT`, `KILL` still
-terminates the session — its whole point is dropping control for manual handling.
+**`KILL`** drops control immediately and leaves any open position **untouched** — deliberately, per its own promised contract ("Control dropped. Position remains OPEN.") — `_teardown()` checks `_kill_no_exit` and skips straight to stopping the feed, no exit attempt, no cache clear (a same-day restart after KILL should still get the cache's benefit). Unlike `EXIT`, `KILL` still terminates the session — its whole point is dropping control for manual handling.
 
-**`DISABLE`** is a startup-only gate, checked in `main()` before the `Prometheus` object is even
-constructed.
+**`DISABLE`** is a startup-only gate, checked in `main()` before the `Prometheus` object is even constructed.
 
-**§2, Phase 3: teardown's normal path no longer force-exits an open position at all.** Where
-Phase 2 always flattened at session end, Phase 3 leaves it open — that's the expected shape most
-days (§3 of the plan: positions can span a contract roll). The only exits that happen are the
-ones already firing during `run()` itself (SL/target/trend-flip); teardown just stops the feed,
-clears the private cache, saves state as-is, and reports.
+**§2, Phase 3: teardown's normal path no longer force-exits an open position at all.** Where Phase 2 always flattened at session end, Phase 3 leaves it open — that's the expected shape most days (§3 of the plan: positions can span a contract roll). The only exits that happen are the ones already firing during `run()` itself (SL/target/trend-flip); teardown just stops the feed, clears the private cache, saves state as-is, and reports.
 
-**Slack delivery on shutdown, `_slack_flush()`.** `_slack()` only enqueues a message; a single
-daemon worker thread (`_slack_worker`, 2026-09-08 — replaced one throwaway thread per message to
-fix a lot1/lot2/total delivery-order race) actually sends it. Being daemon means nothing keeps
-that thread alive once the main thread finishes, so a message still queued or mid-send at that
-instant is silently dropped — and `_send_session_report()` is always the LAST `_slack()` call in
-`_teardown()`, itself the last thing `run()` does before `main()`'s `finally` block exits the
-process. Bug caught 2026-09-10: the session report never arrived one night, lost to exactly this
-race. `main()`'s `finally` now calls `_slack_flush()` — blocks (up to 10s) via `queue.join()`
-until every queued send has actually returned — right before the process exits, on every shutdown
-path (session end, SIGTERM/KILL, unhandled exception).
+**Slack delivery on shutdown, `_slack_flush()`.** `_slack()` only enqueues a message; a single daemon worker thread (`_slack_worker`, 2026-09-08 — replaced one throwaway thread per message to fix a lot1/lot2/total delivery-order race) actually sends it. Being daemon means nothing keeps that thread alive once the main thread finishes, so a message still queued or mid-send at that instant is silently dropped — and `_send_session_report()` is always the LAST `_slack()` call in `_teardown()`, itself the last thing `run()` does before `main()`'s `finally` block exits the process. Bug caught 2026-09-10: the session report never arrived one night, lost to exactly this race. `main()`'s `finally` now calls `_slack_flush()` — blocks (up to 10s) via `queue.join()` until every queued send has actually returned — right before the process exits, on every shutdown path (session end, SIGTERM/KILL, unhandled exception).
 
-**Startup Slack sequence** (`#tradebot-updates`, extended 2026-09-11): login attempt → login
-success (client code shown) → "starting, trading `<symbol>`" (now includes the session's own
-`SESSION_START_TIME`–`CLOSING_TIME` window, since `CLOSING_TIME` is auto-computed and DST-
-dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST
-value, not just trend direction) → today's DPL circuit band (§11a, above).
+**Startup Slack sequence** (`#tradebot-updates`, extended 2026-09-11): login attempt → login success (client code shown) → "starting, trading `<symbol>`" (now includes the session's own `SESSION_START_TIME`–`CLOSING_TIME` window, since `CLOSING_TIME` is auto-computed and DST- dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST value, not just trend direction) → today's DPL circuit band (§11a, above).
 
-**Shutdown Slack sequence** (`#tradebot-updates`, extended 2026-09-11): the relevant "stopped"
-message (one of three, per branch — Kill Switch / position-left-open / plain stop) → "Angel One
-logged off successfully" → the session report. `_confirm_logoff()` moved the actual
-`terminateSession()` call from `main()`'s `finally` into `_teardown()` itself, right before each
-`_send_session_report()` call, so the confirmation is tied to a real, confirmed logoff — symmetric
-with the startup login-attempt/login-success messages above. `main()`'s `finally` still calls
-`terminateSession()` too, as a defensive fallback for the one path that skips `_teardown()`
-entirely (`_setup()` returning `False` before `run()`'s `try` block is ever entered) — a second
-call on an already-terminated session is a harmless no-op.
+**Shutdown Slack sequence** (`#tradebot-updates`, extended 2026-09-11): the relevant "stopped" message (one of three, per branch — Kill Switch / position-left-open / plain stop) → "Angel One logged off successfully" → the session report. `_confirm_logoff()` moved the actual `terminateSession()` call from `main()`'s `finally` into `_teardown()` itself, right before each `_send_session_report()` call, so the confirmation is tied to a real, confirmed logoff — symmetric with the startup login-attempt/login-success messages above. `main()`'s `finally` still calls `terminateSession()` too, as a defensive fallback for the one path that skips `_teardown()` entirely (`_setup()` returning `False` before `run()`'s `try` block is ever entered) — a second call on an already-terminated session is a harmless no-op.
 
-**Session report date-qualification** (`_send_session_report`, fixed 2026-09-11): Phase 3
-positions can span multiple sessions (§2, no EOD flatten) — an entry/exit on a different calendar
-day than the report's own date used to print bare `HH:MM`, making e.g. a 22:15 entry the previous
-day indistinguishable from a same-day 22:15 entry (user-caught against a real report). A local
-`_ts_str()` helper now qualifies with the date (`DD-Mon HH:MM`) only when it differs from the
-report's own date — the common same-day case is unchanged.
+**Session report date-qualification** (`_send_session_report`, fixed 2026-09-11): Phase 3 positions can span multiple sessions (§2, no EOD flatten) — an entry/exit on a different calendar day than the report's own date used to print bare `HH:MM`, making e.g. a 22:15 entry the previous day indistinguishable from a same-day 22:15 entry (user-caught against a real report). A local `_ts_str()` helper now qualifies with the date (`DD-Mon HH:MM`) only when it differs from the report's own date — the common same-day case is unchanged.
 
 ---
 
 ## Guardian Check
 
-Prometheus refuses to start if Apollo, Athena, Artemis, or Iris has an open position (shared
-Angel One account, shared rate-limit budget — a second concurrent login can disrupt an already-
-running session). Symmetric with Iris's own guardian check against the other three.
+Prometheus refuses to start if Apollo, Athena, Artemis, or Iris has an open position (shared Angel One account, shared rate-limit budget — a second concurrent login can disrupt an already- running session). Symmetric with Iris's own guardian check against the other three.
 
 ---
 
@@ -758,35 +489,15 @@ running session). Symmetric with Iris's own guardian check against the other thr
 
 ## Position-Sizing Capacity: Liquidity & Slippage (2026-09-07)
 
-Before scaling `STATIC_UNITS`/`DYNAMIC_SIZING` up from go-live's `1`, a volume/participation
-analysis was run against CRUDEOILM's own 1-min history to gauge how much real market depth backs
-each additional lot — the backtest's own P&L is cost-free (`SLIPPAGE_ENABLED=False` throughout,
-`prometheus_backtest/`), so it says nothing about fill quality at size on its own.
+Before scaling `STATIC_UNITS`/`DYNAMIC_SIZING` up from go-live's `1`, a volume/participation analysis was run against CRUDEOILM's own 1-min history to gauge how much real market depth backs each additional lot — the backtest's own P&L is cost-free (`SLIPPAGE_ENABLED=False` throughout, `prometheus_backtest/`), so it says nothing about fill quality at size on its own.
 
-**Units check, done first.** `getCandleData`'s `volume` field is confirmed to be lots/contracts,
-not underlying barrels — CRUDEOILM (`LOT_SIZE`=10 bbl) and CRUDEOIL (100 bbl) print comparable
-per-minute volume magnitudes at identical timestamps, which wouldn't hold if the field were
-barrels (the 100-bbl contract's lot would then need to print ~10x the figure for comparable
-participation). Every number below is in lots, directly comparable to `STATIC_UNITS`/an order size.
+**Units check, done first.** `getCandleData`'s `volume` field is confirmed to be lots/contracts, not underlying barrels — CRUDEOILM (`LOT_SIZE`=10 bbl) and CRUDEOIL (100 bbl) print comparable per-minute volume magnitudes at identical timestamps, which wouldn't hold if the field were barrels (the 100-bbl contract's lot would then need to print ~10x the figure for comparable participation). Every number below is in lots, directly comparable to `STATIC_UNITS`/an order size.
 
-**Method.** Participation measured on the 1-min bar starting at each 15-min mark (:00/:15/:30/:45,
-from `MIN_ENTRY_BUFFER_MIN`'s effective start onward) — the bar an ST_15-triggered Rule 7 order
-actually fills against — across CRUDEOILM's full 6.5-month history (8,594 boundary-minutes).
-Whole-session averages would flatter the picture; this doesn't.
+**Method.** Participation measured on the 1-min bar starting at each 15-min mark (:00/:15/:30/:45, from `MIN_ENTRY_BUFFER_MIN`'s effective start onward) — the bar an ST_15-triggered Rule 7 order actually fills against — across CRUDEOILM's full 6.5-month history (8,594 boundary-minutes). Whole-session averages would flatter the picture; this doesn't.
 
-**Result:** median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin
-minute). At 50 lots, median participation is 32.68% of that minute's own volume, and 5,770 of
-8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is meaningfully
-time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median (204 vs. 96
-lots). Tick size is 1.0 (all OHLC prints are whole numbers) → 1 tick = ₹10/lot on CRUDEOILM.
+**Result:** median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin minute). At 50 lots, median participation is 32.68% of that minute's own volume, and 5,770 of 8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is meaningfully time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median (204 vs. 96 lots). Tick size is 1.0 (all OHLC prints are whole numbers) → 1 tick = ₹10/lot on CRUDEOILM.
 
-**Slippage, framed in ticks, not a modeled ₹ figure.** No square-root-impact coefficient is
-applied — an uncalibrated constant against real volume data produces a number that looks derived
-without being one. Grounded read: at single-digit-to-teens lots, comfortably inside the spread
-most of the time. Past ~20-30% participation (roughly 30-50 lots per the table below), expect to
-reliably cross the spread and likely walk 1-2 ticks beyond (₹10-20/lot) on the worse-liquidity
-minutes; past ~100 lots, plan for multi-tick slippage and likely order-splitting well before MCX's
-1,000-lot freeze limit (`freeze_qty=10000` underlying units / `LOT_SIZE=10`).
+**Slippage, framed in ticks, not a modeled ₹ figure.** No square-root-impact coefficient is applied — an uncalibrated constant against real volume data produces a number that looks derived without being one. Grounded read: at single-digit-to-teens lots, comfortably inside the spread most of the time. Past ~20-30% participation (roughly 30-50 lots per the table below), expect to reliably cross the spread and likely walk 1-2 ticks beyond (₹10-20/lot) on the worse-liquidity minutes; past ~100 lots, plan for multi-tick slippage and likely order-splitting well before MCX's 1,000-lot freeze limit (`freeze_qty=10000` underlying units / `LOT_SIZE=10`).
 
 | Order size (lots) | Median participation | p10 | Boundary-minutes ≥20% participation |
 |---:|---:|---:|---:|
@@ -796,114 +507,45 @@ minutes; past ~100 lots, plan for multi-tick slippage and likely order-splitting
 | 50 | 32.68% | 8.40% | 5,770 |
 | 100 | 65.36% | 16.81% | 7,443 |
 
-**Decision (2026-09-07):** current capital supports scaling to 50 lots, approached gradually, with
-1-2 ticks of worst-case slippage on thin minutes accepted as the cost of that size. No code change
-was needed to act on this — `resolve_live_sizing()` (below) already applies a `STATIC_UNITS`/
-`DYNAMIC_SIZING` change live on the very next entry, so scaling is purely a configs/Slack action.
+**Decision (2026-09-07):** current capital supports scaling to 50 lots, approached gradually, with 1-2 ticks of worst-case slippage on thin minutes accepted as the cost of that size. No code change was needed to act on this — `resolve_live_sizing()` (below) already applies a `STATIC_UNITS`/ `DYNAMIC_SIZING` change live on the very next entry, so scaling is purely a configs/Slack action.
 
-Full methodology, the complete participation table, and the Risk-of-Ruin simulation this feeds
-into (40%-drawdown ruin threshold, 0.00% P(ruin) at 50-unit sizing across 20,000 simulated 2-year
-paths) are in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis"
-and "Risk of Ruin at 50-unit sizing" sections.
+Full methodology, the complete participation table, and the Risk-of-Ruin simulation this feeds into (40%-drawdown ruin threshold, 0.00% P(ruin) at 50-unit sizing across 20,000 simulated 2-year paths) are in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis" and "Risk of Ruin at 50-unit sizing" sections.
 
 ---
 
 ## Resilient Order Execution (§1)
 
-`place_order()` was ported from Athena's `_place_order` pattern (`athena_engine.py`) 2026-09-04 —
-the original single-`try`/`except` version (Iris's simpler pattern, ported for Phase 2) didn't do
-any of this:
+`place_order()` was ported from Athena's `_place_order` pattern (`athena_engine.py`) 2026-09-04 — the original single-`try`/`except` version (Iris's simpler pattern, ported for Phase 2) didn't do any of this:
 
-1. **Freeze-limit quantity splitting** — chunks a request bigger than the broker will accept in
-   one order into several, each placed separately. `freeze_qty` is read live off the resolved
-   contract (`resolve_effective_contract()`'s own dict, sourced from
-   `data_pipeline/data/mcx_instrument_master.csv`), not a hardcoded constant like the other four
-   strategies' `QTY_FREEZE` — MCX freeze quantities are set per-commodity. Confirmed
-   `freeze_qty=10000` for CRUDEOILM (`lotsize=10`) → up to 1000 lots per order; today's 2-4 lot
-   sizing never exercises the split.
-2. **Rejection retry** — an actual `'rejected'` broker response retries up to
-   `REJECTION_RETRY_ATTEMPTS` times before giving up on that chunk.
-3. **Ghost-order recovery** — on `DataException`/`NetworkException` specifically (a lost
-   response, not necessarily a lost order), checks the order book for a matching order (same
-   symbol/type/quantity, recently updated, not already claimed by this run) before assuming
-   nothing happened and retrying placement — avoids a genuine double-fill on a network blip.
+1. **Freeze-limit quantity splitting** — chunks a request bigger than the broker will accept in one order into several, each placed separately. `freeze_qty` is read live off the resolved contract (`resolve_effective_contract()`'s own dict, sourced from `data_pipeline/data/mcx_instrument_master.csv`), not a hardcoded constant like the other four strategies' `QTY_FREEZE` — MCX freeze quantities are set per-commodity. Confirmed `freeze_qty=10000` for CRUDEOILM (`lotsize=10`) → up to 1000 lots per order; today's 2-4 lot sizing never exercises the split.
+2. **Rejection retry** — an actual `'rejected'` broker response retries up to `REJECTION_RETRY_ATTEMPTS` times before giving up on that chunk.
+3. **Ghost-order recovery** — on `DataException`/`NetworkException` specifically (a lost response, not necessarily a lost order), checks the order book for a matching order (same symbol/type/quantity, recently updated, not already claimed by this run) before assuming nothing happened and retrying placement — avoids a genuine double-fill on a network blip.
 
-**Returns a LIST of order IDs, not one.** `get_fill_price_and_qty()` aggregates fill
-quantity/value across the whole list (summed, then a blended average price) before returning —
-mirrors Athena's `_fetch_order_details`. At today's sizing this list always has one element and
-the aggregation degenerates to the original single-order behavior.
+**Returns a LIST of order IDs, not one.** `get_fill_price_and_qty()` aggregates fill quantity/value across the whole list (summed, then a blended average price) before returning — mirrors Athena's `_fetch_order_details`. At today's sizing this list always has one element and the aggregation degenerates to the original single-order behavior.
 
 `get_fill_price_and_qty()`'s own two-path approach is otherwise unchanged from Phase 2:
-1. **Fast path**: `OrderFillWatcher` (WebSocket `SmartWebSocketOrderUpdate`) — resolves as soon
-   as every order ID in the list is confirmed
+1. **Fast path**: `OrderFillWatcher` (WebSocket `SmartWebSocketOrderUpdate`) — resolves as soon as every order ID in the list is confirmed
 2. **Fallback**: REST order-book poll if WS doesn't confirm within `ORDER_TIMEOUT_SEC`
 3. **DRY_RUN**: returns the current feed LTP immediately (no order placed)
 
-**Partial fills** (fewer lots filled than requested) are treated as an intentional smaller
-trade — lot 2 simply may never open, and is never retried (retrying introduces its own
-entry-price-drift risk). If some chunks of a multi-chunk order fill and others time out
-(unreachable at today's sizing, since chunking never fires), that's treated as a hard failure
-rather than a partial-across-orders reconciliation — consistent with "never fabricate, never
-guess."
+**Partial fills** (fewer lots filled than requested) are treated as an intentional smaller trade — lot 2 simply may never open, and is never retried (retrying introduces its own entry-price-drift risk). If some chunks of a multi-chunk order fill and others time out (unreachable at today's sizing, since chunking never fires), that's treated as a hard failure rather than a partial-across-orders reconciliation — consistent with "never fabricate, never guess."
 
 ---
 
 ## Private Intraday Cache (§15)
 
-Prometheus maintains its own 1-min OHLCV cache, `data/prometheus_today_1m.csv` — separate from
-the shared MCX contract CSV `data_downloader_mcx.py` maintains, which Prometheus stopped writing
-to entirely (2026-09-04). Nothing else reads or writes this file, so none of the write-race/
-single-source-of-truth reasoning that removed Prometheus's writes to the *shared* file applies to
-it.
+Prometheus maintains its own 1-min OHLCV cache, `data/prometheus_today_1m.csv` — separate from the shared MCX contract CSV `data_downloader_mcx.py` maintains, which Prometheus stopped writing to entirely (2026-09-04). Nothing else reads or writes this file, so none of the write-race/ single-source-of-truth reasoning that removed Prometheus's writes to the *shared* file applies to it.
 
-- **Written incrementally**: every 1-min poll (`_merge_1m`) appends to it, same merge-dedup
-  logic (`_merge_and_save`) the shared file uses. Every row also carries a `token` column
-  (2026-09-07), stamped with whichever contract wrote it.
-- **Read on startup**: `seed_st15` reads the cache for today's data and only live-fetches the
-  *gap* since its last row — a mid-day crash-restart goes from "re-fetch the whole session" to
-  "re-fetch a few minutes."
-- **No longer cleared at teardown (amended 2026-09-07)** — it used to be, every normal stop,
-  which meant even a routine mid-session restart had to re-fetch the *whole* elapsed day from
-  scratch instead of a small gap (observed live: a 09:21 restart re-fetching 09:00→09:21 hit the
-  AB1021 rate limit and stalled seeding ~2 more minutes with an open position's exit monitoring
-  not yet subscribed). Now a same-day restart genuinely reuses whatever's on disk.
-- **Self-prunes on read instead** (`read_today_cache`): the first read each day rewrites the file
-  down to just that day's own rows (by date), bounding disk growth now that nothing wipes it
-  nightly. Also filters on `token` — required by every caller — so a restart that re-resolves a
-  *different* contract than what's currently cached (a flat restart after a same-day early
-  rollover switch, see §18) can't silently seed off a mismatched contract's cached prices; a
-  token mismatch just falls back to a live gap-fetch, same as a cold cache, and self-heals within
-  the same setup call once the rollover check re-runs. The prune itself only ever discards rows
-  failing the *date* filter, never the *token* filter — a same-day row for a contract nobody
-  asked for this particular read stays on disk for whoever legitimately wants it next.
-- **Rewritten wholesale on every in-session contract switch** (`_rewrite_today_cache_for_switch`,
-  called by every §18 rollover path plus §6's own evening-triggered one) — the cache must never
-  hold a mix of the old and new contract's rows under one "today" file; a switch replaces it
-  entirely with the new contract's own series, re-tagged with its token.
-- **Date-and-token-filtered on every read** (`read_today_cache`) as the safety net for all of the
-  above — even an ungraceful crash that skips a rewrite can't leave a stale or wrong-contract
-  cache silently misread as today's data. A cache file predating the `token` column has no way to
-  know its rows' provenance and is discarded wholesale on first read (one gap-fetch, same cost as
-  any empty-cache day) — the one-time migration cost of this 2026-09-07 change.
+- **Written incrementally**: every 1-min poll (`_merge_1m`) appends to it, same merge-dedup logic (`_merge_and_save`) the shared file uses. Every row also carries a `token` column (2026-09-07), stamped with whichever contract wrote it.
+- **Read on startup**: `seed_st15` reads the cache for today's data and only live-fetches the *gap* since its last row — a mid-day crash-restart goes from "re-fetch the whole session" to "re-fetch a few minutes."
+- **No longer cleared at teardown (amended 2026-09-07)** — it used to be, every normal stop, which meant even a routine mid-session restart had to re-fetch the *whole* elapsed day from scratch instead of a small gap (observed live: a 09:21 restart re-fetching 09:00→09:21 hit the AB1021 rate limit and stalled seeding ~2 more minutes with an open position's exit monitoring not yet subscribed). Now a same-day restart genuinely reuses whatever's on disk.
+- **Self-prunes on read instead** (`read_today_cache`): the first read each day rewrites the file down to just that day's own rows (by date), bounding disk growth now that nothing wipes it nightly. Also filters on `token` — required by every caller — so a restart that re-resolves a *different* contract than what's currently cached (a flat restart after a same-day early rollover switch, see §18) can't silently seed off a mismatched contract's cached prices; a token mismatch just falls back to a live gap-fetch, same as a cold cache, and self-heals within the same setup call once the rollover check re-runs. The prune itself only ever discards rows failing the *date* filter, never the *token* filter — a same-day row for a contract nobody asked for this particular read stays on disk for whoever legitimately wants it next.
+- **Rewritten wholesale on every in-session contract switch** (`_rewrite_today_cache_for_switch`, called by every §18 rollover path plus §6's own evening-triggered one) — the cache must never hold a mix of the old and new contract's rows under one "today" file; a switch replaces it entirely with the new contract's own series, re-tagged with its token.
+- **Date-and-token-filtered on every read** (`read_today_cache`) as the safety net for all of the above — even an ungraceful crash that skips a rewrite can't leave a stale or wrong-contract cache silently misread as today's data. A cache file predating the `token` column has no way to know its rows' provenance and is discarded wholesale on first read (one gap-fetch, same cost as any empty-cache day) — the one-time migration cost of this 2026-09-07 change.
 
-A real, pre-existing bug in `_merge_and_save` was found and fixed while wiring this in: writing
-to the same file twice in a row (on-disk rows re-parsed to a fixed-offset tz, freshly-localized
-new rows to a named-zone tz — numerically identical, different pandas dtypes) silently turned the
-older rows into `NaT` on the second write. This affected the shared per-contract files too
-(`backfill_contract_if_needed`'s multi-chunk backfills), not just this new cache — fixed by
-normalizing both sides to tz-naive before concatenating.
+A real, pre-existing bug in `_merge_and_save` was found and fixed while wiring this in: writing to the same file twice in a row (on-disk rows re-parsed to a fixed-offset tz, freshly-localized new rows to a named-zone tz — numerically identical, different pandas dtypes) silently turned the older rows into `NaT` on the second write. This affected the shared per-contract files too (`backfill_contract_if_needed`'s multi-chunk backfills), not just this new cache — fixed by normalizing both sides to tz-naive before concatenating.
 
-**A second, related tz bug — caught live, first real Delos run of Phase 3 (2026-09-04):**
-`fetch_one_minute_window` parses the broker's `+05:30`-suffixed timestamps with a format string
-that includes `%z`, so its output was tz-**aware** (fixed offset), while every other in-memory
-series in this file (`_tail_read_contract_csv`, `read_today_cache`, `_df_1m_today`) is tz-naive.
-Three of five call sites already stripped this defensively right after calling it —
-`seed_st15`'s own gap-fetch (`prometheus_functions.py`) didn't, so on the very first live run (a
-fresh, empty private cache) the live gap-fetch's tz-aware rows collided with the shared
-pipeline's tz-naive past-days rows on the next concat: `TypeError: Cannot compare tz-naive and
-tz-aware timestamps`, crashing `_setup()` before the session even reached the main loop. Fixed at
-the source — `fetch_one_minute_window` itself now strips tz to naive before returning — so every
-caller gets consistent naive timestamps without needing to remember to do it themselves.
+**A second, related tz bug — caught live, first real Delos run of Phase 3 (2026-09-04):** `fetch_one_minute_window` parses the broker's `+05:30`-suffixed timestamps with a format string that includes `%z`, so its output was tz-**aware** (fixed offset), while every other in-memory series in this file (`_tail_read_contract_csv`, `read_today_cache`, `_df_1m_today`) is tz-naive. Three of five call sites already stripped this defensively right after calling it — `seed_st15`'s own gap-fetch (`prometheus_functions.py`) didn't, so on the very first live run (a fresh, empty private cache) the live gap-fetch's tz-aware rows collided with the shared pipeline's tz-naive past-days rows on the next concat: `TypeError: Cannot compare tz-naive and tz-aware timestamps`, crashing `_setup()` before the session even reached the main loop. Fixed at the source — `fetch_one_minute_window` itself now strips tz to naive before returning — so every caller gets consistent naive timestamps without needing to remember to do it themselves.
 
 ---
 
@@ -930,18 +572,7 @@ rm prometheus_production/data/prometheus_active.flag
 
 ## Backtest Reference
 
-See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration
-journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate**
-(`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`,
-`TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show.
-`TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase
-3 caveat #1) — this is Prometheus's final exit configuration for now; table below refreshed
-2026-09-11 under a corrected backtest simulator (`prometheus_backtest/refresh_pipeline.py` plus a
-same-day fix — see that repo's "Backtest/production timing-guard parity fix" for what changed and
-why; T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the fix,
-not overturned), then again the same day under a deliberate drawdown-methodology change (per-trade
-instead of per-lot-exit — see `prometheus_backtest/README.md`'s "Drawdown methodology: per-trade,
-not per-lot-exit" for the reasoning).
+See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate** (`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show. `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase 3 caveat #1) — this is Prometheus's final exit configuration for now; table below refreshed 2026-09-11 under a corrected backtest simulator (`prometheus_backtest/refresh_pipeline.py` plus a same-day fix — see that repo's "Backtest/production timing-guard parity fix" for what changed and why; T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the fix, not overturned), then again the same day under a deliberate drawdown-methodology change (per-trade instead of per-lot-exit — see `prometheus_backtest/README.md`'s "Drawdown methodology: per-trade, not per-lot-exit" for the reasoning).
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
@@ -953,159 +584,36 @@ not per-lot-exit" for the reasoning).
 | Calmar | 14.76 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
 | Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-11 under the per-trade drawdown methodology** — Calmar 9.47, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
-Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no
-entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting
-for that structural difference; Calmar is the fairer cross-phase comparison.
+Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting for that structural difference; Calmar is the fairer cross-phase comparison.
 
 ---
 
 ## Status
 
-- [x] Effective-contract resolution — exchange front-month with 5-trading-day-early roll, plus
-      `freeze_qty` read live off the instrument master (§1)
-- [x] ST_15 seeding — past days from the shared pipeline file, today from the private cache + live
-      gap-fetch, gap-checked, bounded blocking startup retry (§15)
+- [x] Effective-contract resolution — exchange front-month with 5-trading-day-early roll, plus `freeze_qty` read live off the instrument master (§1)
+- [x] ST_15 seeding — past days from the shared pipeline file, today from the private cache + live gap-fetch, gap-checked, bounded blocking startup retry (§15)
 - [x] Resilient 1-min polling — inner retry + non-blocking outer recovery queue
-- [x] Deferred 15m-bar computation — waits up to `DEFERRED_BAR_CUTOFF_MIN` for a genuinely
-      complete window before building from what's on hand (§12); underlying resample function's
-      day-end boundary bug fixed in the same pass (§17)
-- [x] Opening-bar price-artifact correction — built, gated `OPENING_BAR_CORRECTION_ENABLED=False`
-      pending chart validation (§11)
+- [x] Deferred 15m-bar computation — waits up to `DEFERRED_BAR_CUTOFF_MIN` for a genuinely complete window before building from what's on hand (§12); underlying resample function's day-end boundary bug fixed in the same pass (§17)
+- [x] Opening-bar price-artifact correction — built, gated `OPENING_BAR_CORRECTION_ENABLED=False` pending chart validation (§11)
 - [x] 2-lot scale-out entry — partial-fill aware, lot 2 never retried if it doesn't fill
-- [x] Three exit conditions — SL, lot1 target, lot2 target, plus trend-flip (Rule 7 — now a single
-      combined net order for the exit+re-entry, not the old two/three-order sequence, §7). **No EOD
-      square-off any more** (§2) — a position carries across sessions
+- [x] Three exit conditions — SL, lot1 target, lot2 target, plus trend-flip (Rule 7 — now a single combined net order for the exit+re-entry, not the old two/three-order sequence, §7). **No EOD square-off any more** (§2) — a position carries across sessions
 - [x] Fill-confirmation invariant — no lot is ever marked closed without a genuine confirmed fill
-- [x] Resilient order execution — freeze-limit chunking, rejection retry, ghost-order recovery,
-      list-based order IDs aggregated on fill (§1)
-- [x] Realised/unrealised/total P&L reporting — both the periodic Slack update and the
-      session-report "still open" fallback (§13)
+- [x] Resilient order execution — freeze-limit chunking, rejection retry, ghost-order recovery, list-based order IDs aggregated on fill (§1)
+- [x] Realised/unrealised/total P&L reporting — both the periodic Slack update and the session-report "still open" fallback (§13)
 - [x] ST seed skip-list — `ST_SEED_SKIP_DATES` for known-bad sessions (§14)
-- [x] `state.token` invariant — `_get_ltp()` now keys off the position's own token, not whichever
-      contract is currently "effective" (§3, ahead of rollover landing)
+- [x] `state.token` invariant — `_get_ltp()` now keys off the position's own token, not whichever contract is currently "effective" (§3, ahead of rollover landing)
 - [x] State persistence — atomic CSV write, mid-trade restart recovery (not yet broker-reconciled)
 - [x] Guardian check — blocks start if another strategy has an open position
 - [x] Own circuit breaker — `prometheus_command.flag`, separate from the shared NSE/BSE one
 - [x] DRY_RUN paper mode — LTP-based fills, no real orders
 - [x] Session report — per-trade + session-total Slack summary at teardown
-- [x] **Contract rollover — trigger, recovery, timing, veto, recalibration, trade-log schema
-      (plan §3–§9, built 2026-09-04)**: `state.token` invariant (§3); the evening lookahead +
-      entry suppression near `ROLLOVER_TIME` (§4); missed-rollover recovery at next startup, per
-      the decided "roll immediately, loudly alerted" option (§5); the full `ROLLOVER_PREFETCH_TIME`
-      → dual-poll → `ROLLOVER_TIME` → veto → flatten → reopen timeline, with the old contract's WS
-      only unsubscribed once its exit is confirmed (§6); Rule 7's combined-order mechanics extended
-      with a `_pending_flip` retry-until-resolved marker for a stuck partial fill (§7); the
-      historical-basis recalibration method with its own ST-disagreement veto and a
-      `recalibration_basis_price` field kept separate from the real fill price (§8); and the
-      two-linked-rows trade-log schema (`parent_trade_id`, `bullish-rollover`/`bearish-rollover`
-      direction labels) (§9). Verified against real on-disk CRUDEOILM/CRUDEOIL data (the historical
-      basis lookup, the ST-for-a-not-yet-effective-contract computation) and mocked broker
-      responses (full/partial-fill Rule 7 reconciliation with the lot2-first tie-break, the
-      rollover reopen's basis-vs-fill-price separation) — not yet live-tested end-to-end, since
-      that needs an actual rollover (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21
-      CRUDEOILM expiry) to exercise for real.
-- [x] **Provisional boundary computation (§12a, built 2026-09-04)** — at a 15m-aligned boundary,
-      if REST is already incomplete at that instant, build a provisional candle from
-      `SharedFeed.get_ohlc()`'s genuine tick-aggregated OHLC (not sampled — Apollo already reads
-      this for Nifty/VIX), act on it (entry and/or exit, same real order-placement paths as a
-      normal flip) only if it clears `PROVISIONAL_MARGIN_PCT` past the band, then reconcile
-      against the real bar once REST recovers. **Enabled** (`PROVISIONAL_BOUNDARY_ENABLED=True`,
-      commit `806aeb0`) specifically to stress-test it under DRY_RUN — deliberate departure from
-      the "shadow-log first, calibrate on real data" pattern used for
-      `OPENING_BAR_CORRECTION_ENABLED`/`ENTRY_FILTER_1H_ALIGN_ENABLED`, safe here only because
-      every action it gates is a DRY_RUN-simulated fill, not a real order; do **not** carry this
-      `True` into a `DRY_RUN=False` flip without reviewing how it actually behaved first. Still
-      shadow-logs the verdict unconditionally regardless, so `PROVISIONAL_MARGIN_PCT` (currently
-      an uncalibrated placeholder) can eventually be sized on real agreement data — see
-      `plans/prometheus-phase3-production.md` §12a for the full design and the
-      margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks) before deploy; live
-      behavior not yet observed — the trigger condition is rare (never breached the existing
-      1-minute cutoff in ~34 hours of DRY_RUN observation before this was built).
-- [x] **First-minute exit guard (§10, built 2026-09-04)** — `_past_first_minute_guard` gates
-      `_check_exit_conditions_ltp` for `NO_EXIT_BEFORE_BUFFER_MIN` (1 min) after today's session
-      genuinely opens, protecting against a repeat of the 2026-09-02 447-point single-minute
-      price-discovery print. Keyed off the actual first 1-min bar seen today, not a hardcoded
-      clock time — the plan's original `NO_EXIT_BEFORE='09:01'` proposal would have silently done
-      nothing on the ~7/153 evening-only special sessions, where the real open is 17:00, not
-      09:00. Mock-verified (8/8 checks, including the evening-only case). Building this surfaced a
-      related, already-live bug, fixed the same day: `MIN_ENTRY_TIME='09:15'` had the identical
-      hardcoded-clock-time flaw and had been gating real entries since Phase 3 went live — replaced
-      by `_past_min_entry_guard`/`MIN_ENTRY_BUFFER_MIN=15` (shares `_minutes_since_session_open`
-      with the exit guard above, one dynamic-anchor mechanism, not two). The old bare
-      `now_after_min_entry()` function is gone; all three call sites (fresh entry, Rule 7
-      re-entry, the provisional-boundary path) now call `self._past_min_entry_guard`. Mock-verified
-      (8/8 checks, including the evening-only case).
-- [x] **`_safe_concat` — fixes a live pandas dtype-corruption bug, not just a future warning
-      (2026-09-04)**: this codebase's `self._df_1m_today`/`self._df_15m`/`cached_today`
-      accumulators all legitimately start each day as an empty DataFrame, then concatenate
-      against the first real fetch — exactly the shape that triggers pandas's "concat with empty
-      or all-NA entries" warning. Checked precisely: with the currently-installed pandas, this
-      isn't just a future-version concern — `pd.concat([empty_df, real_df])` silently degrades
-      `open`/`high`/`low`/`close`/`volume` from numeric (`int64`/`float64`) to `object` dtype
-      *today*. `_safe_concat` (`prometheus_functions.py`) excludes empty frames before
-      concatenating (pandas's own recommended fix), applied at all 8 `pd.concat` call sites in
-      `prometheus.py`/`prometheus_functions.py` that touch one of these accumulators — not just
-      the two that happened to warn in one session's log. Verified numerically identical output,
-      correct dtype, warning gone (9/9 checks).
-- [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**:
-      `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract`
-      (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same
-      "no silent staleness" gap-refusal as the 15m rollover veto. Wired into all three entry
-      paths uniformly, no per-site exceptions: fresh `watching`→`in_trade` entry, Rule 7
-      re-entry (gates only the re-entry half of the combined order — the exit half always
-      proceeds), and the rollover reopen (ANDed on top of §8's own 15m ST-disagreement veto —
-      either failing lands on the same flatten-and-wait outcome). Unit-tested (toggle on/off,
-      agree/disagree in both directions, empty/NaN ST result treated as disagree, and the
-      toggle-off short-circuit never touching `self`). **Gated off**:
-      `ENTRY_FILTER_1H_ALIGN_ENABLED = False`; `ST_1H_PERIOD`/`ST_1H_MULTIPLIER` are unset
-      placeholders (same starting values as the 15m ST params), not calibrated — left off so
-      live ST_15 flip accuracy can be validated against the chart first, per the same reasoning
-      as §11's opening-bar correction toggle.
-- [x] **Rollover redesign — event-driven same-day transition, all 3 phases built (§18,
-      2026-09-05)**: collapses the scheduled evening rollover into an event-driven one wherever
-      possible. **Phase 1** (flat at setup on a rollover-eve): switches `self._contract`
-      immediately via `_switch_to_new_contract_now`, rather than waiting for the evening — avoids
-      opening on the old contract only to be rolled the same evening. **Phase 2** (in-trade):
-      `_start_dual_tracking` subscribes the new contract's WS and seeds its own independent 15m ST
-      series right at setup; a new staggered per-minute poll (`NEW_CONTRACT_POLL_OFFSET_SEC=27`,
-      offset from the old contract's own on-the-minute poll to avoid rate-limit collisions) keeps
-      it current all day — advisory only, never drives an order by itself. **Phase 3**: on the old
-      contract's own flip, `_execute_coincident_flip_transition` exits it unconditionally (plain
-      `trend_flip`, no Rule 7 netting — different tokens, the exchange can't net a sell of one
-      against a buy of the other) and, only once that exit is CONFIRMED, switches `self._contract`;
-      if the new contract independently flipped the same direction on the same 15m bar (a genuine
-      15/15-row window required — an incomplete one never claims coincidence), a wholly fresh entry
-      follows on it (real fill price, no `parent_trade_id`/rollover framing at all). A dedicated
-      `_pending_contract_transition` marker retries an unconfirmed exit every tick, same
-      CRITICAL-then-debounced-alert shape as Rule 7's own stuck-flip marker. A second advisor
-      review of the drafted Phase 3 design (before any of it was coded) caught a real bug already
-      in the Phase 2 commit — `_check_rollover_timing`'s topup-poll had no lower time bound once
-      `_rollover_prefetch_done` could be set at setup instead of only at 23:10, firing every minute
-      all day instead of just the intended 5-minute window — fixed. It also surfaced (and all were
-      applied): a window-completeness gate before claiming a coincident flip; a strict
-      `now < ROLLOVER_TIME` ownership boundary so this mechanism and the scheduled evening one can
-      never both act on the same position; refusing to start while a Rule 7 flip is already stuck;
-      draining the new contract's hours-old accumulated tick-OHLC before it becomes the active
-      contract (otherwise the provisional-boundary feature, live, could act on a whole-day-wide
-      range); and a belt-and-suspenders token check on the existing 23:15 fallback so it can never
-      flatten a position it wasn't armed against. A separate post-build advisor pass caught one
-      more real bug (fixed before deploy): the new-contract poll's own clock was only advancing
-      inside the same condition that gated the actual poll — an SL/target exit (not a flip) could
-      leave it frozen for hours, then burst dozens of real broker calls on the next in-trade tick
-      trying to catch up; fixed by decoupling the clock's advance from the poll decision. Mock-
-      verified 24/24 for Phase 3 (coincident/non-coincident outcomes, the completeness gate, the
-      unconfirmed-exit retry, both routing refusals, the `ROLLOVER_TIME` boundary, the fallback
-      token-mismatch refusal) plus dedicated regression tests for both caught bugs. Full suite
-      clean after every phase. **Not yet exercised by an actual live rollover** — needs the next
-      one (~2026-09-15) to observe for real.
-- [ ] **Order-update WebSocket unverified for MCX** — worked during the brief 2026-08-31 live
-      window (four real fills resolved via WS), but that window was cut short by the incident
-      below before a full session could confirm it under sustained live conditions
-- [ ] **DRY_RUN=False live deployment** — reverted to `True` on 2026-08-31 after a real incident:
-      a trend-flip exit order failed at the broker with no guard against it, and the code
-      fabricated a fill from LTP, marking both lots closed internally while the real position
-      stayed open and unmonitored for ~28 minutes. Fixed via the fill-confirmation invariant
-      above (commit `8b7bc5b`). **Do not flip `DRY_RUN` back to `False` until that fix has held
-      up under a fresh DRY_RUN pass**, per `prometheus_configs.py`'s own comment.
+- [x] **Contract rollover — trigger, recovery, timing, veto, recalibration, trade-log schema (plan §3–§9, built 2026-09-04)**: `state.token` invariant (§3); the evening lookahead + entry suppression near `ROLLOVER_TIME` (§4); missed-rollover recovery at next startup, per the decided "roll immediately, loudly alerted" option (§5); the full `ROLLOVER_PREFETCH_TIME` → dual-poll → `ROLLOVER_TIME` → veto → flatten → reopen timeline, with the old contract's WS only unsubscribed once its exit is confirmed (§6); Rule 7's combined-order mechanics extended with a `_pending_flip` retry-until-resolved marker for a stuck partial fill (§7); the historical-basis recalibration method with its own ST-disagreement veto and a `recalibration_basis_price` field kept separate from the real fill price (§8); and the two-linked-rows trade-log schema (`parent_trade_id`, `bullish-rollover`/`bearish-rollover` direction labels) (§9). Verified against real on-disk CRUDEOILM/CRUDEOIL data (the historical basis lookup, the ST-for-a-not-yet-effective-contract computation) and mocked broker responses (full/partial-fill Rule 7 reconciliation with the lot2-first tie-break, the rollover reopen's basis-vs-fill-price separation) — not yet live-tested end-to-end, since that needs an actual rollover (~2026-09-15, `TENDER_ROLL_TRADING_DAYS=5` off the Sept-21 CRUDEOILM expiry) to exercise for real.
+- [x] **Provisional boundary computation (§12a, built 2026-09-04)** — at a 15m-aligned boundary, if REST is already incomplete at that instant, build a provisional candle from `SharedFeed.get_ohlc()`'s genuine tick-aggregated OHLC (not sampled — Apollo already reads this for Nifty/VIX), act on it (entry and/or exit, same real order-placement paths as a normal flip) only if it clears `PROVISIONAL_MARGIN_PCT` past the band, then reconcile against the real bar once REST recovers. **Enabled** (`PROVISIONAL_BOUNDARY_ENABLED=True`, commit `806aeb0`) specifically to stress-test it under DRY_RUN — deliberate departure from the "shadow-log first, calibrate on real data" pattern used for `OPENING_BAR_CORRECTION_ENABLED`/`ENTRY_FILTER_1H_ALIGN_ENABLED`, safe here only because every action it gates is a DRY_RUN-simulated fill, not a real order; do **not** carry this `True` into a `DRY_RUN=False` flip without reviewing how it actually behaved first. Still shadow-logs the verdict unconditionally regardless, so `PROVISIONAL_MARGIN_PCT` (currently an uncalibrated placeholder) can eventually be sized on real agreement data — see `plans/prometheus-phase3-production.md` §12a for the full design and the margin-guard-over-unwind-path reasoning. Mock-verified (14/14 checks) before deploy; live behavior not yet observed — the trigger condition is rare (never breached the existing 1-minute cutoff in ~34 hours of DRY_RUN observation before this was built).
+- [x] **First-minute exit guard (§10, built 2026-09-04)** — `_past_first_minute_guard` gates `_check_exit_conditions_ltp` for `NO_EXIT_BEFORE_BUFFER_MIN` (1 min) after today's session genuinely opens, protecting against a repeat of the 2026-09-02 447-point single-minute price-discovery print. Keyed off the actual first 1-min bar seen today, not a hardcoded clock time — the plan's original `NO_EXIT_BEFORE='09:01'` proposal would have silently done nothing on the ~7/153 evening-only special sessions, where the real open is 17:00, not 09:00. Mock-verified (8/8 checks, including the evening-only case). Building this surfaced a related, already-live bug, fixed the same day: `MIN_ENTRY_TIME='09:15'` had the identical hardcoded-clock-time flaw and had been gating real entries since Phase 3 went live — replaced by `_past_min_entry_guard`/`MIN_ENTRY_BUFFER_MIN=15` (shares `_minutes_since_session_open` with the exit guard above, one dynamic-anchor mechanism, not two). The old bare `now_after_min_entry()` function is gone; all three call sites (fresh entry, Rule 7 re-entry, the provisional-boundary path) now call `self._past_min_entry_guard`. Mock-verified (8/8 checks, including the evening-only case).
+- [x] **`_safe_concat` — fixes a live pandas dtype-corruption bug, not just a future warning (2026-09-04)**: this codebase's `self._df_1m_today`/`self._df_15m`/`cached_today` accumulators all legitimately start each day as an empty DataFrame, then concatenate against the first real fetch — exactly the shape that triggers pandas's "concat with empty or all-NA entries" warning. Checked precisely: with the currently-installed pandas, this isn't just a future-version concern — `pd.concat([empty_df, real_df])` silently degrades `open`/`high`/`low`/`close`/`volume` from numeric (`int64`/`float64`) to `object` dtype *today*. `_safe_concat` (`prometheus_functions.py`) excludes empty frames before concatenating (pandas's own recommended fix), applied at all 8 `pd.concat` call sites in `prometheus.py`/`prometheus_functions.py` that touch one of these accumulators — not just the two that happened to warn in one session's log. Verified numerically identical output, correct dtype, warning gone (9/9 checks).
+- [x] **1h/15m entry filter — built, unit-tested, gated off (§17, 2026-09-04)**: `_check_1h_alignment` computes ST_1H via the generalized `compute_st_for_contract` (`minutes=60, st_period=ST_1H_PERIOD, st_multiplier=ST_1H_MULTIPLIER`), reusing the same "no silent staleness" gap-refusal as the 15m rollover veto. Wired into all three entry paths uniformly, no per-site exceptions: fresh `watching`→`in_trade` entry, Rule 7 re-entry (gates only the re-entry half of the combined order — the exit half always proceeds), and the rollover reopen (ANDed on top of §8's own 15m ST-disagreement veto — either failing lands on the same flatten-and-wait outcome). Unit-tested (toggle on/off, agree/disagree in both directions, empty/NaN ST result treated as disagree, and the toggle-off short-circuit never touching `self`). **Gated off**: `ENTRY_FILTER_1H_ALIGN_ENABLED = False`; `ST_1H_PERIOD`/`ST_1H_MULTIPLIER` are unset placeholders (same starting values as the 15m ST params), not calibrated — left off so live ST_15 flip accuracy can be validated against the chart first, per the same reasoning as §11's opening-bar correction toggle.
+- [x] **Rollover redesign — event-driven same-day transition, all 3 phases built (§18, 2026-09-05)**: collapses the scheduled evening rollover into an event-driven one wherever possible. **Phase 1** (flat at setup on a rollover-eve): switches `self._contract` immediately via `_switch_to_new_contract_now`, rather than waiting for the evening — avoids opening on the old contract only to be rolled the same evening. **Phase 2** (in-trade): `_start_dual_tracking` subscribes the new contract's WS and seeds its own independent 15m ST series right at setup; a new staggered per-minute poll (`NEW_CONTRACT_POLL_OFFSET_SEC=27`, offset from the old contract's own on-the-minute poll to avoid rate-limit collisions) keeps it current all day — advisory only, never drives an order by itself. **Phase 3**: on the old contract's own flip, `_execute_coincident_flip_transition` exits it unconditionally (plain `trend_flip`, no Rule 7 netting — different tokens, the exchange can't net a sell of one against a buy of the other) and, only once that exit is CONFIRMED, switches `self._contract`; if the new contract independently flipped the same direction on the same 15m bar (a genuine 15/15-row window required — an incomplete one never claims coincidence), a wholly fresh entry follows on it (real fill price, no `parent_trade_id`/rollover framing at all). A dedicated `_pending_contract_transition` marker retries an unconfirmed exit every tick, same CRITICAL-then-debounced-alert shape as Rule 7's own stuck-flip marker. A second advisor review of the drafted Phase 3 design (before any of it was coded) caught a real bug already in the Phase 2 commit — `_check_rollover_timing`'s topup-poll had no lower time bound once `_rollover_prefetch_done` could be set at setup instead of only at 23:10, firing every minute all day instead of just the intended 5-minute window — fixed. It also surfaced (and all were applied): a window-completeness gate before claiming a coincident flip; a strict `now < ROLLOVER_TIME` ownership boundary so this mechanism and the scheduled evening one can never both act on the same position; refusing to start while a Rule 7 flip is already stuck; draining the new contract's hours-old accumulated tick-OHLC before it becomes the active contract (otherwise the provisional-boundary feature, live, could act on a whole-day-wide range); and a belt-and-suspenders token check on the existing 23:15 fallback so it can never flatten a position it wasn't armed against. A separate post-build advisor pass caught one more real bug (fixed before deploy): the new-contract poll's own clock was only advancing inside the same condition that gated the actual poll — an SL/target exit (not a flip) could leave it frozen for hours, then burst dozens of real broker calls on the next in-trade tick trying to catch up; fixed by decoupling the clock's advance from the poll decision. Mock- verified 24/24 for Phase 3 (coincident/non-coincident outcomes, the completeness gate, the unconfirmed-exit retry, both routing refusals, the `ROLLOVER_TIME` boundary, the fallback token-mismatch refusal) plus dedicated regression tests for both caught bugs. Full suite clean after every phase. **Not yet exercised by an actual live rollover** — needs the next one (~2026-09-15) to observe for real.
+- [ ] **Order-update WebSocket unverified for MCX** — worked during the brief 2026-08-31 live window (four real fills resolved via WS), but that window was cut short by the incident below before a full session could confirm it under sustained live conditions
+- [ ] **DRY_RUN=False live deployment** — reverted to `True` on 2026-08-31 after a real incident: a trend-flip exit order failed at the broker with no guard against it, and the code fabricated a fill from LTP, marking both lots closed internally while the real position stayed open and unmonitored for ~28 minutes. Fixed via the fill-confirmation invariant above (commit `8b7bc5b`). **Do not flip `DRY_RUN` back to `False` until that fix has held up under a fresh DRY_RUN pass**, per `prometheus_configs.py`'s own comment.
 - [ ] Backtest/live parity check (Rollout step 3, plan)
 - [ ] Broker-side reconciliation on mid-trade restart (flagged gap, shared with Iris/Athena)

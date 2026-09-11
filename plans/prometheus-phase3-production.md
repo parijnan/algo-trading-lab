@@ -28,11 +28,11 @@
 
 1. **Freeze-limit quantity splitting** — `l_limit = qty_freeze // lot_size`, chunk the requested quantity into broker-legal pieces before placing (`athena_engine.py:238-242`). Verified across all four existing strategies, per the user's own question: Artemis, Athena, and Apollo all implement this chunking, each against a **hardcoded** `QTY_FREEZE=1800` constant in their own `configs.py` (Nifty-specific, since all three trade Nifty/Sensex derivatives). Iris is the outlier — it imports `QTY_FREEZE` (`iris_functions.py:23`) but never actually references it anywhere; no chunking logic exists in Iris despite the import suggesting otherwise. Worth the user knowing that inconsistency exists, independent of anything Prometheus needs.
 
-   **Decided: build this now, not deferred** — per the user's direction ("It's actually basic hygiene in NSE and BSE considering their tight limits... build it. Why wait for later?"). And **Prometheus should not copy the hardcoded-constant pattern** — a better source already exists: `data_pipeline/data/mcx_instrument_master.csv` (already loaded by `resolve_effective_contract()`) carries a `freeze_qty` column per contract, straight from Angel One's own scrip master — confirmed `freeze_qty=10000` for every current CRUDEOILM contract (tokens 565900/580378/569901, `lotsize=10`). Read `self._contract['freeze_qty']` fresh on every run (it's already part of the resolved-contract row, no new lookup) rather than a hardcoded constant — dynamic per-contract, self-updating if MCX ever changes it or a different underlying's freeze quantity differs, which the other four strategies' hardcoded `QTY_FREEZE=1800` can't do.
+**Decided: build this now, not deferred** — per the user's direction ("It's actually basic hygiene in NSE and BSE considering their tight limits... build it. Why wait for later?"). And **Prometheus should not copy the hardcoded-constant pattern** — a better source already exists: `data_pipeline/data/mcx_instrument_master.csv` (already loaded by `resolve_effective_contract()`) carries a `freeze_qty` column per contract, straight from Angel One's own scrip master — confirmed `freeze_qty=10000` for every current CRUDEOILM contract (tokens 565900/580378/569901, `lotsize=10`). Read `self._contract['freeze_qty']` fresh on every run (it's already part of the resolved-contract row, no new lookup) rather than a hardcoded constant — dynamic per-contract, self-updating if MCX ever changes it or a different underlying's freeze quantity differs, which the other four strategies' hardcoded `QTY_FREEZE=1800` can't do.
 
-   **`place_order` returns a *list* of order IDs, not one** — this is the part worth spelling out precisely, since it's a real signature change, not an internal detail contained inside `place_order` alone. Mirroring Athena's shape (`athena_engine.py:238-303`): compute `l_limit = self._contract['freeze_qty'] // LOT_SIZE`, split `lots` into chunks of at most `l_limit` each (`while rem > 0: chunk = min(rem, l_limit); ...`), place each chunk as its *own* `placeOrderFullResponse` call — each independently subject to the rejection-retry and ghost-recovery logic in items 2/3 below — and return the full list of resulting order IDs. Concretely, if `self._contract['freeze_qty']=10000` (`l_limit=1000` lots) and a requested size were ever 1,500 lots, that's two orders: 1,000 + 500. At 15,000 lots, that's fifteen 1,000-lot orders, not one giant rejected order or a naive single split — the `while` loop handles any multiple, not just a boundary case.
+**`place_order` returns a *list* of order IDs, not one** — this is the part worth spelling out precisely, since it's a real signature change, not an internal detail contained inside `place_order` alone. Mirroring Athena's shape (`athena_engine.py:238-303`): compute `l_limit = self._contract['freeze_qty'] // LOT_SIZE`, split `lots` into chunks of at most `l_limit` each (`while rem > 0: chunk = min(rem, l_limit); ...`), place each chunk as its *own* `placeOrderFullResponse` call — each independently subject to the rejection-retry and ghost-recovery logic in items 2/3 below — and return the full list of resulting order IDs. Concretely, if `self._contract['freeze_qty']=10000` (`l_limit=1000` lots) and a requested size were ever 1,500 lots, that's two orders: 1,000 + 500. At 15,000 lots, that's fifteen 1,000-lot orders, not one giant rejected order or a naive single split — the `while` loop handles any multiple, not just a boundary case.
 
-   **`get_fill_price_and_qty` needs the matching change — aggregate across the list, not track one ID.** Prometheus's current version (`prometheus_functions.py:768-836`) is built around a single `order_id`: the WS branch does `order_watcher.live_orders.get(str(order_id))`, the REST branch searches `orderBook()` for one matching `orderid`. Both need to become "for every ID in the list, sum filled quantity and value" — Athena's `_fetch_order_details` (`athena_engine.py:305-343`) is the exact reference: WS fast path loops `orderid_list`, accumulating `total_qty`/`total_val` per order and taking the latest `updatetime` as the fill timestamp, then `avg_price = total_val / total_qty`, `filled_lots = total_qty // LOT_SIZE` once all chunks are accounted for (or the poll times out, falling back to REST doing the same aggregation via repeated `orderBook()` lookups). At today's 2-4 lot sizing this list always has exactly one element and the aggregation degenerates to the current single-order behavior — but every call site that currently passes a bare `order_id` string (`_execute_entry`, `_execute_exit_lot`, §7's future combined order) needs to pass/receive a list instead, so this is worth building as the real shape from the start rather than retrofitting once sizing or a freeze-quantity edge case actually exercises it.
+**`get_fill_price_and_qty` needs the matching change — aggregate across the list, not track one ID.** Prometheus's current version (`prometheus_functions.py:768-836`) is built around a single `order_id`: the WS branch does `order_watcher.live_orders.get(str(order_id))`, the REST branch searches `orderBook()` for one matching `orderid`. Both need to become "for every ID in the list, sum filled quantity and value" — Athena's `_fetch_order_details` (`athena_engine.py:305-343`) is the exact reference: WS fast path loops `orderid_list`, accumulating `total_qty`/`total_val` per order and taking the latest `updatetime` as the fill timestamp, then `avg_price = total_val / total_qty`, `filled_lots = total_qty // LOT_SIZE` once all chunks are accounted for (or the poll times out, falling back to REST doing the same aggregation via repeated `orderBook()` lookups). At today's 2-4 lot sizing this list always has exactly one element and the aggregation degenerates to the current single-order behavior — but every call site that currently passes a bare `order_id` string (`_execute_entry`, `_execute_exit_lot`, §7's future combined order) needs to pass/receive a list instead, so this is worth building as the real shape from the start rather than retrofitting once sizing or a freeze-quantity edge case actually exercises it.
 2. **Rejection retry** — on an actual `rejected` response (not an exception), retry up to 3 times with a 1s cooldown before giving up and alerting, rather than treating one rejection as final. Applies per chunk, not once per call — a rejection on the 3rd of 15 chunks doesn't invalidate the 2 already placed.
 3. **Ghost-order recovery, the important one** — on `DataException`/`NetworkException` specifically (not a blanket catch-all), sleep 2s, then query `obj.orderBook()` and search for a matching order: same symbol, same transaction type, same quantity, status in `complete`/`open`/`validation pending`, updated within the last 60s, and not already claimed by this run's own placed-ID set. If found, that's the real order — recover its `order_id` and proceed to normal fill verification. If not found, the order genuinely never reached the broker and it's safe to retry placement. Also per chunk — Athena's `_placed_order_ids` set (item 3's "not already claimed") is exactly what keeps chunk *N*'s ghost-recovery search from accidentally matching chunk *N-1*'s already-placed order of the same symbol/type/quantity.
 
@@ -595,8 +595,7 @@ Not yet deployed to Delos as of this writing — holding for a deliberate restar
 **Frequency check — run against real data, not assumed.** The design's usefulness depends on how often a coincident flip actually happens; a rare coincidence would mean this mostly resolves to "old contract exits, then we just watch the new one," which is still a real improvement (no forced idle wait, no basis-drift exposure on that path) but delivers fewer same-day takeovers than the framing might suggest. Checked directly: using the real overlapping 1-min history for the current front (CRUDEOILM, Sep, `2026-09-21`) and next (Oct, `2026-10-19`) contracts — both have genuinely liquid daily volume across 2026-08-17 through 2026-09-04 (15 trading days, comparable row counts/volume both sides, not a thin-liquidity artifact) — run through the actual production `_resample_1m_to_Nmin`/`compute_st` functions at production config (`ST_PERIOD=10`, `ST_MULTIPLIER=2.0`), not a reimplementation:
 - Front contract had 40 independent 15m ST flips over the window.
 - **28/40 (70%) coincided with an independent next-contract flip on the exact same 15m bar.**
-- 4 more flipped one bar (±15 min) away, 3 more within ±30 min; only 5/40 (12.5%) had no next-contract flip anywhere within ±30 min.
-This is high enough that the coincident-flip path is expected to be the common case on a rollover day with an open position, not an edge case that rarely fires — expected, since both contracts track the same underlying commodity with a comparatively stable calendar spread, but worth having confirmed numerically before building around it. (Caveat: this measures general two-month-apart CRUDEOILM correlation over an arbitrary 15-day window, not specifically *rollover-day* behavior — no actual MCX rollover event with dual-tracked history has occurred yet to measure directly; treat 70% as a same-underlying base rate, not a rollover-specific guarantee.)
+- 4 more flipped one bar (±15 min) away, 3 more within ±30 min; only 5/40 (12.5%) had no next-contract flip anywhere within ±30 min. This is high enough that the coincident-flip path is expected to be the common case on a rollover day with an open position, not an edge case that rarely fires — expected, since both contracts track the same underlying commodity with a comparatively stable calendar spread, but worth having confirmed numerically before building around it. (Caveat: this measures general two-month-apart CRUDEOILM correlation over an arbitrary 15-day window, not specifically *rollover-day* behavior — no actual MCX rollover event with dual-tracked history has occurred yet to measure directly; treat 70% as a same-underlying base rate, not a rollover-specific guarantee.)
 
 **Nine issues raised in review (advisor pass, 2026-09-04/05) and how each is resolved:**
 
@@ -672,105 +671,32 @@ Phase 4 (§6's now-genuinely-time-boxed 23:10 prefetch/topup) stays wired as the
 
 ## 21. Position-sizing capacity — volume/participation analysis for scaling on CRUDEOILM [DECIDED 2026-09-07]
 
-**Trigger**: user confirmed the CRUDEOILM-vs-CRUDEOIL cross-validation finding (§20's sibling
-work, `prometheus_backtest/README.md`'s Phase 3 section) settles the primary-instrument question
-in CRUDEOILM's favor — "primarily trade the mini... allows enough room to scale" — and asked for a
-volume analysis to model expected slippage as `STATIC_UNITS` scales up, explicitly deferred out of
-official documentation until reviewed.
+**Trigger**: user confirmed the CRUDEOILM-vs-CRUDEOIL cross-validation finding (§20's sibling work, `prometheus_backtest/README.md`'s Phase 3 section) settles the primary-instrument question in CRUDEOILM's favor — "primarily trade the mini... allows enough room to scale" — and asked for a volume analysis to model expected slippage as `STATIC_UNITS` scales up, explicitly deferred out of official documentation until reviewed.
 
-**Units check, done first**: `getCandleData`'s `volume` field is confirmed to be lots/contracts,
-not underlying barrels — CRUDEOILM (10 bbl/lot) and CRUDEOIL (100 bbl/lot) print comparable
-per-minute volume magnitudes at identical timestamps, which would not hold if the field were
-barrels (CRUDEOIL's 10x-larger lot would then show ~10x the figure for comparable participation).
-This matters because every downstream participation number is wrong by 10x if the unit is
-misread, and it's a number the user sizes real trades off of.
+**Units check, done first**: `getCandleData`'s `volume` field is confirmed to be lots/contracts, not underlying barrels — CRUDEOILM (10 bbl/lot) and CRUDEOIL (100 bbl/lot) print comparable per-minute volume magnitudes at identical timestamps, which would not hold if the field were barrels (CRUDEOIL's 10x-larger lot would then show ~10x the figure for comparable participation). This matters because every downstream participation number is wrong by 10x if the unit is misread, and it's a number the user sizes real trades off of.
 
-**Method**: `data_loader.load_futures_1min('CRUDEOILM')`, full 6.5-month series (2026-01-30 to
-2026-09-04, 130,366 1-min bars). Participation measured specifically on the 1-min bar starting at
-each 15-min mark from 09:15 onward (matching `MIN_ENTRY_TIME`) — 8,594 bars — since that's the bar
-an ST_15-triggered Rule 7 order actually fills against; a whole-session average would flatter the
-picture. 8 rows carry a data-pipeline artifact (negative volume); none land on a 15-min boundary,
-so excluded from consideration without further investigation (out of scope for this analysis).
+**Method**: `data_loader.load_futures_1min('CRUDEOILM')`, full 6.5-month series (2026-01-30 to 2026-09-04, 130,366 1-min bars). Participation measured specifically on the 1-min bar starting at each 15-min mark from 09:15 onward (matching `MIN_ENTRY_TIME`) — 8,594 bars — since that's the bar an ST_15-triggered Rule 7 order actually fills against; a whole-session average would flatter the picture. 8 rows carry a data-pipeline artifact (negative volume); none land on a 15-min boundary, so excluded from consideration without further investigation (out of scope for this analysis).
 
-**Finding**: median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin
-minute). At 50 lots, median participation is 32.68% of that minute's volume (p10: 8.40%), and
-5,770 of 8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is
-meaningfully time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median
-(204 vs. 96 lots). No square-root-impact ₹ figure was modeled — an uncalibrated coefficient
-against real volume data produces a number that looks derived without being one; framed in ticks
-instead (tick size confirmed 1.0 → ₹10/lot on CRUDEOILM): past ~20-30% participation, expect to
-reliably cross the spread and likely walk 1-2 ticks beyond on the worse-liquidity minutes.
+**Finding**: median boundary-minute volume is 153 lots (10th percentile: 29 lots, a genuinely thin minute). At 50 lots, median participation is 32.68% of that minute's volume (p10: 8.40%), and 5,770 of 8,594 boundary-minutes (~67%) see ≥20% participation at that size. Liquidity is meaningfully time-of-day-skewed — 15:00–close boundary minutes run ~2x the 09:15–15:00 median (204 vs. 96 lots). No square-root-impact ₹ figure was modeled — an uncalibrated coefficient against real volume data produces a number that looks derived without being one; framed in ticks instead (tick size confirmed 1.0 → ₹10/lot on CRUDEOILM): past ~20-30% participation, expect to reliably cross the spread and likely walk 1-2 ticks beyond on the worse-liquidity minutes.
 
-**Decision**: user's current capital supports scaling `STATIC_UNITS` to 50 lots, to be approached
-gradually rather than in one step; 1-2 ticks of slippage on worst-liquidity minutes explicitly
-accepted as the cost of that size. No code change required by this section — sizing changes
-already take effect live via §19's `resolve_live_sizing()`, so scaling is purely a
-configs/Slack-sizing action from here, not an engineering one.
+**Decision**: user's current capital supports scaling `STATIC_UNITS` to 50 lots, to be approached gradually rather than in one step; 1-2 ticks of slippage on worst-liquidity minutes explicitly accepted as the cost of that size. No code change required by this section — sizing changes already take effect live via §19's `resolve_live_sizing()`, so scaling is purely a configs/Slack-sizing action from here, not an engineering one.
 
-**Not done / open**: no real slippage model exists (no fill data yet to calibrate one against) —
-this is a capacity/headroom read, not a predictive model. Worth re-cutting against actual fill
-data once trading at meaningful size. Full analysis, methodology, and the participation table live
-in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis" section.
+**Not done / open**: no real slippage model exists (no fill data yet to calibrate one against) — this is a capacity/headroom read, not a predictive model. Worth re-cutting against actual fill data once trading at meaningful size. Full analysis, methodology, and the participation table live in `prometheus_backtest/README.md`'s "Position sizing — volume/participation analysis" section.
 
 ---
 
 ## 22. Two bugs surfaced by the same evening: session report silently failed again, and an isolated getRMS blip [FIXED 2026-09-08]
 
-**Trigger**: user noticed no session report arrived at last night's (2026-09-07) teardown, and
-asked to investigate both that and the isolated `AB1007 Invalid Token` margin-fetch warning from
-the 16:30 Rule 7 re-entry (§21's memory note).
+**Trigger**: user noticed no session report arrived at last night's (2026-09-07) teardown, and asked to investigate both that and the isolated `AB1007 Invalid Token` margin-fetch warning from the 16:30 Rule 7 re-entry (§21's memory note).
 
-**Bug A — `prometheus_trades.csv` was ragged, a THIRD distinct bug in this pipeline (after §20's
-two).** The teardown log showed `_send_session_report failed: Error tokenizing data. C error:
-Expected 23 fields in line 3, saw 25` — `pd.read_csv` failing before §20's date-parsing logic ever
-ran. Root cause: `append_cumulative_trade` (`prometheus_functions.py`) only ever writes the header
-once, the first time the file doesn't exist (`write_header = not os.path.exists(TRADES_FILE)`),
-using whatever keys that first row's `_pending_trade_row` happened to have — not a fixed schema.
-Trade #9 was that first row, written mid-restart with `lot1_pnl_points`/`lot1_pnl_rs` missing (the
-exact §20/pnl-restoration-fix-era bug), permanently fixing the on-disk header at 23 columns. Trade
-#10's row, closed after the restart that picked up the pnl-restoration fix, carried those two
-fields anyway (25 fields) — ragged against the frozen 23-column header. Neither row had
-`parent_trade_id` either (both spanned a restart and were rebuilt via `_setup()`'s resume path,
-which never sets it) — a fourth, latent version of the same class of gap, not yet manifested as a
-visible failure only because no genuinely-rolled trade has closed yet.
+**Bug A — `prometheus_trades.csv` was ragged, a THIRD distinct bug in this pipeline (after §20's two).** The teardown log showed `_send_session_report failed: Error tokenizing data. C error: Expected 23 fields in line 3, saw 25` — `pd.read_csv` failing before §20's date-parsing logic ever ran. Root cause: `append_cumulative_trade` (`prometheus_functions.py`) only ever writes the header once, the first time the file doesn't exist (`write_header = not os.path.exists(TRADES_FILE)`), using whatever keys that first row's `_pending_trade_row` happened to have — not a fixed schema. Trade #9 was that first row, written mid-restart with `lot1_pnl_points`/`lot1_pnl_rs` missing (the exact §20/pnl-restoration-fix-era bug), permanently fixing the on-disk header at 23 columns. Trade #10's row, closed after the restart that picked up the pnl-restoration fix, carried those two fields anyway (25 fields) — ragged against the frozen 23-column header. Neither row had `parent_trade_id` either (both spanned a restart and were rebuilt via `_setup()`'s resume path, which never sets it) — a fourth, latent version of the same class of gap, not yet manifested as a visible failure only because no genuinely-rolled trade has closed yet.
 
-**Fix**: `prometheus_functions.py` gained an explicit `TRADE_LOG_COLUMNS` constant (26 columns —
-the original 23 plus `parent_trade_id`, `lot1_pnl_points`, `lot1_pnl_rs`) and
-`append_cumulative_trade` now does `pd.DataFrame([row]).reindex(columns=TRADE_LOG_COLUMNS)` before
-every write — the file's shape can no longer depend on `_pending_trade_row`'s incidental keys for
-a given trade. Logs a warning (doesn't crash) if a row ever carries a key outside this list, as an
-early-warning tripwire for future schema drift. Mock-verified 9/9 (mixed-shape rows, an
-unexpected-key row, column order, exact values all round-trip through `pd.read_csv` cleanly).
+**Fix**: `prometheus_functions.py` gained an explicit `TRADE_LOG_COLUMNS` constant (26 columns — the original 23 plus `parent_trade_id`, `lot1_pnl_points`, `lot1_pnl_rs`) and `append_cumulative_trade` now does `pd.DataFrame([row]).reindex(columns=TRADE_LOG_COLUMNS)` before every write — the file's shape can no longer depend on `_pending_trade_row`'s incidental keys for a given trade. Logs a warning (doesn't crash) if a row ever carries a key outside this list, as an early-warning tripwire for future schema drift. Mock-verified 9/9 (mixed-shape rows, an unexpected-key row, column order, exact values all round-trip through `pd.read_csv` cleanly).
 
-**Data migration, done on Delos with explicit user approval (the harness's auto-mode classifier
-blocked the SSH write even after in-chat approval — user ran it directly).** A generic (not
-trade-#9-hardcoded) migration script backed up the original file
-(`prometheus_trades.csv.bak-preschema-migration`) and rewrote both existing rows into the correct
-26-column shape, backfilling trade #9's `lot1_pnl_points`/`lot1_pnl_rs` as `171.0`/`1710.0` —
-derived exactly as `total_pnl − lot2_pnl` (guaranteed exact by `_finalize_trade`'s own formula),
-never guessed. `parent_trade_id` left blank for both (neither was a genuine rolled trade). Verified
-post-migration: 26 columns, `pd.read_csv` parses clean, totals unchanged (343.0/3430.0,
-−36.0/−360.0).
+**Data migration, done on Delos with explicit user approval (the harness's auto-mode classifier blocked the SSH write even after in-chat approval — user ran it directly).** A generic (not trade-#9-hardcoded) migration script backed up the original file (`prometheus_trades.csv.bak-preschema-migration`) and rewrote both existing rows into the correct 26-column shape, backfilling trade #9's `lot1_pnl_points`/`lot1_pnl_rs` as `171.0`/`1710.0` — derived exactly as `total_pnl − lot2_pnl` (guaranteed exact by `_finalize_trade`'s own formula), never guessed. `parent_trade_id` left blank for both (neither was a genuine rolled trade). Verified post-migration: 26 columns, `pd.read_csv` parses clean, totals unchanged (343.0/3430.0, −36.0/−360.0).
 
-**Bug B — isolated `getRMS` `AB1007 Invalid Token`, one occurrence, no recurrence.** Investigated
-against AngelOne's own SmartAPI error documentation: AB1007 is a generic code, and "Invalid Token"
-under it is documented as *"almost always a routine daily session expiry"* — doesn't fit here
-(surrounding calls succeeded before and after, ~2h into the session). No documented transient
-cause (rate-limit, concurrent-request race) matches a single self-resolving blip like this; their
-own guidance amounts to "retry."
+**Bug B — isolated `getRMS` `AB1007 Invalid Token`, one occurrence, no recurrence.** Investigated against AngelOne's own SmartAPI error documentation: AB1007 is a generic code, and "Invalid Token" under it is documented as *"almost always a routine daily session expiry"* — doesn't fit here (surrounding calls succeeded before and after, ~2h into the session). No documented transient cause (rate-limit, concurrent-request race) matches a single self-resolving blip like this; their own guidance amounts to "retry."
 
-**Fix, per explicit user instruction ("add a retry... if the retry fails, position sizing should
-fall back to whatever is defined in the static position sizing")**: new shared
-`_fetch_available_margin()` (`prometheus.py`) wraps the `rmsLimit()` call with one retry (1s pause)
-before raising to the caller. Used by both `_calculate_units` (dynamic-sizing path — on a second
-failure, falls back to `resolve_live_sizing()`'s own static value, exactly the existing behavior,
-now reached only after two real attempts) and `_check_margin_sufficient` (the separate
-defense-in-depth pre-entry check — on a second failure, still fails open/proceeds, unchanged
-behavior, same reasoning as before: the primary tender-margin defense is the early roll, §1).
-Mock-verified 7/7 against a `FakeObj` simulating retry-then-succeed, double-fail, and no-failure-
-at-all paths for both call sites, using the real `prometheus.py` code (not a reimplementation).
+**Fix, per explicit user instruction ("add a retry... if the retry fails, position sizing should fall back to whatever is defined in the static position sizing")**: new shared `_fetch_available_margin()` (`prometheus.py`) wraps the `rmsLimit()` call with one retry (1s pause) before raising to the caller. Used by both `_calculate_units` (dynamic-sizing path — on a second failure, falls back to `resolve_live_sizing()`'s own static value, exactly the existing behavior, now reached only after two real attempts) and `_check_margin_sufficient` (the separate defense-in-depth pre-entry check — on a second failure, still fails open/proceeds, unchanged behavior, same reasoning as before: the primary tender-margin defense is the early roll, §1). Mock-verified 7/7 against a `FakeObj` simulating retry-then-succeed, double-fail, and no-failure- at-all paths for both call sites, using the real `prometheus.py` code (not a reimplementation).
 
-**Status: both fixed 2026-09-08, before market open. Full suite clean (80/82, same 2 pre-existing
-unrelated Iris failures throughout).** Not yet exercised by a live `AB1007` retry in production
-(no way to force AngelOne's API to fail on demand) — the mock coverage is the only verification
-until it happens again, if it does.
+**Status: both fixed 2026-09-08, before market open. Full suite clean (80/82, same 2 pre-existing unrelated Iris failures throughout).** Not yet exercised by a live `AB1007` retry in production (no way to force AngelOne's API to fail on demand) — the mock coverage is the only verification until it happens again, if it does.
