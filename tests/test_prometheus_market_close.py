@@ -25,6 +25,13 @@ handling, all fixed together:
      with a persisted watermark (state.last_processed_boundary) and
      _reconcile_missed_flip(), replayed at _setup() -- see
      TestReconcileMissedFlip.
+  4. CLOSING_TIME itself used to require hand-toggling around each US DST
+     changeover. MCX's rule turns out to be fully deterministic (confirmed
+     via broker circulars for the 2026-03-09 change): 23:30 during US DST
+     (2nd Sunday of March through 1st Sunday of November), 23:55 outside
+     it -- itself following the fixed US DST rule (Energy Policy Act of
+     2005). Replaced the hand-toggle with _resolve_closing_time(), computed
+     fresh at every process start -- see TestClosingTimeAutoComputation.
 
 TestReconcileMissedFlip constructs a bare Prometheus instance via
 object.__new__ (bypassing __init__, which needs a live broker session) and
@@ -57,6 +64,65 @@ def _null_logger(name: str) -> logging.Logger:
     lg.addHandler(logging.NullHandler())
     lg.propagate = False
     return lg
+
+
+# ---------------------------------------------------------------------------
+# Finding 4 — CLOSING_TIME auto-computed from the US DST calendar
+# ---------------------------------------------------------------------------
+
+class TestClosingTimeAutoComputation(unittest.TestCase):
+
+    def setUp(self):
+        sys.path.insert(0, PROM_DIR)
+        sys.modules.pop('prometheus_configs', None)
+        import prometheus_configs as pc
+        self.pc = pc
+
+    def tearDown(self):
+        sys.modules.pop('prometheus_configs', None)
+        if PROM_DIR in sys.path:
+            sys.path.remove(PROM_DIR)
+
+    def test_dst_transition_dates_2026(self):
+        """2nd Sunday of March 2026 = March 8 (matches the real MCX change,
+        effective the next trading day, Monday March 9 -- confirmed via
+        broker circulars). 1st Sunday of November 2026 = November 1."""
+        from datetime import date
+        dst_start, dst_end = self.pc._us_dst_transition_dates(2026)
+        self.assertEqual(dst_start, date(2026, 3, 8))
+        self.assertEqual(dst_end, date(2026, 11, 1))
+
+    def test_dst_transition_dates_are_always_sundays(self):
+        from datetime import date
+        for year in range(2024, 2035):
+            dst_start, dst_end = self.pc._us_dst_transition_dates(year)
+            self.assertEqual(dst_start.weekday(), 6, f'{year} DST start not a Sunday')
+            self.assertEqual(dst_end.weekday(), 6, f'{year} DST end not a Sunday')
+            self.assertEqual(dst_start.month, 3)
+            self.assertEqual(dst_end.month, 11)
+
+    def test_resolve_closing_time_boundaries(self):
+        from datetime import date
+        cases = [
+            (date(2026, 3, 7), '23:55'),    # Saturday before DST start
+            (date(2026, 3, 8), '23:30'),    # DST start Sunday itself (MCX doesn't trade)
+            (date(2026, 3, 9), '23:30'),    # first trading Monday after -- real-world confirmed
+            (date(2026, 9, 11), '23:30'),   # deep in DST season
+            (date(2026, 10, 31), '23:30'),  # day before DST end
+            (date(2026, 11, 1), '23:55'),   # DST end Sunday itself
+            (date(2026, 11, 2), '23:55'),   # first Monday after
+            (date(2026, 1, 1), '23:55'),    # dead of winter
+            (date(2027, 3, 14), '23:30'),   # next year's transition (2nd Sun March 2027)
+        ]
+        for d, expected in cases:
+            self.assertEqual(self.pc._resolve_closing_time(d), expected, f'mismatch for {d}')
+
+    def test_current_closing_time_matches_todays_computation(self):
+        """The module-level CLOSING_TIME constant must equal what
+        _resolve_closing_time(today) computes right now -- pins down that
+        CLOSING_TIME is actually wired to the auto-computation, not still a
+        stale hardcoded string sitting next to it."""
+        self.assertEqual(self.pc.CLOSING_TIME, self.pc._resolve_closing_time())
 
 
 # ---------------------------------------------------------------------------

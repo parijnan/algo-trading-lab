@@ -238,18 +238,50 @@ evening-only special sessions open at a real time that varies
 `SESSION_START_TIME` represents — `_past_min_entry_guard` already covers
 thin-opening-liquidity protection on the entry side.
 
-### 5. Sequencing / explicit scope for this change
+### 5. `CLOSING_TIME` itself auto-computed — no Slack button needed (added 2026-09-11)
 
-- **In scope, implemented**: config change (§1), `place_order` market-hours
-  guard (§4), `_reconcile_missed_flip` + `_retry_pending_missed_flip` (§3),
-  the `last_processed_boundary` state field, tests.
-- **Explicitly deferred, propose as follow-up**: a Slack action button to
-  toggle `CLOSING_TIME` at the DST changeover. It touches
-  `slack_listener.py`, needs a systemd restart on Delos to take effect (per
-  the `acd3a26` precedent), and adds a runtime-mutable config path — real
-  scope on its own. Manual toggle with a calendar reminder (~1st Sunday of
-  November) is adequate until then; the current code comment already
-  documents the exact dates.
+Originally scoped §4 above as "manual toggle, propose a Slack button as a
+follow-up." Reconsidered per the user's direct question: is MCX's DST-driven
+close-time change actual exchange discretion, or a deterministic rule that
+can just be computed? Researched via broker circulars covering the real
+2026-03-09 change (Zerodha/Upstox/ICICI Direct bulletins) — confirmed
+deterministic: MCX's non-agri (metals + energy, includes CRUDEOILM/CRUDEOIL)
+evening close is 23:30 during US Daylight Saving Time (2nd Sunday of March
+through 1st Sunday of November) and 23:55 outside it, purely to keep MCX's
+close aligned with the US market hours that set the international benchmark
+prices these contracts track. The underlying US DST rule itself has been
+fixed federal law (2nd Sunday March / 1st Sunday November) since the Energy
+Policy Act of 2005 — stable enough to compute rather than hand-maintain.
+
+MCX applies its own change on the next MCX *trading* day after the DST
+Sunday transition (confirmed: DST started Sunday 2026-03-08, MCX's change
+took effect Monday 2026-03-09) — but since MCX never trades on the Sunday
+itself, a plain `dst_start <= today < dst_end` date comparison already
+resolves correctly with no separate trading-day-shift logic needed.
+
+Implemented in `prometheus_configs.py`: `_us_dst_transition_dates(year)`
+(2nd-Sunday-of-March / 1st-Sunday-of-November calculator) and
+`_resolve_closing_time(today=None)`, with `CLOSING_TIME =
+_resolve_closing_time()` computed fresh at every process import — i.e. every
+time the bot starts (cron runs it fresh each day). **The manual-toggle
+scheme and the Slack-button follow-up are both obsolete** — there's nothing
+left to toggle, by hand or by button.
+
+Residual edge case, accepted rather than engineered around: if the Monday
+immediately following a DST transition happens to be an MCX holiday, MCX's
+real change could land a day later than this computes. Rare (needs the 2nd
+Monday of March or 1st Monday of November specifically to be a holiday) and
+bounded — `place_order`'s own market-hours refusal (§4) is the actual
+backstop against trading past the real close regardless of what this
+computes; the broker's own rejection in live mode is the backstop beyond
+that.
+
+Tests: `TestClosingTimeAutoComputation` in
+`tests/test_prometheus_market_close.py` — DST transition dates for 2024-2034
+(always a Sunday, correct month), the exact 2026-03-08/03-09/11-01/11-02
+boundary cases against the real-world-confirmed dates, and a pin that the
+live `CLOSING_TIME` constant is actually wired to the computation (not a
+stale value sitting next to it).
 
 ## Testing — implemented, `tests/test_prometheus_market_close.py` (16 tests) + 2 more in `test_state_roundtrip.py`
 
@@ -299,14 +331,12 @@ thin-opening-liquidity protection on the entry side.
   (extended).
 - `prometheus_production/README.md` — still pending, see below.
 
-## Remaining before this is fully closed out
+## Status: fully closed out (2026-09-11)
 
-1. **`prometheus_production/README.md` update** — not yet done. Repo
-   convention ("README and REQUIREMENTS.md... update them in the same commit
-   whenever a feature touches documented architecture") calls for a note on
-   the close-time/reconciliation design.
-2. **Commit** — not yet committed; awaiting the go-ahead per this repo's
-   standing convention (only `prometheus-refresh`'s skill has standing
-   commit/push authorization; this change does not).
-3. **Slack toggle button** — explicitly deferred (§5), propose separately
+The first commit (`55565e7`) shipped §1-4 (hard stop, `place_order` guard,
+missed-flip reconciliation) and was pushed to `origin/main`. §5
+(`CLOSING_TIME` auto-computation) followed in the same session once the
+user asked whether MCX's DST-driven change was programmable — it is,
+researched and confirmed, implemented, tested, and documented above. No
+Slack toggle button needed — there's nothing left to toggle.
    if/when wanted.

@@ -15,6 +15,7 @@ DRY_RUN = True  → log intended orders, place nothing; use feed LTP as fill pri
           False → live orders. See the DRY_RUN assignment below for the
           actual decision record of when/why this was flipped.
 """
+from datetime import date, timedelta
 from pathlib import Path
 
 REPO_ROOT       = Path(__file__).parent.parent
@@ -124,10 +125,48 @@ MIN_ENTRY_BUFFER_MIN = 15   # skip the first 15 min of the ACTUAL session — th
 # to be. See `_past_first_minute_guard` in prometheus.py.
 NO_EXIT_BEFORE_BUFFER_MIN = 1
 
-# CLOSING_TIME is DST-dependent and must be toggled by hand around the US
-# DST changes (~2nd Sun of March -> 23:30, ~1st Sun of Nov -> 23:55) — see
-# plan §3. Current value is correct for 2026-08-30 (DST in force).
-CLOSING_TIME = '23:30'
+# CLOSING_TIME -- auto-computed, no hand-toggling (2026-09-11, superseding
+# the earlier hand-toggle scheme -- see
+# plans/prometheus-market-close-timing-and-reconciliation.md). MCX's own
+# rule (confirmed via multiple broker circulars for the 2026-03-09 change,
+# e.g. Zerodha/Upstox/ICICI Direct bulletins) is itself fully deterministic,
+# not exchange discretion: non-agri commodities (metals + energy, includes
+# CRUDEOILM/CRUDEOIL) close at 23:30 during US Daylight Saving Time (2nd
+# Sunday of March through 1st Sunday of November) and 23:55 outside that
+# window -- purely to keep MCX's close aligned with the US market hours
+# that set the international benchmark prices these contracts track. The
+# US DST rule itself has been fixed federal law since the Energy Policy Act
+# of 2005 (2nd Sunday of March / 1st Sunday of November, unchanged since),
+# so this is safe to compute rather than hand-maintain.
+#
+# MCX applies its change on the next MCX TRADING day after the US DST
+# Sunday transition (confirmed live: DST started Sunday 2026-03-08, MCX's
+# change took effect Monday 2026-03-09) -- but since MCX never trades on
+# the Sunday itself, a plain `dst_start <= today < dst_end` date comparison
+# already resolves correctly with no separate trading-day-shift logic.
+# Residual edge case, not specially handled: if the Monday immediately
+# following a DST transition happens to be an MCX holiday, MCX's real
+# change might land a day later than this computes -- rare (both the 2nd
+# Monday of March and 1st Monday of November would need to be holidays),
+# and bounded in impact either way (place_order's own market-hours refusal,
+# prometheus_functions.py, is the actual backstop against trading past the
+# real close regardless of what this computes).
+def _us_dst_transition_dates(year: int) -> tuple:
+    """US DST: starts 2nd Sunday of March, ends 1st Sunday of November."""
+    def _nth_sunday(y: int, month: int, n: int) -> date:
+        d = date(y, month, 1)
+        first_sunday = d + timedelta(days=(6 - d.weekday()) % 7)   # weekday(): Mon=0..Sun=6
+        return first_sunday + timedelta(weeks=n - 1)
+    return _nth_sunday(year, 3, 2), _nth_sunday(year, 11, 1)
+
+
+def _resolve_closing_time(today: date = None) -> str:
+    today = today or date.today()
+    dst_start, dst_end = _us_dst_transition_dates(today.year)
+    return '23:30' if dst_start <= today < dst_end else '23:55'
+
+
+CLOSING_TIME = _resolve_closing_time()
 
 # Plan §2, Phase 3: no EOD flatten, no entry cutoff before close — a position
 # is *expected* to still be open at session end most days (§3's "a position
@@ -140,8 +179,9 @@ CLOSING_TIME = '23:30'
 
 # SESSION_END_TIME = CLOSING_TIME, deliberately no buffer (2026-09-11 fix).
 # Previously ran CLOSING_TIME + a 25-min SESSION_END_BUFFER_MIN, computed via
-# string HH:MM subtraction with no day-boundary handling -- when CLOSING_TIME
-# is hand-toggled to '23:55' (winter DST), that arithmetic silently wrapped
+# string HH:MM subtraction with no day-boundary handling -- back when
+# CLOSING_TIME was hand-toggled to '23:55' (winter DST; now auto-computed,
+# see CLOSING_TIME's own definition above), that arithmetic silently wrapped
 # to '00:20' with no date attached, and run()'s session_end ended up hours in
 # the PAST relative to any daytime process start, so the main loop's `while
 # ... and datetime.now() < session_end` was False from the first check --
@@ -358,7 +398,8 @@ def _minus_minutes(hhmm: str, minutes: int) -> str:
 
 # ROLLOVER_TIME: the evening cutoff where a confirmed roll actually executes
 # -- derived the same way EOD_SQUAREOFF_TIME was in Phase 2 (CLOSING_TIME
-# minus a buffer), same DST-hand-toggle caveat carried over. Under the
+# minus a buffer). Tracks CLOSING_TIME's own auto-computed DST swing
+# automatically (no separate hand-toggle needed, 2026-09-11). Under the
 # current CLOSING_TIME=23:30 this computes to 23:15, matching the plan.
 ROLLOVER_BEFORE_CLOSE_MIN = 15
 ROLLOVER_TIME = _minus_minutes(CLOSING_TIME, ROLLOVER_BEFORE_CLOSE_MIN)
