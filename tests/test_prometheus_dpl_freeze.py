@@ -24,6 +24,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock
 
+import pandas as pd
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 PROM_DIR = os.path.join(REPO_ROOT, 'prometheus_production')
 
@@ -152,6 +154,7 @@ class TestCheckDplCircuitHit(unittest.TestCase):
         self.p._dpl_lc = 9332.0
         self.p._dpl_frozen = False
         self.p._dpl_frozen_price = None
+        self.p._df_1m_today = pd.DataFrame({'time_stamp': [pd.Timestamp('2026-09-11 09:00:00')]})
         self.alerts = []
         self.mod._slack = lambda msg, channel=None: self.alerts.append((msg, channel))
         self.mod.DPL_CIRCUIT_POLL_ENABLED = True
@@ -232,6 +235,20 @@ class TestCheckDplCircuitHit(unittest.TestCase):
     def test_ltp_unavailable_is_a_safe_noop(self):
         self.p._get_contract_ltp = lambda: None
         self.p._check_dpl_circuit_hit()
+        self.assertFalse(self.p._dpl_frozen)
+        self.assertEqual(self.alerts, [])
+
+    def test_no_bar_yet_today_skips_ltp_call_entirely(self):
+        """Evening-only session dead zone (e.g. 2026-09-14, morning leg
+        closed, real open 17:00): today's session hasn't produced a first
+        bar yet, so this must stay fully inert -- and critically, must
+        never even call _get_contract_ltp() (which would otherwise hammer
+        fetch_ltp_rest() every main-loop tick for the whole dead zone)."""
+        self.p._df_1m_today = pd.DataFrame({'time_stamp': []})
+        calls = []
+        self.p._get_contract_ltp = lambda: (calls.append(1), 9700.0)[1]
+        self.p._check_dpl_circuit_hit()
+        self.assertEqual(calls, [])
         self.assertFalse(self.p._dpl_frozen)
         self.assertEqual(self.alerts, [])
 

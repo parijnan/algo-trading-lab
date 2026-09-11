@@ -33,13 +33,16 @@ Every gate touched by the §17 1h-alignment filter is labeled `inert unless ENTR
 ```mermaid
 graph TD
     Start([python prometheus_production/prometheus.py]) --> Holiday{MCX fully closed today?\nmcx_holidays.csv}
-    Holiday -- Yes --> AbortHoliday([Exit — not starting])
-    Holiday -- No --> Disable{prometheus_command.flag\n== DISABLE?}
-    Disable -- Yes --> AbortDisable([Exit — disabled via Slack])
+    Holiday -- Yes --> AbortHoliday([Exit — not starting\nSlack if a real holiday,\nnot for the routine weekend case, §23])
+    Holiday -- No --> KillOld[SIGTERM stale PID if exists;\nwrite prometheus.pid + touch\nprometheus_active.flag, §23]
+    KillOld --> EveningOnly{Evening-only session?\nmorning leg closed, evening open\n-- mcx_holidays.csv, §23}
+    EveningOnly -- Yes --> DeferSleep[Slack: deferring start until\nEVENING_SESSION_OPEN_TIME;\nsleep until then minus\nEVENING_SESSION_WAKE_BUFFER_MIN, §23]
+    DeferSleep --> Disable
+    EveningOnly -- No --> Disable{prometheus_command.flag\n== DISABLE?}
+    Disable -- Yes --> AbortDisable([Exit — disabled via Slack\ncleans up PID/flag, §23])
     Disable -- No --> Guardian{Guardian check:\nno other active strategy session?}
-    Guardian -- Fail --> AbortGuardian([Exit — exclusive session required])
-    Guardian -- Pass --> KillOld[SIGTERM old PID if exists]
-    KillOld --> Login[Angel One login]
+    Guardian -- Fail --> AbortGuardian([Exit — exclusive session required\ncleans up PID/flag, §23])
+    Guardian -- Pass --> Login[Angel One login]
     Login --> Contract[resolve_effective_contract:\nexchange front-month, UNLESS\n< 5 trading days to its expiry\n-- then roll to next contract out.\nAlso reads freeze_qty live off\nthe instrument master, §1]
 
     Contract --> SeedRetry{seed_st15 attempt\nfailed?}
@@ -430,11 +433,13 @@ State is persisted to `data/prometheus_state.csv` on every change (atomic tmp-re
 
 **`DISABLE`** is a startup-only gate, checked in `main()` before the `Prometheus` object is even constructed.
 
+**Evening-only session deferred start** (§23, 2026-09-11): on a day where `mcx_holidays.csv` marks the morning leg closed but the evening leg open (e.g. Ganesh Chaturthi 2026-09-14 — ~7/153 days, confirmed via local price history that CRUDEOILM genuinely has zero bars before 17:00 on every such historical day), `main()` defers the entire rest of startup — no login, no WS subscribe, no REST polling — until `EVENING_SESSION_OPEN_TIME` (`'17:00'`), waking `EVENING_SESSION_WAKE_BUFFER_MIN` (5 min) early as one-directional margin against that constant ever being wrong (waking early just costs a few harmless empty polls; waking late would silently lose real opening bars). `prometheus.pid`/`prometheus_active.flag` are written BEFORE this sleep (moved ahead of the old position after the `DISABLE`/Guardian checks specifically for this) so the process stays discoverable as "running, deferred" rather than looking crashed for its own ~8h dead zone, and so a manual restart during the dead zone can still find and SIGTERM the sleeping process via the existing stale-PID-kill logic. `DISABLE`/Guardian are checked AFTER this sleep, deliberately, so they reflect state right before login rather than an 8h-stale snapshot. Chosen over patching each individual dead-zone symptom (the DPL circuit-limit check and the WS stale-tick watchdog would otherwise both have needed separate fixes) — full reasoning and the three other threads considered in `plans/prometheus-phase3-production.md` §23.
+
 **§2, Phase 3: teardown's normal path no longer force-exits an open position at all.** Where Phase 2 always flattened at session end, Phase 3 leaves it open — that's the expected shape most days (§3 of the plan: positions can span a contract roll). The only exits that happen are the ones already firing during `run()` itself (SL/target/trend-flip); teardown just stops the feed, clears the private cache, saves state as-is, and reports.
 
 **Slack delivery on shutdown, `_slack_flush()`.** `_slack()` only enqueues a message; a single daemon worker thread (`_slack_worker`, 2026-09-08 — replaced one throwaway thread per message to fix a lot1/lot2/total delivery-order race) actually sends it. Being daemon means nothing keeps that thread alive once the main thread finishes, so a message still queued or mid-send at that instant is silently dropped — and `_send_session_report()` is always the LAST `_slack()` call in `_teardown()`, itself the last thing `run()` does before `main()`'s `finally` block exits the process. Bug caught 2026-09-10: the session report never arrived one night, lost to exactly this race. `main()`'s `finally` now calls `_slack_flush()` — blocks (up to 10s) via `queue.join()` until every queued send has actually returned — right before the process exits, on every shutdown path (session end, SIGTERM/KILL, unhandled exception).
 
-**Startup Slack sequence** (`#tradebot-updates`, extended 2026-09-11): login attempt → login success (client code shown) → "starting, trading `<symbol>`" (now includes the session's own `SESSION_START_TIME`–`CLOSING_TIME` window, since `CLOSING_TIME` is auto-computed and DST- dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST value, not just trend direction) → today's DPL circuit band (§11a, above).
+**Startup Slack sequence** (`#tradebot-updates`, extended 2026-09-11): [evening-only session only: "deferring start until `EVENING_SESSION_OPEN_TIME`", §23 above] → login attempt → login success (client code shown) → "starting, trading `<symbol>`" (now includes the session's own `SESSION_START_TIME`–`CLOSING_TIME` window, since `CLOSING_TIME` is auto-computed and DST- dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST value, not just trend direction) → today's DPL circuit band (§11a, above). A fully-closed day (§0) instead sends a single "MCX closed today (`<reason>`) — not starting" message and exits — skipped for the routine `'weekend'` reason (cron is Mon-Fri only; that case only ever fires on a manual run) but sent for a real MCX holiday.
 
 **Shutdown Slack sequence** (`#tradebot-updates`, extended 2026-09-11): the relevant "stopped" message (one of three, per branch — Kill Switch / position-left-open / plain stop) → "Angel One logged off successfully" → the session report. `_confirm_logoff()` moved the actual `terminateSession()` call from `main()`'s `finally` into `_teardown()` itself, right before each `_send_session_report()` call, so the confirmation is tied to a real, confirmed logoff — symmetric with the startup login-attempt/login-success messages above. `main()`'s `finally` still calls `terminateSession()` too, as a defensive fallback for the one path that skips `_teardown()` entirely (`_setup()` returning `False` before `run()`'s `try` block is ever entered) — a second call on an already-terminated session is a harmless no-op.
 
@@ -466,6 +471,8 @@ Prometheus refuses to start if Apollo, Athena, Artemis, or Iris has an open posi
 | `TENDER_ROLL_TRADING_DAYS` | 5 | Trading days before expiry to roll early |
 | `SEED_DAYS` | 18 | Calendar days of 1-min history tail-read for ST seeding |
 | `MIN_ENTRY_BUFFER_MIN` | 15 | No entry until the session's real open + this many minutes (fixed 2026-09-04 from a hardcoded `MIN_ENTRY_TIME` clock time — see the Entry/Exit Priority section) — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
+| `EVENING_SESSION_OPEN_TIME` | 17:00 | §23, 2026-09-11 — real open on an evening-only session (morning leg closed), confirmed against 3 historical instances. `main()` defers startup entirely until this time |
+| `EVENING_SESSION_WAKE_BUFFER_MIN` | 5 | §23 — wakes this many minutes early as one-directional margin (early is harmless, late loses real bars) |
 | `NO_EXIT_BEFORE_BUFFER_MIN` | 1 | No SL/target exit check until the session's real open + this many minutes (§10, built 2026-09-04) |
 | `CLOSING_TIME` | 23:30 (today) | **Auto-computed, no hand-toggling** (2026-09-11). MCX's non-agri (metals/energy) evening close follows a fully deterministic rule — 23:30 during US DST (2nd Sun of March → 1st Sun of Nov, itself fixed federal law since 2005), 23:55 outside it — confirmed via broker circulars for the real 2026-03-09 change. `_resolve_closing_time()` computes this fresh from the calendar at every process start; no Slack toggle button needed |
 | `SESSION_END_TIME` | = `CLOSING_TIME` | The main loop's own hard exit clock — **no buffer** (fixed 2026-09-04→09-11: previously `CLOSING_TIME` + a 25-min `SESSION_END_BUFFER_MIN`, computed via bare `HH:MM` string subtraction with no day-boundary handling; toggling `CLOSING_TIME` to `'23:55'` wrapped that to `'00:20'` with no date attached, so `run()`'s `session_end` landed hours in the past and the main loop's `while` condition was false from the first check — the whole session ran with zero LTP/15m monitoring. Removing the buffer fixes this outright and means the process is never alive past the real close — see `_reconcile_missed_flip` below for why the day's last bar not being processed live is safe) |

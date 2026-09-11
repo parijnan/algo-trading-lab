@@ -231,6 +231,36 @@ def mcx_fully_closed_today(today: date = None) -> tuple:
     return False, None
 
 
+def mcx_evening_only_today(today: date = None) -> tuple:
+    """
+    Companion to mcx_fully_closed_today(): True when today's morning leg is
+    closed but the evening leg is open (e.g. 2026-09-14, Ganesh Chaturthi)
+    -- the evening-only special session where CRUDEOILM genuinely doesn't
+    trade at all until EVENING_SESSION_OPEN_TIME (see prometheus_configs.py
+    for the live-data confirmation). main() uses this to defer the whole
+    process start (login, WS subscribe, REST polling) until then, instead
+    of sitting idle from 09:00 for ~8 hours.
+
+    Returns (evening_only, reason_or_None). False on a weekend -- already
+    caught by mcx_fully_closed_today's own weekend rule, so never reached
+    from main()'s actual call order, but kept consistent for any standalone
+    caller.
+    """
+    today = today or date.today()
+    if today.weekday() >= 5:
+        return False, None
+    holidays_df = _load_mcx_holidays()
+    if holidays_df.empty:
+        return False, None
+    row = holidays_df[holidays_df['date'] == today]
+    if row.empty:
+        return False, None
+    row = row.iloc[0]
+    if bool(row['morning_session_closed']) and not bool(row['evening_session_closed']):
+        return True, str(row.get('holiday_name', 'MCX holiday'))
+    return False, None
+
+
 def next_trading_day(today: date) -> date:
     """
     §4: the next day after `today` that isn't fully closed (weekend or an

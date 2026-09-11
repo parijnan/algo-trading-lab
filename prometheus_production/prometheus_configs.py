@@ -99,6 +99,27 @@ DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a 
 # ── Session ───────────────────────────────────────────────────────────────────
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
 
+# Evening-only special sessions (~7/153 days -- MCX holiday calendar rows
+# where morning_session_closed=True, evening_session_closed=False, e.g.
+# 2026-09-14 Ganesh Chaturthi): CRUDEOILM genuinely doesn't trade at all
+# until this clock time (confirmed 2026-09-11 against three historical
+# instances -- Holi 2026-03-03, Maharashtra Day 2026-05-01, Moharram
+# 2026-06-26 -- zero 1-min bars before 17:00 on any of them). Used by
+# main()'s pre-login gate (mcx_evening_only_today()) to defer the whole
+# process start until this time rather than sit idle from 09:00: no
+# login, no WS subscribe, no REST polling, no DPL circuit-limit checks,
+# nothing for the stale-tick watchdog to misread as a dead feed.
+EVENING_SESSION_OPEN_TIME = '17:00'
+
+# Wake a few minutes early rather than sleep to the exact open -- the two
+# failure directions aren't symmetric: waking too EARLY just costs a few
+# harmless "0 candle(s)" REST polls (already a normal, gracefully-handled
+# outcome — fetch_one_minute_window), while waking too LATE (e.g. if
+# EVENING_SESSION_OPEN_TIME is ever off by a few minutes for some future
+# holiday) silently loses real opening bars. This buffer is cheap insurance
+# against the latter, not a correction to the confirmed 17:00 figure itself.
+EVENING_SESSION_WAKE_BUFFER_MIN = 5
+
 # Min-entry guard — a genuine buffer duration, NOT a clock time (fixed
 # 2026-09-04, same bug class/fix as NO_EXIT_BEFORE_BUFFER_MIN below).
 # MIN_ENTRY_TIME used to be a hardcoded '09:15' clock time, live since

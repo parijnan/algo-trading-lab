@@ -46,6 +46,7 @@ from prometheus_configs import (
     PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
     NO_EXIT_BEFORE_BUFFER_MIN, NEW_CONTRACT_POLL_OFFSET_SEC,
     DPL_CIRCUIT_POLL_ENABLED, CLOSING_TIME, FO_EXCHANGE,
+    EVENING_SESSION_OPEN_TIME, EVENING_SESSION_WAKE_BUFFER_MIN,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -58,7 +59,7 @@ from prometheus_functions import (
     compute_st_for_contract, historical_basis_price,
     place_order, get_fill_price_and_qty, OrderFillWatcher, fetch_ltp_rest,
     load_trade_counter, save_trade_counter, append_trade_log_row, append_cumulative_trade,
-    check_no_active_strategies, mcx_fully_closed_today,
+    check_no_active_strategies, mcx_fully_closed_today, mcx_evening_only_today,
 )
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -2211,6 +2212,17 @@ class Prometheus:
         """
         if not DPL_CIRCUIT_POLL_ENABLED or self._dpl_uc is None or self._dpl_lc is None:
             return
+        if self._df_1m_today.empty:
+            # Same anchor as _minutes_since_session_open: no bar yet today
+            # means today's session (this contract) genuinely hasn't opened
+            # -- most days that's a few seconds after 09:00, but on an
+            # evening-only session (morning leg closed per the MCX holiday
+            # calendar, real open 17:00) this holds for the whole ~8h dead
+            # zone. Without this guard, _get_contract_ltp()'s REST fallback
+            # would fire every main-loop tick for that entire window,
+            # regardless of whether getMarketData() happens to return a
+            # stale/last-known UC/LC for a not-yet-open token.
+            return
         ltp = self._get_contract_ltp()
         if ltp is None:
             return
@@ -3007,6 +3019,24 @@ class Prometheus:
 # Standalone login and entry point
 # ---------------------------------------------------------------------------
 
+def _seconds_until_time(time_str: str, now: datetime) -> float:
+    """Seconds from `now` until `time_str` (HH:MM) on `now`'s own calendar
+    date -- clamped to 0.0 rather than going negative if `now` is already
+    past that clock time (e.g. a manual restart after EVENING_SESSION_OPEN_
+    TIME on an evening-only day should start immediately, not sleep almost
+    24h)."""
+    target = datetime.combine(now.date(), datetime.strptime(time_str, '%H:%M').time())
+    return max(0.0, (target - now).total_seconds())
+
+
+def _seconds_until_evening_open(now: datetime) -> float:
+    """_seconds_until_time(EVENING_SESSION_OPEN_TIME, now), minus
+    EVENING_SESSION_WAKE_BUFFER_MIN worth of early-wake margin -- see that
+    constant's own comment for why the buffer only ever pulls the wake time
+    earlier, never later. Clamped to 0.0 either way."""
+    return max(0.0, _seconds_until_time(EVENING_SESSION_OPEN_TIME, now) - EVENING_SESSION_WAKE_BUFFER_MIN * 60)
+
+
 def _login() -> tuple:
     import pyotp
     from SmartApi import SmartConnect
@@ -3038,24 +3068,28 @@ def main():
     # §0: Prometheus's own daily gate against mcx_holidays.csv — distinct
     # from Leto's NSE/BSE check, and checked before login (a local-file
     # check needs no broker session) so a holiday costs nothing beyond
-    # this one read.
+    # this one read. No Slack for the routine 'weekend' case (cron itself
+    # is Mon-Fri only; 'weekend' only ever fires on a manual test run and
+    # would just be noise) -- real MCX holidays still get one, since that's
+    # the "closed for the entire day" case worth flagging.
     closed, reason = mcx_fully_closed_today()
     if closed:
         logger.info(f'MCX closed today ({reason}) — not starting.')
         print(f'MCX is closed today ({reason}). Not starting Prometheus.')
+        if reason != 'weekend':
+            _slack(f'{_tag(SYMBOL)}: MCX closed today ({reason}) — not starting.', SLACK_TRADEBOT_CHANNEL)
+            _slack_flush()
         sys.exit(0)
 
-    if COMMAND_FLAG_PATH.exists() and COMMAND_FLAG_PATH.read_text().strip() == 'DISABLE':
-        logger.info('Prometheus DISABLE flag set — not starting.')
-        print('Prometheus is disabled via Slack. Clear the flag to resume.')
-        sys.exit(0)
-
-    ok, reason = check_no_active_strategies()
-    if not ok:
-        print(f'ERROR: Cannot start Prometheus — {reason}')
-        print('Prometheus requires an exclusive Angel One session.')
-        sys.exit(1)
-
+    # PID/active-flag bookkeeping happens BEFORE the evening-only sleep
+    # below (2026-09-11 fix) so a deferred-start process stays discoverable
+    # for its entire ~8h dead zone, not just from 17:00 onward: prometheus.
+    # pid/prometheus_active.flag both existing is what tells prometheus-qc's
+    # lifecycle check (and a human running `ps aux`) that Prometheus is
+    # genuinely running today (just sleeping), not crashed -- and it's what
+    # lets a manual restart during the dead zone find and SIGTERM the
+    # sleeping process via the stale-PID kill below, instead of silently
+    # ending up with two processes both waking into 17:00.
     if PID_FILE.exists():
         try:
             old_pid = int(PID_FILE.read_text().strip())
@@ -3073,6 +3107,38 @@ def main():
     obj = None
     tag = _tag(SYMBOL)
     try:
+        # §23 (2026-09-11): evening-only special session (morning leg
+        # closed, e.g. Ganesh Chaturthi 2026-09-14) -- CRUDEOILM genuinely
+        # doesn't trade at all until EVENING_SESSION_OPEN_TIME (confirmed
+        # against three historical instances, see that constant's own
+        # comment). Defer the rest of startup until then rather than come
+        # up at 09:00 and sit idle for ~8h: no login, no WS subscribe, no
+        # REST polling -- so nothing for the DPL circuit check to hammer
+        # and nothing for the WS stale-tick watchdog to misread as a dead
+        # feed. DISABLE-flag/exclusivity are (deliberately) checked AFTER
+        # this sleep, not before it, so they reflect the state actually in
+        # effect right before login, not a snapshot from 8h earlier.
+        evening_only, eo_reason = mcx_evening_only_today()
+        if evening_only:
+            wait_sec = _seconds_until_evening_open(datetime.now())
+            logger.info(f'MCX morning session closed today ({eo_reason}) — evening-only session, '
+                       f'deferring start until {EVENING_SESSION_OPEN_TIME} ({wait_sec / 60:.0f} min).')
+            _slack(f'{tag}: MCX morning session closed today ({eo_reason}) — evening session only. '
+                  f'Deferring start until {EVENING_SESSION_OPEN_TIME}.', SLACK_TRADEBOT_CHANNEL)
+            if wait_sec > 0:
+                time.sleep(wait_sec)
+
+        if COMMAND_FLAG_PATH.exists() and COMMAND_FLAG_PATH.read_text().strip() == 'DISABLE':
+            logger.info('Prometheus DISABLE flag set — not starting.')
+            print('Prometheus is disabled via Slack. Clear the flag to resume.')
+            sys.exit(0)
+
+        ok, reason = check_no_active_strategies()
+        if not ok:
+            print(f'ERROR: Cannot start Prometheus — {reason}')
+            print('Prometheus requires an exclusive Angel One session.')
+            sys.exit(1)
+
         _slack(f'{tag}: logging in to Angel One…', SLACK_TRADEBOT_CHANNEL)
         obj, auth_token, api_key, client_code = _login()
         _slack(f'{tag}: Angel One login successful (client {client_code}).', SLACK_TRADEBOT_CHANNEL)
