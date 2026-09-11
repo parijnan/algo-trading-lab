@@ -805,7 +805,7 @@ algo-trading-lab/
 │       ├── configs_p3.py           # Only SYMBOL differs from phase3/'s own — same combo, unchanged parameters
 │       ├── backtest_p3.py, trade_paths_p3.py, sweep_p3.py, exit_calib_p3.py, bespoke_2lot_p3.py
 │       │                          # Same pipeline as phase3/, run against CRUDEOIL's own price series
-│       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: Rs 55L start, Rs 10L margin/unit (both user-checked against CRUDEOIL's real margin)
+│       ├── dynamic_sizing_sim.py   # Equity/drawdown sim: Rs 55L start; margin/unit computed live per trade since §26 (entry_price*LOT_SIZE/3*4, divisor user-checked against CRUDEOIL's real margin)
 │       ├── dynamic_sizing_sim_slippage.py  # Same sim + participation-based slippage (same model as phase3/'s, own real 1-min volume)
 │       └── data_sweep/             (generated — gitignored)
 │   └── phase4/                     # Phase 4 — 1h/15m alignment entry filter (tested, SHELVED 2026-09-04 — no beat vs. baseline)
