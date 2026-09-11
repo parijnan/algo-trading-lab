@@ -26,10 +26,12 @@ import unittest
 import importlib.util
 import pandas as pd
 from dataclasses import fields as dc_fields
+from pathlib import Path
 
 REPO_ROOT  = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 APOLLO_DIR = os.path.join(REPO_ROOT, 'apollo_production')
 ATHENA_DIR = os.path.join(REPO_ROOT, 'athena_production')
+PROMETHEUS_DIR = os.path.join(REPO_ROOT, 'prometheus_production')
 
 
 def _load_state_module(strategy_dir, prefix, configs_filename, configs_import_name,
@@ -303,6 +305,44 @@ class TestAthenaStateRoundtrip(unittest.TestCase):
         pd.DataFrame([row]).to_csv(self.m.STATE_FILE, index=False)
         r = self.m.load_state()
         self.assertEqual(r.status, 'in_trade')
+
+
+# ---------------------------------------------------------------------------
+# Prometheus — last_processed_boundary (market-close reconciliation fix,
+# 2026-09-11, plans/prometheus-market-close-timing-and-reconciliation.md)
+# ---------------------------------------------------------------------------
+
+class TestPrometheusStateRoundtrip(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m   = _load_state_module(PROMETHEUS_DIR, 'prometheus',
+                                      'prometheus_configs.py', 'prometheus_configs',
+                                      'prometheus_state.py')
+        self.m.STATE_FILE = Path(self.tmp.name) / 'prometheus_state.csv'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_last_processed_boundary_roundtrip(self):
+        """A plain string field with no special casting in _INT_FIELDS/
+        _FLOAT_FIELDS -- confirms it survives the CSV round-trip as-is,
+        not coerced to NaN/float/etc."""
+        s = self.m.PrometheusState()
+        s.status = 'watching'
+        s.last_processed_boundary = '2026-09-10T23:00:00'
+        self.m.save_state(s)
+        r = self.m.load_state()
+        self.assertEqual(r.last_processed_boundary, '2026-09-10T23:00:00')
+        self.assertIsInstance(r.last_processed_boundary, str)
+
+    def test_last_processed_boundary_none_roundtrip(self):
+        """A fresh state file (first-ever run) must round-trip None, not
+        'None'/'nan' strings -- _reconcile_missed_flip's watermark check
+        depends on this being real None."""
+        self.m.save_state(self.m.PrometheusState())
+        r = self.m.load_state()
+        self.assertIsNone(r.last_processed_boundary)
 
 
 if __name__ == '__main__':

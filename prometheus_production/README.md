@@ -350,6 +350,60 @@ graph TD
 
 ---
 
+### Missed-Flip Reconciliation (at startup, added 2026-09-11)
+
+`SESSION_END_TIME` now equals `CLOSING_TIME` exactly (no buffer — see the
+Key Parameters table above), so the process is never alive past the real
+close and deliberately never live-processes the day's last, possibly-
+truncated 15m bar via `_handle_new_15m_bar`. `seed_st15()` still recomputes
+that bar's `trend`/`trend_flip` correctly on the next `_setup()` (`compute_st`
+runs over the *whole* series, not just "new" rows) — but nothing used to act
+on it: `_execute_entry`/`_execute_rule7_flip` are only ever called from
+`_handle_new_15m_bar`'s own live boundary-tick path, which never revisits a
+boundary from a prior session. A flip in that unprocessed last bar was
+silently lost — `watching` never entered a position the signal called for,
+or an `in_trade` position sat stale/wrong-direction until some unrelated
+later flip.
+
+Fixed with a persisted watermark, `state.last_processed_boundary` (the
+timestamp of the last 15m boundary `_handle_new_15m_bar` actually processed
+live, advanced unconditionally — flip or not), and `_reconcile_missed_flip()`,
+called from `_setup()` right after the WS feed is subscribed and after
+`_recover_missed_rollover()`:
+
+- Scans `self._df_15m` for any `trend_flip == True` bar after the watermark.
+  None found (the ordinary case, most restarts) → no-op.
+- One or more found (coalesced to the *latest* only — same "resolve to the
+  correct end state, don't replay every intermediate event" pattern as
+  missed-rollover recovery above; matters for a multi-day gap, e.g. an MCX
+  holiday) → replays exactly the action `_handle_new_15m_bar` would have
+  taken: `in_trade` + opposing direction → `_execute_rule7_flip` (no
+  `_past_min_entry_guard` gate here either, matching the live `in_trade`
+  path); `watching` + entry guards already clear → `_execute_entry`
+  immediately.
+- `watching` but `_past_min_entry_guard` not yet clear (the common case —
+  reconciliation runs at minute zero of the new session) → deferred, not
+  dropped: parked in `self._pending_missed_flip` and retried every tick of
+  `run()`'s main loop by `_retry_pending_missed_flip()` (same shape as §7's
+  `_pending_flip` retry) until the guard clears, or dropped if a fresher
+  live flip already moved `state.status` off `'watching'` without it (no
+  double-entry). The watermark only advances once the entry actually fires.
+- No watermark yet (first run on a fresh state file) → establishes the
+  baseline off the freshly-seeded series' own last bar, takes no retroactive
+  action on however much history `seed_st15` happened to pull.
+
+`place_order()` (`prometheus_functions.py`) independently refuses any
+order — paper or live — once `now` is at/after `CLOSING_TIME`, as the actual
+enforcement point for "never trades after close" (the loop's own hard stop
+above is reinforcement, not the only thing preventing it — DRY_RUN's paper
+fill used to have zero market-hours awareness of its own).
+
+Tests: `tests/test_prometheus_market_close.py`,
+`tests/test_state_roundtrip.py::TestPrometheusStateRoundtrip`. Full design
+trace: `plans/prometheus-market-close-timing-and-reconciliation.md`.
+
+---
+
 ## Signal: ST_15
 
 - **Timeframe**: single 15-min Supertrend (`ST_PERIOD=10`, `ST_MULTIPLIER=2.0`) — no regime gate,
@@ -646,7 +700,7 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `MIN_ENTRY_BUFFER_MIN` | 15 | No entry until the session's real open + this many minutes (fixed 2026-09-04 from a hardcoded `MIN_ENTRY_TIME` clock time — see the Entry/Exit Priority section) — the only entry-timing gate left (§2, Phase 3: no cutoff before close) |
 | `NO_EXIT_BEFORE_BUFFER_MIN` | 1 | No SL/target exit check until the session's real open + this many minutes (§10, built 2026-09-04) |
 | `CLOSING_TIME` | 23:30 | **DST-dependent — must be hand-toggled around US DST changes** (→23:30 ~2nd Sun March, →23:55 ~1st Sun Nov) |
-| `SESSION_END_BUFFER_MIN` | 25 | → `SESSION_END_TIME`, the main loop's own hard exit clock (process lifecycle only — unaffected by §2's no-EOD-flatten change) |
+| `SESSION_END_TIME` | = `CLOSING_TIME` | The main loop's own hard exit clock — **no buffer** (fixed 2026-09-04→09-11: previously `CLOSING_TIME` + a 25-min `SESSION_END_BUFFER_MIN`, computed via bare `HH:MM` string subtraction with no day-boundary handling; toggling `CLOSING_TIME` to `'23:55'` wrapped that to `'00:20'` with no date attached, so `run()`'s `session_end` landed hours in the past and the main loop's `while` condition was false from the first check — the whole session ran with zero LTP/15m monitoring. Removing the buffer fixes this outright and means the process is never alive past the real close — see `_reconcile_missed_flip` below for why the day's last bar not being processed live is safe) |
 | `CANDLE_POLL_LIMIT` / `LTP_POLL_LIMIT` | 3 / 10 per sec | Broker-wide client-side rate caps |
 | `ORDER_TIMEOUT_SEC` | 30 | WS fast path + REST fallback timeout |
 | `TRADE_UPDATE_SEC` | 20 | Slack update cadence while in-trade — matches Artemis's/Athena's convention, not Iris's 10s |

@@ -138,21 +138,27 @@ CLOSING_TIME = '23:30'
 # what was calibrated. Exit priority drops to SL -> lot1 target -> lot2
 # target -> trend_flip only (`_check_exit_conditions_ltp`, prometheus.py).
 
-# Poller/WS session-end buffer — tracks CLOSING_TIME plus the same generous
-# buffer mcx_live_downloader.py uses (SESSION_END_TIME=23:55 vs its own
-# MARKET_CLOSE=23:30, a 25-min buffer). This is process-lifecycle only (when
-# the daily cron's run() loop stops), not position management — unaffected
-# by the no-EOD-flatten change above.
-SESSION_END_BUFFER_MIN = 25
-
-
-def _minus_minutes(hhmm: str, minutes: int) -> str:
-    from datetime import datetime as _dt, timedelta as _td
-    t = _dt.strptime(hhmm, '%H:%M') - _td(minutes=minutes)
-    return t.strftime('%H:%M')
-
-
-SESSION_END_TIME = _minus_minutes(CLOSING_TIME, -SESSION_END_BUFFER_MIN)   # CLOSING_TIME + buffer
+# SESSION_END_TIME = CLOSING_TIME, deliberately no buffer (2026-09-11 fix).
+# Previously ran CLOSING_TIME + a 25-min SESSION_END_BUFFER_MIN, computed via
+# string HH:MM subtraction with no day-boundary handling -- when CLOSING_TIME
+# is hand-toggled to '23:55' (winter DST), that arithmetic silently wrapped
+# to '00:20' with no date attached, and run()'s session_end ended up hours in
+# the PAST relative to any daytime process start, so the main loop's `while
+# ... and datetime.now() < session_end` was False from the first check --
+# _setup() ran, then straight to _teardown(), zero LTP/15m monitoring for the
+# entire session. The buffer's only real purpose was process-lifecycle
+# margin (mirroring mcx_live_downloader.py's own), not continued position
+# management -- Phase 3's last 15m bar of the day is deliberately never
+# built live either way (see _reconcile_missed_flip in prometheus.py, which
+# is what makes that safe: any flip in that unprocessed bar gets replayed at
+# the next session's _setup(), not silently lost). Removing the buffer
+# entirely (a) eliminates the day-rollover bug outright rather than papering
+# over one call site, and (b) means the bot process itself is never alive
+# past the real close, so it can't fire a fresh entry/flip order after the
+# market has shut -- reinforced by place_order's own market-hours check
+# (prometheus_functions.py) as the actual enforcement point, not just this
+# loop boundary.
+SESSION_END_TIME = CLOSING_TIME
 
 # ── Signal: ST_15, single timeframe (no regime gate — Phase 2 design) ───────
 ST_PERIOD     = 10
@@ -337,6 +343,19 @@ SEED_RETRY_ATTEMPTS = 5
 SEED_RETRY_INTERVAL_SEC = 120   # 2 min apart, ~10 min total before giving up
 
 # ── Contract rollover (plan §4/§5/§6/§7/§8/§9, 2026-09-04) ──────────────────
+def _minus_minutes(hhmm: str, minutes: int) -> str:
+    """Subtract `minutes` from an 'HH:MM' string, same day only -- safe as
+    long as the result never crosses midnight (true for every current
+    caller: ROLLOVER_TIME/ROLLOVER_PREFETCH_TIME only ever subtract 5-15 min
+    from a CLOSING_TIME of 23:xx). Never use this for anything that ADDS
+    minutes near a 23:xx CLOSING_TIME -- that's exactly how the
+    SESSION_END_TIME day-rollover bug happened (fixed 2026-09-11 by
+    removing that addition entirely rather than making it day-aware)."""
+    from datetime import datetime as _dt, timedelta as _td
+    t = _dt.strptime(hhmm, '%H:%M') - _td(minutes=minutes)
+    return t.strftime('%H:%M')
+
+
 # ROLLOVER_TIME: the evening cutoff where a confirmed roll actually executes
 # -- derived the same way EOD_SQUAREOFF_TIME was in Phase 2 (CLOSING_TIME
 # minus a buffer), same DST-hand-toggle caveat carried over. Under the

@@ -40,6 +40,12 @@ class PrometheusState:
     lot2_exit_ts:        Optional[str]   = None
     lot2_exit_reason:    Optional[str]   = None
     last_known_ltp:      Optional[float] = None       # for restart recovery
+    last_processed_boundary: Optional[str] = None      # ISO timestamp of the last 15m boundary
+                                                         # _handle_new_15m_bar actually processed live
+                                                         # (set unconditionally, flip or not) -- the
+                                                         # watermark _reconcile_missed_flip() scans
+                                                         # past at _setup() to catch a flip that fired
+                                                         # in a bar the session ended before reaching.
     last_updated:        Optional[str]   = None        # stamped in save_state()
 
 

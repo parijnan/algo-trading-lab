@@ -211,6 +211,11 @@ class Prometheus:
                                                      # retry-until-resolved marker -- deliberately separate
                                                      # from _pending_flip (a cross-contract transition can't
                                                      # be represented by Rule 7's same-instrument marker).
+        self._pending_missed_flip = None   # market-close fix (2026-09-11): a missed-flip entry found by
+                                            # _reconcile_missed_flip() at _setup() but blocked by
+                                            # _past_min_entry_guard (session just started) -- retried every
+                                            # tick, same shape as _pending_flip, until the guard clears or a
+                                            # fresh live flip supersedes it (state.status leaves 'watching').
 
         # Provisional boundary computation (2026-09-04, user-directed) —
         # all in-memory only, same precedent as _pending_recovery/
@@ -1058,6 +1063,115 @@ class Prometheus:
               f'(§18 early switch earlier today, not a missed rollover).', SLACK_TRADEBOT_CHANNEL)
         self._contract = caught_up
 
+    def _reconcile_missed_flip(self) -> None:
+        """
+        Market-close fix (2026-09-11): SESSION_END_TIME now equals
+        CLOSING_TIME exactly (no buffer -- see prometheus_configs.py), so
+        the bot process is never alive past the real close and deliberately
+        never live-processes the day's last, possibly-truncated 15m bar via
+        _handle_new_15m_bar. seed_st15() still recomputes that bar's
+        trend/trend_flip correctly on the next _setup() (compute_st runs
+        over the WHOLE series, not just "new" rows) -- but nothing used to
+        ACT on it. _execute_entry/_execute_rule7_flip are ONLY ever called
+        from _handle_new_15m_bar's own live boundary-tick path, which never
+        revisits a boundary from a prior session. A flip in that
+        unprocessed last bar was silently lost: `watching` never entered a
+        position the signal called for, or an `in_trade` position sat
+        stale/wrong-direction until some unrelated later flip. This replays
+        exactly that missed action.
+
+        Watermark-based (self.state.last_processed_boundary, advanced in
+        _handle_new_15m_bar on every bar, flip or not) rather than "does
+        state.direction disagree with the current trend" -- the
+        disagreement check alone misses the `watching` case (flat, no
+        state.direction to disagree with a flip that should have opened a
+        position in the first place).
+
+        Must run after self.feed is started/subscribed (_execute_entry
+        needs live LTP) and after _recover_missed_rollover() (so it acts
+        against whatever contract/state that resolved to, not a stale one).
+        No coincident-flip-transition branch needed here (unlike
+        _handle_new_15m_bar's live in_trade path): self._rollover_new_contract
+        is only ever set by _check_rollover_timing, called from run()'s live
+        loop -- always None at this point in _setup(), so a plain Rule 7
+        flip is the correct and complete replay.
+        """
+        tag = _tag(self._contract['symbol_root'])
+        if self.state.last_processed_boundary is None:
+            # No watermark yet (first run on this state file). Nothing to
+            # compare against -- establish the baseline off the freshly
+            # seeded series' own last bar and move on; don't act
+            # retroactively on however much history seed_st15 pulled.
+            last = self._df_15m.iloc[-1]
+            if not pd.isna(last['trend']):
+                self.state.last_processed_boundary = last['time_stamp'].isoformat()
+                save_state(self.state)
+            return
+
+        watermark = pd.Timestamp(self.state.last_processed_boundary)
+        unprocessed = self._df_15m[self._df_15m['time_stamp'] > watermark]
+        flips = unprocessed[unprocessed['trend_flip'] == True]
+        if flips.empty:
+            return
+
+        bar = flips.iloc[-1]   # coalesce to the latest unprocessed flip only --
+                                # same "resolve to the correct end state, don't
+                                # replay every intermediate event" pattern as
+                                # _recover_missed_rollover above.
+        direction_now = 'bullish' if bool(bar['trend']) else 'bearish'
+        window_start = bar['time_stamp']
+        logger.critical(f'Missed flip detected: ST_15 flipped -> {direction_now} at {window_start} '
+                        f'-- session ended before this bar went live. Reconciling at startup.')
+        _slack(f'\U0001f504 {tag}: missed flip -> *{direction_now}* at {window_start:%Y-%m-%d %H:%M} '
+              f'(session ended before this bar went live) -- reconciling now.', SLACK_TRADEBOT_CHANNEL)
+
+        if self.state.status == 'in_trade':
+            if direction_now != self.state.direction:
+                self._execute_rule7_flip(direction_now, window_start, bar['close'])
+            self.state.last_processed_boundary = bar['time_stamp'].isoformat()
+            save_state(self.state)
+        elif self.state.status == 'watching':
+            if (self._past_min_entry_guard(datetime.now())
+                    and not self._rollover_entry_suppressed(datetime.now())
+                    and self._check_1h_alignment(direction_now)):
+                self._execute_entry(direction_now, window_start, bar['close'])
+                self.state.last_processed_boundary = bar['time_stamp'].isoformat()
+                save_state(self.state)
+            else:
+                # Session just started -- _past_min_entry_guard almost always
+                # blocks here (reconciliation runs at _setup(), i.e. minute
+                # zero of the new session). Defer, don't drop: retried every
+                # tick by _retry_pending_missed_flip() until the guard clears
+                # (same shape as §7's _pending_flip retry). Watermark
+                # deliberately NOT advanced yet -- only once it actually fires.
+                logger.info(f'Missed-flip entry ({direction_now}) deferred -- entry guards not '
+                           f'yet clear at session start. Will retry every tick.')
+                self._pending_missed_flip = {
+                    'direction': direction_now, 'window_start': window_start,
+                    'close': float(bar['close']), 'boundary_ts': bar['time_stamp'],
+                }
+
+    def _retry_pending_missed_flip(self) -> None:
+        """Retried every tick until _past_min_entry_guard (and the other
+        entry guards) clear, or a fresh live flip supersedes it (state.status
+        leaves 'watching', e.g. the ordinary _handle_new_15m_bar path already
+        entered on a newer signal) -- see _reconcile_missed_flip()."""
+        pf = self._pending_missed_flip
+        if pf is None:
+            return
+        if self.state.status != 'watching':
+            self._pending_missed_flip = None   # superseded -- state moved on without us
+            return
+        now = datetime.now()
+        if not (self._past_min_entry_guard(now)
+                and not self._rollover_entry_suppressed(now)
+                and self._check_1h_alignment(pf['direction'])):
+            return
+        self._execute_entry(pf['direction'], pf['window_start'], pf['close'])
+        self._pending_missed_flip = None
+        self.state.last_processed_boundary = pf['boundary_ts'].isoformat()
+        save_state(self.state)
+
     def _recover_missed_rollover(self) -> None:
         """§5 (DECIDED option a): if a rollover was missed overnight (the
         process wasn't alive at ROLLOVER_TIME, an MCX holiday, KILL,
@@ -1490,6 +1604,7 @@ class Prometheus:
         # overnight), THEN check whether ANOTHER roll is needed tonight —
         # in that order, so §4's check runs against the now-correct contract.
         self._recover_missed_rollover()
+        self._reconcile_missed_flip()
         self._check_rollover_tonight()
 
         logger.info('Setup complete — watchdog armed.')
@@ -1761,6 +1876,12 @@ class Prometheus:
                 if self._pending_contract_transition is not None:
                     self._retry_pending_contract_transition()
 
+                # ── Market-close fix (2026-09-11): retry a deferred
+                #    missed-flip entry every tick until entry guards clear
+                #    or a fresher live signal supersedes it ─────────────
+                if self._pending_missed_flip is not None:
+                    self._retry_pending_missed_flip()
+
                 # ── In-trade: tight LTP-driven exit loop, every tick ────
                 if self.state.status == 'in_trade':
                     self._check_exit_conditions_ltp(now)
@@ -2029,6 +2150,15 @@ class Prometheus:
         persist_15m_series(self._df_15m)
         if bar is None:
             return
+
+        # Watermark for _reconcile_missed_flip() (§ market-close fix,
+        # 2026-09-11): advances unconditionally, flip or not, so an
+        # ordinary restart mid-session never finds a stale "unprocessed"
+        # tail -- only a bar the live loop genuinely never reached (the
+        # session ended before this boundary fired) is ever found by the
+        # next _setup()'s scan.
+        self.state.last_processed_boundary = bar['time_stamp'].isoformat()
+        save_state(self.state)
 
         flip = bool(bar['trend_flip'])
         direction_now = 'bullish' if bool(bar['trend']) else 'bearish'

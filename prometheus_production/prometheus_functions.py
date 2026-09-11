@@ -1212,7 +1212,37 @@ def place_order(obj, transaction_type: str, symbol: str, token: str,
     fires — freeze_qty=10000 for CRUDEOILM (lotsize=10) allows up to 1000
     lots in a single order. Callers (get_fill_price_and_qty) must aggregate
     across the whole list regardless, not assume a single ID.
+
+    Market-hours guard (2026-09-11): refuses ANY order — paper or live —
+    once `now` is at/after CLOSING_TIME. Before this, DRY_RUN's unconditional
+    "success" had zero market-hours awareness of its own; the only thing
+    stopping a post-close order was the broker's own live-mode rejection
+    (external to this codebase) or the main loop happening to not be alive
+    that late. Deliberately made unconditional on dry_run so paper testing
+    exercises the same refusal live trading would hit, rather than only
+    finding out live orders get rejected after DRY_RUN=False. This is now
+    the single enforcement point for "the bot never trades after market
+    close" — the loop's own session_end stop (run(), prometheus.py) getting
+    the day-boundary math wrong is no longer the only thing preventing it.
+    Should essentially never fire under normal operation (SESSION_END_TIME
+    == CLOSING_TIME, so the loop itself isn't alive past this point) — if it
+    does, that's a real bug elsewhere (a stuck retry, a delayed reconciliation
+    call, clock skew), not an expected path. No lower-bound (session-open)
+    check here: Phase 3's evening-only special sessions open at a real time
+    that varies (self._df_1m_today's own first bar), not a fixed clock
+    value SESSION_START_TIME represents — see _minutes_since_session_open's
+    own docstring in prometheus.py. _past_min_entry_guard already covers
+    thin-opening-liquidity protection on the entry side.
     """
+    now = datetime.now()
+    closing = pd.Timestamp(f'{now.date()} {CLOSING_TIME}')
+    if now >= closing:
+        logger.critical(f'place_order REFUSED: now={now:%H:%M:%S} is at/after CLOSING_TIME '
+                        f'({CLOSING_TIME}) — {transaction_type} {lots} lot(s) of {symbol} NOT placed '
+                        f'(dry_run={dry_run}). Should never fire under normal operation — investigate '
+                        f'what called place_order this late.')
+        return []
+
     if dry_run:
         dry_id = f'PAPER_{token}_{transaction_type}_{datetime.now():%H%M%S}'
         logger.info(f'[PAPER] {transaction_type} {lots} lot(s) of {symbol} (token={token}) -> {dry_id}')
