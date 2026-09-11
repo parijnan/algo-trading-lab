@@ -3025,9 +3025,10 @@ class Prometheus:
               f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{pnl["unrealised_rs"]:+,.0f})  '
               f'Total: Rs.{pnl["total_rs"]:+,.0f}')
         # 2026-09-08 (user-requested): Slack-only, not logged to file/console
-        # — this fires every TRADE_UPDATE_SEC (20s) while in-trade and was
-        # drowning out genuinely critical log lines; the user already gets
-        # this exact message on Slack (SLACK_TRADE_UPDATES) regardless.
+        # — this fires every TRADE_UPDATE_SEC (60s, raised from 20s 2026-09-11
+        # — see that constant's own comment) while in-trade and was drowning
+        # out genuinely critical log lines; the user already gets this exact
+        # message on Slack (SLACK_TRADE_UPDATES) regardless.
         _slack(msg, SLACK_TRADE_UPDATES)
 
 
