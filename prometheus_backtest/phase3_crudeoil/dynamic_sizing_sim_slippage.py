@@ -153,8 +153,9 @@ def run_sim(a_coeff):
     days = (df['entry_ts'].max() - df['entry_ts'].min()).days
     years = days / 365.25
     cagr = ((final_capital / STARTING_CAPITAL) ** (1 / years) - 1) * 100 if years > 0 else float('nan')
-    max_dd_pct = events_df['drawdown_pct'].min()
-    max_dd_rs = events_df['drawdown_rs'].min()
+    max_dd_row = events_df.loc[events_df['drawdown_pct'].idxmin()]
+    max_dd_pct = max_dd_row['drawdown_pct']
+    max_dd_rs = max_dd_row['drawdown_rs']
     calmar = (total_return_pct / 100) / abs(max_dd_pct) if max_dd_pct else float('nan')
 
     stats = {
