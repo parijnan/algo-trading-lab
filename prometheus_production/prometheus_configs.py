@@ -470,11 +470,12 @@ NEW_CONTRACT_POLL_OFFSET_SEC = 27
 PENDING_FLIP_REALERT_DEBOUNCE_SEC = 300
 
 # ── Slack ─────────────────────────────────────────────────────────────────────
-TRADE_UPDATE_SEC = 60      # raised from 20s 2026-09-11: at 20s this alone could produce
-                            # ~2,600 Slack messages in a single full in-trade session, a major
-                            # contributor to the workspace hitting Slack's own
-                            # message_limit_exceeded cap that day (see _slack_worker's own
-                            # comment) — 60s cuts that to a third
+TRADE_UPDATE_SEC = 20      # briefly raised to 60s on 2026-09-11 after this cadence contributed
+                            # to the workspace hitting Slack's own message_limit_exceeded cap
+                            # that day (see plans/prometheus-phase3-production.md §24) -- reverted
+                            # back to 20s the same day once the Slack plan was upgraded, removing
+                            # the message-cap constraint. Matches Artemis's/Athena's convention,
+                            # not Iris's 10s.
 
 # ── 15-min debug series retention (§4) — non-authoritative, purely for human
 # visibility; never read back as an input to live ST computation. ───────────
