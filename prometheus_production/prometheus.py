@@ -1624,6 +1624,24 @@ class Prometheus:
         logger.info('Setup complete — watchdog armed.')
         return True
 
+    def _confirm_logoff(self, tag: str) -> None:
+        """Real terminateSession() call (2026-09-11), moved here from
+        main()'s finally so the confirmation message can sit exactly where
+        the user asked for it -- after the 'stopped' message, before the
+        session report. Symmetric with main()'s own login-attempt/login-
+        success messages. main()'s finally still ALSO calls
+        terminateSession() (unchanged) -- a defensive fallback for the one
+        path that skips _teardown() entirely (_setup() returning False
+        before run()'s try block is ever entered); a second call there on
+        an already-terminated session is a harmless no-op, already wrapped
+        in its own try/except."""
+        try:
+            self.obj.terminateSession(self._client_code)
+            logger.info('Angel One session terminated.')
+            _slack(f'{tag}: Angel One logged off successfully.', SLACK_TRADEBOT_CHANNEL)
+        except Exception as e:
+            logger.warning(f'terminateSession failed here (non-fatal, main() will retry at exit): {e}')
+
     def _teardown(self) -> None:
         tag = _tag(self._contract['symbol_root']) if self._contract else '*Prometheus*'
 
@@ -1672,6 +1690,7 @@ class Prometheus:
             _slack(f'⏹ {tag}: stopped via Kill Switch. Position left OPEN and untouched, '
                   f'as promised — manage it manually, or restart Prometheus to resume monitoring it.',
                   SLACK_TRADEBOT_CHANNEL)
+            self._confirm_logoff(tag)
             self._send_session_report()
             return
 
@@ -1705,6 +1724,7 @@ class Prometheus:
             logger.info('Teardown with an open position — left OPEN, as designed (Phase 3, no EOD flatten).')
             _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ {tag} stopped. Position left OPEN — expected, '
                   f'not an error. A restart resumes monitoring it.', SLACK_TRADEBOT_CHANNEL)
+            self._confirm_logoff(tag)
             self._send_session_report()
             return
 
@@ -1712,6 +1732,7 @@ class Prometheus:
         save_state(self.state)
         logger.info('Prometheus stopped.')
         _slack(f'{"[PAPER] " if DRY_RUN else ""}⏹ {tag} stopped.', SLACK_TRADEBOT_CHANNEL)
+        self._confirm_logoff(tag)
         self._send_session_report()
 
     def _send_session_report(self) -> None:
@@ -3066,6 +3087,12 @@ def main():
         FLAG_PATH.unlink(missing_ok=True)
         PID_FILE.unlink(missing_ok=True)
         if obj is not None:
+            # 2026-09-11: Prometheus._confirm_logoff() already calls this
+            # (and Slacks the confirmation) from inside _teardown() on every
+            # NORMAL exit path -- this is now a defensive fallback for the
+            # one path that skips _teardown() entirely (_setup() returning
+            # False before run()'s try block is ever entered). Calling it
+            # again on an already-terminated session is a harmless no-op.
             try:
                 obj.terminateSession(str(pd.read_csv(CREDS_FILE).iloc[0]['user_name']))
             except Exception:

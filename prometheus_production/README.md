@@ -690,6 +690,16 @@ success (client code shown) → "starting, trading `<symbol>`" (now includes the
 dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST
 value, not just trend direction) → today's DPL circuit band (§11a, above).
 
+**Shutdown Slack sequence** (`#tradebot-updates`, extended 2026-09-11): the relevant "stopped"
+message (one of three, per branch — Kill Switch / position-left-open / plain stop) → "Angel One
+logged off successfully" → the session report. `_confirm_logoff()` moved the actual
+`terminateSession()` call from `main()`'s `finally` into `_teardown()` itself, right before each
+`_send_session_report()` call, so the confirmation is tied to a real, confirmed logoff — symmetric
+with the startup login-attempt/login-success messages above. `main()`'s `finally` still calls
+`terminateSession()` too, as a defensive fallback for the one path that skips `_teardown()`
+entirely (`_setup()` returning `False` before `run()`'s `try` block is ever entered) — a second
+call on an already-terminated session is a harmless no-op.
+
 **Session report date-qualification** (`_send_session_report`, fixed 2026-09-11): Phase 3
 positions can span multiple sessions (§2, no EOD flatten) — an entry/exit on a different calendar
 day than the report's own date used to print bare `HH:MM`, making e.g. a 22:15 entry the previous

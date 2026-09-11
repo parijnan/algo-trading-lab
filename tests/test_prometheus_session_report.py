@@ -1,12 +1,23 @@
 """
-§_send_session_report date-qualification fix, regression test.
+Teardown/session-report Slack messaging, regression tests.
 
-Context: user caught 2026-09-10's session report showing trade #16's entry
-as bare "22:15" with no date -- Phase 3 positions can span multiple
-sessions (§2, no EOD flatten), so a PREVIOUS day's entry read as if it were
-today's. Fixed 2026-09-11 with a local _ts_str() helper inside
-_send_session_report: qualifies with the date only when it differs from the
-report's own date, leaving the common same-day case exactly as before.
+Two fixes, same 2026-09-11 session, both in the shutdown path:
+
+1. §_send_session_report date-qualification: user caught 2026-09-10's
+   session report showing trade #16's entry as bare "22:15" with no date --
+   Phase 3 positions can span multiple sessions (§2, no EOD flatten), so a
+   PREVIOUS day's entry read as if it were today's. Fixed with a local
+   _ts_str() helper inside _send_session_report: qualifies with the date
+   only when it differs from the report's own date, leaving the common
+   same-day case exactly as before.
+
+2. §_confirm_logoff: user asked for a "logged off successfully" message,
+   symmetric with the login-attempt/login-success messages, positioned
+   after the "stopped" message and before the session report in all three
+   _teardown() exit branches. The actual terminateSession() call moved from
+   main()'s finally into _teardown() itself so the confirmation is tied to
+   a real, confirmed logoff -- main()'s finally still calls it too, as a
+   defensive fallback for the one path that skips _teardown() entirely.
 """
 import importlib.util
 import logging
@@ -135,6 +146,39 @@ class TestSessionReportDateQualification(unittest.TestCase):
         self.p._send_session_report()
         report = self.captured[0]
         self.assertIn(f"Entry: {yesterday.strftime('%d-%b')} 22:15", report)
+
+
+class TestConfirmLogoff(unittest.TestCase):
+
+    def setUp(self):
+        self.mod = _load_prometheus_module()
+        self.p = object.__new__(self.mod.Prometheus)
+        self.p._client_code = 'p436059'
+        self.captured = []
+        self.mod._slack = lambda msg, channel=None: self.captured.append(msg)
+
+    def tearDown(self):
+        for mod in ('prometheus_configs', 'prometheus_state', 'prometheus_functions',
+                   'prometheus_logger_setup', 'prometheus'):
+            sys.modules.pop(mod, None)
+        for d in (PROM_DIR, REPO_ROOT):
+            if d in sys.path:
+                sys.path.remove(d)
+
+    def test_success_calls_terminate_session_and_announces(self):
+        calls = []
+        self.p.obj = type('Obj', (), {'terminateSession': lambda self_, code: calls.append(code)})()
+        self.p._confirm_logoff('*Prometheus [CRUDEOILM]*')
+        self.assertEqual(calls, ['p436059'])
+        self.assertEqual(len(self.captured), 1)
+        self.assertIn('logged off successfully', self.captured[0])
+
+    def test_failure_is_non_fatal_and_does_not_announce_false_success(self):
+        def _raise(self_, code):
+            raise RuntimeError('network blip')
+        self.p.obj = type('Obj', (), {'terminateSession': _raise})()
+        self.p._confirm_logoff('*Prometheus [CRUDEOILM]*')   # must not raise
+        self.assertEqual(self.captured, [])
 
 
 if __name__ == '__main__':
