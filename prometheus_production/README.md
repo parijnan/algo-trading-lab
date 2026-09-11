@@ -451,22 +451,20 @@ trace: `plans/prometheus-market-close-timing-and-reconciliation.md`.
   the 15m bar is skipped outright (a gap in the ST series, alerted loudly); if it has fewer than
   8 of the expected 15, the bar is still built from what's available, also alerted — "no silent
   staleness."
-- **DPL circuit-breaker ladder detection** (§11a, added 2026-09-11): MCX's Daily Price Limit
-  mechanism can freeze CRUDEOILM at a fixed price for ~9-16 minutes, then jump a fixed increment,
-  repeating for several steps (confirmed three times historically: 2026-03-09 a 7-step ladder,
-  2026-04-08 a 4-step ladder, 2026-09-10 a single-step freeze) — a multi-step ladder badly distorts
-  ST's ATR across the affected bars, the same mechanism as the opening-bar artifact above but worse
-  and not confined to one candle or one time of day. `_check_dpl_freeze()` runs on every 1-min
-  merge, scanning the *settled* portion of today's series (excluding the newest
-  `DPL_SETTLE_LAG_MIN` minutes, which can still be rewritten by the next poll) for a **chain of 2+
-  consecutive flat-price runs** (`DPL_MIN_STEP_MIN`-`DPL_MAX_STEP_MIN` minutes each, gapped by at
-  most `DPL_CHAIN_GAP_MAX_SEC`) — calibrated against the full local 1-min history rather than
-  assumed: an *isolated* flat run alone does not reliably separate a real freeze from an ordinary
-  quiet/thin-liquidity spell, but the chain signature had zero false positives across the whole
-  sweep. **Detect + Slack-alert only** (`#error-alerts`, once per episode) — zero change to any
-  SL/target/ST/entry/exit behavior; a single-step freeze (no chain) is a known gap, not yet
-  detectable from CRUDEOILM's own data alone. Full calibration writeup:
-  `plans/prometheus-phase3-production.md` §11a.
+- **DPL circuit-limit detection** (§11a, 2026-09-11): MCX's Daily Price Limit mechanism can freeze
+  CRUDEOILM at a fixed price for several minutes, then jump a fixed increment, repeating for
+  several steps (confirmed three times historically: 2026-03-09 a 7-step ladder, 2026-04-08 a
+  4-step ladder, 2026-09-10 a single-step freeze) — badly distorts ST's ATR across the affected
+  bars while it holds. Reads MCX's own live circuit limits directly from AngelOne's REST Quote API
+  (`getMarketData(mode='FULL')` → `upperCircuit`/`lowerCircuit`, confirmed live against real
+  CRUDEOILM data and cross-checked against the WS SNAP_QUOTE fields — exact agreement) rather than
+  inferring a freeze from price patterns — exchange-authoritative, self-updates through every
+  relaxation step, and catches an isolated single-step freeze that an earlier pattern-based
+  approach explicitly could not. `_check_dpl_circuit_hit()` runs every main-loop tick regardless of
+  `state.status`, comparing live LTP against the cached band; `_refresh_dpl_circuit_limits()`
+  re-fetches at startup, on freeze release, and periodically if no band is known yet. **Detect +
+  Slack-alert only** (`#tradebot-updates`) — zero change to any SL/target/ST/entry/exit behavior.
+  `DPL_CIRCUIT_POLL_ENABLED` is a kill switch. Full writeup: `plans/prometheus-phase3-production.md` §11a.
 
 ---
 
@@ -686,6 +684,19 @@ race. `main()`'s `finally` now calls `_slack_flush()` — blocks (up to 10s) via
 until every queued send has actually returned — right before the process exits, on every shutdown
 path (session end, SIGTERM/KILL, unhandled exception).
 
+**Startup Slack sequence** (`#tradebot-updates`, extended 2026-09-11): login attempt → login
+success (client code shown) → "starting, trading `<symbol>`" (now includes the session's own
+`SESSION_START_TIME`–`CLOSING_TIME` window, since `CLOSING_TIME` is auto-computed and DST-
+dependent — see the Key Parameters table) → "ST_15 seeded" (now includes the actual computed ST
+value, not just trend direction) → today's DPL circuit band (§11a, above).
+
+**Session report date-qualification** (`_send_session_report`, fixed 2026-09-11): Phase 3
+positions can span multiple sessions (§2, no EOD flatten) — an entry/exit on a different calendar
+day than the report's own date used to print bare `HH:MM`, making e.g. a 22:15 entry the previous
+day indistinguishable from a same-day 22:15 entry (user-caught against a real report). A local
+`_ts_str()` helper now qualifies with the date (`DD-Mon HH:MM`) only when it differs from the
+report's own date — the common same-day case is unchanged.
+
 ---
 
 ## Guardian Check
@@ -724,10 +735,7 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `SEED_RETRY_ATTEMPTS` / `SEED_RETRY_INTERVAL_SEC` | 5 / 120 | §15 — bounded, blocking startup retry around `seed_st15` (safe pre-position, no concurrent loop to starve) |
 | `OPENING_BAR_CORRECTION_ENABLED` | `False` | §11 — the opening-bar fix always runs and logs; only patches when `True` |
 | `OPENING_BAR_ARTIFACT_THRESHOLD` | 0.5 | §11 — CRUDEOIL/CRUDEOILM true-range ratio below this at 09:00 triggers the substitution |
-| `DPL_MIN_STEP_MIN` / `DPL_MAX_STEP_MIN` | 8 / 18 | §11a — candidate DPL circuit-freeze step length, calibrated against the full local CRUDEOILM history (shortest/longest confirmed real step: 9 / ~15-16 min) |
-| `DPL_CHAIN_GAP_MAX_SEC` | 180 | §11a — max gap between chained steps; every confirmed chain's step-to-step gap was 1-2 min |
-| `DPL_SETTLE_LAG_MIN` | 2 | §11a — excludes the newest, still-rewritable 1-min bar(s) from detection |
-| `DPL_FREEZE_ALERT_ENABLED` | `True` | §11a — kill switch if the alert proves noisier live than in the historical calibration; zero effect on trading either way |
+| `DPL_CIRCUIT_POLL_ENABLED` | `True` | §11a — kill switch for the live DPL circuit-limit check; zero effect on trading either way |
 | `ST_SEED_SKIP_DATES` | `[]` | §14 — manually populated dates excluded from the daily seed's tail-read (whole bad sessions, e.g. a Budget special session) |
 | `REJECTION_RETRY_ATTEMPTS` / `_COOLDOWN_SEC` | 3 / 1 | §1 — `place_order`'s retry on an actual broker rejection |
 | `GHOST_RECOVERY_COOLDOWN_SEC` / `_LOOKBACK_SEC` | 2 / 60 | §1 — `place_order`'s order-book check on a `DataException`/`NetworkException` |

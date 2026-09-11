@@ -45,8 +45,7 @@ from prometheus_configs import (
     ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
     PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
     NO_EXIT_BEFORE_BUFFER_MIN, NEW_CONTRACT_POLL_OFFSET_SEC,
-    DPL_MIN_STEP_MIN, DPL_MAX_STEP_MIN, DPL_CHAIN_GAP_MAX_SEC,
-    DPL_SETTLE_LAG_MIN, DPL_FREEZE_ALERT_ENABLED,
+    DPL_CIRCUIT_POLL_ENABLED, CLOSING_TIME, FO_EXCHANGE,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -181,12 +180,10 @@ class Prometheus:
         self._pending_15m_boundary = None   # §12: 15m boundary awaiting a complete 1-min window
         self._pending_15m_deadline = None   # §12: cutoff before building it from what's on hand
         self._opening_bar_checked = False   # §11: run patch_opening_bar_if_artifact once per session
-        self._dpl_alerted_chains = set()   # §11a: chain-start ISO timestamps already alerted on —
-                                            # in-memory only, per session (matches _pending_recovery/
-                                            # _pending_15m_boundary's own "crash loses this, falls back
-                                            # to a safe default" precedent; re-detecting and re-alerting
-                                            # once after a restart mid-ladder is an acceptable, harmless
-                                            # duplicate, not a correctness issue for an alert-only feature)
+        self._dpl_uc = None            # §11a: live upper circuit limit, refreshed from the broker
+        self._dpl_lc = None            # §11a: live lower circuit limit
+        self._dpl_frozen = False       # §11a: currently pinned at a circuit limit
+        self._dpl_frozen_price = None  # §11a: the exact price it's pinned at, for unfreeze detection
         self._trade_counter = load_trade_counter()
         self._pending_trade_row = {}   # built in _execute_entry; reconstructed in _setup() on crash resume
 
@@ -1475,7 +1472,8 @@ class Prometheus:
                     f'(token {self._contract["token"]}, expiry {self._contract["expiry_date"]:%Y-%m-%d})'
                     f'{roll_note}')
         _slack(f'{"[PAPER] " if DRY_RUN else ""}⚡ {tag} starting — '
-              f'trading {self._contract["symbol"]}{roll_note}', SLACK_TRADEBOT_CHANNEL)
+              f'trading {self._contract["symbol"]}{roll_note} '
+              f'(session {SESSION_START_TIME}–{CLOSING_TIME})', SLACK_TRADEBOT_CHANNEL)
 
         # §15: seed_st15 is single-shot by default (no retry) -- a broker
         # hiccup during its live gap-fetch would otherwise block the whole
@@ -1503,8 +1501,16 @@ class Prometheus:
 
         last = self._df_15m.iloc[-1]
         trend_str = ('bullish' if bool(last['trend']) else 'bearish') if not pd.isna(last['trend']) else 'warmup'
+        st_str = f'{last["supertrend"]:.2f}' if not pd.isna(last['supertrend']) else 'n/a (warmup)'
         _slack(f'{"[PAPER] " if DRY_RUN else ""}✅ {tag}: ST_15 seeded '
-              f'({len(self._df_15m)} bars). Trend: {trend_str}.', SLACK_TRADEBOT_CHANNEL)
+              f'({len(self._df_15m)} bars). Trend: {trend_str}. ST={st_str}.', SLACK_TRADEBOT_CHANNEL)
+
+        # §11a: initial DPL circuit-band announcement, right after seeding —
+        # a fetch failure here is non-fatal (logged, not blocking startup);
+        # _check_dpl_circuit_hit simply stays inert until a later refresh
+        # succeeds (self._dpl_uc/_lc stay None).
+        if not self._refresh_dpl_circuit_limits(announce=True):
+            logger.warning('Initial DPL circuit-limit fetch failed — will retry on next refresh.')
 
         # §15: seed_st15 already assembled + cached today's 1-min data
         # internally (private cache + live gap-fetch) — re-read that same
@@ -1730,6 +1736,19 @@ class Prometheus:
             lines.append('━' * 37)
 
             today = datetime.now().date()
+
+            def _ts_str(ts) -> str:
+                """2026-09-11 (user-caught): Phase 3 positions can span
+                multiple sessions (§2, no EOD flatten) -- an entry/exit on a
+                DIFFERENT calendar day than this report's own date used to
+                print bare HH:MM, making e.g. trade #16's entry 22:15 (the
+                PREVIOUS day) indistinguishable from a same-day 22:15 entry.
+                Qualify with the date only when it differs from `today`,
+                rather than always showing the full date (the common,
+                same-day case stays exactly as before)."""
+                ts = pd.Timestamp(ts)
+                return ts.strftime('%d-%b %H:%M') if ts.date() != today else ts.strftime('%H:%M')
+
             trades_today = pd.DataFrame()
             if TRADES_FILE.exists():
                 # 2026-09-07 (user-caught): every row in this file is, by
@@ -1788,11 +1807,11 @@ class Prometheus:
             else:
                 for _, t in trades_today.iterrows():
                     direction = str(t['direction']).capitalize()
-                    entry_ts_str = pd.Timestamp(t['entry_ts']).strftime('%H:%M')
+                    entry_ts_str = _ts_str(t['entry_ts'])
                     entry_price = t['entry_price']
                     exit_candidates = [pd.Timestamp(v) for v in
                                        (t.get('lot1_exit_ts'), t.get('lot2_exit_ts')) if pd.notna(v)]
-                    exit_ts_str = max(exit_candidates).strftime('%H:%M') if exit_candidates else '—'
+                    exit_ts_str = _ts_str(max(exit_candidates)) if exit_candidates else '—'
                     exit_reason = t.get('lot2_exit_reason') or t.get('lot1_exit_reason') or '?'
                     exit_str = str(exit_reason).replace('_', ' ').title()
                     pnl_pts = t.get('total_pnl_points') or 0
@@ -1807,8 +1826,7 @@ class Prometheus:
 
                 if self.state.status == 'in_trade':
                     direction = (self.state.direction or '?').capitalize()
-                    entry_ts_str = (datetime.fromisoformat(self.state.entry_ts).strftime('%H:%M')
-                                    if self.state.entry_ts else '?')
+                    entry_ts_str = _ts_str(self.state.entry_ts) if self.state.entry_ts else '?'
                     entry = self.state.entry_price or 0
                     ltp = self.state.last_known_ltp or entry
                     # §13 (2026-09-04): realised + unrealised, not unrealised
@@ -1890,6 +1908,11 @@ class Prometheus:
                 if self._pending_missed_flip is not None:
                     self._retry_pending_missed_flip()
 
+                # ── §11a: DPL circuit-limit check, every tick, regardless
+                #    of status -- a freeze is a property of the contract,
+                #    not of whether a position happens to be open ─────────
+                self._check_dpl_circuit_hit()
+
                 # ── In-trade: tight LTP-driven exit loop, every tick ────
                 if self.state.status == 'in_trade':
                     self._check_exit_conditions_ltp(now)
@@ -1904,6 +1927,15 @@ class Prometheus:
                     self._recover_pending_windows()
                     self._harvest_tick_ohlc()   # provisional-boundary feature, every 1-min cycle
                     self._check_rollover_timing(now)   # §6 steps 2-4, same 1-min cadence
+                    # §11a: retry the DPL circuit-limit fetch on the 1-min
+                    # cadence if the initial (or any prior) attempt failed --
+                    # _check_dpl_circuit_hit stays a permanent no-op otherwise,
+                    # since its only other refresh trigger (an observed
+                    # unfreeze) can never fire without a band to freeze
+                    # against in the first place. A no-op once the band is
+                    # already known (the unfreeze path keeps it current).
+                    if self._dpl_uc is None or self._dpl_lc is None:
+                        self._refresh_dpl_circuit_limits(announce=True)
                     win_to = datetime.now()
                     win_from = win_to - timedelta(minutes=5)
                     df = fetch_one_minute_window(self.obj, self._contract['token'], win_from, win_to)
@@ -2059,7 +2091,6 @@ class Prometheus:
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
         self._df_1m_today = combined.sort_values('time_stamp').reset_index(drop=True)
         self._maybe_check_opening_bar()
-        self._check_dpl_freeze()
 
     def _maybe_check_opening_bar(self) -> None:
         """§11 (2026-09-04): once per session, the first time today's 09:00
@@ -2091,90 +2122,101 @@ class Prometheus:
             for col in ('open', 'high', 'low', 'close'):
                 self._df_1m_today.at[idx, col] = patched[col]
 
-    def _find_dpl_step_runs(self, df_1m: pd.DataFrame, now: datetime) -> list:
-        """§11a: scan the SETTLED portion of df_1m for candidate DPL
-        circuit-freeze "steps" -- consecutive 1-min bars with
-        open==high==low==close, identical price across the whole run,
-        nonzero volume throughout (distinguishing a genuine freeze -- real
-        trades queuing at the band edge -- from a feed/connectivity stall,
-        which would show zero volume), run length within
-        [DPL_MIN_STEP_MIN, DPL_MAX_STEP_MIN]. "Settled" excludes the newest
-        DPL_SETTLE_LAG_MIN minutes: the 5-min rolling re-poll + keep='last'
-        dedupe (§3/§12) means the newest row can still be rewritten on the
-        next poll, and a minute with one tick so far looks identical to a
-        frozen one until it's actually settled.
+    def _get_contract_ltp(self) -> float:
+        """Same WS-then-REST-fallback shape as _get_ltp(), but keyed off
+        self._contract (the currently-resolved effective contract) instead
+        of state.token -- unlike _get_ltp(), this must work whether or not
+        a position is open (status=='watching' has no state.token to read),
+        since a DPL circuit event is a property of the CONTRACT, not of
+        whether Prometheus happens to be in one right now."""
+        token = self._contract['token']
+        if self.feed is not None and self.feed.is_connected():
+            ltp = self.feed.get_ltp(token)
+            if ltp is not None:
+                return ltp
+        return fetch_ltp_rest(self.obj, self._contract['symbol'], token)
 
-        Calibrated against the full local CRUDEOILM 1-min history (see
-        prometheus_configs.py's own comment on this block) -- an isolated
-        run alone is NOT a reliable signal (ordinary quiet/thin-liquidity
-        spells produce runs of comparable length and volume); this only
-        returns candidate STEPS, chaining them into an alert-worthy ladder
-        is _check_dpl_freeze's job.
+    def _fetch_dpl_circuit_limits(self) -> tuple:
+        """§11a (2026-09-11): read MCX's live DPL upper/lower circuit
+        limits directly from the exchange via AngelOne's REST Quote API --
+        confirmed live (see prometheus_configs.py's own comment) that
+        getMarketData(mode='FULL') returns 'upperCircuit'/'lowerCircuit'
+        for MCX contracts, agreeing exactly with the WS SNAP_QUOTE fields
+        and with the DPL percentage formula computed off the broker's own
+        'close' (previous session's settlement) to within 0.01%. Returns
+        (uc, lc) as floats, or (None, None) on any failure -- callers keep
+        using whatever was last successfully fetched rather than treat a
+        transient API hiccup as "no circuit limits exist."
         """
-        cutoff = now - timedelta(minutes=DPL_SETTLE_LAG_MIN)
-        settled = df_1m[df_1m['time_stamp'] < cutoff].sort_values('time_stamp').reset_index(drop=True)
-        if settled.empty:
-            return []
-        is_flat = ((settled['open'] == settled['high']) & (settled['high'] == settled['low'])
-                   & (settled['low'] == settled['close']))
-        has_volume = settled['volume'] > 0
-        candidate = is_flat & has_volume
-        runs = []
-        i, n = 0, len(settled)
-        while i < n:
-            if not candidate.iloc[i]:
-                i += 1
-                continue
-            j = i
-            price = settled['close'].iloc[i]
-            while j < n and candidate.iloc[j] and settled['close'].iloc[j] == price:
-                j += 1
-            run_len = j - i
-            if DPL_MIN_STEP_MIN <= run_len <= DPL_MAX_STEP_MIN:
-                runs.append({'start': settled['time_stamp'].iloc[i], 'end': settled['time_stamp'].iloc[j - 1],
-                            'price': price, 'run_len': run_len})
-            i = j
-        return runs
+        try:
+            resp = self.obj.getMarketData(mode='FULL', exchangeTokens={FO_EXCHANGE: [self._contract['token']]})
+            fetched = resp.get('data', {}).get('fetched', [])
+            if not fetched:
+                logger.warning(f'DPL circuit-limit fetch: no data returned ({resp}).')
+                return None, None
+            row = fetched[0]
+            return float(row['upperCircuit']), float(row['lowerCircuit'])
+        except Exception as e:
+            logger.warning(f'DPL circuit-limit fetch failed: {e}')
+            return None, None
 
-    def _check_dpl_freeze(self) -> None:
-        """§11a: detect + Slack-alert ONLY (2026-09-11) -- a possible MCX
-        DPL circuit-breaker ladder distorting ST_15's ATR across multiple
-        bars. Deliberately no change to any SL/target/ST/entry/exit
-        behavior -- see prometheus_configs.py's own comment on why a ladder
-        (2+ chained steps), not an isolated single freeze, is what this
-        detects, and why that's the calibrated, evidence-backed scope.
-        Debounced per EPISODE (each chain alerted once, keyed by its first
-        step's start timestamp), not per minute -- matches
-        websocket_feed.py's stale-tick-watchdog per-token debounce shape.
-        """
-        if not DPL_FREEZE_ALERT_ENABLED or self._df_1m_today.empty:
-            return
-        runs = self._find_dpl_step_runs(self._df_1m_today, datetime.now())
-        chains, current = [], []
-        for r in runs:
-            if current and (r['start'] - current[-1]['end']).total_seconds() <= DPL_CHAIN_GAP_MAX_SEC:
-                current.append(r)
-            else:
-                if len(current) >= 2:
-                    chains.append(current)
-                current = [r]
-        if len(current) >= 2:
-            chains.append(current)
-
-        for chain in chains:
-            chain_key = chain[0]['start'].isoformat()
-            if chain_key in self._dpl_alerted_chains:
-                continue
-            self._dpl_alerted_chains.add(chain_key)
+    def _refresh_dpl_circuit_limits(self, announce: bool) -> bool:
+        """Fetches fresh UC/LC and updates self._dpl_uc/self._dpl_lc.
+        announce=True Slacks the (re)confirmed band to #tradebot-updates --
+        used both for the once-per-session startup announcement and after
+        a freeze releases, when the band has very likely just widened to
+        its next step. Returns True on a successful fetch."""
+        uc, lc = self._fetch_dpl_circuit_limits()
+        if uc is None or lc is None:
+            return False
+        self._dpl_uc, self._dpl_lc = uc, lc
+        if announce:
             tag = _tag(self._contract['symbol_root'])
-            steps_str = ' -> '.join(f"{r['price']:.1f}" for r in chain)
-            logger.warning(f'Possible DPL circuit-breaker ladder: {len(chain)} steps, '
-                           f'{chain[0]["start"]} -> {chain[-1]["end"]}, prices {steps_str}.')
-            _slack(f'\U0001f6a8 {tag}: possible MCX DPL circuit-breaker ladder detected -- '
-                  f'{len(chain)} consecutive price-freeze steps from {chain[0]["start"]:%H:%M} to '
-                  f'{chain[-1]["end"]:%H:%M} (prices {steps_str}). ST_15/ATR may be distorted for '
-                  f'the duration -- no action taken automatically, purely informational.',
-                  SLACK_ERRORS_CHANNEL)
+            _slack(f'\U0001f512 {tag}: today\'s DPL circuit band — LC={lc:.2f}  UC={uc:.2f}.',
+                  SLACK_TRADEBOT_CHANNEL)
+        return True
+
+    def _check_dpl_circuit_hit(self) -> None:
+        """§11a (2026-09-11): detect + Slack-alert ONLY -- zero change to
+        any SL/target/ST/entry/exit behavior. Runs every main-loop tick,
+        regardless of state.status (a circuit freeze is a property of the
+        contract, not of whether Prometheus currently holds a position),
+        comparing the live LTP against the exchange's own published
+        upper/lower circuit limits (refreshed by _refresh_dpl_circuit_limits,
+        not recomputed here). A real freeze pins LTP at EXACTLY the circuit
+        price tick after tick; "unfrozen" is LTP moving off that exact
+        value, at which point the band is re-fetched (it has very likely
+        just widened to the next relaxation step) and announced.
+        """
+        if not DPL_CIRCUIT_POLL_ENABLED or self._dpl_uc is None or self._dpl_lc is None:
+            return
+        ltp = self._get_contract_ltp()
+        if ltp is None:
+            return
+        tag = _tag(self._contract['symbol_root'])
+
+        if not self._dpl_frozen:
+            if ltp >= self._dpl_uc or ltp <= self._dpl_lc:
+                side = 'upper' if ltp >= self._dpl_uc else 'lower'
+                self._dpl_frozen = True
+                self._dpl_frozen_price = ltp
+                logger.warning(f'DPL {side} circuit limit reached: LTP={ltp} '
+                               f'(band was {self._dpl_lc:.2f}-{self._dpl_uc:.2f}).')
+                _slack(f'\U0001f6a8 {tag}: price FROZEN at the {side} circuit limit — '
+                      f'LTP={ltp:.2f} (band was {self._dpl_lc:.2f}-{self._dpl_uc:.2f}). '
+                      f'ST_15/ATR may be distorted while this holds — no action taken automatically.',
+                      SLACK_TRADEBOT_CHANNEL)
+        else:
+            if ltp != self._dpl_frozen_price:
+                frozen_at = self._dpl_frozen_price
+                self._dpl_frozen = False
+                self._dpl_frozen_price = None
+                self._refresh_dpl_circuit_limits(announce=False)
+                logger.info(f'DPL freeze released: LTP now {ltp} (was pinned at {frozen_at}). '
+                           f'New band: {self._dpl_lc:.2f}-{self._dpl_uc:.2f}.')
+                _slack(f'✅ {tag}: price unfroze from {frozen_at:.2f} (now {ltp:.2f}) — '
+                      f'updated circuit band: LC={self._dpl_lc:.2f}  UC={self._dpl_uc:.2f}.',
+                      SLACK_TRADEBOT_CHANNEL)
 
     # -----------------------------------------------------------------------
     # 15-min bar handling — flip detection, fresh entry, trend-flip exit+reentry
@@ -3008,8 +3050,11 @@ def main():
     logger.info('prometheus_active.flag created.')
 
     obj = None
+    tag = _tag(SYMBOL)
     try:
+        _slack(f'{tag}: logging in to Angel One…', SLACK_TRADEBOT_CHANNEL)
         obj, auth_token, api_key, client_code = _login()
+        _slack(f'{tag}: Angel One login successful (client {client_code}).', SLACK_TRADEBOT_CHANNEL)
         prometheus = Prometheus(obj, auth_token, api_key, client_code)
         prometheus.run()
     except KeyboardInterrupt:
