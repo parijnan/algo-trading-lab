@@ -1478,6 +1478,74 @@ class Prometheus:
     # Setup / teardown
     # -----------------------------------------------------------------------
 
+    def _reconcile_positions(self) -> None:
+        """
+        §25 (2026-09-11): compare broker position data against local state
+        on restart -- same shape as Apollo/Athena/Artemis's own
+        _reconcile_positions() (self.obj.position(), netqty vs. an expected
+        signed quantity). Alerts on a mismatch; never auto-corrects, and
+        deliberately never compares price -- a broker fill carries
+        brokerage/other charges the state file's entry_price doesn't, so
+        only the net quantity is a meaningful cross-check (user-specified).
+
+        Keyed off self.state.token, not self._contract['token'] -- these
+        can differ on a missed-rollover resume (§5), and state.token is
+        the one actually being monitored/traded.
+
+        Skipped entirely in DRY_RUN: no real broker position exists for a
+        paper trade, so there's nothing to reconcile against -- calling
+        the broker anyway would only ever "mismatch" against the real
+        (empty) position book, which is noise, not a finding.
+
+        Caveat, not independently confirmed beyond what Apollo/Athena/
+        Artemis already rely on unmodified in production: this assumes
+        `netqty` in the broker's position response already reflects the
+        CURRENT total holding for a position carried forward from a prior
+        day (the standard convention across Indian broker APIs -- a
+        carry-forward position merges into the same net-quantity bucket,
+        with cfbuyqty/cfsellqty as supplementary breakdown fields, not a
+        separate quantity to add on top). Prometheus is positional (§2,
+        multi-day holds are the COMMON case, unlike Apollo/Athena/Artemis
+        which are intraday-or-overnight-at-most) -- a resume with zero
+        same-day activity on an older position is more central here than
+        for any of them, but the formula is identical to theirs,
+        unmodified, and none of the other three have shown a false
+        mismatch from this despite also sometimes holding overnight. If
+        netqty ever turns out NOT to include carry-forward, this would
+        false-alarm on every multi-day-hold restart -- watch the first
+        few live restarts with an open position for exactly that.
+        """
+        if DRY_RUN:
+            logger.debug('Position reconciliation skipped (DRY_RUN — no real broker position exists).')
+            return
+        try:
+            resp = self.obj.position()
+            data = (resp or {}).get('data') or []
+        except Exception as e:
+            logger.warning(f'Position reconciliation: broker call failed ({e}). Proceeding without check.')
+            return
+
+        pos = {str(p['symboltoken']): int(p.get('netqty', 0))
+               for p in data if p.get('symboltoken')}
+
+        open_lots = ((self.state.lot1_lots or 0) if self.state.lot1_status == 'open' else 0) + \
+                    ((self.state.lot2_lots or 0) if self.state.lot2_status == 'open' else 0)
+        sign = 1 if self.state.direction == 'bullish' else -1
+        expected_qty = sign * open_lots * LOT_SIZE
+
+        token = str(self.state.token)
+        broker_qty = pos.get(token, 0)
+        tag = _tag(self._contract['symbol_root'])
+
+        if broker_qty != expected_qty:
+            msg = (f'{tag} ALERT: Position mismatch on restart — token={token}: '
+                  f'expected {expected_qty:+d}, broker={broker_qty:+d} — verify manually before trading continues.')
+            logger.error(f'Position reconciliation FAILED: expected {expected_qty:+d}, '
+                        f'broker {broker_qty:+d} (token={token}).')
+            _slack(msg, SLACK_ERRORS_CHANNEL)
+        else:
+            logger.info(f'Position reconciliation OK — broker netqty {broker_qty:+d} matches state (token={token}).')
+
     def _setup(self) -> bool:
         logger.info(f'Prometheus starting [DRY_RUN={DRY_RUN}] SYMBOL={SYMBOL}')
 
@@ -1620,12 +1688,17 @@ class Prometheus:
                     'lot2_pnl_points': round(pnl_pts, 2),
                     'lot2_pnl_rs': round(pnl_pts * (self.state.lot2_lots or 0) * LOT_SIZE, 2),
                 })
-            # §4: reconciliation gap flagged in the plan (crash between order
-            # placement and fill confirmation) — not built; a resumed in-trade
-            # state is trusted as-is, same as Iris/Athena today. Flag loudly.
+            # §25 (2026-09-11): net-quantity reconciliation against the
+            # broker's own position book, same pattern Apollo/Athena/Artemis
+            # already use in production (self.obj.position(), netqty vs.
+            # expected) — see _reconcile_positions()'s own docstring for the
+            # DRY_RUN gating and the one open caveat (carry-forward netqty
+            # semantics, unverified beyond what those three already rely on).
+            self._reconcile_positions()
             _slack(f'ℹ️ {tag}: resumed with an open position from a prior session '
-                  f'({self.state.direction}, entry {self.state.entry_price}). State was NOT '
-                  f'reconciled against the broker\'s order book — verify manually if in doubt.',
+                  f'({self.state.direction}, entry {self.state.entry_price}). '
+                  + ('[PAPER] — no real broker position to reconcile against.' if DRY_RUN
+                     else 'Reconciled against the broker\'s position book.'),
                   SLACK_TRADEBOT_CHANNEL)
         else:
             self.state.status = 'watching'
