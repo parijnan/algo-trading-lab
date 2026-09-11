@@ -248,6 +248,52 @@ OPENING_BAR_ARTIFACT_THRESHOLD  = 0.5
 CRUDEOIL_REFERENCE_SYMBOL       = 'CRUDEOIL'   # full-size contract, reference only —
                                                 # Prometheus never trades this symbol
 
+# ── MCX DPL (Daily Price Limit) circuit-breaker ladder detection (plan §11a) ─
+# Detect + Slack-alert ONLY (2026-09-11) — zero change to any SL/target/ST
+# behavior. §11a's own risk surface #2 (LTP-driven exit skipping through a
+# level between circuit steps) was checked and confirmed already safe:
+# _check_exit_conditions_ltp triggers on the CURRENT ltp crossing sl/target
+# (`ltp <= sl`, not `ltp == sl`), and books the real broker fill price via
+# get_fill_price_and_qty — never a fabricated fill at the skipped level. No
+# code needed for that surface. This block covers risk surface #1 only: a
+# multi-step DPL ladder badly distorting ST_15's ATR (§11's own mechanism,
+# worse) with no automated response — just visibility for a human.
+#
+# Calibrated against the full local CRUDEOILM 1-min history (~209 candidate
+# single flat-price runs of >=3 min across ~8 months) rather than assumed:
+# a single isolated flat run (the plan's original candidate signature) does
+# NOT reliably separate a real DPL freeze from an ordinary quiet/thin-
+# liquidity spell — many single runs with comparable or larger volume and
+# run-length are clearly not circuit events (e.g. a 34-min flat run with
+# real matched volume throughout). What DOES separate cleanly, with zero
+# false positives across the full sweep: a CHAIN of 2+ consecutive
+# DPL_MIN_STEP_MIN-DPL_MAX_STEP_MIN-minute flat runs, each starting within
+# DPL_CHAIN_GAP_MAX_SEC of the previous one ending, prices stepping
+# monotonically. This sweep also surfaced a THIRD confirmed historical
+# instance (2026-04-08 09:00-09:54, a 4-step ladder) beyond the two named
+# in §11a's own text — cross-checked against CRUDEOIL at the same minutes,
+# same identical-timing signature as 2026-03-09.
+#
+# Deliberately does NOT attempt to detect an ISOLATED single-step freeze
+# (e.g. 2026-09-10 21:18, a real instance but a single step, not a ladder)
+# — the calibration sweep found no single-instrument signal (run length,
+# volume, post-release jump size) that reliably separates that case from
+# ordinary market pauses. §11a's own text notes the reliable signal there
+# is cross-instrument (CRUDEOIL frozen identically at the same moment) —
+# building that would mean a new continuous CRUDEOIL poll (similar scope to
+# plan §8's "track every listed contract" ask), a bigger, separate decision
+# not bundled into this detect-only pass.
+DPL_MIN_STEP_MIN          = 8     # shortest confirmed real step was 9 min (2026-04-08's 3rd step)
+DPL_MAX_STEP_MIN          = 18    # longest confirmed real step was ~15-16 min; small margin above
+DPL_CHAIN_GAP_MAX_SEC     = 180   # every confirmed chain's step-to-step gap was 1-2 min
+DPL_SETTLE_LAG_MIN        = 2     # exclude the in-flight/rewritable newest 1-min bar(s) from
+                                   # detection — the 5-min rolling re-poll + keep='last' dedupe
+                                   # (§3/§12) means the newest row can still be rewritten on the
+                                   # next poll; a single-tick-so-far minute looks identical to a
+                                   # frozen one until it's settled
+DPL_FREEZE_ALERT_ENABLED = True   # kill switch if this proves noisier live than in the
+                                   # historical sweep — zero effect on trading either way
+
 # ── Scale-out — 'pct' hardcoded per Rollout step 5: "backtest keeps both
 # modes for comparison, production hardcodes 'pct'". Changed 2026-09-04 from
 # Phase 2's mult-3.0 calibration (T1=1.0/T2=2.3 flat/SL=1.8, configs_p2.py,

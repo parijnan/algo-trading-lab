@@ -451,6 +451,22 @@ trace: `plans/prometheus-market-close-timing-and-reconciliation.md`.
   the 15m bar is skipped outright (a gap in the ST series, alerted loudly); if it has fewer than
   8 of the expected 15, the bar is still built from what's available, also alerted — "no silent
   staleness."
+- **DPL circuit-breaker ladder detection** (§11a, added 2026-09-11): MCX's Daily Price Limit
+  mechanism can freeze CRUDEOILM at a fixed price for ~9-16 minutes, then jump a fixed increment,
+  repeating for several steps (confirmed three times historically: 2026-03-09 a 7-step ladder,
+  2026-04-08 a 4-step ladder, 2026-09-10 a single-step freeze) — a multi-step ladder badly distorts
+  ST's ATR across the affected bars, the same mechanism as the opening-bar artifact above but worse
+  and not confined to one candle or one time of day. `_check_dpl_freeze()` runs on every 1-min
+  merge, scanning the *settled* portion of today's series (excluding the newest
+  `DPL_SETTLE_LAG_MIN` minutes, which can still be rewritten by the next poll) for a **chain of 2+
+  consecutive flat-price runs** (`DPL_MIN_STEP_MIN`-`DPL_MAX_STEP_MIN` minutes each, gapped by at
+  most `DPL_CHAIN_GAP_MAX_SEC`) — calibrated against the full local 1-min history rather than
+  assumed: an *isolated* flat run alone does not reliably separate a real freeze from an ordinary
+  quiet/thin-liquidity spell, but the chain signature had zero false positives across the whole
+  sweep. **Detect + Slack-alert only** (`#error-alerts`, once per episode) — zero change to any
+  SL/target/ST/entry/exit behavior; a single-step freeze (no chain) is a known gap, not yet
+  detectable from CRUDEOILM's own data alone. Full calibration writeup:
+  `plans/prometheus-phase3-production.md` §11a.
 
 ---
 
@@ -708,6 +724,10 @@ running session). Symmetric with Iris's own guardian check against the other thr
 | `SEED_RETRY_ATTEMPTS` / `SEED_RETRY_INTERVAL_SEC` | 5 / 120 | §15 — bounded, blocking startup retry around `seed_st15` (safe pre-position, no concurrent loop to starve) |
 | `OPENING_BAR_CORRECTION_ENABLED` | `False` | §11 — the opening-bar fix always runs and logs; only patches when `True` |
 | `OPENING_BAR_ARTIFACT_THRESHOLD` | 0.5 | §11 — CRUDEOIL/CRUDEOILM true-range ratio below this at 09:00 triggers the substitution |
+| `DPL_MIN_STEP_MIN` / `DPL_MAX_STEP_MIN` | 8 / 18 | §11a — candidate DPL circuit-freeze step length, calibrated against the full local CRUDEOILM history (shortest/longest confirmed real step: 9 / ~15-16 min) |
+| `DPL_CHAIN_GAP_MAX_SEC` | 180 | §11a — max gap between chained steps; every confirmed chain's step-to-step gap was 1-2 min |
+| `DPL_SETTLE_LAG_MIN` | 2 | §11a — excludes the newest, still-rewritable 1-min bar(s) from detection |
+| `DPL_FREEZE_ALERT_ENABLED` | `True` | §11a — kill switch if the alert proves noisier live than in the historical calibration; zero effect on trading either way |
 | `ST_SEED_SKIP_DATES` | `[]` | §14 — manually populated dates excluded from the daily seed's tail-read (whole bad sessions, e.g. a Budget special session) |
 | `REJECTION_RETRY_ATTEMPTS` / `_COOLDOWN_SEC` | 3 / 1 | §1 — `place_order`'s retry on an actual broker rejection |
 | `GHOST_RECOVERY_COOLDOWN_SEC` / `_LOOKBACK_SEC` | 2 / 60 | §1 — `place_order`'s order-book check on a `DataException`/`NetworkException` |

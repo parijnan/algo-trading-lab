@@ -45,6 +45,8 @@ from prometheus_configs import (
     ENTRY_FILTER_1H_ALIGN_ENABLED, ST_1H_PERIOD, ST_1H_MULTIPLIER,
     PROVISIONAL_BOUNDARY_ENABLED, PROVISIONAL_MARGIN_PCT,
     NO_EXIT_BEFORE_BUFFER_MIN, NEW_CONTRACT_POLL_OFFSET_SEC,
+    DPL_MIN_STEP_MIN, DPL_MAX_STEP_MIN, DPL_CHAIN_GAP_MAX_SEC,
+    DPL_SETTLE_LAG_MIN, DPL_FREEZE_ALERT_ENABLED,
 )
 from prometheus_state import PrometheusState, save_state, load_state
 from prometheus_logger_setup import get_logger
@@ -179,6 +181,12 @@ class Prometheus:
         self._pending_15m_boundary = None   # §12: 15m boundary awaiting a complete 1-min window
         self._pending_15m_deadline = None   # §12: cutoff before building it from what's on hand
         self._opening_bar_checked = False   # §11: run patch_opening_bar_if_artifact once per session
+        self._dpl_alerted_chains = set()   # §11a: chain-start ISO timestamps already alerted on —
+                                            # in-memory only, per session (matches _pending_recovery/
+                                            # _pending_15m_boundary's own "crash loses this, falls back
+                                            # to a safe default" precedent; re-detecting and re-alerting
+                                            # once after a restart mid-ladder is an acceptable, harmless
+                                            # duplicate, not a correctness issue for an alert-only feature)
         self._trade_counter = load_trade_counter()
         self._pending_trade_row = {}   # built in _execute_entry; reconstructed in _setup() on crash resume
 
@@ -2051,6 +2059,7 @@ class Prometheus:
         combined = combined.drop_duplicates(subset=['time_stamp'], keep='last')
         self._df_1m_today = combined.sort_values('time_stamp').reset_index(drop=True)
         self._maybe_check_opening_bar()
+        self._check_dpl_freeze()
 
     def _maybe_check_opening_bar(self) -> None:
         """§11 (2026-09-04): once per session, the first time today's 09:00
@@ -2081,6 +2090,91 @@ class Prometheus:
             idx = self._df_1m_today.index[mask][0]
             for col in ('open', 'high', 'low', 'close'):
                 self._df_1m_today.at[idx, col] = patched[col]
+
+    def _find_dpl_step_runs(self, df_1m: pd.DataFrame, now: datetime) -> list:
+        """§11a: scan the SETTLED portion of df_1m for candidate DPL
+        circuit-freeze "steps" -- consecutive 1-min bars with
+        open==high==low==close, identical price across the whole run,
+        nonzero volume throughout (distinguishing a genuine freeze -- real
+        trades queuing at the band edge -- from a feed/connectivity stall,
+        which would show zero volume), run length within
+        [DPL_MIN_STEP_MIN, DPL_MAX_STEP_MIN]. "Settled" excludes the newest
+        DPL_SETTLE_LAG_MIN minutes: the 5-min rolling re-poll + keep='last'
+        dedupe (§3/§12) means the newest row can still be rewritten on the
+        next poll, and a minute with one tick so far looks identical to a
+        frozen one until it's actually settled.
+
+        Calibrated against the full local CRUDEOILM 1-min history (see
+        prometheus_configs.py's own comment on this block) -- an isolated
+        run alone is NOT a reliable signal (ordinary quiet/thin-liquidity
+        spells produce runs of comparable length and volume); this only
+        returns candidate STEPS, chaining them into an alert-worthy ladder
+        is _check_dpl_freeze's job.
+        """
+        cutoff = now - timedelta(minutes=DPL_SETTLE_LAG_MIN)
+        settled = df_1m[df_1m['time_stamp'] < cutoff].sort_values('time_stamp').reset_index(drop=True)
+        if settled.empty:
+            return []
+        is_flat = ((settled['open'] == settled['high']) & (settled['high'] == settled['low'])
+                   & (settled['low'] == settled['close']))
+        has_volume = settled['volume'] > 0
+        candidate = is_flat & has_volume
+        runs = []
+        i, n = 0, len(settled)
+        while i < n:
+            if not candidate.iloc[i]:
+                i += 1
+                continue
+            j = i
+            price = settled['close'].iloc[i]
+            while j < n and candidate.iloc[j] and settled['close'].iloc[j] == price:
+                j += 1
+            run_len = j - i
+            if DPL_MIN_STEP_MIN <= run_len <= DPL_MAX_STEP_MIN:
+                runs.append({'start': settled['time_stamp'].iloc[i], 'end': settled['time_stamp'].iloc[j - 1],
+                            'price': price, 'run_len': run_len})
+            i = j
+        return runs
+
+    def _check_dpl_freeze(self) -> None:
+        """§11a: detect + Slack-alert ONLY (2026-09-11) -- a possible MCX
+        DPL circuit-breaker ladder distorting ST_15's ATR across multiple
+        bars. Deliberately no change to any SL/target/ST/entry/exit
+        behavior -- see prometheus_configs.py's own comment on why a ladder
+        (2+ chained steps), not an isolated single freeze, is what this
+        detects, and why that's the calibrated, evidence-backed scope.
+        Debounced per EPISODE (each chain alerted once, keyed by its first
+        step's start timestamp), not per minute -- matches
+        websocket_feed.py's stale-tick-watchdog per-token debounce shape.
+        """
+        if not DPL_FREEZE_ALERT_ENABLED or self._df_1m_today.empty:
+            return
+        runs = self._find_dpl_step_runs(self._df_1m_today, datetime.now())
+        chains, current = [], []
+        for r in runs:
+            if current and (r['start'] - current[-1]['end']).total_seconds() <= DPL_CHAIN_GAP_MAX_SEC:
+                current.append(r)
+            else:
+                if len(current) >= 2:
+                    chains.append(current)
+                current = [r]
+        if len(current) >= 2:
+            chains.append(current)
+
+        for chain in chains:
+            chain_key = chain[0]['start'].isoformat()
+            if chain_key in self._dpl_alerted_chains:
+                continue
+            self._dpl_alerted_chains.add(chain_key)
+            tag = _tag(self._contract['symbol_root'])
+            steps_str = ' -> '.join(f"{r['price']:.1f}" for r in chain)
+            logger.warning(f'Possible DPL circuit-breaker ladder: {len(chain)} steps, '
+                           f'{chain[0]["start"]} -> {chain[-1]["end"]}, prices {steps_str}.')
+            _slack(f'\U0001f6a8 {tag}: possible MCX DPL circuit-breaker ladder detected -- '
+                  f'{len(chain)} consecutive price-freeze steps from {chain[0]["start"]:%H:%M} to '
+                  f'{chain[-1]["end"]:%H:%M} (prices {steps_str}). ST_15/ATR may be distorted for '
+                  f'the duration -- no action taken automatically, purely informational.',
+                  SLACK_ERRORS_CHANNEL)
 
     # -----------------------------------------------------------------------
     # 15-min bar handling — flip detection, fresh entry, trend-flip exit+reentry
