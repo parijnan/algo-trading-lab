@@ -489,9 +489,9 @@ caveat #1):
 
 | | Mult 2.0 (SL 2.2%/T1 2.2%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|
-| Backtest (refreshed 2026-09-11, through 2026-09-10) | 389 trades · WR 45.0% · ₹186,906 total P&L · Calmar 12.24 | 295 trades · WR 49.5% · ₹132,233 total P&L · Calmar 11.79 |
+| Backtest (refreshed 2026-09-11, through 2026-09-10 — corrected trailing-trade-drop bug fixed same day, see `prometheus_backtest/README.md`'s "Routine backtest refresh") | 390 trades · WR 45.1% · ₹193,494 total P&L · Calmar 12.67 | 296 trades · WR 49.7% · ₹137,037 total P&L · Calmar 12.21 |
 
-Mult 2.0 now leads on Calmar (12.24 vs 11.79) since T1 moved to 2.2% — the mult-2.0 decision stands, and the exit-parameter refinement further supports it.
+Mult 2.0 now leads on Calmar (12.67 vs 12.21) since T1 moved to 2.2% — the mult-2.0 decision stands, and the exit-parameter refinement further supports it.
 
 Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
 edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade
@@ -502,21 +502,21 @@ section.
 **Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08, refreshed
 2026-09-11 through 2026-09-10's data): what if Prometheus had gone live on 2026-01-30 with
 ₹50,00,000 and `DYNAMIC_SIZING=True` the whole way, letting units compound with realised P&L
-exactly as `_calculate_units()` would live. Result: 389 trades, ₹50L → ₹2.68Cr (+435.5%), max
-drawdown −14.7%, Calmar 29.73 — but units grow to a peak of 268, far past the ~50-lot range the
+exactly as `_calculate_units()` would live. Result: 390 trades, ₹50L → ₹2.85Cr (+470.7%), max
+drawdown −14.7%, Calmar 32.13 — but units grow to a peak of 268, far past the ~50-lot range the
 liquidity analysis found already uncomfortable, with zero slippage modeled. Read as how the
 sizing mechanics compound, not a realistic forecast at that scale. [Chart +
 table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162); detailed CSVs in
 `phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
 
 **Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08, refreshed
-2026-09-11 through 2026-09-10's data): same 389 trades, but each fill's slippage is now
+2026-09-11 through 2026-09-10's data): same 390 trades, but each fill's slippage is now
 `0.3·√(participation_%)` ticks — participation measured against real CRUDEOILM 1-min volume at
 that fill's own timestamp, coefficient anchored to the liquidity analysis's own stated number
 (25% participation → 1.5 ticks) — and, critically, fed back into capital before the next trade's
 units are sized, so a worse fill this trade damps how big the next one gets. Result: peak units
-drops from 268 to 181, final capital ₹1.78Cr (+256.0%) vs. the no-slippage ₹2.68Cr, Calmar 14.32
-vs. 29.73. Ranking holds across a 0.5×–2× coefficient sensitivity sweep. Same
+drops from 268 to 181, final capital ₹1.89Cr (+279.0%) vs. the no-slippage ₹2.85Cr, Calmar 15.60
+vs. 32.13. Ranking holds across a 0.5×–2× coefficient sensitivity sweep. Same
 [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162), appended below
 the no-slippage results; CSVs alongside the originals in `phase3/data_sweep/mult_2.0/` as
 `dynamic_sizing_trades_slippage.csv` / `dynamic_sizing_equity_curve_slippage.csv`.

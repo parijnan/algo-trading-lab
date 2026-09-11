@@ -73,11 +73,17 @@ def _simulate_trade_detailed(trade_row: pd.Series, path_df: pd.DataFrame,
                 fill = _target_fill_price(direction, t2_price, bar_open)
                 lot2_exit = (ts, fill, 'target2'); lot2_open = False
 
-    flip_ts, flip_price = trade_row['exit_ts'], float(trade_row['exit_price'])
+    flip_ts, flip_price = trade_row['exit_ts'], trade_row['exit_price']
+    has_flip = pd.notna(flip_ts) and pd.notna(flip_price)
+    if (lot1_open or lot2_open) and not has_flip:
+        # Neither SL/target nor a real trend-flip has resolved this trade
+        # within the data available yet -- genuinely still open, not a
+        # trend-flip. Exclude rather than fabricate a fill.
+        return None
     if lot1_open:
-        lot1_exit = (flip_ts, flip_price, 'trend_flip')
+        lot1_exit = (flip_ts, float(flip_price), 'trend_flip')
     if lot2_open:
-        lot2_exit = (flip_ts, flip_price, 'trend_flip')
+        lot2_exit = (flip_ts, float(flip_price), 'trend_flip')
 
     def _pnl_pts(exit_price):
         return (exit_price - entry_price) if direction == 'bullish' else (entry_price - exit_price)
@@ -116,7 +122,10 @@ def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: floa
         tid = int(t['trade_id'])
         if tid not in paths:
             continue
-        rows.append(_simulate_trade_detailed(t, paths[tid], sl_pct, t1_pct, t2_pct))
+        result = _simulate_trade_detailed(t, paths[tid], sl_pct, t1_pct, t2_pct)
+        if result is None:
+            continue
+        rows.append(result)
 
     out = pd.DataFrame(rows)
     out_path = os.path.join(SWEEP_DIR, f'mult_{mult:.1f}', 'bespoke_trade_summary.csv')

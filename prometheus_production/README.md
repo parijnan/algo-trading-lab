@@ -850,11 +850,11 @@ see that repo's "Routine backtest refresh" section for how to re-run this on dem
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
 | Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 389 (refreshed 2026-09-11, through 2026-09-10) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 44.99% | 55.8% |
-| Total P&L | ₹186,906 | ₹42,778 |
+| Trades | 390 (refreshed 2026-09-11, through 2026-09-10 — corrected count, a trailing-trade-drop bug in the calibration pipeline was found and fixed the same day, see `prometheus_backtest/README.md`'s "Routine backtest refresh") | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 45.13% | 55.8% |
+| Total P&L | ₹193,494 | ₹42,778 |
 | Max drawdown | −₹15,267 (per-lot-exit-event series) | −₹14,943 |
-| Calmar | 12.24 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Calmar | 12.67 (per-lot-exit-event, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
 | Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again through 2026-09-10's data** — Calmar 7.13, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no

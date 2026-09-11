@@ -28,6 +28,11 @@ trade's own logged trend_flip exit (trade_summary.csv's exit_price) is the
 fallback when neither SL nor both targets trigger -- and the log's FINAL
 row is excluded from the intrabar check, since that bar is the one the
 original position already exits on at its open (see _simulate_trade).
+A trade with no logged trend_flip exit yet (still open in the raw signal)
+still gets simulated against its available price history -- SL/target can
+close it without a flip -- but if it's STILL open after that walk (no
+flip to fall back on either), it's excluded from this run's output rather
+than fabricated, and will appear once a future refresh's data resolves it.
 
 Output:
   data_sweep/exit_calib_p3_detail.csv   -- one row per (multiplier, stage, param value)
@@ -70,7 +75,11 @@ def _load_multiplier_data(mult: float) -> tuple:
     label = f'mult_{mult:.1f}'
     run_dir = os.path.join(SWEEP_DIR, label)
     trades = pd.read_csv(os.path.join(run_dir, 'trade_summary.csv'), parse_dates=['entry_ts', 'exit_ts'])
-    trades = trades[trades['exit_ts'].notna()].reset_index(drop=True)
+    # Trades with no exit_ts yet (the raw signal hasn't reversed) are kept --
+    # trade_paths_p3.py now walks them to the end of available data too, so
+    # a managed SL/target can still close them here even without a
+    # trend-flip; _simulate_trade drops any trade that's STILL genuinely
+    # unresolved after that walk (see its own trend_flip-fallback guard).
 
     logs_dir = os.path.join(run_dir, 'trade_logs')
     paths = {}
@@ -142,11 +151,17 @@ def _simulate_trade(trade_row: pd.Series, path_df: pd.DataFrame, sl_pct, t1_pct:
                 lot2_exit = (fill, 'target2')
                 lot2_open = False
 
-    flip_price = float(trade_row['exit_price'])
+    flip_price = trade_row['exit_price']
+    has_flip = pd.notna(flip_price)
+    if (lot1_open or lot2_open) and not has_flip:
+        # Neither SL/target nor a real trend-flip has resolved this trade
+        # within the data available yet -- genuinely still open, not a
+        # trend-flip. Exclude rather than fabricate a fill.
+        return None
     if lot1_open:
-        lot1_exit = (flip_price, 'trend_flip')
+        lot1_exit = (float(flip_price), 'trend_flip')
     if lot2_open:
-        lot2_exit = (flip_price, 'trend_flip')
+        lot2_exit = (float(flip_price), 'trend_flip')
 
     def _pnl_pts(exit_price):
         return (exit_price - entry_price) if direction == 'bullish' else (entry_price - exit_price)
@@ -164,6 +179,8 @@ def _run_variant(trades: pd.DataFrame, paths: dict, sl_pct, t1_pct: float, t2_pc
         if tid not in paths:
             continue
         result = _simulate_trade(t, paths[tid], sl_pct, t1_pct, t2_pct)
+        if result is None:
+            continue
         result['trade_id'] = tid
         rows.append(result)
     return pd.DataFrame(rows)
