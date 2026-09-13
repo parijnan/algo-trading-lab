@@ -6,9 +6,7 @@ A personal algorithmic trading laboratory for backtesting, optimising, and autom
 
 ### [Iris](./iris_production/) — Nifty Directional Scalping
 
-Directional scalping strategy — active at VIX > 25. Auto-enters on ST_FAST (5m+15m dual
-supertrend) signals. Buys a single ITM-150 Nifty weekly call/put. Exits on profit target,
-stop loss, trend flip, or 30-min per-trade timer. Routed by Leto; runs under Leto's session.
+Directional scalping strategy — active at VIX > 25. Auto-enters on ST_FAST (5m+15m dual supertrend) signals. Buys a single ITM-150 Nifty weekly call/put. Exits on profit target, stop loss, trend flip, or 30-min per-trade timer. Routed by Leto; runs under Leto's session.
 
 | | |
 |---|---|
@@ -50,11 +48,7 @@ A directional ITM debit spread strategy. Net-negative at VIX > 25 (−₹12/trad
 | Status | Live (open position management only) |
 
 ### Aphrodite — Intraday Iron Condor (shelved)
-Originally conceived to deploy idle capital during VIX < 11 phases while Apollo ran on
-₹8L margin. **Shelved (June 2026):** Apollo is retired from the routing map; Artemis now
-covers VIX < 16, leaving no idle-capital scenario for Aphrodite to exploit. Feasibility
-analysis and design notes archived in `plans/aphrodite.md`. Revisit only if a VIX < 11
-strategy is deployed that leaves substantial capital idle.
+Originally conceived to deploy idle capital during VIX < 11 phases while Apollo ran on ₹8L margin. **Shelved (June 2026):** Apollo is retired from the routing map; Artemis now covers VIX < 16, leaving no idle-capital scenario for Aphrodite to exploit. Feasibility analysis and design notes archived in `plans/aphrodite.md`. Revisit only if a VIX < 11 strategy is deployed that leaves substantial capital idle.
 
 | | |
 |---|---|
@@ -355,8 +349,7 @@ data/
 
 ## Research
 
-Exploratory modules live under `research/`. Nothing here is imported by production code —
-all findings go through a dedicated backtest before any strategy wiring.
+Exploratory modules live under `research/`. Nothing here is imported by production code — all findings go through a dedicated backtest before any strategy wiring.
 
 | Module | Description | Status |
 |---|---|---|
@@ -371,48 +364,20 @@ all findings go through a dedicated backtest before any strategy wiring.
 | [`research/prometheus_p2_single_lot/`](./research/prometheus_p2_single_lot/) | Side-project comparison: Prometheus Phase 2 trading only 1 lot (1% target, 1.8% SL, identical entry/EOD/trend-flip rules) instead of the production 2-lot scale-out. Standalone engine cross-validated byte-for-byte against the two-lot backtest's own lot1 column before being trusted. 217 trades · WR 62.2% · ₹18,664 total P&L · Calmar 2.44 — confirms lot 2 captures upside a single 1% exit structurally can't reach (2-lot P&L is ~2.46× single-lot's, not ~2×). | Complete — decision: keep 2 lots |
 
 Active research plans (forward-looking — not yet wired to production):
-- [`plans/greek-analysis.md`](./plans/greek-analysis.md) — Greek-based diagnostic and predictive
-  research. Six branches: P&L attribution, Greek profile, IV term structure, realized vs implied
-  vol, IV skew, Greek-based exit triggers. Diagnostic branches lead; predictive branches gated on
-  period-stable IC.
-- [`plans/iris-scalping-strategy.md`](./plans/iris-scalping-strategy.md) — Iris scalping strategy:
-  Track A (signal research, current) + Track B (execution harness, post-signal selection).
-  Auto-entry on signal when watchdog armed; arm/disarm via Slack.
-- [`plans/range-detection-research.md`](./plans/range-detection-research.md) — §7 gate **passed**;
-  Artemis annotation complete. Active: (1) lot-sizing by direction on annotated data; (2) range-anchored
-  strike variant backtest. No trade filtering — trades taken every week, optimise the trade itself.
-- [`plans/vix-router-research.md`](./plans/vix-router-research.md) — **[COMPLETE]** VIX-direction
-  router research. Verdict: symmetric router not supported; hard VIX-level gate unchanged.
-  Dominant Artemis P&L driver is containment (ρ=0.32), not VIX direction. See §15 for findings.
-- [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Ares*: proposed range-anchored,
-  vega-adaptive strategy unifying both axes.
+- [`plans/greek-analysis.md`](./plans/greek-analysis.md) — Greek-based diagnostic and predictive research. Six branches: P&L attribution, Greek profile, IV term structure, realized vs implied vol, IV skew, Greek-based exit triggers. Diagnostic branches lead; predictive branches gated on period-stable IC.
+- [`plans/iris-scalping-strategy.md`](./plans/iris-scalping-strategy.md) — Iris scalping strategy: Track A (signal research, current) + Track B (execution harness, post-signal selection). Auto-entry on signal when watchdog armed; arm/disarm via Slack.
+- [`plans/range-detection-research.md`](./plans/range-detection-research.md) — §7 gate **passed**; Artemis annotation complete. Active: (1) lot-sizing by direction on annotated data; (2) range-anchored strike variant backtest. No trade filtering — trades taken every week, optimise the trade itself.
+- [`plans/vix-router-research.md`](./plans/vix-router-research.md) — **[COMPLETE]** VIX-direction router research. Verdict: symmetric router not supported; hard VIX-level gate unchanged. Dominant Artemis P&L driver is containment (ρ=0.32), not VIX direction. See §15 for findings.
+- [`plans/range-vega-strategy.md`](./plans/range-vega-strategy.md) — *Ares*: proposed range-anchored, vega-adaptive strategy unifying both axes.
 - [`plans/athena-entry-filter.md`](./plans/athena-entry-filter.md) — annotation infrastructure + VIX-signal findings.
-- [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) — production
-  architecture for Prometheus Phase 2 (MCX CRUDEOILM): Supertrend seeding via a maintained
-  running CSV, market-order execution with order-update-WebSocket fill tracking, Iris-style
-  non-blocking candle retry/backoff, state file + crash recovery, Slack routing. Standalone
-  cron entry, not routed through Leto. Design only — nothing built yet.
-- [`plans/trend-overlay-strategy.md`](./plans/trend-overlay-strategy.md) — *Poseidon*: proposed
-  continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window
-  before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the
-  existing book — realized-P&L drawdown (₹14,537) may understate true intraday tail risk.
-  **[SHELVED]** — Step 0: MTM max DD ₹18,986 (1.3× realized), below the 1.5–2× weak-evidence
-  threshold (see [`research/mtm_equity/`](./research/mtm_equity/)). §8 fallback (lower Iris's
-  VIX-activation threshold instead of building a new engine) tested and also rejected — the
-  threshold is shared with Athena's ceiling, so lowering it cannibalizes Athena's best VIX band
-  faster than Iris recoups it, and it makes the targeted 2020 proactive window worse, not better
-  (see [`research/iris_threshold/`](./research/iris_threshold/)). No further action; the modest
-  proactive-window gap (₹2,031, recovered in 2 days) is accepted as-is.
+- [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) — production architecture for Prometheus Phase 2 (MCX CRUDEOILM): Supertrend seeding via a maintained running CSV, market-order execution with order-update-WebSocket fill tracking, Iris-style non-blocking candle retry/backoff, state file + crash recovery, Slack routing. Standalone cron entry, not routed through Leto. Design only — nothing built yet.
+- [`plans/trend-overlay-strategy.md`](./plans/trend-overlay-strategy.md) — *Poseidon*: proposed continuous, VIX-independent trend-following / crisis-alpha overlay, aimed at the proactive window before Apollo/Iris's VIX>25 handoff. Gated on a Step 0 MTM equity-curve diagnostic for the existing book — realized-P&L drawdown (₹14,537) may understate true intraday tail risk. **[SHELVED]** — Step 0: MTM max DD ₹18,986 (1.3× realized), below the 1.5–2× weak-evidence threshold (see [`research/mtm_equity/`](./research/mtm_equity/)). §8 fallback (lower Iris's VIX-activation threshold instead of building a new engine) tested and also rejected — the threshold is shared with Athena's ceiling, so lowering it cannibalizes Athena's best VIX band faster than Iris recoups it, and it makes the targeted 2020 proactive window worse, not better (see [`research/iris_threshold/`](./research/iris_threshold/)). No further action; the modest proactive-window gap (₹2,031, recovered in 2 days) is accepted as-is.
 
 ---
 
 ## Consolidated Portfolio Performance (2020–2026)
 
-Routed portfolio results from the **Leto integrated backtest** (`leto_backtest/`). Applies the
-production routing constraint — one active trade at a time, VIX-gated entry — over the full
-backtest data range. 1 lot per strategy throughout. This is the authoritative routed P&L; it
-differs from the sum of isolated strategy backtests because the "no concurrent trade" constraint
-blocks some entries.
+Routed portfolio results from the **Leto integrated backtest** (`leto_backtest/`). Applies the production routing constraint — one active trade at a time, VIX-gated entry — over the full backtest data range. 1 lot per strategy throughout. This is the authoritative routed P&L; it differs from the sum of isolated strategy backtests because the "no concurrent trade" constraint blocks some entries.
 
 | Strategy | VIX Regime | Trades (routed) | Total P&L | Win Rate | Avg/trade |
 | :--- | :--- | :---: | :---: | :---: | :---: |
@@ -427,39 +392,13 @@ blocks some entries.
 | Calmar ratio | 22.2 |
 | Expectancy | ₹930 per trade |
 
-Data cutoffs: Artemis Sensex → 2026-06-29 · Athena → 2026-06-08 · Iris → 2026-05-15.
-Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy backtest refresh.
+Data cutoffs: Artemis Sensex → 2026-06-29 · Athena → 2026-06-08 · Iris → 2026-05-15. Partial 2026 included. Re-run `python leto_backtest/run.py` after each strategy backtest refresh.
 
 ---
 
 ## Prometheus — MCX Crude Oil (Phase 3 Build Complete, Not Yet Live)
 
-Intraday trend-following strategy for MCX crude oil futures — genuinely independent of the
-Nifty/Sensex VIX-routed strategies above: different exchange (MCX vs. NSE/BSE), different
-underlying (crude oil futures vs. index options), no VIX dependency. **Not routed by Leto —
-`prometheus_production/prometheus.py` is its own standalone cron entry**, with its own login
-session, guardian check (mutually exclusive with Apollo/Athena/Artemis/Iris — shared broker
-rate-limit budget), and circuit breaker (`prometheus_command.flag`, separate from the shared
-`SLACK_COMMAND.flag`). See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)
-for the backtest design/calibration journey,
-[`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) for the
-original production architecture, and
-[`plans/prometheus-phase3-production.md`](./plans/prometheus-phase3-production.md) (every
-section `[DECIDED]`) plus [`prometheus_production/README.md`](./prometheus_production/README.md)
-for what's been built on top of it — positions now span multiple sessions (no more EOD flatten),
-resilient order execution, and a full contract-rollover-under-an-open-position sequence (evening
-trigger, missed-rollover recovery, the ROLLOVER_TIME prefetch/veto/flatten/reopen timeline,
-historical-basis SL/target recalibration, and a two-linked-rows trade-log schema for a rolled
-trade) — **superseded as the primary path by plan §18's event-driven rollover redesign, built
-2026-09-05**: on a rollover-eve, a flat position switches contracts immediately at setup, and an
-in-trade position now exits and switches the moment its own signal flips (with a fresh entry
-following if the new contract independently agrees on the same bar) — the evening mechanism above
-only ever runs as a fallback, if the position survives untouched all the way to `ROLLOVER_TIME`.
-Not yet exercised by an actual live rollover. The 1h/15m entry filter (§17) is also fully wired —
-built, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — its own backtest
-(Phase 4, below) found no combination
-of period/multiplier that beats the unfiltered baseline, so it stays off, not pending further
-calibration.
+Intraday trend-following strategy for MCX crude oil futures — genuinely independent of the Nifty/Sensex VIX-routed strategies above: different exchange (MCX vs. NSE/BSE), different underlying (crude oil futures vs. index options), no VIX dependency. **Not routed by Leto — `prometheus_production/prometheus.py` is its own standalone cron entry**, with its own login session, guardian check (mutually exclusive with Apollo/Athena/Artemis/Iris — shared broker rate-limit budget), and circuit breaker (`prometheus_command.flag`, separate from the shared `SLACK_COMMAND.flag`). See [`prometheus_backtest/README.md`](./prometheus_backtest/README.md) for the backtest design/calibration journey, [`plans/prometheus-phase2-production.md`](./plans/prometheus-phase2-production.md) for the original production architecture, and [`plans/prometheus-phase3-production.md`](./plans/prometheus-phase3-production.md) (every section `[DECIDED]`) plus [`prometheus_production/README.md`](./prometheus_production/README.md) for what's been built on top of it — positions now span multiple sessions (no more EOD flatten), resilient order execution, and a full contract-rollover-under-an-open-position sequence (evening trigger, missed-rollover recovery, the ROLLOVER_TIME prefetch/veto/flatten/reopen timeline, historical-basis SL/target recalibration, and a two-linked-rows trade-log schema for a rolled trade) — **superseded as the primary path by plan §18's event-driven rollover redesign, built 2026-09-05**: on a rollover-eve, a flat position switches contracts immediately at setup, and an in-trade position now exits and switches the moment its own signal flips (with a fresh entry following if the new contract independently agrees on the same bar) — the evening mechanism above only ever runs as a fallback, if the position survives untouched all the way to `ROLLOVER_TIME`. Not yet exercised by an actual live rollover. The 1h/15m entry filter (§17) is also fully wired — built, unit-tested, and gated off (`ENTRY_FILTER_1H_ALIGN_ENABLED=False`) — its own backtest (Phase 4, below) found no combination of period/multiplier that beats the unfiltered baseline, so it stays off, not pending further calibration.
 
 | | |
 |---|---|
@@ -476,16 +415,7 @@ calibration.
 
 ### Prometheus's own Phase 3 (`prometheus_backtest/phase3/` — backtest research, decision made)
 
-Not to be confused with the unrelated "Phase 3 Research" section below (that one's ML regime
-work tied to Apollo). This is a second Prometheus design track: positional 2-lot scale-out (no
-EOD square-off — a genuine architectural departure from the session-bound Phase 2 above), with
-the entry signal's own Supertrend multiplier itself put under test for the first time (Phase 2's
-`ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated for crude). Two calibrated
-candidates were under consideration as of 2026-09-01 — **decided 2026-09-04: mult 2.0**, now live
-in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`,
-`TARGET2_FLAT_PCT=5.0`; `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 after widening the
-exit-calibration grid past its original edge — see `prometheus_backtest/README.md`'s Phase 3
-caveat #1):
+Not to be confused with the unrelated "Phase 3 Research" section below (that one's ML regime work tied to Apollo). This is a second Prometheus design track: positional 2-lot scale-out (no EOD square-off — a genuine architectural departure from the session-bound Phase 2 above), with the entry signal's own Supertrend multiplier itself put under test for the first time (Phase 2's `ST_MULTIPLIER=3.0` was inherited from Iris, never actually calibrated for crude). Two calibrated candidates were under consideration as of 2026-09-01 — **decided 2026-09-04: mult 2.0**, now live in `prometheus_production/` (`ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`; `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 after widening the exit-calibration grid past its original edge — see `prometheus_backtest/README.md`'s Phase 3 caveat #1):
 
 | | Mult 2.0 (SL 2.2%/T1 2.2%/T2 5.0%) | Mult 2.5 (SL 1.0%/T1 1.25%/T2 4.0%) |
 |---|---|---|
@@ -493,70 +423,21 @@ caveat #1):
 
 Mult 2.0 leads on Calmar (15.03 vs 11.56) — the mult-2.0 decision stands, and T1=2.2% was independently re-confirmed as the fine-grid Calmar-optimal choice under the corrected simulator (14.76, the single highest value in that re-run grid at its own vintage), not just a plateau pick as the original finding had it.
 
-Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid
-edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade
-manager — structurally different strategies, not the same one at a different scale), and the
-open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3
-section.
+Full design, methodology, both candidates' caveats (mult 2.0's target1 sits at an untested grid edge; its stop-loss is a true tail-risk backstop while Phase 2/mult-2.5's is an active trade manager — structurally different strategies, not the same one at a different scale), and the open-threads list: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 3 section.
 
-**Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08, sizing formula
-updated 2026-09-11, refreshed again 2026-09-12 through 2026-09-11's data — see
-`prometheus_production/README.md`'s §26 and `prometheus_backtest/README.md`'s own writeup below):
-what if Prometheus had gone live on 2026-01-30 with ₹50,00,000 and `DYNAMIC_SIZING=True` the whole
-way, letting units compound with realised P&L exactly as `_calculate_units()` would live. Margin
-per unit is no longer a frozen ₹1,00,000 — it's recomputed at every entry from that trade's own
-price (`entry_price × LOT_SIZE / 3 × 4`, mirroring `Prometheus._calculate_margin_per_unit()`),
-ranging ₹74,413–₹1,43,107 over the backtest window. Result: 390 trades, ₹50L → ₹2.55Cr (+409.1%),
-max drawdown −15.4%, Calmar 26.60 — units run 40 to 226 (starting at 63, not 50, since early-2026
-crude priced margin lower than the old frozen constant implied), with zero slippage modeled. Read
-as how the sizing mechanics compound, not a realistic forecast at that scale. [Chart +
-table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162); detailed CSVs in
-`phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
+**Dynamic-sizing equity simulation** (`phase3/dynamic_sizing_sim.py`, 2026-09-08, sizing formula updated 2026-09-11, refreshed again 2026-09-12 through 2026-09-11's data — see `prometheus_production/README.md`'s §26 and `prometheus_backtest/README.md`'s own writeup below): what if Prometheus had gone live on 2026-01-30 with ₹50,00,000 and `DYNAMIC_SIZING=True` the whole way, letting units compound with realised P&L exactly as `_calculate_units()` would live. Margin per unit is no longer a frozen ₹1,00,000 — it's recomputed at every entry from that trade's own price (`entry_price × LOT_SIZE / 3 × 4`, mirroring `Prometheus._calculate_margin_per_unit()`), ranging ₹74,413–₹1,43,107 over the backtest window. Result: 390 trades, ₹50L → ₹2.55Cr (+409.1%), max drawdown −15.4%, Calmar 26.60 — units run 40 to 226 (starting at 63, not 50, since early-2026 crude priced margin lower than the old frozen constant implied), with zero slippage modeled. Read as how the sizing mechanics compound, not a realistic forecast at that scale. [Chart + table](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162); detailed CSVs in `phase3/data_sweep/mult_2.0/` (gitignored, run the script to regenerate).
 
-**Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08, refreshed
-2026-09-12 through 2026-09-11's data): same 390 trades, but each fill's slippage is now
-`0.3·√(participation_%)` ticks — participation measured against real CRUDEOILM 1-min volume at
-that fill's own timestamp, coefficient anchored to the liquidity analysis's own stated number
-(25% participation → 1.5 ticks) — and, critically, fed back into capital before the next trade's
-units are sized, so a worse fill this trade damps how big the next one gets. Result: peak units
-drops from 226 to 158, final capital ₹1.71Cr (+242.2%) vs. the no-slippage ₹2.55Cr, Calmar 12.17
-vs. 26.60. Ranking holds across a 0.5×–2× coefficient sensitivity sweep (Calmar 18.32 → 12.17 →
-5.85). Same [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162),
-appended below the no-slippage results; CSVs alongside the originals in
-`phase3/data_sweep/mult_2.0/` as `dynamic_sizing_trades_slippage.csv` /
-`dynamic_sizing_equity_curve_slippage.csv`.
+**Slippage-adjusted extension** (`phase3/dynamic_sizing_sim_slippage.py`, 2026-09-08, refreshed 2026-09-12 through 2026-09-11's data): same 390 trades, but each fill's slippage is now `0.3·√(participation_%)` ticks — participation measured against real CRUDEOILM 1-min volume at that fill's own timestamp, coefficient anchored to the liquidity analysis's own stated number (25% participation → 1.5 ticks) — and, critically, fed back into capital before the next trade's units are sized, so a worse fill this trade damps how big the next one gets. Result: peak units drops from 226 to 158, final capital ₹1.71Cr (+242.2%) vs. the no-slippage ₹2.55Cr, Calmar 12.17 vs. 26.60. Ranking holds across a 0.5×–2× coefficient sensitivity sweep (Calmar 18.32 → 12.17 → 5.85). Same [artifact](https://claude.ai/code/artifact/ca487422-3376-46a4-8237-6249ec779162), appended below the no-slippage results; CSVs alongside the originals in `phase3/data_sweep/mult_2.0/` as `dynamic_sizing_trades_slippage.csv` / `dynamic_sizing_equity_curve_slippage.csv`.
 
-**Same simulation on CRUDEOIL, the main contract** (`phase3_crudeoil/dynamic_sizing_sim.py` +
-`dynamic_sizing_sim_slippage.py`, 2026-09-08, sizing formula updated 2026-09-11, refreshed again
-2026-09-12 through 2026-09-11's data): same question, asked of CRUDEOIL instead of the mini,
-starting capital ₹55,00,000 (user-supplied). Margin per unit now ranges ₹7,45,600–₹14,30,667
-(`entry_price × LOT_SIZE(100) / 3 × 4`), no longer the flat ₹10,00,000 the old constant used.
-No-slippage: 410 trades, ₹55L → ₹2.26Cr (+310.4%), max drawdown −16.0%, Calmar 19.39, units 4→21
-(starting at 6) — a far more modest range than CRUDEOILM's 40→226, since CRUDEOIL's ~10x-larger
-per-unit margin means the same rupee P&L moves units far less. Slippage-adjusted (same model,
-same 0.3·√(participation_%) anchor, carried over from the CRUDEOIL liquidity comparison rather
-than re-fit): final capital ₹1.83Cr (+231.8%), Calmar 12.17, peak units damped from 21 to 18.
-[Chart + table](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef) (separate
-artifact, same structure as the CRUDEOILM one); CSVs in `phase3_crudeoil/data_sweep/mult_2.0/`
-(gitignored).
+**Same simulation on CRUDEOIL, the main contract** (`phase3_crudeoil/dynamic_sizing_sim.py` + `dynamic_sizing_sim_slippage.py`, 2026-09-08, sizing formula updated 2026-09-11, refreshed again 2026-09-12 through 2026-09-11's data): same question, asked of CRUDEOIL instead of the mini, starting capital ₹55,00,000 (user-supplied). Margin per unit now ranges ₹7,45,600–₹14,30,667 (`entry_price × LOT_SIZE(100) / 3 × 4`), no longer the flat ₹10,00,000 the old constant used. No-slippage: 410 trades, ₹55L → ₹2.26Cr (+310.4%), max drawdown −16.0%, Calmar 19.39, units 4→21 (starting at 6) — a far more modest range than CRUDEOILM's 40→226, since CRUDEOIL's ~10x-larger per-unit margin means the same rupee P&L moves units far less. Slippage-adjusted (same model, same 0.3·√(participation_%) anchor, carried over from the CRUDEOIL liquidity comparison rather than re-fit): final capital ₹1.83Cr (+231.8%), Calmar 12.17, peak units damped from 21 to 18. [Chart + table](https://claude.ai/code/artifact/704b21e1-1343-489b-8793-7d19240279ef) (separate artifact, same structure as the CRUDEOILM one); CSVs in `phase3_crudeoil/data_sweep/mult_2.0/` (gitignored).
 
 ### Prometheus's own Phase 4 (`prometheus_backtest/phase4/` — backtest research, SHELVED)
 
-Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but
-gated off. ST_15 held fixed at Phase 3's decided mult-2.0 candidate; swept the 1h filter's own
-Supertrend period (3–10) and multiplier (1.0–3.0), 25 cells, by filtering Phase 3's raw trade
-list against a no-lookahead 1h alignment check and re-applying the mult-2.0 bespoke exits.
+Backtest for the 1h/15m entry filter (§17) already wired into `prometheus_production/` but gated off. ST_15 held fixed at Phase 3's decided mult-2.0 candidate; swept the 1h filter's own Supertrend period (3–10) and multiplier (1.0–3.0), 25 cells, by filtering Phase 3's raw trade list against a no-lookahead 1h alignment check and re-applying the mult-2.0 bespoke exits.
 
-**No cell beat the unfiltered baseline (380 trades, ₹169,779, Calmar 10.21).** Below multiplier
-2.5 the filter actively anti-selects — it keeps the worse trades and blocks the better ones (e.g.
-the original preview setting, period 10/mult 2.0: kept-set Calmar 2.05 vs. blocked-set Calmar
-5.15). At multiplier ≥ 2.5 the sign corrects, but the best cell found (period 3/mult 2.5: kept
-Calmar 9.67) still trails baseline while discarding ~60% of trades to get there. Conclusion:
-shelved, not a calibration gap — the mechanism itself doesn't add signal on top of ST_15 mult-2.0
-over this data window. `ENTRY_FILTER_1H_ALIGN_ENABLED` stays `False`; no live re-test warranted.
+**No cell beat the unfiltered baseline (380 trades, ₹169,779, Calmar 10.21).** Below multiplier 2.5 the filter actively anti-selects — it keeps the worse trades and blocks the better ones (e.g. the original preview setting, period 10/mult 2.0: kept-set Calmar 2.05 vs. blocked-set Calmar 5.15). At multiplier ≥ 2.5 the sign corrects, but the best cell found (period 3/mult 2.5: kept Calmar 9.67) still trails baseline while discarding ~60% of trades to get there. Conclusion: shelved, not a calibration gap — the mechanism itself doesn't add signal on top of ST_15 mult-2.0 over this data window. `ENTRY_FILTER_1H_ALIGN_ENABLED` stays `False`; no live re-test warranted.
 
-Full grid, both failure-mode explanations, and open threads:
-[`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 4 section.
+Full grid, both failure-mode explanations, and open threads: [`prometheus_backtest/README.md`](./prometheus_backtest/README.md)'s Phase 4 section.
 
 ---
 
