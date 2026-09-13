@@ -5,8 +5,11 @@ Runs the full deterministic re-backtest chain (raw signal sweep -> bespoke
 exit overlay -> per-trade stats -> dynamic sizing x2 -> risk of
 ruin) against whatever data currently sits in data_pipeline/data/mcx/, for
 both CRUDEOILM (phase3/) and CRUDEOIL (phase3_crudeoil/) -- production's
-live config (SL 2.2% / T1 2.2% / T2 5.0%, mult 2.0) plus mult 2.5 for
-comparison, matching what bespoke_2lot_p3.py's own runs list already does.
+live config only (SL 2.2% / T1 2.2% / T2 5.0%, mult 2.0), matching what
+bespoke_2lot_p3.py's own runs list and configs_p3.py's ST_MULTIPLIER_GRID
+already do. Mult 2.5 (Phase 3's runner-up candidate) was dropped from all
+of these 2026-09-13 to cut routine runtime -- its own numbers are frozen at
+their 2026-09-12 values; see .claude/skills/prometheus-refresh/SKILL.md.
 
 This is a full recompute, not an incremental append -- but because every
 stage is a deterministic, purely-causal function of the (now-longer) 1-min
@@ -18,8 +21,9 @@ the end. The *effect* is append-like even though the *mechanism* is a fresh
 computation each time. A genuinely incremental recompute would need to
 reconstruct Supertrend's recursive internal state and handle
 contract-rollover boundaries exactly at the append point -- fiddly, and
-unnecessary given how cheap a full recompute is (~130k 1-min bars x 8
-multipliers x 2 instruments, single-digit minutes).
+unnecessary given how cheap a full recompute is (~130k 1-min bars x 1
+multiplier x 2 instruments -- single-digit minutes even before this
+2026-09-13 restriction to mult 2.0 only, now faster still).
 
 One real consequence of the full recompute: whichever trade was "still
 open at data end" in the previous run will very likely close for real once
@@ -58,8 +62,8 @@ INSTRUMENTS = {
 }
 
 STAGES = [
-    ('sweep_p3.py', 'Raw signal sweep (all 8 multipliers) -- SLOWEST stage'),
-    ('bespoke_2lot_p3.py', 'Bespoke exit overlay (mult 2.0 T1=2.2%, mult 2.5)'),
+    ('sweep_p3.py', 'Raw signal sweep (mult 2.0 only) -- SLOWEST stage'),
+    ('bespoke_2lot_p3.py', 'Bespoke exit overlay (mult 2.0 T1=2.2%)'),
     ('two_candidate_stats_p3.py', 'Per-lot-exit-event Calmar/drawdown stats'),
     ('dynamic_sizing_sim.py', 'Dynamic-sizing equity simulation (no slippage)'),
     ('dynamic_sizing_sim_slippage.py', 'Dynamic-sizing equity simulation (slippage-adjusted)'),

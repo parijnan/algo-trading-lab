@@ -37,7 +37,10 @@ SWEEP_DIR = os.path.join(HERE, 'data_sweep')
 
 CANDIDATES = [
     ('2.0', 'Mult 2.0 (SL 2.2/T1 2.2/T2 5.0)'),
-    ('2.5', 'Mult 2.5 (SL 1.0/T1 1.25/T2 4.0)'),
+    # Mult 2.5 dropped 2026-09-13 (was ('2.5', 'Mult 2.5 (SL 1.0/T1 1.25/T2
+    # 4.0)')) to cut routine refresh_pipeline.py runtime -- bespoke_2lot_p3.py
+    # no longer regenerates its bespoke_trade_summary.csv, so its own
+    # README table column is frozen at its 2026-09-12 values.
 ]
 
 

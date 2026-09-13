@@ -144,13 +144,16 @@ def save_bespoke_summary(mult: float, sl_pct: float, t1_pct: float, t2_pct: floa
 
 
 if __name__ == '__main__':
-    # The two bespoke-calibrated combos. Mult 2.0's T1 changed 2.0 -> 2.2 on
+    # The decided production combo. Mult 2.0's T1 changed 2.0 -> 2.2 on
     # 2026-09-09, mirroring the CRUDEOILM update (prometheus_backtest/README.md's
     # Phase 3 caveat #1) -- CRUDEOIL cross-validation re-run at the same T1 as
     # production so the two stay comparable.
+    # Mult 2.5 dropped from this list 2026-09-13 (was
+    # (2.5, 1.0, 1.25, 4.0), Phase 3's runner-up candidate) to cut routine
+    # refresh_pipeline.py runtime -- its own bespoke_trade_summary.csv is
+    # frozen at its 2026-09-12 values; see prometheus-refresh SKILL.md.
     runs = [
         (2.0, 2.2, 2.2, 5.0),
-        (2.5, 1.0, 1.25, 4.0),
     ]
     fbbd = first_bar_by_day()
     for mult, sl, t1, t2 in runs:

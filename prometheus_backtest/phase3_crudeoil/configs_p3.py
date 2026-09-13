@@ -104,11 +104,16 @@ NO_EXIT_BEFORE_BUFFER_MIN = 1
 # ---------------------------------------------------------------------------
 ST_PERIOD = 10   # held fixed; not swept this round (grid is multiplier-only,
                  # matching the user's specific 10,3-vs-10,4 hypothesis)
-ST_MULTIPLIER_GRID = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
-# 2.0 added 2026-09-01: raw Calmar was still climbing steadily from 5.5 down
-# to 2.5, the classic edge-of-grid overfitting signature -- extending one
-# step further was needed to check whether that climb continues (it didn't;
-# see prometheus_backtest/README.md's Phase 3 section).
+ST_MULTIPLIER_GRID = [2.0]
+# Restricted to the decided production value 2026-09-13 (was
+# [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]) -- mult 2.0 was decided live
+# 2026-09-04 and the full grid was the slowest stage of every routine
+# refresh_pipeline.py run for no further decision it was informing. Restore
+# the full list above (or add multipliers back individually) if the
+# ST_MULTIPLIER choice itself is ever reopened -- sweep_p3.py's own
+# 2026-09-01 finding (raw Calmar still climbing from 5.5 down to 2.5, then
+# flattening rather than continuing to climb at 2.0) is preserved in
+# prometheus_backtest/README.md's Phase 3 section regardless of this grid.
 
 # ---------------------------------------------------------------------------
 # Costs — same convention as every other phase: deliberately absent.
