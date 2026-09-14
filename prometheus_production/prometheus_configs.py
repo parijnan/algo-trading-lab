@@ -106,7 +106,7 @@ MCX_FO_WS_EXCHANGE_TYPE = 5   # websocket_feed.py exchange_type int for MCX F&O
                               # (matches mcx_live_downloader.py's MCX_FO=5, live-verified)
 
 # ── Kill switch ───────────────────────────────────────────────────────────────
-DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a trend-flip exit
+DRY_RUN = False    # Reverted to paper mode 2026-08-31 after a real incident: a trend-flip exit
                     # order failed at the broker (orderid=None) with no guard against it, and the
                     # code fabricated a fill from LTP -- both lots marked closed internally while
                     # the real 2-lot long stayed open and unmonitored for ~28min until caught
@@ -116,6 +116,15 @@ DRY_RUN = True     # Reverted to paper mode 2026-08-31 after a real incident: a 
                     # specifically to verify the order-update WebSocket for MCX -- that part
                     # worked (four real fills resolved via WS all day). Only flip back to False
                     # after the fix above has held up under a fresh DRY_RUN pass.
+                    #
+                    # Flipped back to False 2026-09-14 (STATIC_UNITS=1) per
+                    # plans/prometheus-live-cutover.md -- the 8b7bc5b fix ran cleanly under DRY_RUN
+                    # for two weeks (trades #9-#20+, multiple trend_flip/target/SL exits, no
+                    # recurrence). State reset to idle on Delos before this flip (no open paper
+                    # position carried into live). PROVISIONAL_BOUNDARY_ENABLED left True per an
+                    # explicit user review of a real observed instance (provisional flip confirmed
+                    # correct by the real candle a minute later) -- deliberately not reverted to
+                    # shadow-only for this go-live.
 
 # ── Session ───────────────────────────────────────────────────────────────────
 SESSION_START_TIME = '09:00'   # cron starts ahead of this; poller/seed both key off it
