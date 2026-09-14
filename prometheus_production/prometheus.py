@@ -595,6 +595,30 @@ class Prometheus:
         self.feed.subscribe_options([new_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
         self.feed.unsubscribe_options([old_contract['token']], exchange_type=MCX_FO_WS_EXCHANGE_TYPE)
 
+        # 2026-09-14 fix (advisor-flagged): now that this can fire mid-day
+        # (not just at setup), two more things can be stale relative to
+        # OLD contract's clock when this switch lands mid-cycle:
+        # - self._pending_15m_boundary/_deadline: if a boundary tick is
+        #   still waiting on a complete 1-min window from the OLD contract
+        #   (§12's deferred-bar wait, up to DEFERRED_BAR_CUTOFF_MIN), the
+        #   main loop's pending-boundary block runs AFTER this switch in
+        #   the same iteration and would otherwise resolve that OLD
+        #   boundary's timestamp against the NEW contract's just-loaded
+        #   df_1m_today -- a bar stamped with one contract's clock, built
+        #   from the other's prices. Drop it; the new contract's own next
+        #   :00/:15/:30/:45 tick sets a fresh one.
+        # - the tick-OHLC accumulator/feed buffer: same issue §18 issue #5
+        #   already fixed for the coincident-flip transition (line ~1467)
+        #   -- the new contract's WS may have been subscribed for hours
+        #   already (dual-tracking since setup), so its feed buffer can
+        #   hold a whole day's accumulated high/low. Drain it before it
+        #   becomes self._contract.
+        self._pending_15m_boundary = None
+        self._pending_15m_deadline = None
+        self.feed.get_ohlc(new_contract['token'])
+        self._tick_ohlc_accum = {'open': None, 'high': None, 'low': None, 'close': None}
+        self._provisional_pending = None
+
         self._contract = new_contract
         self._df_15m = df_15m
         self._df_1m_today = new_today_1m
@@ -876,6 +900,29 @@ class Prometheus:
                 or self._pending_contract_transition is not None):
             return
         nc = self._rollover_new_contract
+
+        # 2026-09-14 fix: _check_rollover_tonight's flat-switch only ever
+        # ran once, at setup -- a position that went flat mid-day (a T2/SL
+        # exit, or a Rule 7 flip with no re-entry) on a rollover-armed
+        # evening was left on the OLD contract for any fresh entry between
+        # then and ROLLOVER_TIME, exactly the "pure churn" outcome
+        # _check_rollover_tonight's own docstring says to avoid. Re-run
+        # the same flat-switch here, every cycle, so it self-heals on
+        # whichever tick first observes the flat transition. status ==
+        # 'watching' specifically (not != 'in_trade', advisor-flagged) --
+        # that's the exact value _finalize_trade writes on a mid-day flat
+        # transition; 'idle' is only ever written by clean teardown at
+        # session end, never mid-run, so matching it too would just widen
+        # the condition without covering any real in-session case. Guarded
+        # on _pending_flip is None too -- Rule 7's combined-order retry can
+        # leave status == 'watching' briefly before its own bookkeeping
+        # (opened_lots/new_trade_lots_target) has finished resolving; that
+        # window is still mid-flight on the OLD contract, not yet a real
+        # "flat, nothing pending" state to switch out from under.
+        if self.state.status == 'watching' and self._pending_flip is None:
+            self._switch_to_new_contract_now(nc)
+            return
+
         prefetch_time = pd.Timestamp(f'{now.date()} {ROLLOVER_PREFETCH_TIME}')
         rollover_time = pd.Timestamp(f'{now.date()} {ROLLOVER_TIME}')
 
