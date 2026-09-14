@@ -197,6 +197,10 @@ class Prometheus:
         self._pending_recovery = []   # [(from_dt, to_dt)] — §3 outer non-blocking retry queue
         self._pending_15m_boundary = None   # §12: 15m boundary awaiting a complete 1-min window
         self._pending_15m_deadline = None   # §12: cutoff before building it from what's on hand
+        self._session_open_time_today = SESSION_START_TIME   # 2026-09-14: overridden in _setup()
+                                                               # to EVENING_SESSION_OPEN_TIME on a
+                                                               # deferred-start day (§23) -- see
+                                                               # _handle_new_15m_bar's pre-open guard
         self._opening_bar_checked = False   # §11: run patch_opening_bar_if_artifact once per session
         self._dpl_uc = None            # §11a: live upper circuit limit, refreshed from the broker
         self._dpl_lc = None            # §11a: live lower circuit limit
@@ -1643,6 +1647,17 @@ class Prometheus:
     def _setup(self) -> bool:
         logger.info(f'Prometheus starting [DRY_RUN={DRY_RUN}] SYMBOL={SYMBOL}')
 
+        # 2026-09-14 fix: on a deferred-start evening-only day (§23), the
+        # process only starts ticking at ~EVENING_SESSION_OPEN_TIME, so the
+        # FIRST 15m boundary it ever sees always has a window that precedes
+        # real market open by construction -- e.g. woken at 16:55, first
+        # boundary at 17:00 tries to build [16:45, 17:00), a window that
+        # was never open for trading at all. _handle_new_15m_bar's
+        # pre-open guard below uses this to tell that apart from a genuine
+        # data gap during real trading hours.
+        evening_only, _ = mcx_evening_only_today()
+        self._session_open_time_today = EVENING_SESSION_OPEN_TIME if evening_only else SESSION_START_TIME
+
         self._contract = resolve_effective_contract(SYMBOL)
         self._catch_up_contract_if_already_switched()
         tag = _tag(self._contract['symbol_root'])
@@ -2185,7 +2200,20 @@ class Prometheus:
                         complete = len(window) >= 15
                         past_cutoff = datetime.now() >= self._pending_15m_deadline
                         if complete or past_cutoff:
-                            if not complete:
+                            # 2026-09-14 fix: same pre-open exemption as
+                            # _handle_new_15m_bar's own guard -- a window
+                            # that starts before today's actual session
+                            # open (deferred-start day) is never going to
+                            # complete no matter how long this waits, and
+                            # it isn't the DEFERRED_BAR_CUTOFF_MIN
+                            # AB1021-style straggler this warning exists
+                            # for. Let _handle_new_15m_bar's own guard
+                            # handle it quietly below instead of alerting
+                            # first.
+                            session_open_today = pd.Timestamp(
+                                f'{window_start.date()} {self._session_open_time_today}')
+                            pre_open = window_start < session_open_today
+                            if not complete and not pre_open:
                                 logger.warning(f'15m bar {window_start:%H:%M}-{pb:%H:%M} still '
                                                f'incomplete ({len(window)}/15) after '
                                                f'{DEFERRED_BAR_CUTOFF_MIN}min cutoff — building from '
@@ -2478,6 +2506,29 @@ class Prometheus:
         window_start = boundary - timedelta(minutes=15)
         window = self._df_1m_today[(self._df_1m_today['time_stamp'] >= window_start) &
                                    (self._df_1m_today['time_stamp'] < boundary)]
+
+        # 2026-09-14 fix: on a deferred-start evening-only day, the process
+        # only starts ticking at ~EVENING_SESSION_OPEN_TIME, so the FIRST
+        # boundary it ever sees is structurally guaranteed to have an empty
+        # window -- e.g. woken at 16:55, first boundary at 17:00 tries to
+        # build [16:45, 17:00), which was never open for trading at all.
+        # That's not a data gap (the ERROR/Slack alert below is for a REAL
+        # gap during actual trading hours -- an AB1021 stretch, a feed
+        # outage) -- it's an expected artifact of the deferred wake, and it
+        # fired every single deferred-start day with no way to distinguish
+        # it from a genuine problem until now. self._session_open_time_today
+        # (set once in _setup(), from mcx_evening_only_today()) is today's
+        # actual first-tradeable-moment; a window that starts before it
+        # never had real data to find, so skip it quietly -- no gap logged,
+        # nothing for the next real boundary's compute_st to treat as
+        # discontinuous (same as how a normal day's pre-session hours were
+        # never a "gap" either).
+        session_open_today = pd.Timestamp(f'{window_start.date()} {self._session_open_time_today}')
+        if window_start < session_open_today:
+            logger.info(f'{window_start:%H:%M}-{boundary:%H:%M} window precedes today\'s '
+                       f'{self._session_open_time_today} session open — not a gap, skipping quietly.')
+            return
+
         # A missing bar isn't a hypothetical: the 1-min poller's own pending-
         # recovery queue can still be catching up when a 15-min boundary
         # fires. Unlike seed_st15 (gap-checked, refuses to seed on any hole),
