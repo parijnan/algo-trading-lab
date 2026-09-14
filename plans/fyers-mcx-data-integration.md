@@ -52,19 +52,36 @@ We only need **separate per-contract files**, not a broker-stitched continuous s
 
 Only start this once §1 passes.
 
-### 2.1 Shape
+### 2.1 App creation & static IP — static IP NOT needed for our use case, checked 2026-09-14
+
+Checked directly against Fyers's current SEBI-compliance docs (three first-party sources: the official notice board post on the new framework, the "How do I activate the new App for API trading after April 1, 2026?" KB article, and the "How to troubleshoot API order placement restrictions" KB article — the last of these frames every error message and every troubleshooting scenario around order placement specifically, never around data access). Static IP is a real requirement under SEBI's new retail algo trading framework (effective 2026-04-01, already in force), but it's scoped specifically to **order placement** — "Orders will only be accepted from a registered App ID mapped to a whitelisted static IP address," per the notice board post's own wording. An app that isn't migrated through the static-IP "Activate" flow doesn't stop working — it's explicitly limited to "Data-Only mode: fetching quotes, historical data, order details, positions, and holdings," with only order placement disabled.
+
+Since our use case is pure data (historical backfill + the §3 live-polling test, no order placement through this account), **we should not need a static IP or the new "activated" app flow at all** — a plain data-only app should work the same simple way the docs originally described. Decided anyway (2026-09-14, user's own call): register both a real redirect_uri and a real static IP up front, since both are already sitting there at zero marginal cost and remove a future blocker if this account's scope ever grows.
+
+1. Go to the API Dashboard (`myapi.fyers.in` or `fyers.in/web/api-dashboard/user-apps`), click **Create App** (Individual App, since this is personal use).
+2. **Redirect URL: `quant-grow.com`** (a domain the user owns and controls — used today for email/Google Workspace, no page currently hosted on it). Satisfies Fyers's own "should be in your control" guidance properly, unlike a throwaway URL. No hosting needed for this to work — see §2.3's Auth section for why the redirect step barely matters in practice once headless login is set up. If a real endpoint is ever wanted there, add a *new* subdomain DNS record (e.g. `fyers-auth.quant-grow.com`) pointing at Delos — never touch the domain's existing MX/SPF/DKIM records.
+3. **Static IP: Delos's IP** — registered proactively even though not required for the data-only flow this plan uses, per the user's own preference to have it already in place rather than needing a second app-config trip later if this account's scope ever expands to order placement.
+4. Under permissions, select **Market Data** (Historical Data, Quotes & Market Data) — leave Order Placement / Transactions Info unchecked, since we're not placing orders through this account.
+5. Save → get an `App ID` (api_key) and `Secret ID` (api_secret).
+6. One-time only: visit the `generate_authcode()` URL in a real browser once, to grant the app permission (standard OAuth consent) — see §2.3's Auth section. After this single step, no further browser interaction should be needed.
+
+**If this account is ever wanted for order placement too** (not our current plan — noted for completeness): that still needs the separate "Activate the new App" flow regardless of whether a static IP is already registered on the data-only app — entered via API Dashboard → the default "Algo trading app" → update static IP + redirect URL + permissions → Activate, which issues a new App ID ending in `200`.
+
+**Not yet confirmed live** (blocked on account verification, same as everything else in this plan): whether daily re-authentication (§2.3's "Auth" bullet — refresh tokens discontinued under the same April 2026 framework) applies identically to a data-only, non-activated app, or only to order-placing ones. The docs read as platform-wide rather than order-placement-specific, so plan for daily token regeneration either way until confirmed otherwise — moot in practice once §2.3's headless login script is working, since that's designed to run daily unattended anyway.
+
+### 2.2 Shape
 
 Mirror `data_pipeline/data_downloader_mcx.py`'s architecture and **output schema exactly** (`time_stamp,open,high,low,close,volume` headers, same timestamp format/timezone convention, one file per contract expiry) so `load_futures_1min()` needs zero — or minimal — changes to consume Fyers-sourced files. Confirm the exact column/dtype/timestamp match as part of §1, not assumed here.
 
-### 2.2 Workflow
+### 2.3 Workflow
 
-- **Auth**: OAuth login flow (`generate-authcode` → `validate-authcode` → `access_token`). Refresh tokens are being discontinued April 1 (per their own docs) — the downloader needs either a daily re-auth step (manual or scripted around whatever replaces refresh-token renewal by then) or to be run in sessions short enough that a single day's token suffices. Worth checking Fyers's docs again closer to April for what the replacement flow looks like.
+- **Auth — headless daily login, found 2026-09-14.** Refresh tokens are being discontinued under the April 2026 SEBI framework, so a browser-based login every day is the naive fallback — but a fully headless alternative exists and is well-established in the community (multiple independent GitHub tools/tutorials describe the identical sequence), built on top of Fyers's own "External 2FA TOTP" feature (Profile → Others → External 2FA TOTP → Enable, on FYERS App or Web). Enabling it exposes a raw, copyable TOTP secret key alongside the QR code (standard RFC 6238 — same mechanism this project already uses for Angel One via `pyotp`, just a different broker's secret). With that secret + the Fyers client ID + 4-digit PIN, a script can replicate the entire login sequence with no browser at all: `POST api-t2.fyers.in/vagator/v2/send_login_otp_v2` (client ID → `request_key`) → `POST .../verify_otp` (that `request_key` + the current locally-computed TOTP code → new `request_key`) → `POST .../verify_pin_v2` (PIN → a session token) → `POST api.fyers.in/api/v2/token` (session token + app details → a redirect URL containing the `auth_code`, replicating what the browser redirect would have produced) → feed that `auth_code` into the **official, documented** `generate_token()` step (`fyers_apiv3`'s `SessionModel`) to get the real `access_token`. Only a single one-time manual browser visit is ever needed — granting the newly-created app's OAuth consent once (§2.1 step 6); after that this script can run daily (cron, matching the pattern of every other broker login in this project) with zero human interaction. **Caveat, unlike everything else in this plan: the four `vagator`/`api.fyers.in` endpoints above are not part of Fyers's official public API docs** — they're reverse-engineered from Fyers's own web app, stable enough that multiple community tools rely on them today, but could change or break without notice, with no official support channel for it since it's outside the sanctioned integration path. Fine for a research/backfill pipeline; re-check this section if it ever silently stops working, don't assume it's guaranteed to keep working the way an officially documented endpoint would.
 - **For each historical contract-month wanted**: Get Expiry Dates (resolve what expiries exist for the underlying, if not already known from MCX's own contract calendar) → Get Expired Contracts (resolve the exact `expired_instrument_key` for that expiry) → Get Expired F&O Data (pull 1-minute candles for that contract's own real tradeable window, chunked at 100 days per request — though a single MCX contract's own listing window is only a few months, so this is probably 1-2 chunks per contract, not a large chunking problem).
 - **For the current, still-active front-month contract**: use the regular History API instead (not the expired-contract one) — plain per-contract query, `cont_flag` **not** set (per the explicit decision that we want separate contract data, not broker-side continuous stitching).
 - **Both instruments**: CRUDEOILM and CRUDEOIL, same treatment, matching the existing two-instrument convention everywhere else in this project.
 - **Rate limiting**: Fyers's limits (10/sec, 200/min) are generous and documented — simpler to respect than Angel One's AB1021 dance, but still worth basic pacing/backoff for safety, not assuming zero risk just because the limit is higher.
 
-### 2.3 Storage — open decision, depends on §1's outcome
+### 2.4 Storage — open decision, depends on §1's outcome
 
 Two options, don't default to one without deciding:
 - **Extend the existing per-contract files** in `data_pipeline/data/mcx/CRUDEOILM/` / `CRUDEOIL/` directly with Fyers-sourced history for contracts before our current earliest data — single unified dataset, cleanest for `load_futures_1min()`, but only safe once §1 confirms the two sources genuinely agree in their overlap window.
@@ -72,9 +89,9 @@ Two options, don't default to one without deciding:
 
 Recommend leaning toward the first option *if and only if* §1 passes cleanly — a split dataset just defers a decision that'll need making eventually and complicates `load_futures_1min()` in the meantime.
 
-### 2.4 Credentials
+### 2.5 Credentials
 
-Mirror the existing pattern: add Fyers `app_id` / `app_secret` / `access_token` fields to `data/user_credentials.csv` (gitignored, never committed — same as every other broker credential in this repo).
+Mirror the existing pattern: add Fyers `app_id` / `app_secret` / `access_token` fields to `data/user_credentials.csv` (gitignored, never committed — same as every other broker credential in this repo). For the §2.3 headless login script specifically, also needs the Fyers client ID (`fy_id`/username), the 4-digit PIN, and the TOTP secret key from enabling External 2FA TOTP — same file, same gitignored treatment, no different in kind from the TOTP secret this project already stores for Angel One.
 
 ---
 
