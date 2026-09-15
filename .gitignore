@@ -386,6 +386,9 @@ research/greek_analysis/data/iv_cache_artemis/
 # AB1007 order diagnostic — run logs (real account/order detail, not for commit)
 research/ab1007_order_diagnostic/logs/
 
+# Fyers-vs-Angel-One validation — fetched comparison data, regenerable via fetch_fyers_data.py
+research/fyers_mcx_validation/data/
+
 # Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
 research/greek_analysis/pnl_attribution/data/*.csv
 research/greek_analysis/pnl_attribution/data/*.parquet
