@@ -66,7 +66,7 @@ ATR_PERIOD = 14
 ER_WINDOW_DAYS = 20          # Kaufman's own standard default
 PCTILE_LOOKBACK_DAYS = 250   # ~1 trading year, causal/expanding until it fills
 FLAG_PERCENTILE = 0.80
-SMOOTHING_WINDOWS = [5, 10, 20, 40]   # trading days
+SMOOTHING_WINDOWS = [5, 10, 20, 30, 40]   # trading days
 
 
 def _daily_atr_pct(df_15m: pd.DataFrame) -> pd.Series:
