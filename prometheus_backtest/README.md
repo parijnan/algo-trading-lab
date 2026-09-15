@@ -259,6 +259,16 @@ The first row isn't a separate finding — when lot1 and lot2 exit at the same s
 - Transaction-cost modeling, given how trade-count-sensitive the candidates are to each other.
 - Once a candidate is chosen: fold it into `configs_p3.py` as the default, and decide whether Phase 3 supersedes Phase 2 as the production target or runs alongside it.
 
+## Phase 3 — Fyers-sourced independent validation track (built 2026-09-15, NOT yet merged into the results above)
+
+Folder: `prometheus_backtest/phase3_fyers/`. **This section is deliberately a pointer, not a results table** — the user's own explicit instruction (2026-09-15): keep this fully separate from everything above until they've validated the findings themselves, so none of its numbers are quoted here.
+
+Same rollover/front-month logic, same decided production combo (`ST_PERIOD=10`/`ST_MULTIPLIER=2.0`, bespoke exits `SL=2.2%`/`T1=2.2%`/`T2=5.0%`), same output shape (`trade_summary.csv`, `trade_logs/*.csv`, `bespoke_trade_summary.csv`) as `phase3/` above — CRUDEOILM only for now — but sourced from `data_pipeline/data/mcx_fyers/` (Fyers) instead of `data_pipeline/data/mcx/` (Angel One), as an independent cross-check of the production numbers against a second data vendor.
+
+One real wrinkle: Fyers has a genuine, confirmed ~3.5-month data void, 2026-03-13 through 2026-06-29 (wider than the "May/June 2026 expiries return `no_data`" finding in `plans/fyers-mcx-data-integration.md` §2.4a — it also truncates the back of the April contract and the front of the July contract). Per the user's own decision, this window is spliced in from the existing Angel-One-sourced dataset rather than left as a gap or silently substituted with the wrong contract's price series — every trade whose hold period touches that window carries `touches_angelone_gap_fill=True` in `bespoke_trade_summary.csv`, so it stays identifiable rather than blended in. Full reasoning in `phase3_fyers/data_loader_fyers.py`'s own docstring.
+
+Run: `python prometheus_backtest/phase3_fyers/sweep_p3.py` then `python prometheus_backtest/phase3_fyers/bespoke_2lot_p3.py`.
+
 ## Phase 4 — 1h/15m ST alignment entry filter (tested, SHELVED 2026-09-04)
 
 Folder: `prometheus_backtest/phase4/`.

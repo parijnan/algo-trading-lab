@@ -430,6 +430,8 @@ prometheus_backtest/phase3/data/
 prometheus_backtest/phase3/data_sweep/
 prometheus_backtest/phase3_crudeoil/data/
 prometheus_backtest/phase3_crudeoil/data_sweep/
+prometheus_backtest/phase3_fyers/data/
+prometheus_backtest/phase3_fyers/data_sweep/
 prometheus_backtest/phase4/data/
 prometheus_backtest/phase4/data_sweep/
 prometheus_backtest/side_wti_5m/data/
