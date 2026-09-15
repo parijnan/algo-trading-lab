@@ -29,10 +29,14 @@ reuse (see plan §3.4/§3.5's own notes). Everything that DOES touch state
 separate files under fyers_st_probe/data/ and fyers_st_probe/logs/ --
 never TODAY_1M_CACHE_FILE or any other file prometheus_production/ reads.
 
-Auth: reads the manually-obtained access_token from data/user_credentials.csv
-(plan §2.1/§2.5). No headless daily re-auth yet (§2.3, blocked on TOTP
-setup) -- the token needs a human refresh before this starts each day,
-same caveat as data_downloader_fyers_mcx.py.
+Auth: performs a fresh headless Fyers login at startup via
+data_pipeline/fyers_auth.py (plan §2.3) -- Fyers's access_token expires at
+midnight IST regardless of issue time, so a 9:00 daily cron can't rely on
+a token obtained any earlier. Requires fyers_client_id/fyers_pin/
+fyers_totp_key in data/user_credentials.csv (from enabling External 2FA
+TOTP on the Fyers account) -- see fyers_auth.py's own docstring. If that
+login fails, this script logs the failure and exits rather than running
+on a stale/expired token.
 
 Usage:
   python fyers_st_probe/fyers_st_probe.py
@@ -58,6 +62,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / 'prometheus_production'))
+sys.path.insert(0, str(REPO_ROOT / 'data_pipeline'))
 
 from prometheus_functions import (   # noqa: E402 -- see module docstring for why these are reused, not reimplemented
     resolve_effective_contract, mcx_evening_only_today, compute_st,
@@ -68,6 +73,7 @@ from prometheus_configs import (   # noqa: E402
     EVENING_SESSION_WAKE_BUFFER_MIN, ST_PERIOD, ST_MULTIPLIER, SEED_DAYS,
     DEFERRED_BAR_CUTOFF_MIN,
 )
+from fyers_auth import ensure_fresh_token   # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config -- this script's own paths, never Prometheus's
@@ -410,6 +416,13 @@ def main():
     logger.info('=' * 70)
     logger.info(f'fyers_st_probe starting -- {SYMBOL}, read-only, no trading logic.')
     logger.info('=' * 70)
+
+    try:
+        ensure_fresh_token()
+        logger.info('Fyers headless login OK -- fresh access_token in user_credentials.csv.')
+    except Exception as e:
+        logger.critical(f'Fyers headless login failed -- cannot start. {e}')
+        sys.exit(1)
 
     evening_only, reason = mcx_evening_only_today()
     session_open_time_today = EVENING_SESSION_OPEN_TIME if evening_only else SESSION_START_TIME
