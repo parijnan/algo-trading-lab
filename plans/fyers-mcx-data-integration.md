@@ -1,6 +1,6 @@
 # Plan: Fyers as an MCX Data Source — Deep Historical Backfill + Live-Feed Investigation
 
-**Status (2026-09-15): account verified, app created and connected, real `access_token` in hand.** Documents approved by Fyers; segment (Commodity/MCX) activation still pending on the account itself but confirmed (via direct research, see §2.1) not to gate API app creation or Data API access — signed up for the API in parallel rather than waiting. App created, connected via the one-time OAuth consent flow, credentials written to `data/user_credentials.csv` (§2.5). **No code has been written yet** — the actual downloader/validation scripts. Next up is §1 (validate Fyers data against Angel One) — nothing past that should start until it passes. No production changes are in scope until explicitly decided (see §6).
+**Status (2026-09-15): account verified, app created and connected, real `access_token` in hand — and this plan's scope just grew.** Documents approved by Fyers; segment (Commodity/MCX) activation still pending on the account itself but confirmed (via direct research, see §2.1) not to gate API app creation or Data API access — signed up for the API in parallel rather than waiting. App created, connected via the one-time OAuth consent flow, credentials written to `data/user_credentials.csv` (§2.5). **No MCX code has been written yet** — the actual downloader/validation scripts. Next up is §1 (validate Fyers data against Angel One) — nothing past that should start until it passes. **Same day, a real live-trading incident (see §7) found that Prometheus shares its Angel One account with the Sensex/Nifty/VIX/Sensex-options downloader, and that collision broke real order placement** — that downloader is now disabled, and §7 (a separate, later phase of this same plan) covers moving those four instruments to Fyers too. No production changes are in scope until explicitly decided (see §8).
 
 ---
 
@@ -118,7 +118,7 @@ AB1021 doesn't show up on a single call — it shows up under sustained realisti
 ### 3.2 Explicitly out of scope for this step
 
 - No changes to `prometheus_production/prometheus_functions.py` or the live polling loop.
-- No decision about migrating the live feed — that's a follow-on question (§6), contingent on this test's result and a lot more discussion (redundancy, failover, dual-broker session management).
+- No decision about migrating the live feed — that's a follow-on question (§8), contingent on this test's result and a lot more discussion (redundancy, failover, dual-broker session management).
 
 ---
 
@@ -142,9 +142,36 @@ Contingent on §1 and §2 both landing cleanly.
 
 ---
 
-## 6. Open questions / follow-on decisions — not resolved by this plan, flagged for later
+## 7. Sensex/Nifty/Sensex-options/India-VIX takeover from Angel One (added 2026-09-15, real root-cause finding)
+
+**Why this exists — a genuine, previously-undiagnosed incident, not a hypothetical.** Prometheus and `data_pipeline/data_downloader_angelone.py` (the daily Sensex-options/Nifty/Sensex-index/India-VIX downloader, cron `45 15 * * 1-5`) share ONE Angel One account (`api_key=PCPSrXLN`/`user_name=p436059` — confirmed identical across `data/user_credentials.csv` and `data_pipeline/data/user_credentials_angel.csv`). On 2026-09-15 (Prometheus's first live, `DRY_RUN=False`, trading day), a real trend-flip at 16:30 tried to place a 4-lot Rule 7 combined order and was rejected continuously for 2+ minutes: `errorcode='AB1007', message='Invalid Token', orderid=None` — while market data (candles, LTP) on the same session kept working the whole time. Root-caused (see `project_prometheus_production` memory for the full investigation, including the three hypotheses ruled out first — wrong token, malformed request, simple JWT expiry): the downloader's own `generateSession()` at 15:45 evicts the *trading* capability of any other already-running session on the same Angel One account. **Confirmed this is the exact same failure that caused the 2026-08-31 incident** (`8b7bc5b`'s own fix addressed the symptom of that incident, never the cause — the same `AB1007`/`Invalid Token` signature is in that day's log too, also hours after the downloader's 15:45 login). The `45 15 * * 1-5` cron entry has been **disabled on Delos** (2026-09-15, user's own action) as the immediate mitigation — but Sensex options data specifically still needs a daily pull, since Angel One does not retain expired Sensex options data beyond a day, so this isn't optional forever, just paused.
+
+**The structural fix, decided 2026-09-15**: move the Sensex-options/Nifty-index/Sensex-index/India-VIX download entirely off Angel One and onto Fyers, and fold its login into the *existing* MCX downloader's own schedule (`56 23 * * 1-5`, `data_pipeline/run_mcx_downloader.sh`) once that becomes a Fyers-based script (§2/§5 above) rather than adding a second separate Fyers cron job. A single Fyers login per day, late at night, after Prometheus's own session has already torn down for the day (`SESSION_END_TIME`/`CLOSING_TIME`, ~23:30) — structurally eliminates this entire collision class going forward, since nothing would ever be logging into a shared account mid-Prometheus-session again (Fyers is its own separate account/app from Angel One entirely, so there's no shared-account risk to begin with, but the *timing* choice of piggybacking the MCX downloader's already-late slot is an extra, deliberate layer of safety, not load-bearing on its own).
+
+### 7.1 What needs investigating before committing (mirrors §1's validation discipline)
+
+- **Does Fyers actually have what's needed for each of the four instruments** — Sensex options (specifically EXPIRED weekly contracts, the exact thing Angel One doesn't retain), Nifty index history, Sensex index history, India VIX index history? §0's research already confirms Fyers's expired-F&O-contract workflow covers MCX; it needs a **separate, explicit check** for BSE (Sensex) index options — not something to assume carries over just because the MCX case worked. NSE (Nifty) and index-level (VIX) data are much more standard and lower-risk to confirm, but still check explicitly, don't assume.
+- **Same validation discipline as §1** applies here too, not just to MCX: before trusting Fyers-sourced Sensex options data for Artemis/Athena's own backtest or any live use, cross-check a completed, fully-overlapping contract-month/date-range against Angel One's existing data the same way §1.1-§1.2 does for CRUDEOILM/CRUDEOIL. Don't skip this just because it's a different instrument class than the plan's original MCX focus.
+- **Volume/OI conventions for index options** may differ from MCX futures in ways worth confirming explicitly (lot size, whether Fyers reports OI at all, whatever `data_downloader_angelone.py`'s existing CAS-adjustment logic — synthetic flat candles, gap-fade tracking, terminal-print bar correction — depends on that this new source needs to replicate or explicitly not need).
+
+### 7.2 If validation passes
+
+- Build (or extend the same Fyers MCX downloader script from §2/§5) a Sensex-options/Nifty/Sensex-index/India-VIX puller, matching `data_downloader_angelone.py`'s own existing output schema/file locations exactly (`sensex.csv`, `nifty.csv`, `india_vix.csv`, `options_list_sensex.csv`, the daily variants) so nothing downstream (Artemis/Athena backtests, CAS tracking) needs to change to consume it.
+- Fold its login into the late-night Fyers MCX downloader run rather than adding a second Fyers cron job — one login, all instruments, once a day.
+- Once this is live and confirmed reliable, the `45 15 * * 1-5` Angel One cron entry can be deleted outright (not just left commented out) — but not before this replacement is actually running and validated; don't delete Angel One coverage before Fyers coverage is confirmed working.
+- `CLAUDE.md`'s "Running things" section needs updating once this replaces the old wrapper script, per the repo's own convention (already noted for the MCX-only case in §5).
+
+### 7.3 Explicitly not yet done as of 2026-09-15
+
+No code written for this section yet — the Angel One downloader is simply disabled (data gap accepted temporarily for Sensex options specifically, since nothing currently backfills it) while the MCX-focused work above (§1-§5) proceeds first. This section's own build is a **separate, later phase** of this same plan, not something to interleave with the MCX validation work already in progress.
+
+---
+
+## 8. Open questions / follow-on decisions — not resolved by this plan, flagged for later
 
 - **Does this ever become the live production feed**, replacing or supplementing Angel One? Contingent entirely on §3's result, and a separate, bigger decision even if that test succeeds (dual-broker session management, redundancy/failover design, whether to keep both accounts long-term).
 - **Unified vs. parallel historical datasets** (§2.3) — needs deciding once §1's validation result is in hand, not before.
 - **Re-opening backtest calibration** (§4's last point) once deeper history exists — the user's call, flagged not decided here.
 - **CRUDEOIL (full-size contract)** gets the identical treatment to CRUDEOILM throughout this plan — no separate open question, just noting it's not an afterthought.
+- **§7's exact build sequencing** relative to §1-§5 — both are Fyers-based and could in principle share infrastructure (auth, rate-limiting, retry logic), but §7 is explicitly a later phase; whether to build shared helper code now (anticipating §7) or duplicate-then-refactor later is an open implementation-time call, not decided here.
+- **How long is "temporarily" for the disabled Angel One downloader** — no expired Sensex options data is being captured at all until §7 ships; if that stretches long, worth a check-in on whether the gap itself matters (e.g. does anything currently consume same-day expired Sensex options data in a way that's actually blocked by this, or is it a "nice to have eventually" gap for now).
