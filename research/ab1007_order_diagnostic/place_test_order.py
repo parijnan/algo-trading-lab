@@ -81,11 +81,25 @@ def login():
     totp = pyotp.TOTP(str(row['qr_code'])).now()
     logger.info('Requesting session (TOTP computed, not logged)')
     resp = obj.generateSession(client_code, str(row['password']), totp)
-    logger.debug('generateSession raw response: %s', json.dumps(resp, default=str))
+
+    # 2026-09-15 fix: generateSession's response carries the real jwtToken/
+    # refreshToken/feedToken in plaintext -- these ARE the live session,
+    # equivalent to a password for API purposes. Never log them, even at
+    # DEBUG, even to a gitignored file -- a pasted-into-chat log (which is
+    # exactly what happened the first time this ran) leaks a working
+    # session. Log everything except the actual token values.
+    redacted = dict(resp)
+    if isinstance(redacted.get('data'), dict):
+        redacted_data = dict(redacted['data'])
+        for k in ('jwtToken', 'refreshToken', 'feedToken'):
+            if k in redacted_data:
+                redacted_data[k] = f'<redacted, {len(redacted_data[k])} chars>'
+        redacted['data'] = redacted_data
+    logger.debug('generateSession response (tokens redacted): %s', json.dumps(redacted, default=str))
 
     if not resp.get('status'):
-        logger.critical('Login FAILED: %s', resp)
-        raise RuntimeError(f'Angel One login failed: {resp}')
+        logger.critical('Login FAILED: %s', redacted)
+        raise RuntimeError(f'Angel One login failed: {redacted}')
 
     logger.info('Logged in as %s', client_code)
     return obj
