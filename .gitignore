@@ -390,6 +390,10 @@ research/ab1007_order_diagnostic/logs/
 research/fyers_mcx_validation/data/
 research/fyers_mcx_validation/live_poll_logs/
 
+# fyers_st_probe — parallel Fyers-sourced ST_15 daemon, generated cache/logs
+fyers_st_probe/data/
+fyers_st_probe/logs/
+
 # Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
 research/greek_analysis/pnl_attribution/data/*.csv
 research/greek_analysis/pnl_attribution/data/*.parquet
