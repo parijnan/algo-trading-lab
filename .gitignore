@@ -383,6 +383,9 @@ research/oi_analysis/data/
 research/greek_analysis/data/iv_cache/
 research/greek_analysis/data/iv_cache_artemis/
 
+# AB1007 order diagnostic — run logs (real account/order detail, not for commit)
+research/ab1007_order_diagnostic/logs/
+
 # Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
 research/greek_analysis/pnl_attribution/data/*.csv
 research/greek_analysis/pnl_attribution/data/*.parquet
