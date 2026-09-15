@@ -388,6 +388,7 @@ research/ab1007_order_diagnostic/logs/
 
 # Fyers-vs-Angel-One validation — fetched comparison data, regenerable via fetch_fyers_data.py
 research/fyers_mcx_validation/data/
+research/fyers_mcx_validation/live_poll_logs/
 
 # Greek analysis — generated outputs per branch (data/.gitkeep tracked; outputs are not)
 research/greek_analysis/pnl_attribution/data/*.csv

@@ -154,14 +154,30 @@ def _get(url: str, params: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Fyers expired-contract workflow (plan §1.3's validated findings baked in)
 # ---------------------------------------------------------------------------
+EXPIRY_DATES_CHUNK_DAYS = 365   # documented limit is 366 days per request; margin of 1
+
 def get_expiry_dates(anchor_symbol: str, range_from: str, range_to: str) -> list:
-    r = _get('https://api-t1.fyers.in/data/history/fno/expired/expiry-dates', {
-        'symbol': anchor_symbol, 'range_from': range_from, 'range_to': range_to, 'date_format': 1,
-    })
-    if r.get('s') != 'ok':
-        logger.error(f'Get Expiry Dates failed: {r}')
-        return []
-    return r.get('data', {}).get('expiry_dates', {}).get('futures', [])
+    """2026-09-15 finding: Get Expiry Dates itself has an undocumented-until-
+    you-hit-it 366-day range cap ({'code':-50,'data':{'range_to':'Date range
+    cannot exceed 366 days'}}) -- a multi-year backfill request needs
+    chunking here too, not just on the historical-data call. Chunked
+    unconditionally so this never silently truncates a wide request."""
+    start = datetime.strptime(range_from, '%Y-%m-%d')
+    end = datetime.strptime(range_to, '%Y-%m-%d')
+    all_expiries = []
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + timedelta(days=EXPIRY_DATES_CHUNK_DAYS - 1), end)
+        r = _get('https://api-t1.fyers.in/data/history/fno/expired/expiry-dates', {
+            'symbol': anchor_symbol, 'range_from': chunk_start.strftime('%Y-%m-%d'),
+            'range_to': chunk_end.strftime('%Y-%m-%d'), 'date_format': 1,
+        })
+        if r.get('s') == 'ok':
+            all_expiries.extend(r.get('data', {}).get('expiry_dates', {}).get('futures', []))
+        else:
+            logger.error(f'Get Expiry Dates failed for [{chunk_start.date()} -> {chunk_end.date()}]: {r}')
+        chunk_start = chunk_end + timedelta(days=1)
+    return sorted(set(all_expiries))
 
 
 def get_expired_contract_symbol(anchor_symbol: str, expiry_date: str) -> str | None:
