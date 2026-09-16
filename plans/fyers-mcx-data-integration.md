@@ -150,6 +150,58 @@ Script: `data_pipeline/data_downloader_fyers_mcx.py`, run manually (see §2.3's 
 
 All output in the staging tree (`data_pipeline/data/mcx_fyers/<instrument>/`), not the live dataset — see §2.4's own storage decision.
 
+### 2.4c Generalized to all enabled MCX underlyings, 2026-09-16
+
+Extended beyond CRUDEOILM/CRUDEOIL to every underlying enabled in `data_pipeline/config/mcx_underlyings.csv` (22 total, spanning energy, base metals, and precious metals — matching the user's own request framing exactly), per an explicit user request. The original script hardcoded `FRONT_MONTH_ANCHOR = {'CRUDEOILM': ..., 'CRUDEOIL': ...}`, a 2-entry dict that would have needed hand-maintaining a fresh, staleness-prone anchor symbol string per instrument to scale.
+
+**Solved by resolving the anchor dynamically from Fyers's own public MCX symbol master** (`https://public.fyers.in/sym_details/MCX_COM_sym_master.json`, ~18MB, first referenced but not yet used in §1.3/§2.1's Get Expired Contracts research). New `resolve_anchor_symbol(instrument)` in `data_downloader_fyers_mcx.py`: downloads (or reuses a 12-hour disk cache at `data_pipeline/data/mcx_com_sym_master.json`, gitignored) the master, filters to records where `underSym == instrument`, `tradeStatus == 1`, and `optType == 'XX'` (excludes CE/PE options records on the same underlying — the first cut without this filter picked an options contract for GOLDM and failed), then picks the soonest-expiring contract that hasn't already expired (not simply nearest-expiry — a contract expiring within days is a poor anchor given the cache can itself be stale, and an already-expired anchor fails in a way that looks like an auth/API error rather than a stale-anchor one). Cross-referenced directly: all 22 enabled underlyings in `mcx_underlyings.csv` resolve cleanly to a real, active futures contract in the master — no manual symbol list needed at all.
+
+`main()`'s `--instrument` now accepts any enabled underlying name or `ALL` (loops every enabled underlying, continuing past a per-instrument failure rather than aborting the whole batch — logged and summarized at the end).
+
+**Auth note**: the access_token had expired (daily midnight-IST expiry, per §2.3 — headless re-auth remains blocked). Refreshed via the same manual-browser-OAuth path as the original 2026-09-15 setup, driven through Claude-in-Chrome on the user's already-authenticated session (redirected straight through with a fresh `auth_code`, no login form needed) — `fyers_client_id` used in the `generate-authcode` URL is the full `fyers_app_id` including its `-200` suffix (not the stripped form `fyers_auth.py`'s step 4 uses internally for the separate `api/v2/token` endpoint — tried first, got `invalid clientId`).
+
+**Smoke test run, `--instrument ALL --months-back 2`**: completed in ~35 seconds (not the 20+ minutes a full-history run across 22 instruments would take — see the run budget note below). 20 of 22 instruments wrote real data (128 files total); CRUDEOIL/CRUDEOILM correctly skipped both their in-window contracts as already-present from the §2.4b deep backfill; **STEELREBAR returned `no_data` for both its July/August 2026 contracts** — cross-checked directly against Angel One's own `data_pipeline/data/mcx/STEELREBAR/` directory, which is also empty for this instrument. Both sources agree: a genuine illiquid/untraded-contract gap, not a downloader bug, consistent in kind with the two-gap CRUDEOIL/CRUDEOILM finding in §2.4b.
+
+### 2.4d Deep backfill run, 2026-09-16 (`--months-back 57`, ~Jan 2022 onward) — done for all 22 instruments
+
+**Safety work added first, per explicit user request**: fatal-condition detection for the two ways a long unattended run can actually die --- token expiry (confirmed empirically the same session: Fyers returns `{'code': -16, 'message': 'Could not authenticate the user', 's': 'error'}`) and rate-limit rejection (HTTP 429, or an equivalent error code/message in a 200 body -- not actually hit this run, Fyers's documented ceiling of 10/sec, 200/min, 100,000/day (§0) sits well above this script's own 5/sec, 100/min limiter and this run's ~2,000-call budget). `_check_fatal()` in `data_downloader_fyers_mcx.py` raises a distinct `FyersAuthExpiredError`/`FyersRateLimitError` for these two cases specifically (leaving every other error shape, e.g. `no_data`, to the existing per-call handling); `main()` catches them separately from the generic per-instrument `except Exception`, stops the **entire** remaining run immediately (rather than letting every remaining instrument fail identically against a dead token), and logs exactly which instruments weren't attempted. Resumability was already correct (`existing.exists(): skip`) — this only stops the run from wasting calls once it's clearly going to keep failing.
+
+**Run completed in one pass, ~18 minutes (22:33–22:51 IST), exit code 0 — never hit either fatal condition, the token survived the whole run.**
+
+| Instrument | Files | Rows | Earliest | Latest |
+|---|---|---|---|---|
+| ALUMINI | 41 | 1,392,333 | 2023-02-20 | 2026-08-31 |
+| ALUMINIUM | 57 | 1,978,172 | 2021-10-01 | 2026-08-31 |
+| COPPER | 57 | 2,016,814 | 2021-10-01 | 2026-08-31 |
+| CRUDEOIL | 57 | 2,025,173 | 2021-09-20 | 2026-08-19 |
+| CRUDEOILM | 40 | 1,381,648 | 2023-03-03 | 2026-08-19 |
+| GOLD | 28 | 1,008,573 | 2021-10-04 | 2026-08-05 |
+| GOLDGUINEA | 57 | 1,999,515 | 2021-10-01 | 2026-08-31 |
+| GOLDM | 57 | 2,036,622 | 2021-10-04 | 2026-09-04 |
+| GOLDPETAL | 57 | 2,016,268 | 2021-10-01 | 2026-08-31 |
+| GOLDTEN | 16 | 505,711 | 2025-04-01 | 2026-08-31 |
+| LEAD | 57 | 1,832,164 | 2021-10-01 | 2026-08-31 |
+| LEADMINI | 41 | 1,319,413 | 2023-02-22 | 2026-08-31 |
+| NATGASMINI | 40 | 1,378,556 | 2023-03-14 | 2026-08-26 |
+| NATURALGAS | 57 | 2,017,774 | 2021-09-27 | 2026-08-26 |
+| NICKEL | 21 | 369,030 | 2021-10-01 | 2026-08-18 |
+| SILVER | 25 | 868,115 | 2021-10-04 | 2026-09-04 |
+| SILVER100 | 2 | 59,472 | 2026-06-30 | 2026-08-31 |
+| SILVERM | 24 | 869,615 | 2021-10-01 | 2026-08-31 |
+| SILVERMIC | 24 | 871,178 | 2021-10-01 | 2026-08-31 |
+| STEELREBAR | 1 | 4,162 | 2024-01-15 | 2024-02-22 |
+| ZINC | 57 | 1,995,902 | 2021-10-01 | 2026-08-31 |
+| ZINCMINI | 41 | 1,410,398 | 2023-02-17 | 2026-08-31 |
+| **Total** | **857** | **29,356,608** | | |
+
+**Findings worth carrying forward, all cross-checked directly rather than assumed as bugs:**
+- **A June 2026 gap hit nearly every instrument, not just CRUDEOIL/CRUDEOILM** — every underlying that had a June-2026 expiry logged `no_data` for it. This matches (and generalizes) §2.4b's original two-gap finding and §4.1's later refinement (the true CRUDEOILM/CRUDEOIL gap is ~3.5 months, 2026-03-13 to 2026-06-29) — evidently a Fyers-side coverage hole spanning that window across MCX broadly, not specific to crude.
+- **NICKEL's row counts collapse sharply after 2022-05** (34K–37K rows/month through May 2022, down to low hundreds or single digits June–Nov 2022, then almost entirely `no_data` from 2023-03 through 2025-12, reviving only in 2026) — this lines up with MCX's real, publicly documented nickel-trading disruption following the March 2022 LME nickel short-squeeze crisis. Plausible explanation, not independently confirmed against an MCX circular this session — worth a quick check before relying on NICKEL history from that multi-year window for anything, but not a downloader bug (Fyers is faithfully reporting genuinely thin/absent trading, not failing to fetch it).
+- **STEELREBAR (1 file, ~6 weeks of data total) and SILVER100 (2 files, both 2026)** are close to structurally untraded on Fyers's own history — consistent with the smoke test's earlier STEELREBAR finding, itself cross-checked against Angel One's own empty STEELREBAR directory. Real characteristics of these specific contracts, not something to fix here.
+- **GOLDTEN's earliest data is 2025-04-01** — a real contract-launch-date floor (same shape as CRUDEOILM's 2023-03-03 floor in §2.4b), not a Fyers coverage gap; its own Get Expiry Dates result had a clean cutoff with nothing earlier at all.
+
+All output remains in the staging tree (`data_pipeline/data/mcx_fyers/<instrument>/`), not the live dataset — see §2.4's own storage decision. Merging into the live tree Prometheus/the backtest pipeline actually read is still a distinct, undecided step (§8).
+
 ### 2.5 Credentials
 
 Mirror the existing pattern: add Fyers `app_id` / `app_secret` / `access_token` fields to `data/user_credentials.csv` (gitignored, never committed — same as every other broker credential in this repo). For the §2.3 headless login script specifically, also needs the Fyers client ID (`fy_id`/username), the 4-digit PIN, and the TOTP secret key from enabling External 2FA TOTP — same file, same gitignored treatment, no different in kind from the TOTP secret this project already stores for Angel One.

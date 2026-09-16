@@ -1,10 +1,20 @@
 """
 Fyers-sourced MCX historical backfill downloader (plan §2,
 plans/fyers-mcx-data-integration.md) -- deep historical 1-min data for
-CRUDEOILM and CRUDEOIL, going back further than Angel One safely allows
-(§0's own rationale: Angel One's getCandleData silently mislabels
-pre-front-month history under the wrong contract's token, so
-data_downloader_mcx.py deliberately never backfills into the past).
+any enabled MCX underlying (data_pipeline/config/mcx_underlyings.csv),
+going back further than Angel One safely allows (§0's own rationale:
+Angel One's getCandleData silently mislabels pre-front-month history
+under the wrong contract's token, so data_downloader_mcx.py deliberately
+never backfills into the past).
+
+Originally built (2026-09-15) for CRUDEOILM/CRUDEOIL only, with a
+hardcoded per-instrument anchor-contract dict. Generalized (2026-09-16) to
+every enabled underlying in mcx_underlyings.csv (energy, base metals,
+precious metals) by resolving each instrument's anchor contract
+dynamically from Fyers's own public MCX symbol master
+(https://public.fyers.in/sym_details/MCX_COM_sym_master.json, first
+referenced in plan §1.3) instead of hand-maintaining a stale symbol string
+per instrument -- see resolve_anchor_symbol() below.
 
 **Writes to a SEPARATE staging tree, data_pipeline/data/mcx_fyers/, NOT the
 live data_pipeline/data/mcx/ tree Prometheus and the backtest pipeline
@@ -38,7 +48,7 @@ claim).
 
 Usage (run from repo root):
   python data_pipeline/data_downloader_fyers_mcx.py --instrument CRUDEOILM --months-back 6
-  python data_pipeline/data_downloader_fyers_mcx.py --instrument CRUDEOIL --months-back 6
+  python data_pipeline/data_downloader_fyers_mcx.py --instrument ALL --months-back 6
   python data_pipeline/data_downloader_fyers_mcx.py --instrument CRUDEOILM --months-back 6 --dry-run
 """
 import argparse
@@ -59,19 +69,19 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STAGING_DIR = Path(__file__).parent / 'data' / 'mcx_fyers'
 CREDS_FILE = REPO_ROOT / 'data' / 'user_credentials.csv'
+UNDERLYINGS_FILE = Path(__file__).parent / 'config' / 'mcx_underlyings.csv'
 
 OHLCV_HEADERS = ['time_stamp', 'open', 'high', 'low', 'close', 'volume']   # matches data_downloader_mcx.py exactly
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Current live front-month contract per underlying, as of 2026-09-15 --
-# used only as the "any real contract" symbol Get Expiry Dates needs to
-# resolve the underlying. Update if this script is still in use once these
-# have rolled -- picking any OTHER still-valid contract for the same
-# underlying works identically, this isn't a hardcoded data dependency.
-FRONT_MONTH_ANCHOR = {
-    'CRUDEOILM': 'MCX:CRUDEOILM26OCTFUT',
-    'CRUDEOIL': 'MCX:CRUDEOIL26OCTFUT',
-}
+# Fyers's own public MCX symbol master -- covers every underlying, not just
+# the two this script originally hardcoded. Used only to resolve one "any
+# real, currently-tradeable contract" anchor symbol per underlying (what
+# Get Expiry Dates needs to resolve the underlying internally); no auth
+# required, cached to disk since it's ~18MB (2026-09-16).
+SYMBOL_MASTER_URL = 'https://public.fyers.in/sym_details/MCX_COM_sym_master.json'
+SYMBOL_MASTER_CACHE = Path(__file__).parent / 'data' / 'mcx_com_sym_master.json'
+SYMBOL_MASTER_MAX_AGE_HOURS = 12   # contract listings don't change intraday; avoid refetching 18MB every invocation
 
 HIST_DATA_CHUNK_DAYS = 90   # under the documented 100-day-per-request limit, with margin
 
@@ -115,6 +125,25 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
+class FyersAuthExpiredError(RuntimeError):
+    """Fyers rejected a request because the access_token is invalid/expired
+    (confirmed empirically, 2026-09-16: code -16, 'Could not authenticate the
+    user'). Not resumable within this process -- needs a fresh manual OAuth
+    token (plan §2.1/§2.5's flow). Deliberately distinct from a generic
+    per-instrument failure so main() can stop the whole batch immediately
+    instead of burning through every remaining instrument with the same
+    doomed call."""
+
+
+class FyersRateLimitError(RuntimeError):
+    """Fyers rejected a request as rate-limited (HTTP 429, or an equivalent
+    error code/message in a 200 JSON body). Documented ceilings are generous
+    (10/sec, 200/min, 100,000/day, plan §0) and this script's own
+    RateLimiter already sits under them (5/sec, 100/min) -- a real hit here
+    is unexpected, but caught explicitly rather than left to masquerade as
+    a per-chunk data error."""
+
+
 # ---------------------------------------------------------------------------
 # Auth / low-level HTTP
 # ---------------------------------------------------------------------------
@@ -135,20 +164,95 @@ def _auth_header() -> str:
     return f'{app_id}:{token}'
 
 
+def _check_fatal(body: dict, context: str) -> None:
+    """Raises FyersAuthExpiredError/FyersRateLimitError for the two known
+    unrecoverable-within-this-process conditions; leaves every other error
+    shape (a genuine per-chunk/per-contract issue, e.g. no_data) for the
+    caller's own existing per-call error handling."""
+    if not isinstance(body, dict) or body.get('s') != 'error':
+        return
+    code = body.get('code')
+    message = str(body.get('message', '')).lower()
+    if code == -16 or 'authenticate' in message or 'invalid token' in message or 'token' in message and 'expired' in message:
+        raise FyersAuthExpiredError(f'{context}: {body}')
+    if code == 429 or 'rate limit' in message or 'request limit' in message or 'too many request' in message:
+        raise FyersRateLimitError(f'{context}: {body}')
+
+
 def _get(url: str, params: dict) -> dict:
     _rate_limiter.wait()
     full_url = f'{url}?{urllib.parse.urlencode(params)}'
     req = urllib.request.Request(full_url, headers={'Authorization': _auth_header(), 'User-Agent': _UA})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
+            body = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
-        body = e.read().decode()
+        if e.code == 429:
+            raise FyersRateLimitError(f'HTTP 429 (rate limited) for {full_url}')
+        raw = e.read().decode()
         try:
-            return json.loads(body)
+            body = json.loads(raw)
         except json.JSONDecodeError:
-            logger.error(f'HTTP {e.code} for {full_url}: {body}')
+            logger.error(f'HTTP {e.code} for {full_url}: {raw}')
             raise
+    _check_fatal(body, full_url)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Underlying list + anchor-symbol resolution
+# ---------------------------------------------------------------------------
+def load_enabled_underlyings() -> list:
+    with open(UNDERLYINGS_FILE, newline='') as f:
+        return [r['name'] for r in csv.DictReader(f) if r['enabled'] == 'True']
+
+
+def _fetch_symbol_master() -> dict:
+    """Downloads (or reuses a fresh disk-cached copy of) Fyers's full MCX
+    symbol master. No auth needed -- it's a public file -- but still needs a
+    real User-Agent or Cloudflare silently blocks it (same gotcha found for
+    the OAuth token exchange, plan §2.1's addendum #2)."""
+    if SYMBOL_MASTER_CACHE.exists():
+        age_hours = (time.time() - SYMBOL_MASTER_CACHE.stat().st_mtime) / 3600
+        if age_hours < SYMBOL_MASTER_MAX_AGE_HOURS:
+            with open(SYMBOL_MASTER_CACHE) as f:
+                return json.load(f)
+
+    logger.info(f'Fetching Fyers MCX symbol master ({SYMBOL_MASTER_URL}) ...')
+    req = urllib.request.Request(SYMBOL_MASTER_URL, headers={'User-Agent': _UA})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read()
+    SYMBOL_MASTER_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    SYMBOL_MASTER_CACHE.write_bytes(raw)
+    return json.loads(raw.decode())
+
+
+def resolve_anchor_symbol(instrument: str) -> str:
+    """Any real, currently-tradeable contract for `instrument` -- Get Expiry
+    Dates resolves the underlying internally regardless of which specific
+    contract is passed (plan §1.3). Picks the soonest-expiring contract that
+    hasn't ALREADY expired from Fyers's own symbol master, rather than a
+    hardcoded, staleness-prone string per instrument -- a contract expiring
+    within days is a poor anchor since the cache backing `tradeStatus` can
+    itself be up to SYMBOL_MASTER_MAX_AGE_HOURS stale, and an
+    already-expired anchor would make Get Expiry Dates fail in a way that
+    looks like an auth/API error rather than a stale-anchor one."""
+    master = _fetch_symbol_master()
+    now_epoch = time.time()
+    candidates = [
+        rec for rec in master.values()
+        if rec.get('underSym') == instrument and rec.get('tradeStatus') == 1
+        and rec.get('optType') == 'XX'   # 'XX' = futures; 'CE'/'PE' = options on the same underlying -- exclude
+    ]
+    if not candidates:
+        raise RuntimeError(
+            f'No active Fyers contract found for underlying {instrument!r} in the symbol master '
+            f'({SYMBOL_MASTER_URL}) -- check the name matches mcx_underlyings.csv exactly.'
+        )
+    not_yet_expired = [rec for rec in candidates if int(rec['expiryDate']) > now_epoch]
+    pool = not_yet_expired or candidates
+    nearest = min(pool, key=lambda rec: int(rec['expiryDate']))
+    return nearest['symTicker']
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +356,7 @@ def save_contract(instrument: str, expiry_date: str, df: pd.DataFrame, dry_run: 
 # Orchestration
 # ---------------------------------------------------------------------------
 def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> None:
-    anchor = FRONT_MONTH_ANCHOR[instrument]
+    anchor = resolve_anchor_symbol(instrument)
     today = datetime.now(IST).date()
     # 2026-09-15 finding: Get Expiry Dates rejects range_to == today (or later)
     # -- {'code':-50,'data':{'range_to':'range_to cannot be current date or a
@@ -295,16 +399,47 @@ def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> Non
 
 
 def main():
+    enabled = load_enabled_underlyings()
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--instrument', required=True, choices=['CRUDEOILM', 'CRUDEOIL'])
+    p.add_argument('--instrument', required=True, choices=enabled + ['ALL'],
+                    help="A single underlying, or ALL to backfill every enabled underlying "
+                         "in data_pipeline/config/mcx_underlyings.csv")
     p.add_argument('--months-back', type=int, default=6,
                     help='How many months of expired contracts to backfill (default: 6)')
     p.add_argument('--dry-run', action='store_true', help='Fetch and log, but do not write any files')
     args = p.parse_args()
 
+    instruments = enabled if args.instrument == 'ALL' else [args.instrument]
+
     logger.info(f'Staging output directory: {STAGING_DIR} (NOT the live data_pipeline/data/mcx/ tree)')
-    backfill_instrument(args.instrument, args.months_back, args.dry_run)
-    logger.info('Done.')
+    logger.info(f'Instruments: {instruments}')
+    failed = []
+    for i, instrument in enumerate(instruments):
+        try:
+            backfill_instrument(instrument, args.months_back, args.dry_run)
+        except (FyersAuthExpiredError, FyersRateLimitError) as e:
+            remaining = instruments[i:]
+            failed.extend(remaining)
+            logger.error(f'{type(e).__name__}: {e}')
+            logger.error(
+                f'Stopping the run now -- not resumable within this process. '
+                f'{len(remaining)} instrument(s) not yet attempted: {remaining}. '
+                f'Every contract already written this run (or in a prior run) is skipped '
+                f'automatically on re-run (see backfill_instrument\'s existing.exists() check), so '
+                f'just re-run the same --instrument ALL command later (with a fresh access_token, '
+                f'plan §2.1/§2.5\'s manual OAuth flow, if this was a token-expiry stop) to pick up '
+                f'exactly where this run left off.'
+            )
+            break
+        except Exception:
+            logger.exception(f'{instrument}: backfill failed, continuing with remaining instruments.')
+            failed.append(instrument)
+
+    if failed:
+        logger.error(f'Done, with {len(failed)} instrument(s) not completed: {failed}')
+        sys.exit(1)
+    else:
+        logger.info('Done.')
 
 
 if __name__ == '__main__':
