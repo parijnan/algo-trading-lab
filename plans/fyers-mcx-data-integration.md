@@ -312,6 +312,14 @@ Confirmed `load_futures_1min()`'s front-month merge_asof logic works unchanged a
 
 No code written for this section yet — the Angel One downloader is simply disabled (data gap accepted temporarily for Sensex options specifically, since nothing currently backfills it) while the MCX-focused work above (§1-§5) proceeds first. This section's own build is a **separate, later phase** of this same plan, not something to interleave with the MCX validation work already in progress.
 
+### 7.4 Interim Angel-One-side fix shipped, 2026-09-17 — does NOT supersede §7.1/§7.2
+
+Rather than wait for the full Fyers migration above, the user asked for a faster interim fix using the *existing* Angel One downloader: `data_downloader_angelone.py` was refactored so its whole `__main__` body is now the reusable `run_angelone_downloader(obj, creds_df, scrip_master_df, rate_limiter=None)`, which neither authenticates nor terminates the session itself. `data_downloader_mcx.py`'s own `__main__` now calls it directly after finishing its own MCX futures work, reusing the same already-authenticated `obj` and the same raw scrip master (filtered twice, fetched once) — one Angel One login per day at 23:56, not two, eliminating the AB1007 collision risk described in §7 above without needing Fyers at all. Full detail in `data_pipeline/README.md`'s "Merged into the MCX downloader's cron slot" section.
+
+Also added, since it surfaced as a real (not hypothetical) risk while sizing this change: a wall-clock safety cutoff (`OPTIONS_DOWNLOAD_DEADLINE_TIME`, default 07:30 IST) in `download_all_options()` — a single Sensex weekly expiry's full option chain is several hundred contracts, confirmed 366 for the 2026-09-17 expiry, each chunked every 2 days over its ~4-week life, ≈5,100 API calls for that one expiry alone, already at the documented 5,000/hour ceiling before anything else this run does. Real AngelOne throttling bites well under documented limits (`project_angelone_ratelimit_investigation`), so an uncapped run risked still running at Prometheus's own 09:00 login the next morning — recreating the exact collision this fix exists to prevent. The cutoff stops cleanly and resumes the remainder (and the whole expiry, whose `download_status` only flips once every contract in it finishes) on the next run.
+
+**This is explicitly an interim fix, not a replacement for §7.1/§7.2's Fyers migration.** It removes the *urgency* — no more AB1007 risk with a single, safely-timed login — but Sensex options/Nifty/Sensex-index/India-VIX data still lives on Angel One, still depends on this one nightly window, and the eventual move to Fyers (its own separate account, no shared-session risk at all) remains the intended long-term direction whenever §7.1's validation work is picked up.
+
 ---
 
 ## 8. Open questions / follow-on decisions — not resolved by this plan, flagged for later

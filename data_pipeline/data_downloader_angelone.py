@@ -64,6 +64,29 @@ DAILY_INDEX_INSTRUMENTS = [
 ]
 DAILY_HISTORY_YEARS = 3
 
+# Wall-clock safety cutoff for the options catch-up download, added 2026-09-17
+# when this script was wired into the MCX downloader's 23:56 slot (see
+# run_angelone_downloader() and plans/fyers-mcx-data-integration.md §7). A
+# single Sensex weekly expiry's own full contract set (every strike ever
+# listed, not just liquid ones) can be several hundred contracts, each
+# chunked every CHUNK_DAYS days over its ~4-week life -- easily several
+# thousand API calls for one expiry alone (confirmed directly: 366 contracts
+# for the 2026-09-17 expiry x ~14 chunks each = ~5,100 calls, already at the
+# broker's own documented 5,000/hour ceiling before counting anything else
+# this run does). The RateLimiter doesn't fail when a window fills, it just
+# sleeps -- and real AB1021 throttling has been confirmed to bite well
+# under the documented limits (project_angelone_ratelimit_investigation) --
+# so a run this size could plausibly still be going at 09:00 the next
+# morning, colliding with Prometheus's own login and recreating the exact
+# AB1007 session-eviction incident this whole change exists to avoid.
+# download_all_options() checks this before starting each new *contract*
+# (not mid-contract) and stops cleanly once past it, leaving the remaining
+# contracts -- and the whole expiry, since download_status is only set
+# after every contract in it finishes -- pending for the next run. Per-
+# contract progress already saved to disk is never lost or re-fetched
+# (download_option_contract's own file-based resume logic).
+OPTIONS_DOWNLOAD_DEADLINE_TIME = dtime(7, 30)   # IST, well before Prometheus's 09:00 start
+
 # ---------------------------------------------------------------------------
 # Paths  (script lives in the parent directory of "data")
 # ---------------------------------------------------------------------------
@@ -869,6 +892,19 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
 
     logger.info(f"Found {len(pending)} pending expiry entries.")
 
+    # Wall-clock safety cutoff -- see OPTIONS_DOWNLOAD_DEADLINE_TIME's own
+    # docstring-comment above. Always resolves to the NEXT future occurrence
+    # of that time: a normal 23:56 start (> the cutoff time) gets tomorrow's
+    # cutoff; a rare same-morning manual re-run (< the cutoff time) gets
+    # today's.
+    now = datetime.now()
+    deadline = now.replace(hour=OPTIONS_DOWNLOAD_DEADLINE_TIME.hour,
+                           minute=OPTIONS_DOWNLOAD_DEADLINE_TIME.minute,
+                           second=0, microsecond=0)
+    if deadline <= now:
+        deadline += timedelta(days=1)
+    logger.info(f"Options download deadline for this run: {deadline}")
+
     # Pre-process instruments_df once
     inst = instruments_df.copy()
     inst["expiry_parsed"] = inst["expiry"].apply(parse_expiry_from_master)
@@ -879,6 +915,7 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
         axis=1
     )
 
+    deadline_hit = False
     for _, contract in pending.iterrows():
         expiry_date = pd.Timestamp(contract["expiry_date"]).to_pydatetime()
         start_date  = pd.Timestamp(contract["start_date"]).to_pydatetime()
@@ -897,7 +934,12 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
         logger.info(f"  {len(expiry_contracts)} contracts found for this expiry.")
 
         actual_downloads = 0
+        processed = 0
         for _, row in expiry_contracts.iterrows():
+            if datetime.now() >= deadline:
+                deadline_hit = True
+                break
+
             token       = str(row["token"])
             strike      = row["strike_actual"]
             option_type = row["option_type"]
@@ -906,8 +948,25 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
                 obj, token, strike, option_type,
                 expiry_date, start_date
             )
+            processed += 1
             if saved:
                 actual_downloads += 1
+
+        if deadline_hit:
+            logger.warning(
+                f"  Deadline ({deadline}) reached after {processed}/{len(expiry_contracts)} "
+                f"contract(s) for expiry {expiry_date.date()} -- stopping here, expiry left "
+                f"pending. Already-downloaded contracts are unaffected; the rest (and this "
+                f"expiry's own 'complete' status) resume on the next run."
+            )
+            slack_bot_sendtext(
+                f"⏰ *Sensex Options Download Deadline Hit* – expiry {expiry_date.date()}: "
+                f"{processed}/{len(expiry_contracts)} contract(s) processed before the "
+                f"{OPTIONS_DOWNLOAD_DEADLINE_TIME.strftime('%H:%M')} cutoff. Remaining "
+                f"contracts (and any other pending expiries) will resume on the next run.",
+                SLACK_ERROR_CHANNEL
+            )
+            break
 
         logger.info(f"  {actual_downloads} of {len(expiry_contracts)} contracts had data.")
 
@@ -923,7 +982,10 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
             SLACK_DATA_CHANNEL
         )
 
-    # Persist updated statuses back to contracts.csv
+    # Persist updated statuses back to contracts.csv (unconditionally -- even
+    # a deadline-interrupted run may have completed earlier expiries in
+    # `pending` before the one it stopped on, and those updates still need
+    # saving)
     contracts_df.to_csv(os.path.join(CONFIG_DIR, "options_list_sensex.csv"), index=False)
     logger.info("contracts.csv updated with download statuses.")
 
@@ -932,39 +994,49 @@ def download_all_options(obj, contracts_df: pd.DataFrame,
 # Entry point
 # ===========================================================================
 
-if __name__ == "__main__":
-    # --- Load data files ---
-    contracts_df        = pd.read_csv(os.path.join(CONFIG_DIR, "options_list_sensex.csv"),
-                                      parse_dates=["expiry_date", "start_date"])
-    user_credentials_df = pd.read_csv(os.path.join(DATA_DIR, "user_credentials_angel.csv"))
+FO_EXCHANGE_SEGMENT = "BFO"
 
-    # --- Authentication ---
-    try:
-        obj  = SmartConnect(api_key=user_credentials_df.iloc[0].loc["api_key"])
-        # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
-        # the SDK's internal 'logzero_default' logger level — must suppress AFTER
-        # construction, not before, or this is silently overridden back to ERROR.
-        logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
-        totp = TOTP(user_credentials_df.iloc[0].loc["qr_code"]).now()
-        data = obj.generateSession(
-                   user_credentials_df.iloc[0].loc["user_name"],
-                   str(user_credentials_df.iloc[0].loc["password"]),
-                   totp
-               )
-        logger.info("Authentication successful.")
-    except Exception as e:
-        logger.error(f"Authentication failed: {e}")
-        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Authentication failed: {e}",
-                           SLACK_ERROR_CHANNEL)
-        raise SystemExit(1)
 
-    # --- Refresh instrument master from broker ---
-    SCRIP_MASTER_URL    = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-    FO_EXCHANGE_SEGMENT = "BFO"
+def run_angelone_downloader(obj, creds_df: pd.DataFrame, scrip_master_df: pd.DataFrame,
+                            rate_limiter: "RateLimiter | None" = None) -> None:
+    """
+    Runs every AngelOne equities/options download stage (indices, daily
+    indices, Sensex options) against an ALREADY-AUTHENTICATED session —
+    does not log in and does not terminate the session, since both are the
+    caller's responsibility. This lets the same `obj` be reused by another
+    script (data_downloader_mcx.py, wired in 2026-09-17 to avoid a second
+    same-account Angel One login in the same late-night window — see the
+    "shared Angel One account" incident in plans/fyers-mcx-data-
+    integration.md §7) without a second generateSession() call.
+
+    `creds_df` sets this module's own `user_credentials_df` global, since
+    `slack_bot_sendtext` (and every call site below) reads it as a module
+    global rather than taking it as a parameter — this needs to happen
+    before any of those calls fire, including ones inside update_all_indices
+    etc. `scrip_master_df` is the RAW (unfiltered) broker scrip master;
+    filtered here to BFO/SENSEX rather than re-fetched, so a caller that
+    already pulled the same JSON for its own purposes (e.g. the MCX
+    downloader filtering for MCX/FUTCOM) doesn't fetch it twice.
+
+    `rate_limiter`, if given, replaces this module's own `_rate_limiter`
+    singleton for the duration of this call — lets a caller running this
+    back-to-back with its own AngelOne API calls (same account, same
+    broker-side budget) share one sliding-window limiter instead of two
+    independent ones that would each under-count the account's real call
+    volume.
+    """
+    global user_credentials_df, _rate_limiter
+    user_credentials_df = creds_df
+    if rate_limiter is not None:
+        _rate_limiter = rate_limiter
+
+    contracts_df = pd.read_csv(os.path.join(CONFIG_DIR, "options_list_sensex.csv"),
+                               parse_dates=["expiry_date", "start_date"])
+
+    # --- Refresh instrument master from broker (filter only, already fetched) ---
     try:
         logger.info("Refreshing instrument master...")
-        scrip_master_df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
-        instruments_df  = scrip_master_df[
+        instruments_df = scrip_master_df[
             (scrip_master_df["exch_seg"] == FO_EXCHANGE_SEGMENT) &
             (scrip_master_df["name"]     == "SENSEX")
         ]
@@ -974,7 +1046,7 @@ if __name__ == "__main__":
         logger.error(f"Instrument master refresh failed: {e}")
         slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Instrument master refresh failed: {e}",
                            SLACK_ERROR_CHANNEL)
-        raise SystemExit(1)
+        return
 
     # --- Download all index data (1-min) ---
     try:
@@ -1000,6 +1072,42 @@ if __name__ == "__main__":
         logger.error(f"Options data download failed: {e}")
         slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Options data download failed: {e}",
                            SLACK_ERROR_CHANNEL)
+
+
+if __name__ == "__main__":
+    user_credentials_df = pd.read_csv(os.path.join(DATA_DIR, "user_credentials_angel.csv"))
+
+    # --- Authentication ---
+    try:
+        obj  = SmartConnect(api_key=user_credentials_df.iloc[0].loc["api_key"])
+        # SmartConnect.__init__ calls logzero.logfile(loglevel=ERROR), which resets
+        # the SDK's internal 'logzero_default' logger level — must suppress AFTER
+        # construction, not before, or this is silently overridden back to ERROR.
+        logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
+        totp = TOTP(user_credentials_df.iloc[0].loc["qr_code"]).now()
+        data = obj.generateSession(
+                   user_credentials_df.iloc[0].loc["user_name"],
+                   str(user_credentials_df.iloc[0].loc["password"]),
+                   totp
+               )
+        logger.info("Authentication successful.")
+    except Exception as e:
+        logger.error(f"Authentication failed: {e}")
+        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Authentication failed: {e}",
+                           SLACK_ERROR_CHANNEL)
+        raise SystemExit(1)
+
+    # --- Fetch raw scrip master (standalone run — no caller has one to reuse) ---
+    SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    try:
+        scrip_master_df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
+    except Exception as e:
+        logger.error(f"Scrip master fetch failed: {e}")
+        slack_bot_sendtext(f"🚨 *Data Downloader (AngelOne)* – Scrip master fetch failed: {e}",
+                           SLACK_ERROR_CHANNEL)
+        raise SystemExit(1)
+
+    run_angelone_downloader(obj, user_credentials_df, scrip_master_df)
 
     # --- Terminate session ---
     try:

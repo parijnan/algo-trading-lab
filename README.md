@@ -275,7 +275,7 @@ Historical 1-minute OHLCV data for Nifty and Sensex options and indices is maint
 
 | Data | Source | Schedule | Coverage |
 |---|---|---|---|
-| Sensex options + all 1-min indices + daily Nifty, Sensex & VIX | Angel Broking — VPS cron via `run_angelone_downloader.sh` | Daily at 15:45 | Mid-2024 onwards |
+| Sensex options + all 1-min indices + daily Nifty, Sensex & VIX | Angel Broking — VPS cron via `run_mcx_downloader.sh`, same AngelOne session as the MCX row below (merged 2026-09-17 to stop a second same-account login from evicting Prometheus's live session — see `data_pipeline/README.md`) | Weekdays at 23:56 | Mid-2024 onwards |
 | MCX futures (base metals, energy, precious metals — front-month + next-month, every underlying) | Angel Broking — VPS cron via `run_mcx_downloader.sh` | Weekdays at 23:56 | Forward-collection only (no expired-contract history, no pre-front-month backfill — see `data_pipeline/README.md`) |
 | Nifty options | ICICI Breeze — laptop cron via `run_icicidirect_downloader.sh` | Wednesdays at 23:30 | May 2019 onwards |
 | Nifty options (Real-time) | Angel Broking — Manual via `angel_nifty_backtest_data.py` | As needed | Apr 2026 onwards |
@@ -760,13 +760,16 @@ algo-trading-lab/
 │       └── single_lot_trades.csv   # Generated — gitignored
 └── data_pipeline/                  # Automated historical data download
     ├── README.md
-    ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
+    ├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily) --
+    │                                   #   run_angelone_downloader() called FROM data_downloader_mcx.py's
+    │                                   #   own __main__ (2026-09-17), still standalone-runnable too
     ├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
-    ├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min), overnight backfill/update
+    ├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min), overnight backfill/update;
+    │                                   #   also runs data_downloader_angelone's equities/options phase
     ├── mcx_live_downloader.py          # AngelOne: live 1-min CRUDEOILM polling + parallel WS SNAP_QUOTE feed,
     │                                   #   NSE-close through MCX-close; also an AB1021 rate-limit diagnostic probe
-    ├── run_angelone_downloader.sh      # VPS cron wrapper (Sensex options + indices)
-    ├── run_mcx_downloader.sh           # VPS cron wrapper (MCX futures)
+    ├── run_angelone_downloader.sh      # Standalone/manual wrapper (Sensex options + indices) -- no longer cron-scheduled
+    ├── run_mcx_downloader.sh           # VPS cron wrapper (MCX futures + AngelOne equities/options, 23:56)
     ├── run_icicidirect_downloader.sh   # Laptop cron wrapper
     ├── nifty_daily_index.py            # Backup: daily Nifty via ICICI Breeze
     ├── rename_legacy_files.py

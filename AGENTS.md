@@ -273,7 +273,8 @@ python leto.py                                        # production session (cron
 sudo systemctl start slack_listener                   # Slack daemon
 python artemis_backtest/backtest.py                   # backtest (example)
 python leto_backtest/run.py                           # integrated routed backtest
-bash data_pipeline/run_angelone_downloader.sh         # Sensex data (VPS daily)
+bash data_pipeline/run_mcx_downloader.sh              # MCX futures + Sensex/Nifty/VIX/options (VPS, weekdays 23:56)
+bash data_pipeline/run_angelone_downloader.sh         # Sensex/Nifty/VIX/options standalone (manual only, no longer cron-scheduled)
 bash data_pipeline/run_icicidirect_downloader.sh      # Nifty data (local weekly)
 ```
 
