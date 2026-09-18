@@ -8,15 +8,16 @@ For full details on design decisions, API behaviour, deployment, and file format
 
 | Script | Description | Runs on | Schedule |
 |--------|-------------|---------|----------|
-| `data_downloader_angelone.py` | Downloads Sensex options, all 1-min indices, and daily Nifty + VIX OHLC via AngelOne. Its `run_angelone_downloader()` is called from `data_downloader_mcx.py`'s own `__main__` (2026-09-17), reusing the same AngelOne session — see "Merged into the MCX downloader's cron slot" below. Still independently runnable standalone (its own `__main__` authenticates/runs/terminates on its own) for manual/ad hoc use. | VPS (`delos`), called from `data_downloader_mcx.py` | Weekdays 23:56 IST (via `run_mcx_downloader.sh`) |
-| `data_downloader_mcx.py` | Downloads/updates 1-min OHLCV for the current front-month and next-month futures contract on every enabled MCX underlying (base metals, energy, precious metals — see `config/mcx_underlyings.csv`), via AngelOne (SmartAPI). Since 2026-09-17, also runs the AngelOne equities/options phase (above) in the same authenticated session. | VPS (`delos`) | Weekdays 23:56 IST |
+| `data_downloader_angelone.py` | Downloads Sensex options, all 1-min indices, and daily Nifty + VIX OHLC via AngelOne. **Reverted to standalone-only, 2026-09-18** — see "Fyers equities/options downloader" below for why (its brief 2026-09-17 merge into `data_downloader_mcx.py` is fully reverted, not just superseded). Kept in the repo as a manual fallback only. | VPS (`delos`), manual only | Not scheduled |
+| `data_downloader_mcx.py` | Downloads/updates 1-min OHLCV for the current front-month and next-month futures contract on every enabled MCX underlying (base metals, energy, precious metals — see `config/mcx_underlyings.csv`), via AngelOne (SmartAPI). MCX-only again as of 2026-09-18 (see below). | VPS (`delos`) | Weekdays 23:56 IST |
+| `data_downloader_fyers_equities.py` | **New, 2026-09-18.** Nifty/Sensex/India VIX index (1-min + daily) and Nifty/Sensex options, all via Fyers — replaces both the AngelOne equities/options path above and ICICI Direct for Nifty options. See "Fyers equities/options downloader" below. | Laptop (local), manual only | Manual, roughly weekly |
 | `mcx_live_downloader.py` | Live 1-min CRUDEOILM polling (boundary-aligned, zero-buffer, resilient retry/backoff) plus a parallel WebSocket SNAP_QUOTE feed, from NSE close through MCX close. Doubles as an AB1021 rate-limit diagnostic probe. | Manual (evening, ad hoc) | Manual |
 | `nse_cas_market_watch.py` | Polls NSE's live Closing Auction Session Market Watch feed (indicative equilibrium price, imbalance, final auction print) every 15s through the 15:14-15:36 window, one row per poll per symbol | VPS (`delos`) | Weekdays 15:12 IST |
-| `data_downloader_icicidirect.py` | Downloads Nifty options via ICICI Direct/Breeze | Laptop | Wednesdays 23:30 IST |
-| `run_angelone_downloader.sh` | Wrapper: git pull → run AngelOne downloader standalone → git push if config changed. **No longer cron-scheduled** (2026-09-17) — kept only for manual/ad hoc standalone runs; see "Merged into the MCX downloader's cron slot" below | VPS (`delos`) | Manual only |
-| `run_mcx_downloader.sh` | Wrapper: git pull → run MCX+AngelOne downloader → git push `options_list_sensex.csv` if the AngelOne options phase changed it (added 2026-09-17, matching `run_angelone_downloader.sh`'s own push-if-changed pattern) | VPS (`delos`) | Weekdays 23:56 IST |
-| `run_icicidirect_downloader.sh` | Wrapper: git pull → run ICICI Direct downloader → git push if config changed | Laptop | Wednesdays 23:30 IST |
-| `angel_nifty_backtest_data.py` | Downloads Nifty options for specific expiries from Angel One into `data/nifty/temp/` for realtime backtesting of open/recent trades not yet in ICICI | Laptop | Manual |
+| `data_downloader_icicidirect.py` | Downloads Nifty options via ICICI Direct/Breeze. **Unscheduled 2026-09-18** — superseded by `data_downloader_fyers_equities.py`'s own Nifty-options coverage. Kept as a manual fallback, not deleted. | Laptop | Not scheduled |
+| `run_angelone_downloader.sh` | Wrapper: git pull → run AngelOne downloader standalone → git push if config changed. Not cron-scheduled — manual/ad hoc standalone use only. | VPS (`delos`) | Manual only |
+| `run_mcx_downloader.sh` | Wrapper: git pull → run MCX downloader → (no config push — `data/` isn't tracked). Reverted to MCX-only 2026-09-18. | VPS (`delos`) | Weekdays 23:56 IST |
+| `run_icicidirect_downloader.sh` | Wrapper: git pull → run ICICI Direct downloader → git push if config changed. **Unscheduled 2026-09-18**, kept for manual fallback use. | Laptop | Not scheduled |
+| `angel_nifty_backtest_data.py` | Downloads Nifty options for specific expiries from Angel One into `data/nifty/temp/` for realtime backtesting of open/recent trades not yet downloaded | Laptop | Manual |
 | `nifty_daily_index.py` | Backup: official daily Nifty OHLC via ICICI Breeze (not scheduled — manual use only) | Laptop | Manual |
 | `rename_legacy_files.py` | One-time utility to rename legacy Sensex option files | Laptop | Manual |
 | `delete_empty_files.py` | One-time utility to delete empty option CSV files | Laptop | Manual |
@@ -74,17 +75,27 @@ Two known gap days from before the fix, confirmed **permanently unrecoverable** 
 
 Neither is fixable at this point — noted here so a future gap-check doesn't waste time trying to backfill them, and so anyone reading old commentary that called 2026-02-01 "a half day" (an early, incorrect guess) knows it was actually this data gap.
 
-### Merged into the MCX downloader's cron slot (AngelOne equities/options), 2026-09-17
+### Fyers equities/options downloader — replaces AngelOne + ICICI for this data (2026-09-18)
 
-`data_downloader_angelone.py` (Sensex/Nifty/India VIX indices, daily OHLC, Sensex options) used to run on its own cron at 15:45 — the same AngelOne account Prometheus trades on, logging in mid-day. Its own `generateSession()` call silently evicted Prometheus's already-open trading session, causing two real `AB1007`/"Invalid Token" order-rejection incidents (2026-08-31, 2026-09-15) before this was root-caused. The 15:45 cron was disabled on Delos 2026-09-15 as the immediate mitigation, but the equities/options data still needs collecting daily (AngelOne doesn't retain expired Sensex options data beyond ~1-2 weeks).
+**The AngelOne story, in order**: `data_downloader_angelone.py` (Sensex/Nifty/India VIX indices, daily OHLC, Sensex options) used to run on its own 15:45 cron — the same AngelOne account Prometheus trades on, logging in mid-day. Its own `generateSession()` call silently evicted Prometheus's already-open trading session, causing two real `AB1007`/"Invalid Token" order-rejection incidents (2026-08-31, 2026-09-15). The 15:45 cron was disabled 2026-09-15 as an immediate mitigation, then on 2026-09-17 `data_downloader_angelone.py` was merged into `data_downloader_mcx.py`'s own 23:56 slot to keep the data flowing with only one login/day, well after Prometheus's session closes. **That merge lasted about 12 hours.** Its very first live run the same night hit a *different*, previously-unseen failure: AngelOne's `getCandleData` returned clean, empty responses (no exception, no rate-limit error) for 376 of 382 Sensex option contracts under sustained call volume, logged nothing (the "no data" path only logs at `DEBUG`), and the code marked the expiry complete anyway — silently incomplete, never scheduled to retry. Confirmed directly the next morning: the missing data was still genuinely available (re-fetched live from AngelOne moments later, and separately recovered in full from Fyers), so nothing was actually lost, but the failure mode itself — a live broker API silently returning empty instead of erroring, under real production load — was new and serious enough to prompt moving this data off AngelOne entirely rather than patch around it again. **The AngelOne merge is now fully reverted** (`data_downloader_mcx.py`/`run_mcx_downloader.sh` are MCX-only again, matching their pre-2026-09-17 state exactly) — not just superseded; there was no reason to keep two competing paths for the same data.
 
-**Fix**: `data_downloader_angelone.py` was refactored so its whole `__main__` body (auth → scrip master filter → indices → daily indices → options, each stage keeping its own existing try/except + Slack alert) is now the reusable function `run_angelone_downloader(obj, creds_df, scrip_master_df, rate_limiter=None)`, which does **not** authenticate or terminate the session itself. `data_downloader_mcx.py`'s own `__main__`, after finishing its MCX futures work, calls this function directly with its own already-authenticated `obj` and the raw scrip master it already fetched (filtered separately for MCX vs. BFO/SENSEX — one HTTP fetch, not two) — then terminates the session once, after both phases. Net effect: **one AngelOne login per day, not two**, and it happens at 23:56, well after Prometheus's own session has torn down for the day — this cron slot was already timed for exactly that reason (see "Cron schedule" above). `data_downloader_angelone.py` is still independently runnable standalone (`python data_downloader_angelone.py`, or `run_angelone_downloader.sh`) for manual/ad hoc use — its own `__main__` authenticates, calls `run_angelone_downloader()`, and terminates, same as before this change.
+**The replacement**: `data_pipeline/data_downloader_fyers_equities.py`, covering Nifty/Sensex/India VIX index (1-min + daily) and Nifty/Sensex options, all via Fyers — confirmed to have full coverage for all five before building anything (BSE/NSE F&O symbol masters checked directly: 3,156 live SENSEX + 4,048 live NIFTY option contracts; `NSE:INDIAVIX-INDEX` confirmed with real 1-min data). This also retires `data_downloader_icicidirect.py` (Nifty options), which is no longer the only source. Output schema matches the AngelOne/ICICI files exactly (`data/indices/*.csv`, `data/sensex/<expiry>/`, `data/nifty/options/<expiry>/`, `config/options_list_sensex.csv`/`options_list_nf.csv`) — nothing downstream needs to change.
 
-**Rate limiting**: the two scripts' `RateLimiter` singletons are otherwise independent (2/sec, 180/min, 5000/hr each) — `data_downloader_mcx.py` passes its own instance into `run_angelone_downloader()`'s `rate_limiter` param so a combined run shares one sliding-window budget across both phases, reflecting the account's real combined call volume rather than two independently-reset counters. This matters because AngelOne's real throttling (`AB1021`) has been confirmed to bite well under the documented limits (`project_angelone_ratelimit_investigation` memory) — the documented ceilings are not a reliable per-phase safety margin on their own.
+Two structural advantages over the AngelOne approach, not just an account swap:
+- **Options download for an already-EXPIRED contract is one bulk call per strike** (`Get Expired F&O Data`, the same expired-contract workflow already proven for MCX in `data_downloader_fyers_mcx.py`), not AngelOne's day-by-day `getCandleData` polling across ~14 chunks per contract. Confirmed directly: the full 2026-09-17 Sensex expiry (366 contracts) completed in ~3.3 minutes with a 61.7% hit rate (226/366 — the rest are deep OTM/ITM strikes that plausibly never traded, same pattern already seen and accepted for MCX options), versus AngelOne's over an hour for a 1.6% hit rate on the same expiry.
+- **No CAS gap-fill logic needed.** Confirmed directly: Fyers's own index feed already returns a flat carry-forward candle through the 15:16-15:27 auction window and the real terminal print at 15:28 with zero missing timestamps — whatever AngelOne's feed does that `fill_missing_candles`/`extend_to_day_close` exist to fix doesn't happen on Fyers's data, so that logic isn't ported here.
 
-**Options-download wall-clock safety cutoff**: a single Sensex weekly expiry's full option chain (every strike ever listed, not just liquid ones) can be several hundred contracts, each chunked every `CHUNK_DAYS` days over its ~4-week life — confirmed directly: 366 contracts for the 2026-09-17 expiry × ~14 chunks ≈ 5,100 calls, already at the documented 5,000/hour ceiling before counting the MCX futures phase or index updates. Since `RateLimiter.wait()` sleeps rather than fails when a window fills, and real throttling is worse than documented, an uncapped run could still be running at Prometheus's 09:00 login — recreating the exact collision this change exists to prevent. `download_all_options()` now checks a wall-clock deadline (`OPTIONS_DOWNLOAD_DEADLINE_TIME`, default 07:30 IST) before starting each new contract and stops cleanly once past it, leaving the remaining contracts — and the whole expiry, since `download_status` is only set after every contract in it finishes — pending for the next run. Already-saved per-contract progress is never lost or re-fetched (`download_option_contract`'s own file-based resume).
+**The AngelOne incident's own lesson is built in from day one**: an options cycle is only marked complete if `saved/total >= MIN_HIT_RATE` (0.5). A suspiciously low hit rate — the AngelOne incident's own 6/382 = 1.6% would have tripped this immediately — is logged loudly and left pending instead of silently marked done.
 
-**Still the eventual target, not superseded by this fix**: `plans/fyers-mcx-data-integration.md` §7 describes moving this equities/options data off AngelOne onto Fyers entirely, as a separate account with no shared-session risk at all. This AngelOne-side fix removes the *urgency* of that migration (no more AB1007 risk with just one login/day, safely after Prometheus's close) but doesn't replace it — the migration is still open, just no longer blocking.
+**Cannot be scheduled at all, on either machine.** Fyers headless daily re-auth is confirmed blocked by SEBI-driven platform policy (plan §2.3) — there's no unattended path, so this runs manually (roughly weekly), on the **local machine**, the same way `data_downloader_icicidirect.py` always did. `data_downloader_angelone.py` and `data_downloader_icicidirect.py` both remain in the repo as manual fallbacks, not deleted.
+
+Usage:
+```bash
+python data_pipeline/data_downloader_fyers_equities.py --indices   # Nifty/Sensex/VIX, 1-min + daily
+python data_pipeline/data_downloader_fyers_equities.py --options   # pending Nifty/Sensex expired options
+python data_pipeline/data_downloader_fyers_equities.py --all
+```
+Needs a fresh `fyers_access_token` in `data/user_credentials.csv` — same manual browser-OAuth flow already used for the MCX-side Fyers work; a run fails cleanly with a clear message if the token's stale, and resumes exactly where it left off once refreshed (per-contract/per-expiry skip-if-exists, same as the MCX downloader).
 
 ### MCX Live Downloader (Post-NSE-Close)
 `mcx_live_downloader.py` is a separate, ad hoc script (not the overnight `data_downloader_mcx.py`) that polls CRUDEOILM live from NSE close (15:30) through MCX close, for two purposes:
@@ -105,14 +116,16 @@ Usage: `python data_pipeline/mcx_live_downloader.py [--max-cycles N]` (the flag 
 
 ```
 data_pipeline/
-├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices (1-min + daily)
-├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options (1-min)
+├── data_downloader_fyers_equities.py  # Fyers: Nifty/Sensex/VIX indices + Nifty/Sensex options (2026-09-18)
+│                                   #   Laptop, manual only -- see "Fyers equities/options downloader" above
+├── data_downloader_angelone.py     # AngelOne: Sensex options + all indices -- manual fallback only, not scheduled
+├── data_downloader_icicidirect.py  # ICICI Direct: Nifty options -- manual fallback only, not scheduled
 ├── data_downloader_mcx.py          # AngelOne: front-month MCX futures (1-min), overnight backfill/update
 ├── mcx_live_downloader.py          # AngelOne: live 1-min CRUDEOILM (NSE close -> MCX close) + parallel WS
 │                                   #   SNAP_QUOTE feed; also an AB1021 rate-limit diagnostic probe
 ├── mcx_live_downloader_YYYYMMDD.log # Dated log, one per run day (gitignored)
-├── run_angelone_downloader.sh      # VPS cron wrapper for AngelOne downloader
-├── run_icicidirect_downloader.sh   # Laptop cron wrapper for ICICI Direct downloader
+├── run_angelone_downloader.sh      # Manual-only wrapper for AngelOne downloader (fallback)
+├── run_icicidirect_downloader.sh   # Manual-only wrapper for ICICI Direct downloader (fallback)
 ├── nifty_daily_index.py            # Backup: daily Nifty OHLC via ICICI Breeze
 ├── rename_legacy_files.py
 ├── delete_empty_files.py
@@ -157,14 +170,14 @@ data_pipeline/
 56 23 * * 1-5 /home/parijnan/scripts/algo-trading-lab/data_pipeline/run_mcx_downloader.sh
 ```
 
-The former `45 15 * * 1-5 run_angelone_downloader.sh` entry was **disabled on Delos 2026-09-15** (root-caused as the cause of two real AB1007 order-rejection incidents on Prometheus, both from the same shared-AngelOne-account login eviction — see `plans/fyers-mcx-data-integration.md` §7) and its job **merged into the `56 23` slot above on 2026-09-17** rather than re-added on its own schedule — see "Merged into the MCX downloader's cron slot" below. `run_angelone_downloader.sh` itself still exists for manual/ad hoc standalone runs, just not on a cron entry of its own anymore.
+The former `45 15 * * 1-5 run_angelone_downloader.sh` entry was **disabled on Delos 2026-09-15** (root-caused as the cause of two real AB1007 order-rejection incidents on Prometheus, both from the same shared-AngelOne-account login eviction — see `plans/fyers-mcx-data-integration.md` §7), briefly merged into the `56 23` slot above on 2026-09-17, then **that merge itself was fully reverted 2026-09-18** after a real silent-failure incident on its first live run — see "Fyers equities/options downloader" above for the full story. `run_angelone_downloader.sh` still exists for manual/ad hoc standalone use, just not on any cron entry.
 
 **Laptop:**
 ```
-30 23 * * 3 /home/parijnan/scripts/algo-trading-lab/data_pipeline/run_icicidirect_downloader.sh
+30 23 * * 3 /home/parijnan/scripts/algo-trading-lab/data_pipeline/run_icicidirect_downloader.sh   # unscheduled 2026-09-18
 ```
 
-Note: Nifty downloads run on **Wednesday** nights (not Tuesday) — ICICI Direct does not update their servers immediately after expiry.
+**Unscheduled 2026-09-18** — superseded by `data_downloader_fyers_equities.py`'s own Nifty-options coverage (see above). Nothing runs unattended for equities/options data anymore: `data_downloader_fyers_equities.py` can't be, since Fyers headless auth is blocked by SEBI policy — it's a manual, roughly-weekly local run instead.
 
 ## Local sync utility (`datasync`, outside this repo)
 

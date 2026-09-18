@@ -322,6 +322,24 @@ Also added, since it surfaced as a real (not hypothetical) risk while sizing thi
 
 **This is explicitly an interim fix, not a replacement for §7.1/§7.2's Fyers migration.** It removes the *urgency* — no more AB1007 risk with a single, safely-timed login — but Sensex options/Nifty/Sensex-index/India-VIX data still lives on Angel One, still depends on this one nightly window, and the eventual move to Fyers (its own separate account, no shared-session risk at all) remains the intended long-term direction whenever §7.1's validation work is picked up.
 
+### 7.5 §7.4's interim fix superseded within 24 hours — real Fyers migration shipped 2026-09-18
+
+§7.4's own interim fix lasted about 12 hours. Its first live run (2026-09-17 23:56) hit a new, previously-unseen failure: Angel One's `getCandleData` returned clean, empty responses (no exception, no rate-limit error) for 376 of 382 Sensex option contracts under sustained call volume — nothing logged (the "no data" path only logs at `DEBUG`), and the code marked the expiry `download_status=True` anyway, unretried. Confirmed the next morning the data was NOT actually lost (re-fetched live from Angel One directly, and separately recovered in full from Fyers — see below), so no real damage was done, but the failure mode itself (a broker API silently returning empty under load, invisible to every existing safeguard) was serious enough that the user's own call was to stop patching Angel One and do §7.1's validation for real instead.
+
+**§7.1's open validation, finally done**: confirmed directly, not assumed — Fyers's BSE/NSE F&O symbol masters show 3,156 live SENSEX and 4,048 live NIFTY option contracts; the same expired-contract workflow already proven for MCX (§1-§2) resolved 366 real contracts for the exact 2026-09-17 Sensex expiry that failed on Angel One, and pulled 4,044 real 1-min candles across the contract's full life for the specific near-the-money strike that had gone missing — recovering that exact data. `NSE:INDIAVIX-INDEX` confirmed separately via Fyers's regular (non-expired) History API, real values in a plausible 11.9-12.4 range.
+
+**§7.2's build, done**: `data_pipeline/data_downloader_fyers_equities.py` — Nifty/Sensex/India VIX index (1-min + daily) via the regular History API, Nifty/Sensex options via the expired-contract workflow, output schema matched exactly to the Angel One/ICICI files it replaces. Runs on the **laptop, manually, roughly weekly** — confirmed there is no way to make this unattended (Fyers headless auth blocked by SEBI policy, §2.3), so it isn't scheduled at all, on either machine, matching how `data_downloader_icicidirect.py` already worked. The Angel-One merge from §7.4 is fully reverted (`data_downloader_mcx.py`/`run_mcx_downloader.sh` back to their pre-2026-09-17 MCX-only state) rather than left as a second, now-redundant path. `data_downloader_icicidirect.py` (Nifty options' original source) is unscheduled, not deleted — kept as a manual fallback, same as `data_downloader_angelone.py`.
+
+Two structural wins beyond just changing accounts:
+- **One bulk call per expired contract** (`Get Expired F&O Data`) instead of Angel One's day-by-day polling — confirmed directly: the full 2026-09-17 expiry (366 contracts) completed in ~3.3 minutes at a 61.7% hit rate (226/366; the rest are plausible dead deep OTM/ITM strikes, same pattern already accepted for MCX options), versus Angel One's over an hour for a 1.6% hit rate on the identical expiry.
+- **No CAS gap-fill logic ported over.** Confirmed directly: Fyers's own index feed already returns a flat carry-forward candle through the 15:16-15:27 auction window and the real terminal print at 15:28, zero missing timestamps — whatever Angel One's feed does that `fill_missing_candles`/`extend_to_day_close` exist to patch doesn't happen on Fyers's data.
+
+**A concrete safeguard from §7.4's own incident is built into the new script from day one**: an options cycle is only marked `download_status=True` if `saved/total >= MIN_HIT_RATE` (0.5) — the incident's own 6/382 = 1.6% would have tripped this immediately and stayed pending instead of silently "complete."
+
+§4's own strike-parsing logic (symbol string → strike price) was verified empirically against the live symbol masters' own structured `strikePrice` field before trusting it, not just reverse-engineered from a few examples — caught a real edge case this way: ~3.5% of NIFTY contracts use a separate monthly symbol format (MCX-style 3-letter month code) with variable-width strikes that a naive fixed-width parse misreads.
+
+Full detail in `data_pipeline/README.md`'s "Fyers equities/options downloader" section.
+
 ---
 
 ## 8. Open questions / follow-on decisions — not resolved by this plan, flagged for later

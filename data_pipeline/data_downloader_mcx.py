@@ -24,14 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Imported after this script's own chdir/logging setup above, so those run
-# first deterministically -- data_downloader_angelone.py has the identical
-# chdir guard and its own logging.basicConfig() call, both harmless no-ops
-# once this script's own versions have already run (same target directory;
-# logging.basicConfig() is a no-op once the root logger already has a
-# handler).
-import data_downloader_angelone
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -468,11 +460,6 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     # --- Refresh instrument master and select front-month contracts ---
-    # scrip_master_df is the RAW (unfiltered) broker scrip master -- fetched
-    # once here and reused below for the AngelOne equities/options phase
-    # too (data_downloader_angelone.run_angelone_downloader's own scrip_
-    # master_df param), rather than each phase fetching the same JSON
-    # separately.
     try:
         logger.info("Refreshing MCX instrument master...")
         scrip_master_df = pd.read_json(StringIO(urlopen(SCRIP_MASTER_URL).read().decode()))
@@ -550,33 +537,7 @@ if __name__ == "__main__":
     save_tracking(front_month[["name", "token", "symbol", "expiry"]].rename(
         columns={"expiry": "expiry_date"}))
 
-    # --- AngelOne equities/options download (Sensex/Nifty/India VIX + Sensex
-    # options), reusing this same authenticated session --------------------
-    # Wired in 2026-09-17: this used to be a separate 15:45 cron
-    # (data_downloader_angelone.py / run_angelone_downloader.sh) that logged
-    # into the SAME AngelOne account Prometheus trades on -- its own
-    # generateSession() call was silently evicting Prometheus's live trading
-    # session mid-day, causing real AB1007 order-rejection incidents (2026-
-    # 08-31 and 2026-09-15, see plans/fyers-mcx-data-integration.md §7). That
-    # cron was disabled 2026-09-15 as the immediate mitigation. Running it
-    # here instead -- inside this already-authenticated 23:56 session, well
-    # after Prometheus's own SESSION_END_TIME teardown -- means exactly one
-    # AngelOne login per day, not two, and no second login in the same late-
-    # night window at all. Angel One's own rate-limit throttling (AB1021) has
-    # been confirmed account-level, not per-token (project_angelone_
-    # ratelimit_investigation), so sharing this script's own `_rate_limiter`
-    # instance below (rather than letting run_angelone_downloader spin up its
-    # own separate one) makes the client-side pacing reflect the account's
-    # real combined call volume across both phases, not just this phase's.
-    try:
-        data_downloader_angelone.run_angelone_downloader(
-            obj, user_credentials_df, scrip_master_df, rate_limiter=_rate_limiter)
-    except Exception as e:
-        logger.error(f"AngelOne equities/options download failed: {e}")
-        slack_bot_sendtext(f"🚨 *Data Downloader (MCX+AngelOne)* – AngelOne equities/options "
-                           f"phase failed: {e}", SLACK_ERROR_CHANNEL)
-
-    # --- Terminate session (once, after both MCX and AngelOne phases) ---
+    # --- Terminate session ---
     try:
         obj.terminateSession(user_credentials_df.iloc[0].loc["user_name"])
         logger.info("Session terminated.")
