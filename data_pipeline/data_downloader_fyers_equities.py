@@ -92,7 +92,6 @@ SENSEX_DIR = DATA_DIR / 'sensex'
 NIFTY_OPTIONS_DIR = DATA_DIR / 'nifty' / 'options'
 
 INDEX_TS_FMT = '%Y-%m-%d %H:%M:%S'
-OPTIONS_TS_FMT = '%Y-%m-%dT%H:%M:%S'
 OHLCV_HEADERS = ['time_stamp', 'open', 'high', 'low', 'close', 'volume']
 INDEX_HEADERS = ['time_stamp', 'open', 'high', 'low', 'close', 'volume', 'oi']
 
