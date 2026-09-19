@@ -90,8 +90,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 MULT_2_0_DIR = os.path.join(HERE, 'data_sweep', 'mult_2.0')
 
-sys.path.insert(0, os.path.join(REPO_ROOT, 'prometheus_backtest'))
-from data_loader import load_futures_1min  # noqa: E402
+sys.path.insert(0, HERE)
+from data_loader_p3 import load_futures_1min  # noqa: E402
 
 _1min = load_futures_1min('CRUDEOILM')
 VOLUME = _1min['volume']
