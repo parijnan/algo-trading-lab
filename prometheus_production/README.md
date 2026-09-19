@@ -585,17 +585,17 @@ rm prometheus_production/data/prometheus_active.flag
 
 ## Backtest Reference
 
-See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate** (`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show. `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase 3 caveat #1) — this is Prometheus's final exit configuration, live in production since 2026-09-14 (`DRY_RUN=False`, `plans/prometheus-live-cutover.md`); table below refreshed 2026-09-16 through 2026-09-15's data (`prometheus_backtest/refresh_pipeline.py`, a routine data-only refresh — no methodology change this time, see that repo's "Routine backtest refresh" section).
+See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the full calibration journey, both phases. **This production module now runs Phase 3's mult-2.0 candidate** (`prometheus_backtest/phase3/`), decided 2026-09-04 — `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_FLAT_PCT=5.0`, replacing the Phase 2 config this table used to show. `TARGET1_PCT` changed from 2.0 to 2.2 on 2026-09-09 (see `prometheus_backtest/README.md`'s Phase 3 caveat #1) — this is Prometheus's final exit configuration, live in production since 2026-09-14 (`DRY_RUN=False`, `plans/prometheus-live-cutover.md`); table below refreshed 2026-09-19 through 2026-09-18's data (`prometheus_backtest/refresh_pipeline.py`, a routine data-only refresh — no methodology change this time, see that repo's "Routine backtest refresh" section).
 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
 | Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 394 (refreshed 2026-09-16, through 2026-09-15's data) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 45.69% | 55.8% |
-| Total P&L | ₹217,216 | ₹42,778 |
+| Trades | 401 (refreshed 2026-09-19, through 2026-09-18's data) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 45.89% | 55.8% |
+| Total P&L | ₹228,387 | ₹42,778 |
 | Max drawdown | −₹13,944 (per-trade series) | −₹14,943 |
-| Calmar | 15.58 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-16 through 2026-09-15's data** — Calmar 9.46, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Calmar | 16.38 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, **refreshed again 2026-09-19 through 2026-09-18's data** — Calmar 9.87, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting for that structural difference; Calmar is the fairer cross-phase comparison.
 
