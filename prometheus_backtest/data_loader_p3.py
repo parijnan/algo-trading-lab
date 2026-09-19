@@ -1,12 +1,18 @@
 """
-prometheus_backtest/phase3/data_loader_p3.py
+prometheus_backtest/data_loader_p3.py
 
-Corrected CRUDEOILM loader for the Jan-30-to-current Phase 3 backtest
-window -- replaces the naive "nearest unexpired expiry" front-month
-selection in ../data_loader.py's load_futures_1min with production's
-actual tender-margin early-roll rule (TENDER_ROLL_TRADING_DAYS=5,
-prometheus_production/prometheus_configs.py). Two layers, both mirrored
-exactly from prometheus_production/prometheus.py, not just approximated:
+Corrected CRUDEOILM/CRUDEOIL loader for the Jan-30-to-current Phase 3
+backtest window -- replaces the naive "nearest unexpired expiry"
+front-month selection in ./data_loader.py's load_futures_1min with
+production's actual tender-margin early-roll rule
+(TENDER_ROLL_TRADING_DAYS=5, prometheus_production/prometheus_configs.py).
+Shared between phase3/ (CRUDEOILM) and phase3_crudeoil/ (CRUDEOIL) --
+originally built CRUDEOILM-only (2026-09-19), generalized the same day
+once the user asked for CRUDEOIL too; nothing below is actually
+CRUDEOILM-specific except the opening-bar-correction table, which stays
+explicitly guarded to that symbol only (see load_futures_1min). Two
+layers, both mirrored exactly from prometheus_production/prometheus.py,
+not just approximated:
 
 1. resolve_effective_contract's own per-date rule (prometheus_functions.py):
    trading_days_left = trading days from that date through the front-month
@@ -36,7 +42,7 @@ generally the cleaner source), fall back to AngelOne
 (data_pipeline/data/mcx/) for any date the effective contract's Fyers
 file is missing entirely or has no rows that day -- covers both the
 already-documented 2026-03-13->2026-06-29 Fyers void and the fact Fyers
-has no Sept/Oct-2026 CRUDEOILM contract data at all yet. User's own
+has no Sept/Oct-2026 contract data at all yet, for either symbol. User's own
 2026-09-19 decision: accept AngelOne as the fallback throughout, rollover
 weeks included, rather than leaving a gap.
 
@@ -51,8 +57,7 @@ from pathlib import Path
 
 import pandas as pd
 
-_PHASE3_DIR = Path(__file__).parent
-_PROMETHEUS_BACKTEST_DIR = _PHASE3_DIR.parent
+_PROMETHEUS_BACKTEST_DIR = Path(__file__).parent
 _REPO_ROOT = _PROMETHEUS_BACKTEST_DIR.parent
 
 sys.path.insert(0, str(_PROMETHEUS_BACKTEST_DIR))
@@ -179,10 +184,8 @@ def _read_contract_file(base_dir: str, symbol: str, expiry) -> pd.DataFrame:
 
 
 def load_futures_1min(symbol: str, start: str = '2026-01-30') -> pd.DataFrame:
-    if symbol != 'CRUDEOILM':
-        raise NotImplementedError(
-            f"data_loader_p3 is scoped to CRUDEOILM only (the corrected-rollover fix was "
-            f"requested for the live-traded instrument, 2026-09-19) -- got {symbol!r}.")
+    if symbol not in ('CRUDEOILM', 'CRUDEOIL'):
+        raise NotImplementedError(f"data_loader_p3 supports CRUDEOILM and CRUDEOIL only -- got {symbol!r}.")
 
     start_date = pd.Timestamp(start).date()
     expiry_calendar = _discover_expiries(symbol)
@@ -236,11 +239,14 @@ def load_futures_1min(symbol: str, start: str = '2026-01-30') -> pd.DataFrame:
 
     full = pd.concat(day_frames, ignore_index=True)
 
-    for ts, ohlc in _CRUDEOILM_OPENING_BAR_CORRECTIONS.items():
-        mask = (full['time_stamp'] == ts) & (full['data_source'] == 'angelone_fallback')
-        if mask.any():
-            full.loc[mask, ['open', 'high', 'low', 'close']] = [
-                ohlc['open'], ohlc['high'], ohlc['low'], ohlc['close']]
+    # Confirmed CRUDEOILM-specific thin-liquidity artifact (../data_loader.py's own
+    # docstring) -- never applied to CRUDEOIL, which has no evidence of the same defect.
+    if symbol == 'CRUDEOILM':
+        for ts, ohlc in _CRUDEOILM_OPENING_BAR_CORRECTIONS.items():
+            mask = (full['time_stamp'] == ts) & (full['data_source'] == 'angelone_fallback')
+            if mask.any():
+                full.loc[mask, ['open', 'high', 'low', 'close']] = [
+                    ohlc['open'], ohlc['high'], ohlc['low'], ohlc['close']]
 
     full = full.set_index('time_stamp').sort_index()
     return full

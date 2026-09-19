@@ -25,6 +25,7 @@ import configs_p3 as configs
 from backtest_p3 import run_backtest
 from trade_paths_p3 import save_trade_paths_p3
 
+sys.path.insert(0, configs.PROMETHEUS_DIR)
 from data_loader_p3 import load_futures_1min, resample_ohlcv, compute_st  # noqa: E402
 
 
