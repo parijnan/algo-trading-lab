@@ -590,11 +590,11 @@ See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the 
 | Metric | Phase 3 mult 2.0 (live) | Phase 2 (superseded reference) |
 |---|---|---|
 | Config | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 415 (corrected 2026-09-19, through 2026-09-18's data) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 44.34% | 55.8% |
-| Total P&L | ₹216,004 | ₹42,778 |
+| Trades | 417 (corrected 2026-09-19, through 2026-09-18's data) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 44.12% | 55.8% |
+| Total P&L | ₹200,723 | ₹42,778 |
 | Max drawdown | −₹16,831 (per-trade series) | −₹14,943 |
-| Calmar | 12.83 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Calmar | 11.93 (per-trade, methodology-comparable to the mult-2.5 candidate) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
 | Cross-validation | Cross-validated on CRUDEOIL 2026-09-07, re-validated 2026-09-09 at T1=2.2%, refreshed again 2026-09-19 through 2026-09-18's data — Calmar 9.87, edge held (see `prometheus_backtest/README.md`'s Phase 3 caveat #3) — **CRUDEOIL has not had the contract-rollover fix applied**, so this comparison is corrected-vs-uncorrected, not like-for-like | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting for that structural difference; Calmar is the fairer cross-phase comparison.
