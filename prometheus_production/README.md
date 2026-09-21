@@ -468,7 +468,7 @@ Prometheus refuses to start if Apollo, Athena, Artemis, or Iris has an open posi
 | `LOT_SIZE` | looked up live | 10 barrels (CRUDEOILM) / 100 barrels (CRUDEOIL) |
 | `LOTS_PER_LEG` | 1 | 1 unit = 2 lots (1 lot each leg) |
 | `DYNAMIC_SIZING` | `False` | Static at go-live; Artemis's margin-based formula when enabled. Read live via `resolve_live_sizing()` (2026-09-07) — see below |
-| `STATIC_UNITS` | 1 | Starting size. Same live-read as `DYNAMIC_SIZING` |
+| `STATIC_UNITS` | 5 | Bumped 1 → 5 on 2026-09-21 (go-live was 1). Same live-read as `DYNAMIC_SIZING`; applies to the next new entry only, an open position keeps its own persisted size |
 | `MARGIN_PER_UNIT` | 100,000 | ₹ — no longer the live-used figure (§26, 2026-09-11): `_calculate_margin_per_unit()` computes it fresh from LTP every call. This constant is now only the fallback when a live LTP can't be fetched, and (via the Slack instrument-switch modal) keeps that fallback in the right order of magnitude for `SYMBOL` |
 | `ST_PERIOD` / `ST_MULTIPLIER` | 10 / 2.0 | Phase 3 live-test value (2026-09-04) — Phase 2's calibrated `3.0` was the live-test starting point, changed to `2.0` after confirming `3.0`'s live ST matched the chart |
 | `SL_PCT` | 2.2% | Single shared stop — the mult-2.0 candidate's own calibrated value (2026-09-04), not Phase 2's 1.8%; a wider tail-risk backstop rather than an active trade manager (`prometheus_backtest/README.md`'s Phase 3 section) |

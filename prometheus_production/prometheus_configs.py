@@ -355,7 +355,7 @@ TENDER_ROLL_TRADING_DAYS = 5
 # the only strategy on the MCX side of the account, so availablecash already
 # reflects whatever's genuinely free (no other own position to guard against).
 DEFAULT_DYNAMIC_SIZING = False
-DEFAULT_STATIC_UNITS   = 1
+DEFAULT_STATIC_UNITS   = 5   # 2026-09-21 (user-requested): bumped from 1 -> 5 units (10 lots); applies to the next NEW entry
 SIZING_OVERRIDE_FILE   = DATA_DIR / 'sizing_override.json'
 
 # DYNAMIC_SIZING/STATIC_UNITS below are the import-time-resolved values —
