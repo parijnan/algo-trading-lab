@@ -2018,7 +2018,18 @@ class Prometheus:
                     # actual close date (last_exit) instead.
                     trades_today = all_trades[last_exit.dt.date == today]
 
-            total_rs = 0.0
+            # 2026-09-22 (user-requested): this report tracks the
+            # STRATEGY's own performance, not the capital-scaled outcome of
+            # whatever sizing happened to be live that day — every P&L
+            # figure below (per-trade and the session total) is per unit,
+            # with the actual unit count shown alongside each trade so
+            # sizing is still visible, just not baked into the rupee
+            # figures. Session Total is the unweighted SUM of each trade's
+            # own per-unit P&L (not the real total divided by anything) —
+            # deliberately independent of how many units any individual
+            # trade actually carried, per the user's own framing ("regardless
+            # of how many units were traded across trades").
+            total_rs_per_unit = 0.0
             traded = not trades_today.empty or self.state.status == 'in_trade'
 
             if not traded:
@@ -2035,13 +2046,14 @@ class Prometheus:
                     exit_reason = t.get('lot2_exit_reason') or t.get('lot1_exit_reason') or '?'
                     exit_str = str(exit_reason).replace('_', ' ').title()
                     pnl_pts = t.get('total_pnl_points') or 0
-                    pnl_rs = t.get('total_pnl_rs') or 0
-                    total_rs += pnl_rs
+                    trade_units = int(t['units']) or 1
+                    pnl_rs_per_unit = (t.get('total_pnl_rs') or 0) / trade_units
+                    total_rs_per_unit += pnl_rs_per_unit
 
-                    lines.append(f"*Trade #{int(t['trade_id'])}*  ·  {direction}  |  Units: {int(t['units'])}")
+                    lines.append(f"*Trade #{int(t['trade_id'])}*  ·  {direction}  |  Units: {trade_units}")
                     lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry_price:.2f}   "
                                  f"Exit: {exit_ts_str}  ·  {exit_str}")
-                    lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs:+,.0f} Rs)*")
+                    lines.append(f"  ↳ P&L        : *{pnl_pts:+.1f} pts  ({pnl_rs_per_unit:+,.0f} Rs/unit)*")
                     lines.append('')
 
                 if self.state.status == 'in_trade':
@@ -2055,17 +2067,21 @@ class Prometheus:
                     # weeks, §3), and that locked-in P&L was previously
                     # invisible here, silently understating the session total.
                     pnl = self._compute_trade_pnl(ltp)
-                    total_rs += pnl['total_rs']
+                    open_units = self.state.units or 1
+                    realised_per_unit = pnl['realised_rs'] / open_units
+                    unrealised_per_unit = pnl['unrealised_rs'] / open_units
+                    open_total_per_unit = pnl['total_rs'] / open_units
+                    total_rs_per_unit += open_total_per_unit
 
-                    lines.append(f"*Open Position*  ·  {direction}  |  Units: {self.state.units}")
+                    lines.append(f"*Open Position*  ·  {direction}  |  Units: {open_units}")
                     lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry:.2f}   Still open at session end")
-                    lines.append(f"  ↳ Realised   : {pnl['realised_pts']:+.1f} pts  ({pnl['realised_rs']:+,.0f} Rs)")
-                    lines.append(f"  ↳ Unrealised : {pnl['unrealised_pts']:+.1f} pts  ({pnl['unrealised_rs']:+,.0f} Rs)")
-                    lines.append(f"  ↳ P&L        : *{pnl['total_rs']:+,.0f} Rs*")
+                    lines.append(f"  ↳ Realised   : {pnl['realised_pts']:+.1f} pts  ({realised_per_unit:+,.0f} Rs/unit)")
+                    lines.append(f"  ↳ Unrealised : {pnl['unrealised_pts']:+.1f} pts  ({unrealised_per_unit:+,.0f} Rs/unit)")
+                    lines.append(f"  ↳ P&L        : *{open_total_per_unit:+,.0f} Rs/unit*")
                     lines.append('')
 
             lines.append('━' * 37)
-            lines.append(f'*Session Total  :  {total_rs:+,.0f} Rs*')
+            lines.append(f'*Session Total  :  {total_rs_per_unit:+,.0f} Rs/unit*')
             lines.append('━' * 37)
 
             _slack('\n'.join(lines), SLACK_TRADEBOT_CHANNEL)
@@ -3078,8 +3094,15 @@ class Prometheus:
         # reset self.state to 'watching', losing this trade's last row.
         self._append_running_row(fill_price, exit_reason=f'lot{lot_num}_{reason}')
 
-        msg = (f'{"[PAPER] " if DRY_RUN else ""}✅ {tag}: Lot{lot_num} exit — {reason}\n'
-              f'Entry {entry:.2f} -> Exit {fill_price:.2f} | P&L: {pnl_pts:+.2f} pts  Rs.{pnl_rs:+,.0f}')
+        # 2026-09-22 (user-requested): #trade-alerts reports Rs per unit,
+        # same reasoning/convention as _send_trade_update's #trade-updates
+        # fix above — display only, pnl_rs itself (the real total across
+        # filled_qty lots) is untouched everywhere it's actually booked
+        # (self._total_pnl_rs, _pending_trade_row, the eventual
+        # prometheus_trades.csv row).
+        pnl_rs_per_unit = pnl_rs / (self.state.units or 1)
+        msg = (f'{"[PAPER] " if DRY_RUN else ""}✅ {tag}: Lot{lot_num} exit — {reason}  (Units: {self.state.units})\n'
+              f'Entry {entry:.2f} -> Exit {fill_price:.2f} | P&L: {pnl_pts:+.2f} pts  Rs.{pnl_rs_per_unit:+,.0f}/unit')
         logger.info(msg.replace('\n', '  '))
         _slack(msg)
 
@@ -3128,9 +3151,15 @@ class Prometheus:
         self._pending_trade_row['total_pnl_rs'] = round(lot1_rs + lot2_rs, 2)
         append_cumulative_trade(self._pending_trade_row)
 
-        msg = (f'{"[PAPER] " if DRY_RUN else ""}\U0001f4ca {tag}: Trade #{self._trade_counter} closed. '
+        # 2026-09-22 (user-requested): message reports Rs per unit — the
+        # stored/appended row above keeps the real total (needed by
+        # prometheus_trades.csv and _send_session_report's own per-trade
+        # math), only this display divides it down.
+        trade_units = self._pending_trade_row.get('units') or self.state.units or 1
+        total_rs_per_unit = self._pending_trade_row['total_pnl_rs'] / trade_units
+        msg = (f'{"[PAPER] " if DRY_RUN else ""}\U0001f4ca {tag}: Trade #{self._trade_counter} closed.  (Units: {trade_units})\n'
               f'Total P&L: {self._pending_trade_row["total_pnl_points"]:+.2f} pts  '
-              f'Rs.{self._pending_trade_row["total_pnl_rs"]:+,.0f}')
+              f'Rs.{total_rs_per_unit:+,.0f}/unit')
         logger.info(msg)
         _slack(msg)
 
@@ -3237,11 +3266,24 @@ class Prometheus:
         pnl = self._compute_trade_pnl(ltp)
         tag = _tag(self._contract['symbol_root'])
         prefix = '[PAPER] ' if DRY_RUN else ''
-        msg = (f'{prefix}\U0001f4ca {tag} update: {direction.upper()}  {self.state.symbol}  '
+        # 2026-09-22 (user-requested): report Rs per unit here, not the total
+        # across all units — psychologically clearer at size (5 units'
+        # combined total was misread as a single-unit move) and matches
+        # Athena's/Artemis's own convention (both report Rs/lot, never a
+        # total scaled by position size, in their periodic updates).
+        # Deliberately NOT applied to _compute_trade_pnl itself — that's
+        # shared with _send_session_report's "still open" fallback, which
+        # needs the real total for the day's summary line, not a per-unit
+        # figure.
+        units = self.state.units or 1
+        realised_per_unit = pnl['realised_rs'] / units
+        unrealised_per_unit = pnl['unrealised_rs'] / units
+        total_per_unit = pnl['total_rs'] / units
+        msg = (f'{prefix}\U0001f4ca {tag} update: {direction.upper()}  {self.state.symbol}  Units: {units}\n'
               f'Entry: {entry:.2f}  LTP: {ltp:.2f}\n'
-              f'Realised: {pnl["realised_pts"]:+.2f} pts (Rs.{pnl["realised_rs"]:+,.0f})  '
-              f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{pnl["unrealised_rs"]:+,.0f})  '
-              f'Total: Rs.{pnl["total_rs"]:+,.0f}')
+              f'Realised: {pnl["realised_pts"]:+.2f} pts (Rs.{realised_per_unit:+,.0f}/unit)  '
+              f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{unrealised_per_unit:+,.0f}/unit)  '
+              f'Total: Rs.{total_per_unit:+,.0f}/unit')
         # 2026-09-08 (user-requested): Slack-only, not logged to file/console
         # — this fires every TRADE_UPDATE_SEC (20s -- see that constant's own
         # comment for a same-day 60s/20s round trip on 2026-09-11) while
