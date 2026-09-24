@@ -95,3 +95,49 @@ ST_MULTIPLIER_GRID = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0]   #
 SAVE_TRADE_LOGS = False
 
 SLIPPAGE_ENABLED = False   # costs deliberately absent, as in every other phase
+
+# ---------------------------------------------------------------------------
+# Phase 3 -- exit calibration (plan §5, exit_calib_selene.py). Bespoke 2-lot
+# scale-out on top of the raw signal: lot 1 books at TARGET1, lot 2 at TARGET2,
+# a shared stop-loss, trend-flip as the fallback exit; positional, no EOD
+# square-off. Staged one-variable-at-a-time (SL -> T1 -> T2, each stage picking
+# the best Calmar with the others pinned), same as Prometheus's exit_calib_p3.py.
+# ---------------------------------------------------------------------------
+# Shortlist carried out of the Phase 2 sweep (plan §11): 2.5 and 3.0 lead ex-2026,
+# 2.0 kept as the full-window co-leader/reference (user, 2026-09-24: "all 3").
+CALIBRATION_MULTIPLIERS = [2.0, 2.5, 3.0]
+
+# Grids start wider than Prometheus's on purpose: its T1 grid landed on its own
+# edge on the first pass and had to be widened after the fact (prometheus_backtest/
+# README.md Phase 3 caveat #1). Percent of entry price.
+SL_GRID = [0.6, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.5, 4.0]
+T1_GRID = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+T2_GRID = [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0]
+
+# Values the not-yet-calibrated legs are pinned at in the first stages. T2's
+# starting value must exceed the largest T1 in the grid (T1 stage pins T2).
+T1_STARTING_DEFAULT = 1.0
+T2_STARTING_DEFAULT = 4.0
+
+# Same production guard Prometheus replicates: no SL/target check on a session's
+# own first 1-min bar.
+NO_EXIT_BEFORE_BUFFER_MIN = 1
+
+# Winners are also reported on each side of this date, since the Phase 2 ranking
+# was 2026-led (plan §11) and a combo that only works in 2026 is not a finding.
+WALKFORWARD_SPLIT_DATE = '2026-01-01'
+
+# ---------------------------------------------------------------------------
+# Phase 3b -- exit STRUCTURE comparison (exit_structures_selene.py). Added after
+# the staged calibration above hit its own grid edges (T1 3.0%, T2 8.0%) and
+# showed targets adding nothing (plan §12): tests "SL only, trend-flip is the
+# only profit exit" against the 2-lot structure over wider target grids.
+# ---------------------------------------------------------------------------
+# A percentage this large can never be reached, i.e. "leg switched off".
+DISABLED_PCT = 1000.0
+# Stage A: stop-loss only (both targets disabled); None-equivalent = DISABLED_PCT row.
+SL_ONLY_GRID = [0.6, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+# Stage B: full T1 x T2 grid at the SL fixed by stage A (T1 < T2 only), and a
+# same-target single-exit variant is covered by T1 == T2.
+T1_WIDE_GRID = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
+T2_WIDE_GRID = [2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0]
