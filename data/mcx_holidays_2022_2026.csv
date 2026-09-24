@@ -1,0 +1,91 @@
+Year,Date,Day,Holiday,Morning Session,Evening Session
+2026,01 Jan 2026,Thursday,New Year's Day,Open,Closed
+2026,26 Jan 2026,Monday,Republic Day,Closed,Closed
+2026,03 Mar 2026,Tuesday,Holi (2nd day),Closed,Open
+2026,26 Mar 2026,Thursday,Shri Ram Navmi,Closed,Open
+2026,31 Mar 2026,Tuesday,Shri Mahavir Jayanti,Closed,Open
+2026,03 Apr 2026,Friday,Good Friday,Closed,Closed
+2026,14 Apr 2026,Tuesday,Dr. Baba Saheb Ambedkar Jayanti,Closed,Open
+2026,01 May 2026,Friday,Maharashtra Day,Closed,Open
+2026,28 May 2026,Thursday,Bakri Id,Closed,Open
+2026,26 Jun 2026,Friday,Moharram,Closed,Open
+2026,14 Sep 2026,Monday,Ganesh Chaturthi,Closed,Open
+2026,02 Oct 2026,Friday,Mahatma Gandhi Jayanti,Closed,Closed
+2026,20 Oct 2026,Tuesday,Dassera,Closed,Open
+2026,10 Nov 2026,Tuesday,Diwali-Balipratipada,Closed,Open
+2026,24 Nov 2026,Tuesday,Guru Nanak Jayanti,Closed,Open
+2026,25 Dec 2026,Friday,Christmas,Closed,Closed
+2025,01 Jan 2025,Wednesday,New Year's Day,Open,Closed
+2025,26 Jan 2025,Sunday,Republic Day,Closed,Closed
+2025,26 Feb 2025,Wednesday,Mahashivratri,Closed,Open
+2025,14 Mar 2025,Friday,Holi,Closed,Open
+2025,31 Mar 2025,Monday,Id-Ul-Fitr (Ramzan Id),Closed,Open
+2025,10 Apr 2025,Thursday,Shri Ram Navmi,Closed,Open
+2025,14 Apr 2025,Monday,Dr. Baba Saheb Ambedkar Jayanti,Closed,Open
+2025,18 Apr 2025,Friday,Good Friday,Closed,Closed
+2025,01 May 2025,Thursday,Maharashtra Day,Closed,Open
+2025,05 Jun 2025,Thursday,Bakri Id (Id-Ul-Zuha),Closed,Open
+2025,15 Aug 2025,Friday,Independence Day,Closed,Closed
+2025,02 Oct 2025,Thursday,Mahatma Gandhi Jayanti,Closed,Closed
+2025,22 Oct 2025,Wednesday,Diwali-Balipratipada,Closed,Open
+2025,05 Nov 2025,Wednesday,Guru Nanak Jayanti,Closed,Open
+2025,25 Dec 2025,Thursday,Christmas,Closed,Closed
+2024,22 Jan 2024,Monday,Special Holiday,Closed,Open
+2024,26 Jan 2024,Friday,Republic Day,Closed,Closed
+2024,08 Mar 2024,Friday,Mahashivratri,Closed,Open
+2024,25 Mar 2024,Monday,Holi,Closed,Open
+2024,29 Mar 2024,Friday,Good Friday,Closed,Closed
+2024,11 Apr 2024,Thursday,Id-Ul-Fitr (Ramzan Id),Closed,Open
+2024,17 Apr 2024,Wednesday,Shri Ram Navmi,Closed,Open
+2024,01 May 2024,Wednesday,Maharashtra Day,Closed,Open
+2024,17 Jun 2024,Monday,Bakri Id (Id-Ul-Zuha),Closed,Open
+2024,17 Jul 2024,Wednesday,Moharram,Closed,Open
+2024,15 Aug 2024,Thursday,Independence Day,Closed,Closed
+2024,02 Oct 2024,Wednesday,Mahatma Gandhi Jayanti,Closed,Closed
+2024,01 Nov 2024,Friday,Diwali Laxmi Pujan,Closed,Closed
+2024,15 Nov 2024,Friday,Guru Nanak Jayanti,Closed,Open
+2024,25 Dec 2024,Wednesday,Christmas,Closed,Closed
+2023,26 Jan 2023,Thursday,Republic Day,Closed,Closed
+2023,07 Mar 2023,Tuesday,Holi,Closed,Open
+2023,30 Mar 2023,Thursday,Shri Ram Navmi,Closed,Open
+2023,04 Apr 2023,Tuesday,Shri Mahavir Jayanti,Closed,Open
+2023,07 Apr 2023,Friday,Good Friday,Closed,Closed
+2023,14 Apr 2023,Friday,Dr. Baba Saheb Ambedkar Jayanti,Closed,Open
+2023,01 May 2023,Monday,Maharashtra Day,Closed,Open
+2023,29 Jun 2023,Thursday,Bakri Id (Id-Ul-Zuha),Closed,Open
+2023,15 Aug 2023,Tuesday,Independence Day,Closed,Closed
+2023,19 Sep 2023,Tuesday,Ganesh Chaturthi,Closed,Open
+2023,02 Oct 2023,Monday,Mahatma Gandhi Jayanti,Closed,Closed
+2023,24 Oct 2023,Tuesday,Dassera,Closed,Open
+2023,14 Nov 2023,Tuesday,Diwali-Balipratipada,Closed,Open
+2023,27 Nov 2023,Monday,Guru Nanak Jayanti,Closed,Open
+2023,25 Dec 2023,Monday,Christmas,Closed,Closed
+2022,26 Jan 2022,Wednesday,Republic Day,Closed,Closed
+2022,01 Mar 2022,Tuesday,Mahashivratri,Closed,Open
+2022,18 Mar 2022,Friday,Holi,Closed,Open
+2022,14 Apr 2022,Thursday,Dr. Baba Saheb Ambedkar Jayanti / Mahavir Jayanti,Closed,Open
+2022,15 Apr 2022,Friday,Good Friday,Closed,Closed
+2022,03 May 2022,Tuesday,Id-Ul-Fitr (Ramzan Id),Closed,Open
+2022,16 May 2022,Monday,Buddha Purnima,Closed,Open
+2022,09 Aug 2022,Tuesday,Moharram,Closed,Open
+2022,15 Aug 2022,Monday,Independence Day,Closed,Closed
+2022,31 Aug 2022,Wednesday,Ganesh Chaturthi,Closed,Open
+2022,05 Oct 2022,Wednesday,Dassera,Closed,Open
+2022,24 Oct 2022,Monday,Diwali Laxmi Pujan,Closed,Closed
+2022,26 Oct 2022,Wednesday,Diwali-Balipratipada,Closed,Open
+2022,08 Nov 2022,Tuesday,Guru Nanak Jayanti,Closed,Open
+2021,01 Jan 2021,Friday,New Year's Day,Open,Closed
+2021,26 Jan 2021,Tuesday,Republic Day,Closed,Closed
+2021,11 Mar 2021,Thursday,Mahashivratri,Closed,Open
+2021,29 Mar 2021,Monday,Holi (2nd day),Closed,Open
+2021,02 Apr 2021,Friday,Good Friday,Closed,Closed
+2021,14 Apr 2021,Wednesday,Dr. Baba Saheb Ambedkar Jayanti,Closed,Open
+2021,21 Apr 2021,Wednesday,Shri Ram Navmi,Closed,Open
+2021,13 May 2021,Thursday,Id-Ul-Fitr (Ramzan Id),Closed,Open
+2021,21 Jul 2021,Wednesday,Bakri Id (Id-Ul-Zuha),Closed,Open
+2021,19 Aug 2021,Thursday,Moharram,Closed,Open
+2021,10 Sep 2021,Friday,Ganesh Chaturthi,Closed,Open
+2021,15 Oct 2021,Friday,Dassera,Closed,Open
+2021,04 Nov 2021,Thursday,Diwali Laxmi Pujan (muhurat evening),Closed,Open
+2021,05 Nov 2021,Friday,Diwali-Balipratipada,Closed,Open
+2021,19 Nov 2021,Friday,Guru Nanak Jayanti,Closed,Open

@@ -428,6 +428,7 @@ prometheus_backtest/phase2/data/
 prometheus_backtest/phase2/data_sweep/
 prometheus_backtest/phase3/data/
 prometheus_backtest/phase3/data_sweep/
+selene_backtest/data_sweep/
 prometheus_backtest/phase3_crudeoil/data/
 prometheus_backtest/phase3_crudeoil/data_sweep/
 prometheus_backtest/phase3_fyers/data/

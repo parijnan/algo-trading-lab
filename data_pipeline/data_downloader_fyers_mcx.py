@@ -355,7 +355,7 @@ def save_contract(instrument: str, expiry_date: str, df: pd.DataFrame, dry_run: 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> None:
+def backfill_instrument(instrument: str, months_back: int, dry_run: bool, extend_days: int = 0) -> None:
     anchor = resolve_anchor_symbol(instrument)
     today = datetime.now(IST).date()
     # 2026-09-15 finding: Get Expiry Dates rejects range_to == today (or later)
@@ -370,7 +370,7 @@ def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> Non
 
     for expiry_date in expiries:
         existing = get_staging_filepath(instrument, expiry_date)
-        if existing.exists():
+        if existing.exists() and not extend_days:
             logger.info(f'{instrument} {expiry_date}: staging file already exists, skipping '
                         f'({existing}). Delete it first to force a re-fetch.')
             continue
@@ -386,8 +386,23 @@ def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> Non
         # gracefully outside the real window, so an over-wide guess costs
         # a slightly larger request, not incorrect data.
         expiry_dt = datetime.strptime(expiry_date, '%Y-%m-%d')
-        hist_from = (expiry_dt - timedelta(days=60)).strftime('%Y-%m-%d')
+        hist_from = (expiry_dt - timedelta(days=extend_days or 60)).strftime('%Y-%m-%d')
         hist_to = expiry_date
+
+        # --extend-history-days (2026-09-24, SILVERMIC/Selene): the 60-day window above is
+        # tuned for crude's ~1-month real listing life and leaves whole months uncovered
+        # for a contract that lists 3-4 months ahead (SILVERMIC: Feb/Apr/Jun/Aug/Nov expiries
+        # leave September and December with no data at all, and every early-roll week without
+        # the next contract). For a staging file that already exists, fetch only the part
+        # BEFORE what it already holds and merge, never re-download what's there.
+        prior = None
+        if existing.exists():
+            prior = pd.read_csv(existing)
+            first_have = pd.to_datetime(prior['time_stamp']).min().date()
+            hist_to = (first_have - timedelta(days=1)).strftime('%Y-%m-%d')
+            if hist_to < hist_from:
+                logger.info(f'{instrument} {expiry_date}: already covers {hist_from} onward, nothing to extend.')
+                continue
 
         logger.info(f'{instrument} {expiry_date}: fetching {contract_symbol}, {hist_from} -> {hist_to} ...')
         df = get_expired_historical_data(contract_symbol, hist_from, hist_to)
@@ -395,6 +410,9 @@ def backfill_instrument(instrument: str, months_back: int, dry_run: bool) -> Non
             logger.warning(f'{instrument} {expiry_date}: no candles returned for {contract_symbol} -- skipping.')
             continue
 
+        if prior is not None:
+            df = pd.concat([df, prior], ignore_index=True).drop_duplicates(subset='time_stamp') \
+                   .sort_values('time_stamp').reset_index(drop=True)
         save_contract(instrument, expiry_date, df, dry_run)
 
 
@@ -406,6 +424,9 @@ def main():
                          "in data_pipeline/config/mcx_underlyings.csv")
     p.add_argument('--months-back', type=int, default=6,
                     help='How many months of expired contracts to backfill (default: 6)')
+    p.add_argument('--extend-history-days', type=int, default=0,
+                    help='Fetch each contract from this many days before expiry (default: off = 60-day window, '
+                         'skip existing files). When set, existing staging files are extended backward, not skipped.')
     p.add_argument('--dry-run', action='store_true', help='Fetch and log, but do not write any files')
     args = p.parse_args()
 
@@ -416,7 +437,7 @@ def main():
     failed = []
     for i, instrument in enumerate(instruments):
         try:
-            backfill_instrument(instrument, args.months_back, args.dry_run)
+            backfill_instrument(instrument, args.months_back, args.dry_run, args.extend_history_days)
         except (FyersAuthExpiredError, FyersRateLimitError) as e:
             remaining = instruments[i:]
             failed.extend(remaining)
