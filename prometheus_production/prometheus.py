@@ -2021,15 +2021,24 @@ class Prometheus:
             # 2026-09-22 (user-requested): this report tracks the
             # STRATEGY's own performance, not the capital-scaled outcome of
             # whatever sizing happened to be live that day — every P&L
-            # figure below (per-trade and the session total) is per unit,
+            # figure below (per-trade and the session summary) is per unit,
             # with the actual unit count shown alongside each trade so
             # sizing is still visible, just not baked into the rupee
-            # figures. Session Total is the unweighted SUM of each trade's
-            # own per-unit P&L (not the real total divided by anything) —
-            # deliberately independent of how many units any individual
-            # trade actually carried, per the user's own framing ("regardless
-            # of how many units were traded across trades").
-            total_rs_per_unit = 0.0
+            # figures. The session summary sums per-unit figures
+            # (unweighted), deliberately independent of how many units any
+            # individual trade actually carried.
+            #
+            # 2026-09-24 (user-requested): the bottom "Session Total" is now
+            # split into Realized / Unrealized, no combined total. Realized
+            # counts ONLY lots whose exit was booked on TODAY's date — the
+            # per-trade blocks above still show each trade's full P&L with
+            # its own real entry/exit dates (unchanged), but a carryover
+            # trade whose lot1 booked target1 in an earlier session
+            # contributes only its lot2 here, since lot1's P&L was already
+            # reported as that earlier session's Realized. Unrealized is the
+            # mark-to-market of whatever is still open right now.
+            realized_rs_per_unit = 0.0
+            unrealized_rs_per_unit = 0.0
             traded = not trades_today.empty or self.state.status == 'in_trade'
 
             if not traded:
@@ -2048,7 +2057,12 @@ class Prometheus:
                     pnl_pts = t.get('total_pnl_points') or 0
                     trade_units = int(t['units']) or 1
                     pnl_rs_per_unit = (t.get('total_pnl_rs') or 0) / trade_units
-                    total_rs_per_unit += pnl_rs_per_unit
+                    for lot_no in (1, 2):
+                        lot_exit_ts = t.get(f'lot{lot_no}_exit_ts')
+                        lot_pnl_rs = t.get(f'lot{lot_no}_pnl_rs')
+                        if (pd.notna(lot_exit_ts) and pd.notna(lot_pnl_rs)
+                                and pd.Timestamp(lot_exit_ts).date() == today):
+                            realized_rs_per_unit += float(lot_pnl_rs) / trade_units
 
                     lines.append(f"*Trade #{int(t['trade_id'])}*  ·  {direction}  |  Units: {trade_units}")
                     lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry_price:.2f}   "
@@ -2071,7 +2085,21 @@ class Prometheus:
                     realised_per_unit = pnl['realised_rs'] / open_units
                     unrealised_per_unit = pnl['unrealised_rs'] / open_units
                     open_total_per_unit = pnl['total_rs'] / open_units
-                    total_rs_per_unit += open_total_per_unit
+                    unrealized_rs_per_unit += unrealised_per_unit
+                    # Realized-today share of this still-open trade: only a
+                    # lot that booked on today's date (e.g. target1 hit this
+                    # session) — a lot that booked in an earlier session was
+                    # already counted in THAT session's report.
+                    for exit_price, exit_ts, status, lots in (
+                            (self.state.lot1_exit_price, self.state.lot1_exit_ts,
+                             self.state.lot1_status, self.state.lot1_lots),
+                            (self.state.lot2_exit_price, self.state.lot2_exit_ts,
+                             self.state.lot2_status, self.state.lot2_lots)):
+                        if (status == 'booked' and exit_price is not None and lots and exit_ts
+                                and pd.Timestamp(exit_ts).date() == today):
+                            lot_pts = ((exit_price - entry) if self.state.direction == 'bullish'
+                                       else (entry - exit_price))
+                            realized_rs_per_unit += lot_pts * lots * LOT_SIZE / open_units
 
                     lines.append(f"*Open Position*  ·  {direction}  |  Units: {open_units}")
                     lines.append(f"  ↳ Entry: {entry_ts_str} @ {entry:.2f}   Still open at session end")
@@ -2081,7 +2109,9 @@ class Prometheus:
                     lines.append('')
 
             lines.append('━' * 37)
-            lines.append(f'*Session Total  :  {total_rs_per_unit:+,.0f} Rs/unit*')
+            lines.append('*Session Total*')
+            lines.append(f'  ↳ Realized P&L   :  *{realized_rs_per_unit:+,.0f} Rs/unit*')
+            lines.append(f'  ↳ Unrealized P&L :  *{unrealized_rs_per_unit:+,.0f} Rs/unit*')
             lines.append('━' * 37)
 
             _slack('\n'.join(lines), SLACK_TRADEBOT_CHANNEL)

@@ -148,6 +148,131 @@ class TestSessionReportDateQualification(unittest.TestCase):
         self.assertIn(f"Entry: {yesterday.strftime('%d-%b')} 22:15", report)
 
 
+class TestSessionTotalRealizedUnrealizedSplit(unittest.TestCase):
+    """2026-09-24 (user-requested): the report's bottom "Session Total" is
+    split into Realized / Unrealized, no combined total. Realized counts only
+    lots whose exit was booked TODAY; per-trade blocks stay full-trade."""
+
+    def setUp(self):
+        self.mod = _load_prometheus_module()
+        self.p = object.__new__(self.mod.Prometheus)
+        self.p._contract = {'symbol_root': 'CRUDEOILM'}
+        self.p.state = self.mod.PrometheusState(status='watching')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.trades_file = Path(self.tmp.name) / 'prometheus_trades.csv'
+        self.mod.TRADES_FILE = self.trades_file
+        self.captured = []
+        self.mod._slack = lambda msg, channel=None: self.captured.append(msg)
+        self.today = pd.Timestamp.now().normalize()
+        self.yesterday = self.today - pd.Timedelta(days=1)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        for mod in ('prometheus_configs', 'prometheus_state', 'prometheus_functions',
+                   'prometheus_logger_setup', 'prometheus'):
+            sys.modules.pop(mod, None)
+        for d in (PROM_DIR, REPO_ROOT):
+            if d in sys.path:
+                sys.path.remove(d)
+
+    def _trade(self, trade_id, units, entry_ts, lot1_ts, lot1_rs, lot2_ts, lot2_rs):
+        row = {k: '' for k in TRADES_HEADER}
+        row.update({
+            'trade_id': trade_id, 'direction': 'bearish', 'units': units,
+            'entry_ts': entry_ts.isoformat(), 'entry_price': 9000.0,
+            'lot1_exit_ts': lot1_ts.isoformat(), 'lot1_exit_reason': 'target1',
+            'lot1_pnl_points': 10, 'lot1_pnl_rs': lot1_rs,
+            'lot2_exit_ts': lot2_ts.isoformat(), 'lot2_exit_reason': 'trend_flip',
+            'lot2_pnl_points': 5, 'lot2_pnl_rs': lot2_rs,
+            'total_pnl_points': 15, 'total_pnl_rs': lot1_rs + lot2_rs,
+        })
+        return row
+
+    def _run(self, rows):
+        if rows:
+            pd.DataFrame(rows).to_csv(self.trades_file, index=False)
+        self.p._send_session_report()
+        self.assertEqual(len(self.captured), 1)
+        return self.captured[0]
+
+    def test_carryover_trade_counts_only_todays_lot_in_realized(self):
+        """lot1 booked yesterday (5,000 = 1,000/unit), lot2 today (2,500 = 500/unit):
+        the trade block shows the FULL trade (+1,500/unit), Realized only +500."""
+        row = self._trade(40, 5, self.yesterday + pd.Timedelta(hours=10),
+                          self.yesterday + pd.Timedelta(hours=15), 5000,
+                          self.today + pd.Timedelta(hours=10), 2500)
+        report = self._run([row])
+        self.assertIn('(+1,500 Rs/unit)', report)                # trade block: whole trade
+        self.assertIn('Realized P&L   :  *+500 Rs/unit*', report)  # session: today's lot only
+        self.assertIn('Unrealized P&L :  *+0 Rs/unit*', report)
+        self.assertNotIn('Session Total  :', report)             # old combined line is gone
+
+    def test_both_lots_today_both_count(self):
+        row = self._trade(41, 5, self.today + pd.Timedelta(hours=9),
+                          self.today + pd.Timedelta(hours=11), 5000,
+                          self.today + pd.Timedelta(hours=12), 2500)
+        report = self._run([row])
+        self.assertIn('Realized P&L   :  *+1,500 Rs/unit*', report)
+
+    def test_multiple_trades_realized_sums_per_unit_unweighted(self):
+        a = self._trade(42, 1, self.today + pd.Timedelta(hours=9),
+                        self.today + pd.Timedelta(hours=10), 100,
+                        self.today + pd.Timedelta(hours=10), 100)      # 200/unit
+        b = self._trade(43, 5, self.today + pd.Timedelta(hours=11),
+                        self.today + pd.Timedelta(hours=12), 5000,
+                        self.today + pd.Timedelta(hours=12), 5000)     # 2,000/unit
+        report = self._run([a, b])
+        self.assertIn('Realized P&L   :  *+2,200 Rs/unit*', report)
+
+    def test_open_position_lot1_booked_today_counts_realized_and_unrealized_split(self):
+        lot_size = self.mod.LOT_SIZE
+        self.p.state = self.mod.PrometheusState(
+            status='in_trade', direction='bearish', units=5,
+            entry_ts=(self.today + pd.Timedelta(hours=9)).isoformat(), entry_price=9000.0,
+            last_known_ltp=8950.0,
+            lot1_status='booked', lot1_lots=5, lot1_exit_price=8900.0,
+            lot1_exit_ts=(self.today + pd.Timedelta(hours=11)).isoformat(),
+            lot2_status='open', lot2_lots=5,
+        )
+        self.p._compute_trade_pnl = lambda ltp: {
+            'realised_pts': 100.0, 'realised_rs': 100.0 * 5 * lot_size,
+            'unrealised_pts': 50.0, 'unrealised_rs': 50.0 * 5 * lot_size,
+            'total_rs': 150.0 * 5 * lot_size,
+        }
+        report = self._run([])
+        self.assertIn(f'Realized P&L   :  *+{100.0 * lot_size:,.0f} Rs/unit*', report)
+        self.assertIn(f'Unrealized P&L :  *+{50.0 * lot_size:,.0f} Rs/unit*', report)
+        # per-trade open block unchanged: still shows its own Realised/Unrealised/P&L
+        self.assertIn('*Open Position*', report)
+        self.assertIn(f'P&L        : *+{150.0 * lot_size:,.0f} Rs/unit*', report)
+
+    def test_open_position_lot1_booked_earlier_session_excluded_from_realized(self):
+        lot_size = self.mod.LOT_SIZE
+        self.p.state = self.mod.PrometheusState(
+            status='in_trade', direction='bearish', units=5,
+            entry_ts=(self.yesterday + pd.Timedelta(hours=9)).isoformat(), entry_price=9000.0,
+            last_known_ltp=8950.0,
+            lot1_status='booked', lot1_lots=5, lot1_exit_price=8900.0,
+            lot1_exit_ts=(self.yesterday + pd.Timedelta(hours=11)).isoformat(),
+            lot2_status='open', lot2_lots=5,
+        )
+        self.p._compute_trade_pnl = lambda ltp: {
+            'realised_pts': 100.0, 'realised_rs': 100.0 * 5 * lot_size,
+            'unrealised_pts': 50.0, 'unrealised_rs': 50.0 * 5 * lot_size,
+            'total_rs': 150.0 * 5 * lot_size,
+        }
+        report = self._run([])
+        self.assertIn('Realized P&L   :  *+0 Rs/unit*', report)     # lot1 was yesterday's
+        self.assertIn(f'Unrealized P&L :  *+{50.0 * lot_size:,.0f} Rs/unit*', report)
+        self.assertIn(f'Realised   : +100.0 pts  (+{100.0 * lot_size:,.0f} Rs/unit)', report)  # block unchanged
+
+    def test_no_trade_today_shows_zero_split(self):
+        report = self._run([])
+        self.assertIn('No trade today', report)
+        self.assertIn('Realized P&L   :  *+0 Rs/unit*', report)
+        self.assertIn('Unrealized P&L :  *+0 Rs/unit*', report)
+
+
 class TestConfirmLogoff(unittest.TestCase):
 
     def setUp(self):
