@@ -73,10 +73,11 @@ TENDER_ROLL_TRADING_DAYS = 5
 # Capital per unit (NOT used by the sweep -- recorded for the later
 # return-%age phase, plan §1.5/§1.7): required capital for one unit =
 # entry_price * LOT_SIZE / MARGIN_CONTRACT_VALUE_DIVISOR * MARGIN_SIZING_MULTIPLIER.
-# (Crude's is /3 * 4.) User-confirmed 2026-09-24.
+# (Crude's is /3 * 4.) User-confirmed 2026-09-24 as /8 * 4, then changed the same day to /8 * 2 once the 2-lot
+# scale-out was abandoned (plan §12: one lot per unit).
 # ---------------------------------------------------------------------------
 MARGIN_CONTRACT_VALUE_DIVISOR = 8
-MARGIN_SIZING_MULTIPLIER      = 4
+MARGIN_SIZING_MULTIPLIER      = 2   # was 4 while a unit was a 2-lot scale-out; 2 since the scale-out was dropped (2026-09-24)
 
 # ---------------------------------------------------------------------------
 # Session / entry guards -- same as Prometheus's Phase 3 / production values.
