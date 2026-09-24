@@ -92,3 +92,25 @@ Repo convention is Greek mythology, matched to the instrument (`CLAUDE.md`: "Pro
 - Rollover-week ST splicing artifacts, and Fyers' zero-volume placeholder bars, are accepted as in Prometheus Phase 3.
 
 **Phase 2 code (written, not yet run).** `selene_backtest/`: `selene_configs.py` (source of truth: multiplier grid 1.0–6.0 in 0.5 steps, `ST_PERIOD=10` held, margin `/8 × 4` recorded for later, `SAVE_TRADE_LOGS=False`), `backtest_selene.py` (verbatim port of Prometheus's raw state machine), `trade_paths_selene.py`, `sweep_selene.py` (writes a per-multiplier summary and a per-year breakdown so a regime break is visible immediately). No return-% calculation, per the user. Module names are prefixed because the Prometheus loader chain does a bare `import configs`.
+
+## 11. Phase 2 — raw signal sweep result, run 2026-09-24
+
+`python selene_backtest/sweep_selene.py` (~3.5 min), ST_PERIOD 10, multipliers 1.0–6.0, 2021-04-01 → 2026-09-23, raw signal only (no SL/target/costs), 1 lot (1 kg). Outputs in `selene_backtest/data_sweep/` (gitignored): `sweep_summary.csv`, `sweep_by_year.csv`, per-multiplier `trade_summary.csv`. P&L is in points = Rs per lot; no return-% by design.
+
+| Mult | Trades | Win % | P&L pts | Avg pts/trade | Avg hold (h) |
+|---|---|---|---|---|---|
+| 1.0 | 8,063 | 36.3 | 349,306 | 43 | 5.9 |
+| 1.5 | 4,945 | 36.7 | 486,190 | 98 | 9.7 |
+| 2.0 | 3,405 | 36.9 | 634,388 | 186 | 14.1 |
+| 2.5 | 2,471 | 38.9 | 583,253 | 236 | 19.3 |
+| 3.0 | 1,950 | 39.7 | 634,381 | 325 | 24.5 |
+| 3.5 | 1,628 | 39.7 | 454,943 | 279 | 29.4 |
+| 4.0 | 1,346 | 39.7 | 389,255 | 289 | 35.4 |
+| 4.5 | 1,129 | 39.8 | 427,442 | 379 | 42.2 |
+| 5.0 | 983 | 40.7 | 484,086 | 492 | 48.6 |
+| 5.5 | 846 | 42.3 | 459,415 | 543 | 56.3 |
+| 6.0 | 755 | 42.8 | 303,565 | 402 | 63.1 |
+
+**Reading.** Every multiplier is net positive over the full window, and every multiplier is positive in 2022–2026; only 2021 (a partial, weakest year) has small losses at 1.0/4.0/4.5. Total P&L is a broad plateau at **2.0–3.0** (2.0 and 3.0 tie at ~634k), falling off on both sides, and win rate rises steadily with the multiplier (36% → 43%) as trades get longer and fewer. Points are not comparable across years because the price rose ~4x (≈65k → ≈260k per kg), so `sweep_by_year` was also read price-normalised (sum of per-trade % move): ex-2026, **2.5 leads (191)**, then 3.0 (173), with 1.5/2.0/6.0 around 155 and 4.0 lowest (102). **2026 dominates every multiplier** (e.g. 2.0: 174 of a 328 total) because silver trended violently, so raw totals overstate what a normal year earns; this is the regime question §4 asked to watch. It is a trend-intensity step-up in 2026 (win rates jump there for mults 2.0–3.5) more than a sharp break like crude's, but it means the full-window ranking is 2026-led.
+
+**Not yet weighed:** costs (1.0–1.5 trade 5,000–8,000 times, the high multipliers under 1,000), drawdown and Calmar (deferred with the return-% work), and the fixed early-roll/fill artifacts noted in §10. Next per §5: exit calibration on a shortlist (2.0, 2.5, 3.0 look like the candidates), and a walk-forward/ex-2026 split first if the ranking's 2026 dependence matters to the decision.
