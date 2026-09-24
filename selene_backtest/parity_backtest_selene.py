@@ -113,12 +113,35 @@ class Contract:
 
 
 def load_contracts(symbol, seg_start, seg_end) -> dict:
-    """Fyers per-contract files only: AngelOne's per-contract files mislabel pre-front-month history
-    (data_downloader_mcx.py's header), so they are not used inside this segment."""
+    """Per-contract 1-minute frames: Fyers where it has the contract's day, AngelOne only where it doesn't.
+
+    AngelOne rows are used two ways (selene_configs.ANGELONE_OWN_FROM): from that date a file's rows are its
+    own contract's; before it they are the then-front-month contract's real prices, so each such date is
+    relabelled to that day's front-month contract (smallest expiry >= the date) -- and only where Fyers has no
+    row for that contract on that date, so Fyers always wins. This fills the 2026-04-01..06-29 Fyers void
+    (April contract through 04-30, June from 05-01) and nothing else."""
+    cal = _p3._discover_expiries(symbol)
+    fy = {e: _p3._read_contract_file(_p3.FYERS_DATA_DIR, symbol, e) for e in cal}
+    fy_days = {e: set(d['time_stamp'].dt.date) for e, d in fy.items() if len(d)}
+    parts = {e: [fy[e]] if len(fy[e]) else [] for e in cal}
+    own_from = pd.Timestamp(configs.ANGELONE_OWN_FROM)
+    for e in cal:
+        ao = _p3._read_contract_file(_p3.ANGELONE_DATA_DIR, symbol, e)
+        if ao.empty:
+            continue
+        own = ao[ao['time_stamp'] >= own_from]
+        if len(own):
+            parts[e].append(own)
+        pre = ao[ao['time_stamp'] < own_from]
+        for day, chunk in pre.groupby(pre['time_stamp'].dt.date):
+            f = _p3._naive_front_month_for_date(day, cal)
+            if f is not None and day not in fy_days.get(f, set()):
+                parts[f].append(chunk)
     out = {}
-    for e in _p3._discover_expiries(symbol):
-        df = _p3._read_contract_file(_p3.FYERS_DATA_DIR, symbol, e)
-        if len(df):
+    for e, ps in parts.items():
+        ps = [x for x in ps if len(x)]
+        if ps:
+            df = pd.concat(ps, ignore_index=True).drop_duplicates('time_stamp', keep='first')
             out[e] = Contract(e, df)
     return out
 
@@ -132,7 +155,7 @@ def simulate(seg_start: str, seg_end: str) -> pd.DataFrame:
     sl_frac = configs.DECIDED_SL_PCT / 100
 
     legs, stats = [], {'flat_switch': 0, 'coincident': 0, 'noncoincident_switch': 0, 'stop_switch': 0,
-                       'fallback_go': 0, 'fallback_nogo': 0, 'fallback_nodata': 0}
+                       'fallback_go': 0, 'fallback_nogo': 0, 'fallback_nodata': 0, 'forced_roll': 0, 'naive_day': 0}
     pos = None        # dict(trade_id, contract, direction, entry_ts, entry_px, sl, ref_px, parent_leg)
     pending = None    # dict(close, entry_dir, entry_contract)
     trade_id = 0
@@ -159,17 +182,42 @@ def simulate(seg_start: str, seg_end: str) -> pd.DataFrame:
 
     days = [d.date() for d in pd.bdate_range(seg_start, seg_end) if d.date() not in closed]
     for d in days:
+        dts = pd.Timestamp(d)
+
+        def has(c):
+            return c in contracts and contracts[c].has_day(d)
+
         C = _p3._plain_resolve(d, cal, closed)
         N = _p3._effective_contract_for_date(d, cal, closed)   # = plain resolve of the next trading day
-        if C not in contracts or not contracts[C].has_day(d):
-            continue
-        eve = N != C and N in contracts and contracts[N].has_day(d)
+        if not has(C):
+            # production's contract has no data today (Fyers void, or a contract not tracked yet): fall back to
+            # the front-month contract, as the spliced loader does; no roll eve is possible without new-contract data
+            nf = _p3._naive_front_month_for_date(d, cal)
+            if nf is None or not has(nf):
+                continue
+            C = nf
+            stats['naive_day'] += 1
+        eve = N != C and has(N)
+
+        if pos is not None and pos['contract'] != C:
+            # The held contract is not today's and no production roll handled it (its successor had no data on the
+            # eve, or the held contract expired): roll now at real prices on both sides -- same instant when both
+            # trade today, else old contract's last close -> new contract's first open. Position keeps direction and
+            # trade id; the stop is re-based on the new fill (no historical basis exists for these).
+            old = pos['contract']
+            first_new = contracts[C].first_ts[dts]
+            if has(old):
+                ts_roll, px_old = first_new, contracts[old].open_at(first_new)
+            else:
+                j = contracts[old].idx.searchsorted(dts) - 1
+                ts_roll, px_old = contracts[old].idx[j], float(contracts[old].c[j])
+            p_old = close_pos(ts_roll, px_old, 'forced_roll')
+            new_open = contracts[C].open_at(first_new)
+            pos = open_pos(C, p_old['direction'], first_new, new_open, ref_px=new_open, tid=p_old['trade_id'], parent=p_old)
+            stats['forced_roll'] += 1
+
         if pos is not None:
             A = pos['contract']
-            if A != C:
-                # position sits on a contract that is no longer today's -- should not happen; close at the open
-                close_pos(contracts[A].first_ts.get(pd.Timestamp(d), pd.Timestamp(d)), contracts[A].open_at(pd.Timestamp(d)) or pos['entry_px'], 'orphan')
-                A = N if eve else C
             dual = N if eve and A == C else None
         else:
             A, dual = (N, None) if eve else (C, None)
@@ -298,25 +346,37 @@ def metrics(t: pd.DataFrame) -> dict:
 
 
 def main():
+    end = sys.argv[1] if len(sys.argv) > 1 else configs.PARITY_END_EXTENDED
     os.makedirs(configs.DATA_SWEEP_DIR, exist_ok=True)
-    legs = simulate(configs.DATA_START, configs.PARITY_END)
+    legs = simulate(configs.DATA_START, end)
     legs.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_legs.csv'), index=False)
     trades = to_trades(legs)
     trades.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_trades.csv'), index=False)
+    from parity_trade_logs_selene import write_trade_logs
+    summ = write_trade_logs(legs.assign(contract=pd.to_datetime(legs['contract']).dt.date))
+    trades = trades.merge(summ, on='trade_id', how='left')
+    trades.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_trades.csv'), index=False)
+    print('window', configs.DATA_START, '->', end)
     print('roll events:', legs.attrs['stats'], '| position open at end:', legs.attrs['open_at_end'])
-    print('parity  :', metrics(trades))
     print('exit reasons (legs):', legs['exit_reason'].value_counts().to_dict(), '| multi-leg trades:', int((trades['legs'] > 1).sum()))
 
-    # same config on the spliced continuous series (Phase 2/3 machinery), same window, 1 lot
     import exit_calib_selene as ec
     prices = ec.PriceSeries(loader.load_futures_1min())
     off = configs.DISABLED_PCT
     sp = ec.run_variant(ec.load_trades(configs.DECIDED_MULTIPLIER, prices), prices, configs.DECIDED_SL_PCT, off, off * 2)
-    sp['pnl_pts'] = sp['pnl_pts'] / 2
+    sp['pnl_pts'] = sp['pnl_pts'] / 2       # both lots identical with targets off -> 1 lot
     sp['pnl_pct'] = sp['pnl_pct'] / 2
-    sp = sp[sp['entry_ts'] <= pd.Timestamp(configs.PARITY_END) + pd.Timedelta(days=1)].sort_values('trade_id')
-    print('spliced :', metrics(sp.rename(columns={}).reset_index(drop=True)))
+    sp = sp[sp['entry_ts'] <= pd.Timestamp(end) + pd.Timedelta(days=1)].sort_values('trade_id').reset_index(drop=True)
     sp.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_spliced_reference.csv'), index=False)
+
+    split = pd.Timestamp('2026-04-01')   # first day of the Fyers void: data from here on is AngelOne-filled
+    for name, t in (('parity ', trades), ('spliced', sp)):
+        print(f'{name} all      :', metrics(t.sort_values("exit_ts" if "exit_ts" in t else "entry_ts").reset_index(drop=True)))
+        clean = t[t['entry_ts'] < split]
+        late = t[t['entry_ts'] >= split]
+        print(f'{name} < 2026-04:', metrics(clean.reset_index(drop=True)))
+        if len(late):
+            print(f'{name} >= 2026-04:', metrics(late.reset_index(drop=True)))
 
 
 if __name__ == '__main__':

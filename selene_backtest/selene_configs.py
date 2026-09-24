@@ -165,3 +165,11 @@ BASIS_MAX_GAP_MIN = 5
 # and June-2026 contracts both have Fyers data. Fyers has nothing 2026-04-01..06-29 and no
 # unexpired-contract history for Nov-2026, so per-contract dual tracking is impossible after this.
 PARITY_END = '2026-03-31'
+
+# Extension to the end of the data (user, 2026-09-24): AngelOne fills where Fyers has nothing.
+# AngelOne's per-contract files hold the file's OWN contract only from the day the pipeline began
+# tracking it (2026-09-02 for Nov-2026/Feb-2027); earlier rows are the then-front-month contract's
+# real prices under a not-yet-front token (data_downloader_mcx.py's header), so they are relabelled
+# to whichever contract was front month that day, and only where Fyers has no data for that contract.
+ANGELONE_OWN_FROM = '2026-09-02'
+PARITY_END_EXTENDED = '2026-09-23'
