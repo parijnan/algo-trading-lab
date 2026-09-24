@@ -141,3 +141,27 @@ SL_ONLY_GRID = [0.6, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
 # same-target single-exit variant is covered by T1 == T2.
 T1_WIDE_GRID = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
 T2_WIDE_GRID = [2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0]
+
+# ---------------------------------------------------------------------------
+# Production-parity backtest (parity_backtest_selene.py, plan §13). Mirrors how
+# prometheus_production/ actually handles contracts (plans/prometheus-phase3-
+# production.md §3-§9, §18), applied to SILVERMIC's decided config below.
+# ---------------------------------------------------------------------------
+DECIDED_MULTIPLIER = 2.5     # plan §12
+DECIDED_SL_PCT     = 3.0     # wide protective stop, % of entry price; no targets
+
+# prometheus_configs.SEED_DAYS: each session's ST is seeded from this many
+# calendar days of the CONTRACT'S OWN 1-minute history, then extended bar by bar.
+ST_SEED_DAYS = 18
+
+# Rollover fallback (position still open late on the eve of a roll): production runs it at
+# ROLLOVER_TIME = CLOSING_TIME - 15 min (23:15 when the evening session closes 23:30, 23:40 when
+# it closes 23:55). Here: (last 1-min bar of the session) - ROLLOVER_BUFFER_MIN.
+ROLLOVER_BUFFER_MIN = 14
+# historical_basis_price refuses a lookup further than this from the original entry time.
+BASIS_MAX_GAP_MIN = 5
+
+# Fyers-complete segment the parity run covers: from DATA_START to the last day the April-2026
+# and June-2026 contracts both have Fyers data. Fyers has nothing 2026-04-01..06-29 and no
+# unexpired-contract history for Nov-2026, so per-contract dual tracking is impossible after this.
+PARITY_END = '2026-03-31'
