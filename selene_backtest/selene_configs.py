@@ -197,3 +197,16 @@ SLIP_A_REL_BPS = SLIP_ANCHOR_TICKS_CRUDE / SLIP_ANCHOR_CRUDE_PRICE * 1e4 / (SLIP
 SLIP_A_TICKS = SLIP_ANCHOR_TICKS_CRUDE / (SLIP_ANCHOR_PARTICIPATION_PCT ** 0.5)   # 0.3, Prometheus's literal A
 VOLUME_FLOOR_LOTS = 1
 VOLUME_NEIGHBOUR_MIN = 5   # a zero-volume minute uses the mean of non-zero minutes within this many minutes either side
+
+# ---------------------------------------------------------------------------
+# Risk of ruin (risk_of_ruin_selene.py, plan §16) -- Prometheus's method
+# (prometheus_backtest/phase3/risk_of_ruin_p3.py): bootstrap the real trades, 2-year paths at the observed trade pace,
+# ruin = max drawdown beyond RISK_RUIN_DD_PCT at any point AND not recovered to that peak by the horizon's end.
+# ---------------------------------------------------------------------------
+RISK_N_PATHS = 20_000
+RISK_HORIZON_YEARS = 2
+RISK_RUIN_DD_PCT = -0.40
+RISK_SEED = 20260925
+RISK_BLOCK_LEN = 20                      # trades per block for the clustered-losses variant
+RISK_LEVERAGE_GRID = [1.0, 1.5, 2.0, 3.0, 4.0]
+RISK_COST_DRAG_BPS = [0.0, 3.0, 6.0]     # extra cost per trade, in bps of entry price, on top of the gross parity trades

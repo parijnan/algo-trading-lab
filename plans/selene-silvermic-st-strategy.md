@@ -129,7 +129,7 @@ Repo convention is Greek mythology, matched to the instrument (`CLAUDE.md`: "Pro
 
 - The staged calibration landed on its own grid edges (T1 3.0, T2 8.0) and every staged winner earned *less* than the raw signal (9–30% less). An earlier statement that the calibrated exits "help outside 2026" compared a 1-lot raw sweep to 2-lot exit runs and was wrong; on a like-for-like basis the trend-flip exit alone is essentially optimal for P&L. Extra exit rules only trade P&L for drawdown.
 - Total P&L rises monotonically as targets move out and as the stop widens; stops under ~2% cost 20–40% of P&L. A stop of 3%+ leaves P&L at raw level.
-- Calmar differences are driven by a handful of Jan–Feb 2026 gap trades (stops fill at the gap open, e.g. a short entered 2026-02-20 lost 14.5% of price into a real +5.9% Monday gap despite a 3.5% stop). That risk belongs to position sizing (Phases 4/5), not to exit tuning.
+- Calmar differences are driven by a handful of Jan–Feb 2026 gap trades (stops fill at the gap open, e.g. a short entered 2026-02-20 lost 7.3% of price per lot when a real +5.9% Monday gap filled its stop at the open; the 14.5% shown for that trade in the 2-lot calibration tables was the two lots' sum). That risk belongs to position sizing (Phases 4/5), not to exit tuning.
 - Multiplier 2.5 is the most consistent: raw Calmar 11.5 before 2026 and 9.3 in 2026, and stable across every exit variant. 2.0 is weak before 2026 (Calmar 4.3); 3.0's best result rests on a fragile 0.6% stop.
 - With targets off, lot 1 and lot 2 exit together, so the 2-lot scale-out adds nothing over one lot with the wide stop; treat a "unit" as one lot per unit unless a later phase finds a reason to split.
 
@@ -187,7 +187,7 @@ Parity beats the spliced backtest by 4.3% overall (620,494 vs 594,971 pts, equal
 | 2025 | 458 | 28 → 31 | 12.5 lakh → 29.2 lakh |
 | 2026 | 315 | 24 → 279 | 29.2 lakh → 3.13 crore |
 
-**Drawdowns.** Capital is sized to one unit's margin at price/2, so notional is about 2× capital. Three drawdowns sit at −31% to −33%: October 2021 to January 2022 (−32.7%, a slow grind on a Rs 1.7 lakh account), 2026-02-05 to 02-24 (−30.6%, the 2026-02-20 short that lost 14.5% of price into a Monday gap; the 3% stop can't help against a gap), and 2026-03-24 to 04-02 (−31.2%, Rs 46 lakh). Any gap of that size costs about twice its percentage in capital.
+**Drawdowns.** Capital is sized to one unit's margin at price/2, so notional is about 2× capital. Three drawdowns sit at −31% to −33%: October 2021 to January 2022 (−32.7%, a slow grind on a Rs 1.7 lakh account), 2026-02-05 to 02-24 (−30.6%, a cluster of about 25 trades in a choppy month, including two stop-outs that filled through overnight gaps: −12.4% of capital on 02-05 and −14.5% on 02-20, the worst single trade of the run, which is a 7.3% adverse move in price at 2× leverage), and 2026-03-24 to 04-02 (−31.2%, Rs 46 lakh). The worst single trade per lot was −7.3% of price (the 2026-02-20 short; next −6.3%, −4.6%, −4.5%, −4.0%, all stops filled at a gap open), so no one trade is the drawdown: at 2× leverage a 3% stop costs about 6% of capital and a gap-through costs up to 14.5%, and the −30% episodes are clusters. **Correction:** earlier notes in this plan and in chat put the loss on the 2026-02-20 trade at "14.5% of price" and blamed the whole −57% drawdown of the first (× 2) run on it; 14.5% was the two-lot sum from the calibration run, and the −57% was also a cluster of losing trades at 4× leverage.
 
 **Sensitivity to a hard cap on units (same trades):** 10 units → 60.5×, 25 → 134.8×, 50 → 187.7×, 100 → 257.4×, 250 → 316.6×, 600 or none → 313.2×. The drawdown is −32.7% at every cap.
 
@@ -221,4 +221,28 @@ The no-slippage 313× (§14) becomes 135× under the primary variant. Slippage f
 | 150 | 201× | 135× | 71× | 264× | 21% |
 | none | 199× | 135× | 71× | 279× | 21% |
 
-**Reading.** A cap of about 100 units gives the best result at the primary coefficient (137×) and is essentially where the feedback lands on its own, so the cap only matters as a guard against a coefficient that turns out wrong; above 100 units the 2× coefficient is flat and the primary flat-to-down. 100 units is about a third of a median fill minute (25% is 75 lots), which is the range flagged as reasonable. That is a candidate ceiling, not a decision. The drawdown does not respond to slippage or the cap: it is set by the sizing rule's roughly 2× leverage acting on the 2021–22 grind and the 2026 gap. Not modelled: order slicing across minutes, and the real coefficient. **Next:** risk of ruin on this sizing.
+**Reading.** A cap of about 100 units gives the best result at the primary coefficient (137×) and is essentially where the feedback lands on its own, so the cap only matters as a guard against a coefficient that turns out wrong; above 100 units the 2× coefficient is flat and the primary flat-to-down. 100 units is about a third of a median fill minute (25% is 75 lots), which is the range flagged as reasonable. That is a candidate ceiling, not a decision. The drawdown does not respond to slippage or the cap: it is set by the sizing rule's roughly 2× leverage acting on clusters of stop-outs (the 2021–22 grind, and the Feb–Apr 2026 whipsaw with its gap-through fills). Not modelled: order slicing across minutes, and the real coefficient. **Next:** risk of ruin on this sizing.
+
+## 16. Risk of ruin, run 2026-09-25 (margin `LTP × lot / 8 × 4`)
+
+`python selene_backtest/risk_of_ruin_selene.py` (~10 s). Prometheus's method (`risk_of_ruin_p3.py`): bootstrap-resample the real parity trades with replacement, 20,000 paths of 904 trades (two years at the backtest's own pace of 452 trades a year), and call a path **ruined** when its max drawdown passes 40% at any point and equity has not recovered to that pre-drawdown peak by the end of the two years. Differences from Prometheus, on purpose: trades enter as a **percentage of entry price** (points are not stationary while the price rose fourfold), and sizing is the strategy's own compounding rule, in which every trade multiplies equity by `1 + L × trade %`, with `L = 8 / 4 = 2` the notional-to-capital leverage the margin formula implies (`× 2` would be `L = 4`). Per-trade % move: mean +0.141%, standard deviation 1.45%, worst −7.3%, best +31.4%, win rate 39.0%. The historical sequence at `L = 2` has a max drawdown of −34.4%. Costs are not in the parity trades, so a flat cost-per-trade variant stands in for slippage (§15's is size-dependent). Two bootstraps: i.i.d., and blocks of 20 consecutive trades (keeps streaks).
+
+| Scenario (2-year paths) | P(DD > 30%) | P(DD > 40%) | P(DD > 50%) | **P(ruin)** | Median max DD | 90th pct max DD | Median end multiple |
+|---|---|---|---|---|---|---|---|
+| **Primary: i.i.d., compounding, L = 2** | 57.8% | 18.9% | 4.1% | **5.1%** | 31.5% | 44.5% | 8.8× |
+| Block 20, compounding, L = 2 | 37.2% | 5.9% | 0.6% | 1.6% | 27.3% | 37.4% | 8.7× |
+| i.i.d., fixed units, L = 2 | 16.3% | 5.7% | 2.0% | 0.2% | 19.3% | 34.7% | 3.5× |
+| i.i.d., compounding, L = 2, 3 bps/trade cost | 75.8% | 34.9% | 11.6% | 12.6% | 36.1% | 51.0% | 5.1× |
+| i.i.d., compounding, L = 2, 6 bps/trade cost | 89.1% | 56.0% | 26.0% | 26.1% | 41.8% | 59.2% | 3.0× |
+
+**Leverage (i.i.d., compounding):**
+
+| L | P(DD > 40%) | P(ruin) | Median max DD | 90th pct max DD | Median end multiple |
+|---|---|---|---|---|---|
+| 1 (`/ 8 × 8`) | 0.1% | 0.1% | 16.8% | 24.7% | 3.2× |
+| 1.5 | 4.1% | 1.4% | 24.4% | 35.2% | 5.4× |
+| **2 (`/ 8 × 4`)** | **18.9%** | **5.1%** | **31.5%** | **44.5%** | **8.8×** |
+| 3 | 66.6% | 13.8% | 44.3% | 59.9% | 20.6× |
+| 4 (`/ 8 × 2`) | 93.7% | 18.0% | 55.2% | 71.7% | 42.2× |
+
+**Reading.** At the chosen `× 4` sizing, one two-year path in five suffers a drawdown beyond 40% and one in twenty is ruined by this definition; the median path's worst drawdown is about 31%. Those figures are consistent with the −32.7% to −34% the real sequence produced. Leverage is by far the strongest lever: `L = 1.5` cuts P(ruin) to 1.4% and the median drawdown to 24% at 5.4× instead of 8.8× the money, while `L = 3` or `4` roughly triples it. The i.i.d. bootstrap is the more pessimistic of the two: keeping streaks intact lowers every drawdown figure, because in this strategy a stop-out is usually followed by a winner, so losses are less clustered than shuffling suggests. The cost variants are the warning: 3 bps per trade (about a fifth of the 0.14% average trade) more than doubles P(ruin) and 6 bps quintuples it, so the edge per trade is thin relative to friction, which is exactly what §15's slippage share of gross (12–30%) says. Not modelled: correlation with the unknown coefficient in §15, integer-unit rounding at small capital, margin calls at the broker, and any future gap larger than the 2026-02 ones.
