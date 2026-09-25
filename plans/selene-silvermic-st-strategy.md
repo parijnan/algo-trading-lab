@@ -27,7 +27,7 @@ From `research/mcx_liquidity_screen/README.md` (2026-09-22, same session): SILVE
 - **This is a real, actionable finding for §2.2**: a ~5-trading-day early-roll threshold — the same magnitude as crude's own `TENDER_ROLL_TRADING_DAYS=5` — looks empirically well-supported by SILVERMIC's own liquidity-crossover data, not just carried over from Prometheus by convention. It doesn't by itself resolve §1.3's tender-*margin* question (a different mechanism than the liquidity crossover, even though the numbers rhyme), but it does mean an early roll at that threshold lands in a genuinely liquid successor contract, not a thin one.
 - **Reproducible**: `data_downloader_fyers_mcx.py`'s `resolve_anchor_symbol()` / `get_expiry_dates()` / `get_expired_contract_symbol()` / `get_expired_historical_data()` called directly (wider custom date ranges than `backfill_instrument()`'s own hardcoded 60-day-before-expiry assumption, which is tuned for crude's ~1-month real listing window and undersized for silver's multi-month one) — worth turning into a standing research script rather than redone ad hoc next time.
 
-**1.5 Margin formula — CHANGED 2026-09-24 (user): required capital per unit is now `LTP × LOT_SIZE / 8 × 2`, not `/ 8 × 4`.** The `× 4` was written when a unit was the 2-lot scale-out; §12 dropped the scale-out (one lot per unit), so the multiplier halves. Every `/ 8 × 4` in this document below (§1.5's original text, §1.7, §2 item 5, §9, §11–§13's "next steps") is superseded by `/ 8 × 2`; `selene_configs.MARGIN_SIZING_MULTIPLIER` is 2. Nothing computed so far used the margin formula (the sweeps report points and Rs per lot), so no result changes. Original text, superseded: required capital per unit = `LTP × LOT_SIZE / 8 × 4` (crude's is `/3 × 4`; the divisor is instrument-specific, `MARGIN_CONTRACT_VALUE_DIVISOR=3` in `_calculate_margin_per_unit()` was never a universal constant, `prometheus_production/README.md` §26). The user reports one SILVERMIC contract's margin is almost the same as CRUDEOILM's, which is a plausibility cross-check on the divisor: silver's higher price × lot size (1 kg) is offset by the larger divisor. In config terms `MARGIN_CONTRACT_VALUE_DIVISOR=8`, `MARGIN_SIZING_MULTIPLIER=4`, and it stays a per-trade calculation off that trade's own entry price like Prometheus's, not a frozen constant.
+**1.5 Margin formula — CHANGED BACK 2026-09-25 (user): required capital per unit is `LTP × LOT_SIZE / 8 × 4`.** The 2026-09-24 change to `× 2` (below) was reverted after the first sizing runs; `selene_configs.MARGIN_SIZING_MULTIPLIER` is 4 again, and §14–§15 were re-run and rewritten on that basis (the `× 2` results are noted in §14 as superseded). History of the `× 2` note follows. **1.5 (2026-09-24 note, superseded) — required capital per unit is now `LTP × LOT_SIZE / 8 × 2`, not `/ 8 × 4`.** The `× 4` was written when a unit was the 2-lot scale-out; §12 dropped the scale-out (one lot per unit), so the multiplier halves. Every `/ 8 × 4` in this document below (§1.5's original text, §1.7, §2 item 5, §9, §11–§13's "next steps") was superseded by `/ 8 × 2` for one day, then restored. Nothing computed so far used the margin formula (the sweeps report points and Rs per lot), so no result changes. Original text, superseded: required capital per unit = `LTP × LOT_SIZE / 8 × 4` (crude's is `/3 × 4`; the divisor is instrument-specific, `MARGIN_CONTRACT_VALUE_DIVISOR=3` in `_calculate_margin_per_unit()` was never a universal constant, `prometheus_production/README.md` §26). The user reports one SILVERMIC contract's margin is almost the same as CRUDEOILM's, which is a plausibility cross-check on the divisor: silver's higher price × lot size (1 kg) is offset by the larger divisor. In config terms `MARGIN_CONTRACT_VALUE_DIVISOR=8`, `MARGIN_SIZING_MULTIPLIER=4`, and it stays a per-trade calculation off that trade's own entry price like Prometheus's, not a frozen constant.
 
 **1.7 Metrics convention — all percentage returns and derived metrics are computed off this capital-per-unit figure (user's instruction, 2026-09-24).** Capital base for one unit = `entry_price × LOT_SIZE / 8 × 4` (§1.5), so a trade's return % = trade P&L (Rs per unit) ÷ that capital, and every downstream metric (win-rate-weighted return, Calmar, drawdown %, risk-of-ruin drawdown thresholds, dynamic-sizing equity curve) is expressed against it. This differs from Prometheus's raw-signal sweep, which reports in points/percent of price: in Selene the sweep and calibration tables should carry a capital-based return column from the start so multipliers/exits are compared on the same footing the live sizing will use. Because the base moves with each trade's entry price, drawdown % on a fixed-units run is not comparable to a dynamic-sizing run's; keep the two clearly labeled like Prometheus's own no-slippage/slippage split.
 
@@ -135,7 +135,7 @@ Repo convention is Greek mythology, matched to the instrument (`CLAUDE.md`: "Pro
 
 **What has and hasn't been simulated so far (user asked, 2026-09-24).** Entries and the raw ST signal come from a bar-by-bar state machine on 15-minute bars (`backtest_selene.py`, next-bar-open fills, entry buffer, single position). Exits are overlaid per trade on each trade's 1-minute path, vectorised with numpy. For this design that overlay is exact, because after any exit the system waits for the next flip, and the next flip's entry does not depend on how the previous trade ended. It is **not** a live-mirroring, order-level simulation. Not modelled: contract-roll execution (the series is a spliced continuous one: silver's curve is in steady contango, consecutive contracts 1–3% apart, mean 1.95%; only 25 of 2,471 multiplier-2.5 trades span a splice with both contracts in Fyers, netting −1.5% of raw P&L, gross ±8% by direction, so small but not zero), costs and slippage, position sizing/margin and dynamic sizing, freeze quantity, circuit limits, and the early roll inside the AngelOne-filled 2026-04-01 → 06-29 stretch. The percent-of-capital metrics (§1.7) are also still to do.
 
-**Next per the plan:** Phase 4/5 (liquidity/slippage and dynamic sizing off the `/8 × 2` capital, risk of ruin; on hold while the user reviews the parity trade summary and logs, 2026-09-24), which is where the gap tail risk gets handled, then a production-parity backtest with roll-under-open-position mechanics before any production build.
+**Next per the plan:** Phase 4/5 (liquidity/slippage and dynamic sizing off the `/8 × 4` capital, risk of ruin), which is where the gap tail risk gets handled, then a production-parity backtest with roll-under-open-position mechanics before any production build.
 
 ## 13. Production-parity backtest, run 2026-09-24
 
@@ -172,33 +172,53 @@ Parity beats the spliced backtest by 4.3% overall (620,494 vs 594,971 pts, equal
 
 **Per-trade minute logs (2026-09-24).** `parity_trade_logs_selene.py` (also called at the end of `parity_backtest_selene.py`) writes one CSV per trade, 2,471 files (~127 MB), to `selene_backtest/data_sweep/parity_trade_logs/trade_<id>_<entry date>_<HHMM>_<B|S>.csv`: one row per 1-minute bar of the contract actually held, entry to exit, with `unrealised_pts` (realised legs plus the current leg marked to close), running MAE/MFE on total P&L, the current stop level, and an `event` marker on each leg's first and last row. A rolled trade is one file with the hand-over visible in the `contract`/`leg_no` columns. `parity_trades.csv` also gained `final_mae`, `final_mfe` and `hold_hours`. Checked on every trade: final MFE ≥ P&L and final MAE ≥ −P&L, with no exceptions.
 
-## 14. Dynamic-sizing simulation, no slippage, run 2026-09-25
+## 14. Dynamic-sizing simulation, no slippage, run 2026-09-25 (margin `LTP × lot / 8 × 4`)
 
-`python selene_backtest/dynamic_sizing_selene.py`. Same method as Prometheus's `dynamic_sizing_sim.py`: start with Rs 1,00,000; at each trade's entry `units = max(1, capital // margin_per_unit)` with `margin_per_unit = entry_price × 1 / 8 × 2 = entry_price / 4` (user's formula, `selene_configs`); one unit is one lot (1 kg); a trade's Rs P&L is the parity backtest's points per lot × units; capital updates at each exit. Trades are `parity_trades.csv` (2,471, 2021-04-05 → 2026-09-22; none overlap). Outputs `data_sweep/dynamic_sizing_trades.csv` and `dynamic_sizing_equity_curve.csv`.
+`python selene_backtest/dynamic_sizing_selene.py`. Same method as Prometheus's `dynamic_sizing_sim.py`: start with Rs 1,00,000; at each trade's entry `units = max(1, capital // margin_per_unit)` with `margin_per_unit = entry_price × 1 / 8 × 4 = entry_price / 2`; one unit is one lot (1 kg); a trade's Rs P&L is the parity backtest's points per lot × units; capital updates at each exit. Trades are `parity_trades.csv` (2,471, 2021-04-05 → 2026-09-22; none overlap). Outputs `data_sweep/dynamic_sizing_trades.csv` and `dynamic_sizing_equity_curve.csv`.
 
-**Result (uncapped, no liquidity or slippage):** Rs 1,00,000 → Rs 256.9 crore (25,691×), CAGR 541%, max drawdown −57.1% (Rs −20.4 crore, trough 2026-02-24), Calmar 45,018, units 6 at trade 1 up to 51,207 (42,452 at the last trade), margin per unit Rs 13,177–104,524, never below one unit's margin (lowest capital before a trade Rs 96,080), no ruin. **These figures are arithmetic, not a forecast.** Compounding with no size limit reaches 40,000+ lots, against about 110,000 lots of average daily volume in SILVERMIC and a median 15-minute boundary volume near 100 lots (`research/mcx_liquidity_screen`); 404 trades exceed the 600-lot freeze quantity and all of those come after 2023.
+**Result (no slippage):** Rs 1,00,000 → Rs 3.13 crore (313×), CAGR 186%, max drawdown −32.7% (Rs −54,952, trough 2022-01-18), Calmar 956, units 3 at trade 1 up to a peak of 279 (259 at the last trade), margin per unit Rs 26,354–209,047, never below one unit's margin (lowest capital before a trade Rs 98,156), no ruin, no trade over the 600-lot freeze quantity. Because units stay in the hundreds, the unit caps in the sensitivity table barely bind above 250.
 
 | Entry year | Trades | Units, first → max | Capital, start → end (Rs) |
 |---|---|---|---|
-| 2021 | 338 | 6 → 18 | 1.00 lakh → 1.52 lakh |
-| 2022 | 437 | 9 → 48 | 1.52 lakh → 7.06 lakh |
-| 2023 | 468 | 40 → 96 | 7.06 lakh → 16.0 lakh |
-| 2024 | 455 | 85 → 516 | 16.0 lakh → 1.10 crore |
-| 2025 | 458 | 503 → 928 | 1.10 crore → 4.84 crore |
-| 2026 | 315 | 816 → 51,207 | 4.84 crore → 256.9 crore |
+| 2021 | 338 | 3 → 5 | 1.00 lakh → 1.23 lakh |
+| 2022 | 437 | 3 → 9 | 1.23 lakh → 2.82 lakh |
+| 2023 | 468 | 8 → 12 | 2.82 lakh → 4.51 lakh |
+| 2024 | 455 | 12 → 28 | 4.51 lakh → 12.5 lakh |
+| 2025 | 458 | 28 → 31 | 12.5 lakh → 29.2 lakh |
+| 2026 | 315 | 24 → 279 | 29.2 lakh → 3.13 crore |
 
-**Leverage and the gap.** Sizing capital to one unit's margin at price/4 puts notional at about 4× capital, so the drawdown is a leverage effect: the −57% is the 2026-02-20 short that lost 14.5% of price into a Monday gap (about 4 × 14.5% of capital), and the 3% stop cannot help against a gap. Any similar gap at this sizing costs more than half the capital, whatever the unit count.
+**Drawdowns.** Capital is sized to one unit's margin at price/2, so notional is about 2× capital. Three drawdowns sit at −31% to −33%: October 2021 to January 2022 (−32.7%, a slow grind on a Rs 1.7 lakh account), 2026-02-05 to 02-24 (−30.6%, the 2026-02-20 short that lost 14.5% of price into a Monday gap; the 3% stop can't help against a gap), and 2026-03-24 to 04-02 (−31.2%, Rs 46 lakh). Any gap of that size costs about twice its percentage in capital.
 
-**Sensitivity to a hard cap on units (same trades):**
+**Sensitivity to a hard cap on units (same trades):** 10 units → 60.5×, 25 → 134.8×, 50 → 187.7×, 100 → 257.4×, 250 → 316.6×, 600 or none → 313.2×. The drawdown is −32.7% at every cap.
 
-| Max units | Final capital (Rs) | × start | Max DD | Peak units |
-|---|---|---|---|---|
-| 10 | 62.3 lakh | 62× | −49.6% | 10 |
-| 25 | 1.51 crore | 151× | −57.0% | 25 |
-| 50 | 2.96 crore | 296× | −57.0% | 50 |
-| 100 | 5.73 crore | 573× | −57.0% | 100 |
-| 250 | 13.7 crore | 1,368× | −57.0% | 250 |
-| 600 | 30.5 crore | 3,046× | −57.0% | 600 |
-| none | 256.9 crore | 25,691× | −57.1% | 51,207 |
+**Superseded first run at `× 2` (margin price/4, 2026-09-25):** 25,691×, max drawdown −57.1%, up to 51,207 units, 404 trades over the freeze quantity. Halving the margin per unit doubles the leverage and produced size no market could absorb. The user set the multiplier back to 4 on 2026-09-25 without stating a reason; this is the comparison, not a recorded rationale.
 
-The drawdown percentage barely moves with the cap because the losing trade hits while the cap is already binding or capital is fully sized; only the compounding changes. **Next:** liquidity and slippage on the unit counts (Phase 4), which decides where a realistic cap sits, and risk of ruin.
+## 15. Liquidity and slippage on the sized trades, run 2026-09-25 (margin `LTP × lot / 8 × 4`)
+
+`python selene_backtest/slippage_dynamic_selene.py` (~40 s). The model is Prometheus's (`dynamic_sizing_sim_slippage.py`): `slippage = A × √(participation %)`, participation = order lots ÷ real volume of the fill's own minute, every leg has an entry and an exit fill of `units` lots, slippage always hurts, and it feeds back into capital before the next trade is sized. Run on the parity trades and legs, Rs 1,00,000 start.
+
+**The coefficient is the weak point, and the crude anchor can't be reused as is.** Prometheus anchored "25% participation costs 1.5 ticks" on CRUDEOILM (1 point on about Rs 9,000). SILVERMIC's tick is Rs 1 on Rs 65,000–260,000, so the same 1.5 ticks would be about 15× cheaper in relative terms. The primary variant therefore keeps the same relative cost: 1.67 bps of price at 25% participation (`A = 0.333` bps per √%), stress-tested at 0.5× and 2×; the literal-ticks value (`A = 0.3` points) is reported as a floor. None of these is a measurement; real fill data would replace them. Zero-volume placeholder minutes (47 of 4,952 fills) use the mean of the non-zero minutes within 5 minutes either side (8 fell back to a 1-lot floor), a deliberate deviation from Prometheus's flat floor.
+
+**Liquidity: the minute a fill lands in has a median volume of about 300 lots, stable across 2021–2026** (25th percentile 130–190, 10th percentile 40–100). An order of 10% of that median is about 30 lots; 25% is about 75 lots.
+
+| Variant, uncapped | Final capital | × start | Max DD | Peak units | Slippage share of gross P&L |
+|---|---|---|---|---|---|
+| Literal ticks (floor) | Rs 2.79 crore | 279× | −33.0% | 250 | 1% |
+| 0.5× relative | Rs 1.99 crore | 199× | −32.9% | 183 | 12% |
+| **Primary (1× relative)** | **Rs 1.35 crore** | **135×** | **−33.4%** | **127** | **21%** |
+| 2× relative | Rs 71 lakh | 71× | −33.2% | 69 | 30% |
+
+The no-slippage 313× (§14) becomes 135× under the primary variant. Slippage feeds back and holds size at a peak of 127 units, so no separate cap is needed: the median participation is 3.8%, and it only becomes large in 2026 (median 24%, when units reach 100+ and slippage costs Rs 32 lakh of the year's gain). Only 57 trades exceed 100% participation of their minute's volume.
+
+**Capped, final multiple of the starting capital (max drawdown is −33% in every cell):**
+
+| Max units | 0.5× | 1× (primary) | 2× | Literal ticks | Slippage share of gross (1×) |
+|---|---|---|---|---|---|
+| 25 | 113× | 96× | 67× | 128× | 8% |
+| 50 | 152× | 125× | 74× | 179× | 12% |
+| 75 | 181× | 134× | 71× | 212× | 16% |
+| 100 | 190× | 137× | 71× | 240× | 19% |
+| 150 | 201× | 135× | 71× | 264× | 21% |
+| none | 199× | 135× | 71× | 279× | 21% |
+
+**Reading.** A cap of about 100 units gives the best result at the primary coefficient (137×) and is essentially where the feedback lands on its own, so the cap only matters as a guard against a coefficient that turns out wrong; above 100 units the 2× coefficient is flat and the primary flat-to-down. 100 units is about a third of a median fill minute (25% is 75 lots), which is the range flagged as reasonable. That is a candidate ceiling, not a decision. The drawdown does not respond to slippage or the cap: it is set by the sizing rule's roughly 2× leverage acting on the 2021–22 grind and the 2026 gap. Not modelled: order slicing across minutes, and the real coefficient. **Next:** risk of ruin on this sizing.

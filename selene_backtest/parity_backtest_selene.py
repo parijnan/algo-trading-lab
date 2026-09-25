@@ -59,6 +59,7 @@ class Contract:
         df_1m = df_1m.sort_values('time_stamp').drop_duplicates('time_stamp').set_index('time_stamp')
         self.idx = df_1m.index
         self.o, self.h, self.l, self.c = (df_1m[k].to_numpy(float) for k in ('open', 'high', 'low', 'close'))
+        self.v = df_1m['volume'].to_numpy(float)
         day = self.idx.normalize()
         first = pd.Series(self.idx, index=self.idx).groupby(day).transform('min')
         self.guarded = (self.idx == first.to_numpy())

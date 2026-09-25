@@ -77,7 +77,7 @@ TENDER_ROLL_TRADING_DAYS = 5
 # scale-out was abandoned (plan §12: one lot per unit).
 # ---------------------------------------------------------------------------
 MARGIN_CONTRACT_VALUE_DIVISOR = 8
-MARGIN_SIZING_MULTIPLIER      = 2   # was 4 while a unit was a 2-lot scale-out; 2 since the scale-out was dropped (2026-09-24)
+MARGIN_SIZING_MULTIPLIER      = 4   # 4 (2026-09-24), briefly 2 when the scale-out was dropped, back to 4 on 2026-09-25 (user)
 
 # ---------------------------------------------------------------------------
 # Session / entry guards -- same as Prometheus's Phase 3 / production values.
@@ -180,3 +180,20 @@ PARITY_END_EXTENDED = '2026-09-23'
 # ---------------------------------------------------------------------------
 DYNAMIC_SIZING_START_CAPITAL = 100_000   # Rs, user 2026-09-24/25
 MCX_FREEZE_QTY_LOTS = 600                # instrument master freeze_qty for SILVERMIC (per-order cap, lots)
+
+# ---------------------------------------------------------------------------
+# Slippage-adjusted dynamic sizing (slippage_dynamic_selene.py, plan §15)
+# Model carried over from prometheus_backtest/phase3/dynamic_sizing_sim_slippage.py:
+#   slippage = A * sqrt(participation_pct), participation_pct = 100 * order_lots / volume of the fill's own minute,
+# anchored at "25% participation costs 1.5 ticks" on CRUDEOILM (~Rs 9,000/bbl there).
+# ---------------------------------------------------------------------------
+SLIP_ANCHOR_PARTICIPATION_PCT = 25.0
+SLIP_ANCHOR_TICKS_CRUDE = 1.5
+SLIP_ANCHOR_CRUDE_PRICE = 9000.0
+# SILVERMIC's tick is Rs 1 on a Rs 65,000-260,000 price, ~15x finer relative to price than crude's (1 point on
+# ~9,000), so the crude anchor taken literally in ticks is ~15x too cheap. Primary variant: the same RELATIVE
+# cost, 1.5/9000 = 1.67 bps of price at 25% participation. The literal-ticks variant is reported as a floor.
+SLIP_A_REL_BPS = SLIP_ANCHOR_TICKS_CRUDE / SLIP_ANCHOR_CRUDE_PRICE * 1e4 / (SLIP_ANCHOR_PARTICIPATION_PCT ** 0.5)
+SLIP_A_TICKS = SLIP_ANCHOR_TICKS_CRUDE / (SLIP_ANCHOR_PARTICIPATION_PCT ** 0.5)   # 0.3, Prometheus's literal A
+VOLUME_FLOOR_LOTS = 1
+VOLUME_NEIGHBOUR_MIN = 5   # a zero-volume minute uses the mean of non-zero minutes within this many minutes either side
