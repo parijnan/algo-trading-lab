@@ -174,3 +174,9 @@ PARITY_END = '2026-03-31'
 # to whichever contract was front month that day, and only where Fyers has no data for that contract.
 ANGELONE_OWN_FROM = '2026-09-02'
 PARITY_END_EXTENDED = '2026-09-23'
+
+# ---------------------------------------------------------------------------
+# Dynamic-sizing simulation (dynamic_sizing_selene.py, plan §14)
+# ---------------------------------------------------------------------------
+DYNAMIC_SIZING_START_CAPITAL = 100_000   # Rs, user 2026-09-24/25
+MCX_FREEZE_QTY_LOTS = 600                # instrument master freeze_qty for SILVERMIC (per-order cap, lots)

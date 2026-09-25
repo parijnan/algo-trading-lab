@@ -171,3 +171,34 @@ Repo convention is Greek mythology, matched to the instrument (`CLAUDE.md`: "Pro
 Parity beats the spliced backtest by 4.3% overall (620,494 vs 594,971 pts, equal to 1,240,988 vs 1,189,942 for 2 lots), almost all of it from the Fyers-complete years where roll handling is real; in the AngelOne-filled stretch the two agree to within 1.5%, as expected since neither can model the roll there. Exit legs across the whole window: 2,456 trend-flip, 15 stop-loss, 3 forced-roll, 2 rollover fallback; 5 multi-leg trades. The trade still open at 2026-09-23 is excluded. The decided config (multiplier 2.5, 3.0% stop) stands.
 
 **Per-trade minute logs (2026-09-24).** `parity_trade_logs_selene.py` (also called at the end of `parity_backtest_selene.py`) writes one CSV per trade, 2,471 files (~127 MB), to `selene_backtest/data_sweep/parity_trade_logs/trade_<id>_<entry date>_<HHMM>_<B|S>.csv`: one row per 1-minute bar of the contract actually held, entry to exit, with `unrealised_pts` (realised legs plus the current leg marked to close), running MAE/MFE on total P&L, the current stop level, and an `event` marker on each leg's first and last row. A rolled trade is one file with the hand-over visible in the `contract`/`leg_no` columns. `parity_trades.csv` also gained `final_mae`, `final_mfe` and `hold_hours`. Checked on every trade: final MFE ≥ P&L and final MAE ≥ −P&L, with no exceptions.
+
+## 14. Dynamic-sizing simulation, no slippage, run 2026-09-25
+
+`python selene_backtest/dynamic_sizing_selene.py`. Same method as Prometheus's `dynamic_sizing_sim.py`: start with Rs 1,00,000; at each trade's entry `units = max(1, capital // margin_per_unit)` with `margin_per_unit = entry_price × 1 / 8 × 2 = entry_price / 4` (user's formula, `selene_configs`); one unit is one lot (1 kg); a trade's Rs P&L is the parity backtest's points per lot × units; capital updates at each exit. Trades are `parity_trades.csv` (2,471, 2021-04-05 → 2026-09-22; none overlap). Outputs `data_sweep/dynamic_sizing_trades.csv` and `dynamic_sizing_equity_curve.csv`.
+
+**Result (uncapped, no liquidity or slippage):** Rs 1,00,000 → Rs 256.9 crore (25,691×), CAGR 541%, max drawdown −57.1% (Rs −20.4 crore, trough 2026-02-24), Calmar 45,018, units 6 at trade 1 up to 51,207 (42,452 at the last trade), margin per unit Rs 13,177–104,524, never below one unit's margin (lowest capital before a trade Rs 96,080), no ruin. **These figures are arithmetic, not a forecast.** Compounding with no size limit reaches 40,000+ lots, against about 110,000 lots of average daily volume in SILVERMIC and a median 15-minute boundary volume near 100 lots (`research/mcx_liquidity_screen`); 404 trades exceed the 600-lot freeze quantity and all of those come after 2023.
+
+| Entry year | Trades | Units, first → max | Capital, start → end (Rs) |
+|---|---|---|---|
+| 2021 | 338 | 6 → 18 | 1.00 lakh → 1.52 lakh |
+| 2022 | 437 | 9 → 48 | 1.52 lakh → 7.06 lakh |
+| 2023 | 468 | 40 → 96 | 7.06 lakh → 16.0 lakh |
+| 2024 | 455 | 85 → 516 | 16.0 lakh → 1.10 crore |
+| 2025 | 458 | 503 → 928 | 1.10 crore → 4.84 crore |
+| 2026 | 315 | 816 → 51,207 | 4.84 crore → 256.9 crore |
+
+**Leverage and the gap.** Sizing capital to one unit's margin at price/4 puts notional at about 4× capital, so the drawdown is a leverage effect: the −57% is the 2026-02-20 short that lost 14.5% of price into a Monday gap (about 4 × 14.5% of capital), and the 3% stop cannot help against a gap. Any similar gap at this sizing costs more than half the capital, whatever the unit count.
+
+**Sensitivity to a hard cap on units (same trades):**
+
+| Max units | Final capital (Rs) | × start | Max DD | Peak units |
+|---|---|---|---|---|
+| 10 | 62.3 lakh | 62× | −49.6% | 10 |
+| 25 | 1.51 crore | 151× | −57.0% | 25 |
+| 50 | 2.96 crore | 296× | −57.0% | 50 |
+| 100 | 5.73 crore | 573× | −57.0% | 100 |
+| 250 | 13.7 crore | 1,368× | −57.0% | 250 |
+| 600 | 30.5 crore | 3,046× | −57.0% | 600 |
+| none | 256.9 crore | 25,691× | −57.1% | 51,207 |
+
+The drawdown percentage barely moves with the cap because the losing trade hits while the cap is already binding or capital is fully sized; only the compounding changes. **Next:** liquidity and slippage on the unit counts (Phase 4), which decides where a realistic cap sits, and risk of ruin.
