@@ -59,3 +59,22 @@ def test_production_and_backtest_supertrend_agree(period, multiplier, seed):
     assert [None if pd.isna(x) else bool(x) for x in b['trend']] == [None if pd.isna(x) else bool(x) for x in p['trend']]
     assert (b['trend_flip'].to_numpy() == p['trend_flip'].to_numpy()).all()
     assert int(b['trend_flip'].sum()) > 0, 'test bars produced no flips; the check would be vacuous'
+
+
+@pytest.mark.parametrize('period,multiplier', [(10, 2.0), (10, 2.5), (10, 3.0), (7, 2.5)])
+@pytest.mark.parametrize('seed', [1, 2, 3])
+def test_hestia_supertrend_agrees_with_production(period, multiplier, seed):
+    """hestia_core.indicators.compute_st is the third copy (the Hestia data service's single implementation)."""
+    sys.path.insert(0, str(REPO))
+    from hestia_core.indicators import compute_st as hestia_compute_st
+    prod = _load_production_compute_st()
+    bars = _bars(1500, seed)
+    frame = bars.reset_index().rename(columns={'index': 'time_stamp'})
+
+    h = hestia_compute_st(frame, period, multiplier)
+    p = prod(frame, period, multiplier)
+
+    np.testing.assert_allclose(h['supertrend'].to_numpy(), p['supertrend'].to_numpy(), rtol=0, atol=1e-9, equal_nan=True)
+    assert [None if pd.isna(x) else bool(x) for x in h['trend']] == [None if pd.isna(x) else bool(x) for x in p['trend']]
+    assert (h['trend_flip'].to_numpy() == p['trend_flip'].to_numpy()).all()
+    assert int(h['trend_flip'].sum()) > 0, 'test bars produced no flips; the check would be vacuous'

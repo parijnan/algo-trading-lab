@@ -123,7 +123,7 @@ class TestProtocols(unittest.TestCase):
         self.assertTrue(s.watch_dpl)
 
     def test_version(self):
-        self.assertEqual(i.INTERFACE_VERSION, 1)
+        self.assertEqual(i.INTERFACE_VERSION, '1.1')
 
 
 if __name__ == '__main__':

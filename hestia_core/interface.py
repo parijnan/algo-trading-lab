@@ -1,5 +1,6 @@
 """
-Hestia <-> engine interface, version 1 (DRAFT for review; plans/hestia-interface-spec.md is the prose spec).
+Hestia <-> engine interface, version 1.1 (v1 confirmed by the user 2026-09-28; v1.1, adopted by the user the same day, adds the six P3
+clarifications made while building the fake Hestia, listed in plans/hestia-interface-spec.md, which is the prose spec).
 
 The split (user, 2026-09-28): each strategy engine evaluates and decides (entries, exits, stops, the roll) on
 processed data delivered by Hestia; Hestia performs the actual work (orders, fills, retries, reconciliation, data,
@@ -21,7 +22,7 @@ from datetime import date, datetime
 from enum import Enum, IntEnum
 from typing import Optional, Protocol, Tuple, Union, runtime_checkable
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = '1.1'
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +67,8 @@ class OutcomeStatus(str, Enum):
     DEPENDENCY_FAILED = 'dependency_failed'  # a request it depended on did not fill
     UNCONFIRMED = 'unconfirmed'            # order placed but the fill could not be confirmed; position status unknown
     ABANDONED = 'abandoned'                # engine stopped (KILL) before Hestia finished; nothing was cancelled
+    IN_FLIGHT = 'in_flight'                # only ever returned by request_status() for a request still being worked;
+                                           # never delivered as an event, never confirmed
 
 
 class AckStatus(str, Enum):
@@ -207,8 +210,8 @@ class SessionStart:
 class BarComplete:
     contract: ContractRef
     boundary_ts: datetime            # the boundary this bar closes at
-    bar: Bar
-    st: SupertrendPoint
+    bar: Optional[Bar]               # None only when quality is GAP (no bar was built)
+    st: Optional[SupertrendPoint]    # None only when quality is GAP
     prev_st: Optional[float]         # the previous bar's supertrend, the line this bar had to cross
     quality: BarQuality
     minutes_present: int
@@ -472,6 +475,7 @@ class EngineContext(Protocol):
 
     # facts and data
     def contracts(self, instrument: str) -> Tuple[ContractInfo, ...]: ...
+    def set_trading_contract(self, contract: ContractRef) -> None: ...    # tells Hestia which contract this engine trades
     def track(self, contract: ContractRef) -> None: ...          # answered by TrackReady or TrackFailed
     def untrack(self, contract: ContractRef) -> None: ...
     def ltp(self, contract: ContractRef) -> Optional[LtpQuote]: ...
@@ -487,7 +491,8 @@ class EngineContext(Protocol):
 
     # execution: one request per decision
     def submit(self, request: Request) -> RequestAck: ...
-    def request_status(self, request_id: str) -> Optional[RequestOutcome]: ...   # None if Hestia has never seen it
+    def request_status(self, request_id: str) -> Optional[RequestOutcome]: ...   # None only if Hestia has never seen it;
+                                                                                 # status IN_FLIGHT while still being worked
 
     # persistence of the engine's own decision state (an opaque string; Hestia stores it per engine)
     def save_state(self, blob: str) -> None: ...
