@@ -191,7 +191,7 @@ A note for later: because engines are decision functions over Hestia's events, t
 |---|---|---|
 | **P0** | Decisions in §11; Delos checks | User answers |
 | **P1 (done 2026-09-28, `plans/hestia-p1-inventory.md`)** | Measurements and inventory: refine the candle-call measurement (§5) with the recent live logs; every module-level state, `sys.exit`, `signal`, `terminateSession`, `feed` and lot2 reference in the code to be ported; the data spec each engine needs | Written inventory |
-| **P2** | **The interface spec** (§1) written down as typed events, intents and outcomes | Reviewed by the user |
+| **P2 (drafted 2026-09-28: `plans/hestia-interface-spec.md`, `hestia_core/interface.py`)** | **The interface spec** (§1) written down as typed events, intents and outcomes | Reviewed by the user |
 | **P3** | **Fake/replay Hestia** built with the spec, plus the contract and concurrency tests (§8 items 1 and 2) | Tests green |
 | **P4** | **Live Hestia** services (§2) | Suite green; gateway, idempotency and teardown tests |
 | **P5** | **Prometheus engine parity** against replay of recorded live days | Decision-for-decision agreement |
