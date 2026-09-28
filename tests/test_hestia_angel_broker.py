@@ -243,6 +243,16 @@ def test_the_position_book_is_converted_to_lots_by_each_contracts_lot_size():
     assert out == [None]
 
 
+def test_positions_in_other_exchange_segments_are_not_part_of_the_mcx_book():
+    r = Rig()
+    r.sc.position_rows = [{'symboltoken': 'T1', 'exchange': 'MCX', 'netqty': '-30', 'netprice': '99.5'},
+                          {'symboltoken': '21750', 'exchange': 'NSE', 'netqty': '-1250', 'netprice': '1000'}]
+    out = []
+    r.port.read_positions(out.append)
+    r.kernel.run_for(0)
+    assert out[0] == {'T1': PositionRow(-3, 99.5)}
+
+
 def test_free_cash_fails_closed_when_the_balance_is_missing_or_stale():
     r = Rig()
     assert r.port.free_cash('a') == 0.0

@@ -354,6 +354,9 @@ class AngelBrokerPort:
             token = str(p.get('symboltoken') or '')
             if not token:
                 continue
+            exchange = str(p.get('exchange') or '')
+            if exchange and exchange.upper() != self.cfg.exchange.upper():
+                continue                                     # the account's other segments (an ETF sold intraday) are not Hestia's
             lot = self._lot_size_by_token(token) or 1
             net = int(float(p.get('netqty', 0) or 0)) // lot
             avg = float(p.get('netprice') or 0.0) or None
