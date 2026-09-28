@@ -151,6 +151,7 @@ class HestiaCore:
         self._crashes: Dict[str, List[datetime]] = defaultdict(list)
         self._saved_state: Dict[str, str] = {}
         self._monitor_started = False
+        self._stopping = False
         # execution
         self._registry: Dict[Tuple[str, str], _Rec] = {}
         self._by_order: Dict[str, _Rec] = {}
@@ -202,6 +203,7 @@ class HestiaCore:
 
     def begin_session(self) -> None:
         """Schedule the engines' launch at the data side's session open (the data side has already set its session)."""
+        self._stopping = False
         self.kernel.at(self.data.session_open, self._launch_all)
         if not self._monitor_started:
             self._monitor_started = True
@@ -210,11 +212,24 @@ class HestiaCore:
                 self.kernel.after(self.cfg.ledger_reconcile_interval_s, self._periodic_reconcile)
 
     def end_session(self, at: Optional[datetime] = None) -> None:
-        def fire():
-            for name in list(self._tasks):
-                if self.engine_state.get(name) == 'running':
-                    self._send_stop(name, StopReason.SESSION_END, leave_position=True)
-        self.kernel.at(at or self.now, fire)
+        self.kernel.at(at or self.now, lambda: self.stop_all(StopReason.SESSION_END))
+
+    def stop_all(self, reason: StopReason, leave_position: bool = True) -> None:
+        """Tell every running engine to stop and stop bringing engines back. Orders already at the broker are not touched."""
+        self._stopping = True
+        for name in list(self._tasks):
+            if self.engine_state.get(name) == 'running':
+                self._send_stop(name, reason, leave_position)
+
+    def tasks_snapshot(self) -> Dict[str, object]:
+        return dict(self._tasks)
+
+    def in_flight_count(self) -> int:
+        """Requests still being worked: queued, at the broker, or being reconciled (UNCONFIRMED ones are reported separately)."""
+        return sum(1 for r in self._registry.values() if r.state in ('queued', 'running', 'reconciling'))
+
+    def unconfirmed_requests(self) -> List[Tuple[str, str]]:
+        return [(r.engine, r.request_id) for r in self._registry.values() if r.state == 'unconfirmed']
 
     def host_kill(self) -> None:
         for name in list(self._tasks):
@@ -235,6 +250,8 @@ class HestiaCore:
             task.abort()
 
     def _launch_all(self) -> None:
+        if self._stopping:
+            return
         for name in self._factories:
             if self.engine_state.get(name) in ('killed',):
                 continue
@@ -755,6 +772,9 @@ class HestiaCore:
         self._alert('error', name, f'engine crashed: {task.error!r}')
         if self.engine_state.get(name) == 'killed':
             return
+        if self._stopping:                                  # shutting down: no restart, and nothing to alarm about beyond the crash
+            self.engine_state[name] = 'ended'
+            return
         if n > self.cfg.restart_limit:
             self.engine_state[name] = 'failed'
             self._alert('critical', name, f'engine FAILED: {n} crashes within {window / 60:.0f} min, auto-resume limit '
@@ -766,7 +786,7 @@ class HestiaCore:
         self.kernel.after(backoff, lambda: self._resume_engine(name))
 
     def _resume_engine(self, name: str) -> None:
-        if self.engine_state.get(name) not in ('running',):
+        if self._stopping or self.engine_state.get(name) not in ('running',):
             return
         self._launch(name)
 
