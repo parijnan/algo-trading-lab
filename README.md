@@ -440,11 +440,11 @@ Full grid, both failure-mode explanations, and open threads: [`prometheus_backte
 
 ---
 
-## Hestia — MCX multi-strategy host (built, not yet connected)
+## Hestia — MCX multi-strategy host
 
 Hestia runs several MCX strategy engines (Prometheus, Selene, later Gold Petal and Natural Gas Mini) in one process on the account's single Angel One session; it is independent of Leto and of the NSE/BSE strategies. The engines decide (entries, exits, stops, the contract roll) and Hestia does the work: orders with retries and fill confirmation, the position ledger and its reconciliation against the broker, 15-minute bars and Supertrend per engine, alerts, flags, restart recovery and the teardown order. Two engines can share the one session because a second `generateSession` would evict the first's order capability.
 
-Built in phases (P1 inventory, P2 interface v1.1, P3 fake/replay Hestia and contract tests, P4 live services in five slices), all tested against doubles: the same policy core runs on a simulated clock and scripted broker in the tests, and on a real-time reactor, the Angel One adapter and the live data service in production. **No engine is enabled and Hestia is not scheduled or connected to the broker**; with every engine disabled it exits before logging in. The Prometheus engine is ported (`prometheus_engine/`) and replay-verified against recorded live days (`plans/hestia-p5-prometheus-engine.md`); the cutover is prepared and staged in `plans/hestia-p6-cutover.md` (`python hestia.py --check` is the no-login preflight), then Selene follows. See `hestia_core/README.md` for the module map, guarantees and operation (flags, state files, restart behaviour), `plans/selene-production.md` for the design and `plans/hestia-p4-live-services.md` for the build record.
+Built in phases (P1 inventory, P2 interface v1.1, P3 fake/replay Hestia and contract tests, P4 live services in five slices), all tested against doubles: the same policy core runs on a simulated clock and scripted broker in the tests, and on a real-time reactor, the Angel One adapter and the live data service in production. The Prometheus engine is ported (`prometheus_engine/`), replay-verified against every recorded live day (`plans/hestia-p5-prometheus-engine.md`), and **live on Delos from 2026-09-29** at 1 unit (`plans/hestia-p6-cutover.md`; the standalone `prometheus_production/prometheus.py` entry point is rollback only, disabled). The Selene engine is built (`selene_engine/`) and unit/roll/fake-Hestia tested against the decided backtest config (`plans/hestia-p7-selene-engine.md`); not yet replayed against the parity backtest (P7.2) and not yet enabled anywhere (sizing on hold). **Nothing is enabled in the committed configuration** — a Delos-only, gitignored `hestia_local.py`, or the committed `hestia_config.TRADING_HOSTS` table keyed by hostname, is what lets a specific machine trade; `python hestia.py --check` is the no-login preflight report. See `hestia_core/README.md` for the module map, guarantees and operation (flags, state files, restart behaviour), `plans/selene-production.md` for the design and `plans/hestia-p4-live-services.md` for the build record.
 
 ---
 
@@ -497,6 +497,7 @@ algo-trading-lab/
 ├── hestia.py                       # Hestia entry point (MCX multi-strategy host); the only Hestia login site; not scheduled
 ├── hestia_config.py                # Hestia paths, channels, timings and the engine registry (all engines disabled)
 ├── prometheus_engine/              # the Prometheus engine on Hestia's interface, its replay checker and its state seeder (see plans/hestia-p5-prometheus-engine.md)
+├── selene_engine/                  # the Selene engine on Hestia's interface (see plans/hestia-p7-selene-engine.md)
 ├── hestia_core/                    # Hestia's policy core, live services, fake/replay Hestia (see hestia_core/README.md)
 ├── plans/                          # Implementation plans
 │   ├── individual-order-details.md       # [BLOCKED] individual_order_details() returns AB1007 on this account
