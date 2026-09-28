@@ -39,10 +39,10 @@ class FakeHestia(HestiaCore):
 
     def __init__(self, start: datetime, config: Optional[FakeConfig] = None,
                  broker: Optional[Callable[[BrokerCall], BrokerReply]] = None, holidays: Optional[set] = None,
-                 store=None, sizing_provider=None):
+                 store=None, sizing_provider=None, data_factory=None):
         cfg = config or FakeConfig()
         kernel = SimKernel(start)
-        data = ReplayData(kernel, holidays)
+        data = (data_factory or ReplayData)(kernel, holidays)             # e.g. recorded.LoggedReplayData over recorded live days
         self._sim_data = data
         sim = SimBroker(kernel, broker or (lambda call: BrokerReply('fill')), data.price, self._position_margin,
                         cfg.available_cash, cfg.slippage_points, cfg.unconfirmed_after_s, cfg.ghost_recovery_s,

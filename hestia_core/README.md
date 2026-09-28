@@ -15,6 +15,7 @@ HestiaCore (core.py)  policy, once: request registry, admission, priority dispat
    +-- BrokerPort  SimBroker (replay.py)      | AngelBrokerPort (angel_broker.py) via BrokerGateway (gateway.py); PaperBroker; BrokerRouter picks per engine
    +-- DataPort    ReplayData (replay.py)     | LiveData (live_data.py) over mcx_market.py, history.py, candle_fetch.py, feed_port.py
 roll rules for every engine: roll_policy.py (pure functions, pinned to Prometheus's contract resolution and basis lookup)
+recorded live days as an oracle and replay input: recorded.py (log parser, trades cross-check, data-path table, LoggedReplayData; `python -m hestia_core.recorded`)
 host: host.py (HestiaHost) + lifecycle.py (teardown order, signals) + flags.py + state_store.py + sizing.py + session_lock.py
       + slack_queue.py + alert_router.py + reporting.py; entry point ../hestia.py, configuration ../hestia_config.py
 ```

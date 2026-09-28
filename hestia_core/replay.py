@@ -420,7 +420,8 @@ class ReplayData:
         partial = self.bar_partial.get((token, boundary))
         if delay > 0:
             self._send_provisional(token, boundary, idx)
-            self.kernel.after(delay, lambda: self._release_bar(token, boundary, idx, BarQuality.RECOVERED, True))
+            late_quality = BarQuality.PARTIAL if partial else BarQuality.RECOVERED     # built at the cutoff from what was on hand
+            self.kernel.after(delay, lambda: self._release_bar(token, boundary, idx, late_quality, True))
             return
         self._release_bar(token, boundary, idx, BarQuality.PARTIAL if partial else BarQuality.COMPLETE, False)
 
