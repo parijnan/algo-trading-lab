@@ -17,7 +17,7 @@ def cfg(on, tmp=None):
 
 
 def test_the_switch_is_off_in_the_committed_configuration():
-    assert hestia_config.SLACK_PROMETHEUS_VIA_HESTIA is False
+    assert hestia_config.SLACK_PROMETHEUS_VIA_HESTIA is False or hestia_config.LOCAL_OVERRIDES_PRESENT
 
 
 def test_standalone_paths_and_payload_are_exactly_what_the_listener_always_wrote():

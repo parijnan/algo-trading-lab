@@ -97,15 +97,20 @@ ENGINES = {
 }
 
 
-# ---- machine-local overrides (Delos only) ------------------------------------------------------------------------------------
-# Nothing is enabled in the committed configuration, so a `python hestia.py` on any other machine (the laptop) exits before it logs
-# in: the session lock and the legacy pid check are per machine and could not see Delos's process, and a second login would evict its
-# order capability. The machine allowed to trade carries a gitignored hestia_local.py:
-#
-#     ENGINES = {'prometheus': dict(enabled=True, paper=True, static_units=5, unit_cap=10)}
-#     SLACK_PROMETHEUS_VIA_HESTIA = True
-#
-# Only fields of an existing registry entry can be changed; an unknown engine or field is an error, not a silent no-op.
+# ---- which machine may trade -------------------------------------------------------------------------------------------------
+# Nothing is enabled in the base configuration above, so a `python hestia.py` on any machine not listed here exits before it logs in:
+# the session lock and the legacy pid check are per machine and could not see Delos's process, and a second login would evict its
+# order capability (AB1007). A machine is listed by its hostname; its entry changes fields of existing registry entries (an unknown
+# engine or field is an error, not a silent no-op) and may switch the Slack listener to Hestia. This is committed and deployed with
+# the code. A gitignored hestia_local.py, if present, is applied on top of it (a temporary, per-machine change that needs no commit).
+
+TRADING_HOSTS = {
+    # Delos, from the first live session (2026-09-29): Prometheus live at 1 unit (2 lots), hard cap 10 units. The Slack Exit, Kill,
+    # Disable and sizing buttons drive Hestia's files. Selene is not written yet (P7) and stays disabled.
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10)},
+                  SLACK_PROMETHEUS_VIA_HESTIA=True),
+}
+
 
 def apply_local_overrides(engines, local):
     """The registry with `local.ENGINES` applied (a dict of engine name to field overrides); `local` may be None."""
@@ -114,15 +119,27 @@ def apply_local_overrides(engines, local):
     out = dict(engines)
     for name, fields in changes.items():
         if name not in out:
-            raise KeyError(f'hestia_local.ENGINES names {name!r}, which is not in the registry {sorted(out)}')
+            raise KeyError(f'the overrides name {name!r}, which is not in the registry {sorted(out)}')
         out[name] = dataclasses.replace(out[name], **fields)
     return out
 
 
+def resolve_for_host(engines, hosts, hostname, local=None):
+    """(engines, slack switch) for `hostname`: the base registry, then the host's entry, then the machine-local file."""
+    import types
+    layers = [types.SimpleNamespace(**hosts.get(hostname, {}))] + ([local] if local is not None else [])
+    switch = SLACK_PROMETHEUS_VIA_HESTIA
+    for layer in layers:
+        engines = apply_local_overrides(engines, layer)
+        switch = bool(getattr(layer, 'SLACK_PROMETHEUS_VIA_HESTIA', switch))
+    return engines, switch
+
+
 try:
-    import hestia_local as _local          # noqa: E402  (gitignored; absent on every machine that must not trade)
+    import hestia_local as _local          # noqa: E402  (gitignored; absent unless someone adds a per-machine change)
 except ImportError:
     _local = None
-ENGINES = apply_local_overrides(ENGINES, _local)
-SLACK_PROMETHEUS_VIA_HESTIA = bool(getattr(_local, 'SLACK_PROMETHEUS_VIA_HESTIA', SLACK_PROMETHEUS_VIA_HESTIA))
-LOCAL_OVERRIDES_PRESENT = _local is not None
+import socket as _socket  # noqa: E402
+HOSTNAME = _socket.gethostname()
+ENGINES, SLACK_PROMETHEUS_VIA_HESTIA = resolve_for_host(ENGINES, TRADING_HOSTS, HOSTNAME, _local)
+LOCAL_OVERRIDES_PRESENT = _local is not None or HOSTNAME in TRADING_HOSTS

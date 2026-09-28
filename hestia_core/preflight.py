@@ -53,9 +53,9 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
         out.append(Check(name, status, detail))
 
     if getattr(cfg, 'LOCAL_OVERRIDES_PRESENT', False):
-        add('local overrides', OK, 'hestia_local.py is present and applied (this machine may trade)')
+        add('trading host', OK, f"{getattr(cfg, 'HOSTNAME', '?')} is a configured trading host (or has a hestia_local.py)")
     else:
-        add('local overrides', WARN, 'no hestia_local.py: nothing can be enabled on this machine (correct anywhere but Delos)')
+        add('trading host', WARN, f"{getattr(cfg, 'HOSTNAME', '?')} is not a trading host: nothing can be enabled here (correct anywhere but Delos)")
     engines = {n: e for n, e in cfg.ENGINES.items() if e.enabled}
     if not engines:
         add('engines', FAIL, 'no engine is enabled in hestia_config.ENGINES: Hestia exits before logging in')

@@ -131,7 +131,23 @@ def test_local_overrides_enable_an_engine_only_by_naming_it_and_its_fields():
         hc.apply_local_overrides(hc.ENGINES, types.SimpleNamespace(ENGINES={'prometheus': dict(enabeld=True)}))
 
 
-def test_the_committed_configuration_enables_nothing_and_ignores_the_local_file():
+def test_only_a_listed_hostname_gets_engines_and_a_local_file_layers_on_top():
     import hestia_config as hc
-    assert not any(e.enabled for e in hc.ENGINES.values()) and hc.SLACK_PROMETHEUS_VIA_HESTIA is False
+    hosts = {'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10)},
+                           SLACK_PROMETHEUS_VIA_HESTIA=True)}
+    engines, switch = hc.resolve_for_host(hc.ENGINES, hosts, 'delos')
+    assert engines['prometheus'].enabled and not engines['prometheus'].paper and switch is True
+    engines, switch = hc.resolve_for_host(hc.ENGINES, hosts, 'laptop')
+    assert not any(e.enabled for e in engines.values()) and switch is False                 # any other machine: nothing can log in
+    engines, switch = hc.resolve_for_host(hc.ENGINES, hosts, 'delos',
+                                          types.SimpleNamespace(ENGINES={'prometheus': dict(paper=True)}, SLACK_PROMETHEUS_VIA_HESTIA=False))
+    assert engines['prometheus'].paper and engines['prometheus'].enabled and switch is False   # the local file wins
+
+
+def test_the_committed_configuration_enables_nothing_on_an_unlisted_machine():
+    import hestia_config as hc
+    if hc.HOSTNAME in hc.TRADING_HOSTS:
+        pytest.skip('this machine is a configured trading host')
+    assert not any(e.enabled for e in hc.ENGINES.values()) or hc._local is not None
+    assert hc.SLACK_PROMETHEUS_VIA_HESTIA is False or hc._local is not None
     assert 'hestia_local.py' in (Path(hc.__file__).parent / '.gitignore').read_text()
