@@ -44,9 +44,9 @@ def minutes_frame(base: float, seed: int, offset: float = 0.0) -> pd.DataFrame:
                          'volume': 10.0})
 
 
-def world(engines=(), config=None, broker=None, contracts=(FRONT, NEXT), holidays=None, start=None, extra=()):
+def world(engines=(), config=None, broker=None, contracts=(FRONT, NEXT), holidays=None, start=None, extra=(), **kw):
     """A FakeHestia with XX contracts loaded (and any `extra` ContractSpec) and `engines` registered as (name, factory)."""
-    h = FakeHestia(start or datetime(2026, 9, 3, 8, 50), config or FakeConfig(), broker=broker, holidays=holidays)
+    h = FakeHestia(start or datetime(2026, 9, 3, 8, 50), config or FakeConfig(), broker=broker, holidays=holidays, **kw)
     for k, ref in enumerate(contracts):
         h.add_contract(ContractSpec(ref, lot_size=10, tick_size=0.5, freeze_qty_lots=20,
                                     minutes=minutes_frame(100.0 + 5 * k, seed=11 + k)))

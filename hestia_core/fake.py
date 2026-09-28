@@ -38,7 +38,8 @@ class FakeConfig(CoreConfig):
 class FakeHestia(HestiaCore):
 
     def __init__(self, start: datetime, config: Optional[FakeConfig] = None,
-                 broker: Optional[Callable[[BrokerCall], BrokerReply]] = None, holidays: Optional[set] = None):
+                 broker: Optional[Callable[[BrokerCall], BrokerReply]] = None, holidays: Optional[set] = None,
+                 store=None, sizing_provider=None):
         cfg = config or FakeConfig()
         kernel = SimKernel(start)
         data = ReplayData(kernel, holidays)
@@ -49,7 +50,7 @@ class FakeHestia(HestiaCore):
         self._sim = sim
         self._paper = PaperBroker(kernel, data.price, self._position_margin, cfg.paper_cash, cfg.slippage_points)
         self.holidays = data.holidays
-        super().__init__(kernel, data, BrokerRouter(sim, self._paper), cfg, EngineTask)
+        super().__init__(kernel, data, BrokerRouter(sim, self._paper), cfg, EngineTask, store=store, sizing_provider=sizing_provider)
 
     def _position_margin(self, token: str, net: int, avg: float) -> float:
         spec = self._sim_data._contracts[token]

@@ -122,7 +122,7 @@ class SimBroker:
         net, avg = self.book.get(spec.contract.token, [0, None])
         self.book[spec.contract.token] = list(apply_fill(net, avg, (1 if spec.side == 'BUY' else -1) * lots, price))
 
-    def place(self, spec: OrderSpec, on_result) -> None:
+    def place(self, spec: OrderSpec, on_result, on_placed=None) -> None:
         reply = self.behavior(BrokerCall(spec.engine, spec.request, spec.attempt, spec.lots, spec.close_lots, spec.open_lots))
         if reply.kind == 'reject':
             self.rejections.append((self.kernel.now, spec.engine, spec.request_id))
@@ -131,6 +131,8 @@ class SimBroker:
         order = PlacedOrder(f'ORD{next(self._order_seq):05d}', self.kernel.now, spec.engine, spec.request_id, spec.contract,
                             spec.side, spec.lots, spec.attempt, spec.priority)
         self.orders.append(order)
+        if on_placed is not None:
+            on_placed(order.order_id)
         if reply.kind == 'unconfirmed':
             truth = spec.lots if reply.lots is None else max(0, min(reply.lots, spec.lots))
             self._hidden[order.order_id] = (truth, spec, self.kernel.now, reply.pending_for)

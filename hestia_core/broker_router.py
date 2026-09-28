@@ -35,14 +35,14 @@ class BrokerRouter:
         self.live.set_order_listener(fn)
         self.paper.set_order_listener(fn)
 
-    def place(self, spec: OrderSpec, on_result) -> None:
+    def place(self, spec: OrderSpec, on_result, on_placed=None) -> None:
         port = self._port(spec.engine)
 
         def remember(res: PlaceResult) -> None:
             if res.order_id:
                 self._owner[res.order_id] = port
             on_result(res)
-        port.place(spec, remember)
+        port.place(spec, remember, on_placed)
 
     def read_order(self, order_id: str, on_result) -> None:
         self._owner.get(order_id, self.live).read_order(order_id, on_result)

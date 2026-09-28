@@ -34,6 +34,7 @@ This document lists the third-party libraries and system-level dependencies requ
 - **Python 3.10+** (Anaconda distribution recommended).
 - **systemd:** Used to manage the `slack_listener.service` daemon.
 - **git:** For source control and VPS-Local synchronization.
+- **coreutils `head`/`tail`:** Used by Prometheus and Hestia to tail-read the pipeline's per-contract 1-minute CSV files (Hestia adds no third-party Python dependency: it uses the packages listed above).
 - **cron:** Orchestrates the daily 09:15 AM launch via `leto.py`.
 
 ### Development (Garuda/Linux)

@@ -55,9 +55,10 @@ class Lifecycle:
 
     def __init__(self, core, reactor, executor, terminate: Callable[[], None], flush: Callable[[float], bool],
                  cfg: Optional[LifecycleConfig] = None, sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, before_flush: Optional[Callable[[], None]] = None):
         self.core, self.reactor, self.executor = core, reactor, executor
         self._terminate, self._flush = terminate, flush
+        self._before_flush = before_flush                            # e.g. queue the session report, so the flush carries it
         self.cfg = cfg or LifecycleConfig()
         self._sleep, self._clock = sleep, clock
         self._shutdown = threading.Event()
@@ -121,6 +122,15 @@ class Lifecycle:
                 if not alive or self._clock() >= deadline:
                     break
                 self._sleep(cfg.poll_s)
+            deadline = self._clock() + 2.0                                              # a finished thread reports to the core
+            while self._clock() < deadline:                                             # on the dispatcher: let those land
+                with self.reactor.lock:
+                    pending = [n for n, t in self.core.tasks_snapshot().items()
+                               if t.state == 'done' and self.core.engine_state.get(n) == 'running' and not t.aborted
+                               and t.error is None]
+                if not pending:
+                    break
+                self._sleep(cfg.poll_s)
             report.engines_hung = alive
             report.steps.append('engines_finished' if not alive else 'engines_hung')
             if alive:
@@ -143,6 +153,11 @@ class Lifecycle:
                 self._alert('critical', f'requests left UNCONFIRMED at shutdown (position unknown, check the broker): '
                                         f'{report.unconfirmed}')
 
+            if self._before_flush is not None:
+                try:
+                    self._before_flush()
+                except Exception:                                                       # noqa: BLE001
+                    log.exception('before_flush failed')
             try:                                                                        # 4. flush Slack
                 report.flushed = bool(self._flush(cfg.flush_timeout_s))
             except Exception:                                                           # noqa: BLE001

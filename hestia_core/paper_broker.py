@@ -44,9 +44,11 @@ class PaperBroker:
     def book(self, engine: str) -> Dict[str, list]:
         return self._books.setdefault(engine, {})
 
-    def place(self, spec: OrderSpec, on_result) -> None:
+    def place(self, spec: OrderSpec, on_result, on_placed=None) -> None:
         order_id = f'PAPER{next(self._seq):05d}'
         self.orders.append((self.kernel.now, order_id, spec))
+        if on_placed is not None:
+            on_placed(order_id)
 
         def fill():
             price = self.price_fn(spec.contract.token)

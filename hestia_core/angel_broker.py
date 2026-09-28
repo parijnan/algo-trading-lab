@@ -126,8 +126,8 @@ class AngelBrokerPort:
 
     # ---- placement -------------------------------------------------------------------------------------------------------
 
-    def place(self, spec: OrderSpec, on_result) -> None:
-        fut = self.executor.submit(self._place_blocking, spec)
+    def place(self, spec: OrderSpec, on_result, on_placed=None) -> None:
+        fut = self.executor.submit(self._place_blocking, spec, on_placed)
 
         def done(f):
             try:
@@ -138,7 +138,7 @@ class AngelBrokerPort:
             self.scheduler.post(lambda: on_result(res))
         fut.add_done_callback(done)
 
-    def _place_blocking(self, spec: OrderSpec) -> PlaceResult:
+    def _place_blocking(self, spec: OrderSpec, on_placed=None) -> PlaceResult:
         closing = self._closing_at()
         if closing is not None and self._wall_now() >= closing:
             return PlaceResult('rejected', detail=f'refused: at or after the session close ({closing:%H:%M})')
@@ -167,6 +167,8 @@ class AngelBrokerPort:
         if not order_ids:
             return PlaceResult('rejected', detail=value if chunks else 'nothing to place')
         composite = ','.join(order_ids)
+        if on_placed is not None:                           # the order exists: let the core journal its id before the fill wait
+            self.scheduler.post(lambda: on_placed(composite))
         settled = self._await(order_ids, info.lot_size, high)
         if settled is None:
             for oid in order_ids:

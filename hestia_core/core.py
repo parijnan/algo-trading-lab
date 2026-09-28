@@ -110,6 +110,11 @@ class _Rec:
     reserved: float = 0.0
     depends_on: Optional[str] = None
     pending: Optional[tuple] = None      # (order_id, order_lots, side) of an order whose fill is unconfirmed
+    pending_attempt: Optional[int] = None
+    restored: bool = False               # rebuilt from the journal after a restart: settled without touching the ledger
+    jl_lots: int = 0                     # what the journal recorded of the original request, for a restored one
+    jl_close: int = 0
+    jl_open: int = 0
     pending_reads: int = 0
 
     @property
@@ -130,12 +135,17 @@ def _summary(fills: List[Fill]) -> Optional[FillSummary]:
 
 class HestiaCore:
 
-    def __init__(self, kernel: Scheduler, data: DataPort, broker: BrokerPort, config: CoreConfig, task_factory):
+    def __init__(self, kernel: Scheduler, data: DataPort, broker: BrokerPort, config: CoreConfig, task_factory,
+                 store=None, sizing_provider: Optional[Callable[[str], SizingConfig]] = None):
         self.cfg = config
         self.kernel = kernel
         self.data = data
         self.broker = broker
         self._task_factory = task_factory
+        self.store = store                                           # StateStore or None (in memory only)
+        self.sizing_provider = sizing_provider                       # live-read sizing (SizingStore.get) or None
+        self.alert_sinks: List[Callable[[Alert], None]] = []
+        self.trade_sinks: List[Callable[[str, dict], None]] = []
         broker.set_order_listener(self._on_order_update)
         data.attach(self)
         # registration
@@ -198,6 +208,15 @@ class HestiaCore:
 
     def set_sizing(self, name: str, sizing: SizingConfig) -> None:
         self._sizing[name] = sizing
+
+    def _sizing_for(self, name: str) -> SizingConfig:
+        """The engine's sizing, read live when a provider is set. The unit cap is a hard limit and always the registered one."""
+        base = self._sizing[name]
+        if self.sizing_provider is None:
+            return base
+        live = self.sizing_provider(name)
+        return live if live.unit_cap == base.unit_cap else SizingConfig(live.dynamic, live.static_units, base.unit_cap,
+                                                                        live.allocation_rs)
 
     # ---- sessions and engine lifecycle -----------------------------------------------------------------------------
 
@@ -319,6 +338,11 @@ class HestiaCore:
                    submitted=self.now, depends_on=dep)
         self._registry[key] = rec
         self._queued.append(rec)
+        self._journal({'t': 'submit', 'engine': name, 'request_id': rid, 'kind': request.kind.value,
+                       'token': request.contract.token, 'pclass': rec.pclass,
+                       'lots': getattr(request, 'lots', None) or getattr(request, 'open_lots', 0) or 0,
+                       'close_lots': getattr(request, 'close_lots', 0) or 0, 'open_lots': getattr(request, 'open_lots', 0) or 0,
+                       'ts': self.now})
         self._schedule_pump(self.cfg.dispatch_window_s)
         return RequestAck(rid, AckStatus.ACCEPTED)
 
@@ -393,6 +417,119 @@ class HestiaCore:
         pos[0], pos[1] = apply_fill(pos[0], pos[1], signed_lots, price)
         pos[2] = self.now
         self._ledger_rev += 1
+        self._persist_ledger()
+
+    def _persist_ledger(self) -> None:
+        if self.store is not None:
+            try:
+                self.store.save_ledger(self._ledger)
+            except Exception as exc:                                 # noqa: BLE001
+                self._alert('critical', None, f'could not persist the ledger: {exc!r}')
+
+    def _journal(self, record: dict) -> None:
+        if self.store is not None:
+            try:
+                self.store.journal(record, self.now)
+            except Exception as exc:                                 # noqa: BLE001
+                self._alert('critical', None, f'could not write the request journal: {exc!r}')
+
+    def restore(self) -> None:
+        """After a restart, before the engines launch: reload the persisted ledger and the request journal. A request with a
+        `submit` and no `final` was in flight when the process died. It is never re-sent and never reported unknown: it comes back
+        UNCONFIRMED ("in doubt") and a critical alert asks for the broker to be checked. `settle_restored()` then finishes each one
+        after the broker's book has been taken as the ledger's truth (`bootstrap_ledger(authoritative=True)`): a request whose order
+        id was journalled (a `placed` line with no `attempt_done`) is settled by reading that very order, outcome only, never touching
+        the ledger a second time; one with no order id on record ends ABANDONED."""
+        if self.store is None:
+            return
+        for key, row in self.store.load_ledger().items():
+            self._ledger[key] = row
+        submits, finals, placed, done = {}, {}, {}, {}
+        for rec in self.store.load_journal(self.now.date()):
+            key = (rec['engine'], rec['request_id'])
+            t = rec['t']
+            if t == 'submit':
+                submits[key] = rec
+            elif t == 'final':
+                finals[key] = rec
+            elif t == 'placed':
+                placed.setdefault(key, []).append(rec)
+            elif t == 'attempt_done':
+                done.setdefault(key, set()).add(rec['attempt'])
+        from types import SimpleNamespace
+        from hestia_core.state_store import decode_outcome
+        doubt = []
+        self._restored_no_order = []
+        for key, sub in submits.items():
+            kind = RequestKind(sub['kind'])
+            stub = SimpleNamespace(request_id=key[1], kind=kind, contract=SimpleNamespace(token=sub.get('token')))
+            rec = _Rec(engine=key[0], request=stub, seq=next(self._seq), pclass=int(sub.get('pclass', 4)), submitted=self.now)
+            rec.restored, rec.jl_lots = True, int(sub.get('lots', 0))
+            rec.jl_close, rec.jl_open = int(sub.get('close_lots', 0)), int(sub.get('open_lots', 0))
+            rec.state = 'done'
+            if key in finals:
+                rec.outcome = decode_outcome(finals[key]['outcome'])
+            else:
+                rec.outcome = RequestOutcome(key[1], OutcomeStatus.UNCONFIRMED, kind, rec.jl_lots, self.now, None, None,
+                                             'in doubt: the process restarted while this request was in flight; check the broker')
+                open_orders = [p for p in placed.get(key, []) if p['attempt'] not in done.get(key, set())]
+                if open_orders:
+                    p = open_orders[-1]
+                    rec.state, rec.pending, rec.pending_attempt = 'unconfirmed', (p['order_id'], int(p['lots']), p['side']), p['attempt']
+                    self._by_order[p['order_id']] = rec
+                else:
+                    self._restored_no_order.append(key)
+                doubt.append(key)
+            self._registry[key] = rec
+        if doubt:
+            self._alert('critical', None, f'{len(doubt)} request(s) were in flight when the previous process ended and are IN DOUBT '
+                                          f'(never re-sent): {doubt}. Check the broker book.')
+
+    _restored_no_order: list = []
+
+    def settle_restored(self) -> None:
+        """Finish the in-doubt requests `restore()` found. Call after `bootstrap_ledger(authoritative=True)` has completed."""
+        for key in self._restored_no_order:
+            rec = self._registry[key]
+            self._emit(rec, RequestOutcome(rec.request_id, OutcomeStatus.ABANDONED, rec.request.kind, rec.jl_lots, self.now, None,
+                                           None, 'in doubt after a restart with no order id on record; the ledger was taken from '
+                                                 'the broker book'))
+        self._restored_no_order = []
+        for rec in list(self._registry.values()):
+            if rec.restored and rec.state == 'unconfirmed' and rec.pending is not None:
+                if self.broker.pool_of(rec.engine) == 'live':
+                    self._begin_reconcile(rec)
+                else:                                          # a paper order has no broker row to read
+                    rec.pending, rec.state = None, 'done'
+                    self._emit(rec, RequestOutcome(rec.request_id, OutcomeStatus.ABANDONED, rec.request.kind, rec.jl_lots, self.now,
+                                                   None, None, 'a paper request was in flight at the restart; the ledger is the '
+                                                               'persisted one'))
+
+    def _settle_restored(self, rec: _Rec, read: OrderRead, source: str) -> None:
+        """Outcome only: the ledger was already taken from the broker's book, so filling it here would count the order twice."""
+        order_id, order_lots, side = rec.pending
+        rec.pending = None
+        self._by_order.pop(order_id, None)
+        lots = max(0, min(read.lots, order_lots))
+        status = (OutcomeStatus.REJECTED if lots == 0 else OutcomeStatus.FILLED if lots >= order_lots else OutcomeStatus.PARTIAL)
+        kind = rec.request.kind
+        closed = opened = None
+        if lots:
+            if kind == RequestKind.OPEN:
+                opened = FillSummary(lots, read.price, ())
+            elif kind == RequestKind.FLIP:
+                c = min(lots, rec.jl_close)
+                closed = FillSummary(c, read.price, ()) if c else None
+                opened = FillSummary(lots - c, read.price, ()) if lots - c else None
+            else:
+                closed = FillSummary(lots, read.price, ())
+        rec.state = 'done'
+        self._journal({'t': 'attempt_done', 'engine': rec.engine, 'request_id': rec.request_id, 'attempt': rec.pending_attempt})
+        self._alert('info' if lots else 'warning', rec.engine,
+                    f'restored request {rec.request_id}: {source} shows {lots} of {order_lots} lots filled')
+        self._emit(rec, RequestOutcome(rec.request_id, status, kind, rec.jl_lots or order_lots, self.now, closed, opened,
+                                       f'settled from {source} after a restart (the ledger comes from the broker book)'))
+        self._schedule_pump(0)
 
     def _margin_per_lot(self, info: ContractInfo, price: float) -> float:
         if self.cfg.margin_per_lot is not None:
@@ -404,7 +541,7 @@ class HestiaCore:
         flight in the same pool."""
         pool = self.broker.pool_of(engine) if engine else 'live'
         reserved = sum(r.reserved for r in self._registry.values() if self.broker.pool_of(r.engine) == pool)
-        return self.broker.free_cash(engine or next(iter(self._factories), '')) - reserved
+        return self.broker.free_cash(engine or '') - reserved            # no engine named: the live account, never a paper pool
 
     # ---- admission -------------------------------------------------------------------------------------------------
 
@@ -453,7 +590,7 @@ class HestiaCore:
 
     def _entry_limits(self, rec: _Rec, info: ContractInfo, lots_after: int,
                       margin_needed: float) -> Optional[Tuple[OutcomeStatus, str]]:
-        cap_lots = self._sizing[rec.engine].unit_cap * self._lots_per_unit[rec.engine]
+        cap_lots = self._sizing[rec.engine].unit_cap * self._lots_per_unit[rec.engine]      # the registered cap, never an override's
         if lots_after > cap_lots:
             return OutcomeStatus.LIMIT_REFUSED, f'unit cap: {lots_after} lots would exceed {cap_lots}'
         if info.trading_days_left <= self.cfg.roll_window_days:
@@ -499,11 +636,24 @@ class HestiaCore:
         rec.attempts += 1
         spec = OrderSpec(rec.engine, rec.request_id, rec.request.contract, self._side(rec), order_lots, rec.attempts,
                          rec.pclass, rem_close, rem_open, rec.request)
-        self.broker.place(spec, lambda res: self._on_place_result(rec, spec, res))
+        self.broker.place(spec, lambda res: self._on_place_result(rec, spec, res), lambda oid: self._on_placed(rec, spec, oid))
+
+    def _on_placed(self, rec: _Rec, spec: OrderSpec, order_id: str) -> None:
+        """The order exists at the broker (or in the paper book). Journal its id before the fill is known, so a restart in the
+        middle of the wait can read this very order instead of guessing."""
+        self._journal({'t': 'placed', 'engine': rec.engine, 'request_id': rec.request_id, 'order_id': order_id,
+                       'side': spec.side, 'lots': spec.lots, 'attempt': spec.attempt, 'ts': self.now})
 
     def _on_place_result(self, rec: _Rec, spec: OrderSpec, res: PlaceResult) -> None:
         if rec.state != 'running':
             return
+        try:
+            self._handle_place_result(rec, spec, res)
+        finally:
+            if res.kind != 'unconfirmed':                    # an unconfirmed attempt stays open in the journal until settled
+                self._journal({'t': 'attempt_done', 'engine': rec.engine, 'request_id': rec.request_id, 'attempt': spec.attempt})
+
+    def _handle_place_result(self, rec: _Rec, spec: OrderSpec, res: PlaceResult) -> None:
         if res.kind == 'rejected':
             rec.rejects += 1
             limit = self.cfg.exit_max_attempts if spec.close_lots > 0 else self.cfg.reject_retry_attempts
@@ -563,6 +713,7 @@ class HestiaCore:
         rec.state = 'unconfirmed'
         self._run_dec(rec)
         rec.pending = (res.order_id, spec.lots, spec.side)
+        rec.pending_attempt = spec.attempt
         if res.order_id:
             self._by_order[res.order_id] = rec
         self._alert('critical', rec.engine, f'request {rec.request_id}: fill not confirmed; position status unknown')
@@ -596,8 +747,12 @@ class HestiaCore:
                                                     f'(open or validation pending); will keep re-reading it')
             self.kernel.after(self.cfg.reconcile_retry_s, lambda: self._begin_reconcile(rec))
             return
+        if rec.restored:
+            self._settle_restored(rec, read, source)
+            return
         order_id, order_lots, side = rec.pending
         rec.pending = None
+        self._journal({'t': 'attempt_done', 'engine': rec.engine, 'request_id': rec.request_id, 'attempt': rec.pending_attempt})
         was_waiting = rec.state in ('unconfirmed', 'reconciling')
         lots = max(0, min(read.lots, order_lots))
         if was_waiting:
@@ -639,6 +794,11 @@ class HestiaCore:
     def _emit(self, rec: _Rec, outcome: RequestOutcome) -> None:
         rec.outcome = outcome
         self.outcome_log.append((self.now, rec.engine, outcome))
+        if self.store is not None:
+            from hestia_core.state_store import encode_outcome
+            kind = 'unconfirmed' if outcome.status == OutcomeStatus.UNCONFIRMED else 'final'
+            self._journal({'t': kind, 'engine': rec.engine, 'request_id': rec.request_id, 'outcome': encode_outcome(outcome),
+                           'ts': self.now})
         self.deliver_to(rec.engine, outcome)
 
     def _abandon_queued(self, name: str) -> None:
@@ -705,16 +865,35 @@ class HestiaCore:
         if not mismatches:
             self.last_reconciled = self.now
 
-    def bootstrap_ledger(self) -> None:
+    def bootstrap_ledger(self, authoritative: bool = False) -> None:
         """At start, adopt what the broker's book shows (a position carried overnight) for any live engine whose ledger is
         empty: the position goes to the engine that owns the token's instrument. Anything that cannot be attributed is a
-        critical alert."""
+        critical alert. With `authoritative=True` (a restart, where the persisted ledger may be stale because a request was in
+        flight) the broker's book wins for every live engine's ledger, and each correction is alerted."""
+        self._bootstrap_authoritative = authoritative
         self.broker.read_positions(self._on_bootstrap)
 
+    _bootstrap_authoritative = False
+
+    bootstrap_done = False
+
     def _on_bootstrap(self, book: Optional[Dict[str, PositionRow]]) -> None:
+        self.bootstrap_done = True
         if book is None:
             self._alert('warning', None, 'ledger bootstrap: could not read the broker position book')
             return
+        if self._bootstrap_authoritative:
+            live = set(self._live_engines())
+            for (eng, token), row in list(self._ledger.items()):
+                if eng not in live or not row[0]:
+                    continue
+                have = book[token].net_lots if token in book else 0
+                if have != row[0]:
+                    self._alert('critical', eng, f'restart: persisted ledger held {row[0]:+d} lots of token {token}, the broker '
+                                                 f'book shows {have:+d}; the broker book is taken as the truth')
+                    row[0], row[1] = have, (book[token].avg_price if token in book else None)
+                    self._ledger_rev += 1
+            self._persist_ledger()
         for token, row in sorted(book.items()):
             if not row.net_lots:
                 continue
@@ -725,12 +904,20 @@ class HestiaCore:
                 continue
             if self._held(owner, token) == 0:
                 self._ledger[(owner, token)] = [row.net_lots, row.avg_price, self.now]
+                self._ledger_rev += 1
+                self._persist_ledger()
                 self._alert('warning', owner, f'ledger adopted {row.net_lots:+d} lots of {ref.symbol} from the broker book')
 
     # ---- monitoring and crashes ------------------------------------------------------------------------------------
 
     def _alert(self, level: str, engine: Optional[str], text: str, channel: Optional[str] = None) -> None:
-        self.alerts.append(Alert(self.now, level, engine, text, channel))
+        alert = Alert(self.now, level, engine, text, channel)
+        self.alerts.append(alert)
+        for sink in self.alert_sinks:
+            try:
+                sink(alert)
+            except Exception:                                        # noqa: BLE001 - a failing sink must never stop trading
+                log.exception('alert sink failed')
 
     def _monitor(self) -> None:
         for name, task in self._tasks.items():
@@ -866,7 +1053,7 @@ class CoreContext:
         return MarginSnapshot(self._h.available_cash(self._t.name), self._h.now)
 
     def sizing(self):
-        return self._h._sizing[self._t.name]
+        return self._h._sizing_for(self._t.name)
 
     def submit(self, request):
         return self._h._submit(self._t, request)
@@ -876,9 +1063,16 @@ class CoreContext:
 
     def save_state(self, blob):
         self._h._saved_state[self._t.name] = blob
+        if self._h.store is not None:
+            self._h.store.save_engine_state(self._t.name, blob)
 
     def load_state(self):
-        return self._h._saved_state.get(self._t.name)
+        blob = self._h._saved_state.get(self._t.name)
+        if blob is None and self._h.store is not None:
+            blob = self._h.store.load_engine_state(self._t.name)
+            if blob is not None:
+                self._h._saved_state[self._t.name] = blob
+        return blob
 
     def alert(self, level, text, channel=None):
         self._h._alert(level, self._t.name, text, channel)
@@ -887,4 +1081,10 @@ class CoreContext:
         extra = sorted(set(record) - set(TRADE_RECORD_COLUMNS))
         if extra:
             self._h.warnings.append(f'{self._t.name}: trade record keys dropped: {extra}')
-        self._h.trades.append((self._t.name, {c: record.get(c) for c in TRADE_RECORD_COLUMNS}))
+        row = {c: record.get(c) for c in TRADE_RECORD_COLUMNS}
+        self._h.trades.append((self._t.name, row))
+        for sink in self._h.trade_sinks:
+            try:
+                sink(self._t.name, row)
+            except Exception:                                        # noqa: BLE001 - reporting never stops trading
+                log.exception('trade sink failed')

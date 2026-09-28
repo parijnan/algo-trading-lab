@@ -25,8 +25,11 @@ log = logging.getLogger('hestia_reactor')
 class RealReactor:
 
     def __init__(self, clock: Callable[[], datetime] = datetime.now,
-                 on_error: Optional[Callable[[BaseException], None]] = None):
+                 on_error: Optional[Callable[[BaseException], None]] = None, time_scale: float = 1.0):
+        """`time_scale` > 1 makes waits shorter than the clock says (the clock itself must run that much faster, see
+        `scaled_clock`): for end-to-end tests that play a session in seconds. Live use is always 1.0."""
         self._clock = clock
+        self._scale = time_scale
         self.on_error = on_error or (lambda exc: log.error('scheduled callback failed: %r', exc, exc_info=exc))
         self.lock = threading.RLock()                       # the core lock: held while any callback or context call runs
         self._cv = threading.Condition()
@@ -80,7 +83,7 @@ class RealReactor:
                         _, _, handle, fn = heapq.heappop(self._heap)
                         break
                     wait = (self._heap[0][0] - now).total_seconds() if self._heap else None
-                    self._cv.wait(wait)
+                    self._cv.wait(None if wait is None else wait / self._scale)
             if handle.cancelled:
                 continue
             with self.lock:
@@ -92,3 +95,11 @@ class RealReactor:
                     except Exception:                       # noqa: BLE001
                         log.exception('on_error failed')
                 self.callbacks_run += 1
+
+
+def scaled_clock(start: datetime, scale: float, mono: Callable[[], float] = None) -> Callable[[], datetime]:
+    """A clock that begins at `start` and runs `scale` times faster than real time (tests only)."""
+    import time as _time
+    mono = mono or _time.monotonic
+    t0 = mono()
+    return lambda: start + timedelta(seconds=(mono() - t0) * scale)
