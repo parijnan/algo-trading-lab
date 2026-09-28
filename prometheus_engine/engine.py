@@ -69,6 +69,7 @@ class PrometheusEngine:
         self.provisional_disabled = False
         self.provisional_pending: Optional[dict] = None
         self.exit_requested = False
+        self.market_closed = False                                   # Hestia refused a request as after-the-close: stop deciding for the night
         self.flatten_done = False                                    # a no-next-contract roll flattened: no re-entry for the rest of tonight
         self.next_retry_at: Optional[datetime] = None
         self._alerted: Dict[str, datetime] = {}
@@ -521,6 +522,8 @@ class PrometheusEngine:
         if self.state.frozen or self.ended:
             return
         now = self._now()
+        if self.market_closed or (self.session_close is not None and now >= self.session_close):
+            return                                                    # nothing can fill after the close; Stop arrives momentarily
         if self.next_retry_at is not None and now < self.next_retry_at:
             return
         s = self.state
@@ -618,6 +621,13 @@ class PrometheusEngine:
         self._save()
 
     def _failed(self, o: RequestOutcome, meta: dict, what: str) -> None:
+        if o.status == OutcomeStatus.LIMIT_REFUSED and 'market closed' in o.detail:
+            # not transient: the market is shut. No retry; the position is carried to the next session and the start-up
+            # reconcile deals with it (a stop still stands at its level, checked again once trading resumes)
+            self.market_closed = True
+            self._say('critical', f'{what} refused, the market is closed ({o.detail}); position carried to the next session',
+                      key=f'closed-{meta["purpose"]}')
+            return
         self._say('critical', f'{what} failed ({o.status.value}: {o.detail}); will retry', key=f'fail-{meta["purpose"]}')
         if o.status == OutcomeStatus.REJECTED:                        # the ledger may disagree with the engine: it wins
             self._reconcile_with_ledger()
@@ -641,6 +651,13 @@ class PrometheusEngine:
             if self._already_flat(o):
                 self._reconcile_with_ledger()
                 s.pending_flip = None
+                return
+            if (o.status in (OutcomeStatus.LIMIT_REFUSED, OutcomeStatus.MARGIN_REFUSED) and s.pending_flip
+                    and s.pending_flip['new_lots'] > 0 and 'market closed' not in o.detail):
+                # the new side is refused (unit cap, roll window, margin): the old side must still close, so retry as an exit only
+                s.pending_flip['new_lots'] = 0
+                self._say('critical', f'the flip re-entry was refused ({o.detail}); closing the old side only')
+                self.next_retry_at = self._now() + timedelta(seconds=self.cfg.retry_cooldown_s)
                 return
             self._failed(o, meta, 'the Rule 7 flip')
             return

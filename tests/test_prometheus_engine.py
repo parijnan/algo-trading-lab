@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from prometheus_engine_helpers import (CFG, DAYS, FLIP_PATH, FRONT, SESSION_DATE, SESSION_OPEN, ZIGZAG, alert_texts, hm, scripted_world,
                                        trades)
 from hestia_core.replay import BrokerReply
@@ -475,3 +477,32 @@ def test_provisional_margin_is_measured_against_the_previous_supertrend(close, p
     bar = Bar(hm(10, 45), close, close, close, close, 1.0)
     e._on_provisional(ProvisionalBar(FRONT, hm(11, 0), bar, SupertrendPoint(st_value, Direction.BEARISH, True), prev_st))
     assert bool(e.ctx.sent) is acts
+
+
+def test_a_stop_refused_because_the_market_is_closed_is_not_retried_and_nothing_is_sent_after_the_close():
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    h.run_until(hm(23, 20))
+    e = made[-1]
+    assert e.state.status == 'in_trade' and e.state.direction == 'bullish'
+    n_before = len(h.orders)
+    h.schedule_price(FRONT.token, hm(23, 29) + timedelta(seconds=30), e.state.sl_price - 0.5)        # through the stop, after Hestia's close
+    h.schedule_price(FRONT.token, hm(23, 31), e.state.sl_price - 1.0)
+    h.run_until(hm(23, 45))
+    assert len(h.orders) == n_before                                                       # nothing reached the broker
+    ids = [k[1] for k in h._registry if 'exit_all' in k[1]]
+    assert len(ids) <= 1, ids                                                              # at most the one refused request, no retry loop
+    assert len(ids) == 1 and any('market is closed' in t for t in alert_texts(h))              # sent at 23:29:30, refused, given up
+    assert e.state.status == 'in_trade'                                                    # carried, not booked on a guess
+
+
+def test_a_refused_flip_reentry_falls_back_to_closing_the_old_side_only():
+    from hestia_core.interface import OutcomeStatus, RequestKind, RequestOutcome
+    from test_prometheus_engine_ports import engine, in_trade
+    e = engine(hm(11, 0), in_trade('bearish'))
+    e.state.pending_flip = {'direction': 'bullish', 'signal_ts': hm(10, 45).isoformat(), 'signal_close': 100.0, 'units': 1, 'new_lots': 2}
+    e.state.pending = {'r1': {'purpose': 'flip', 'direction': 'bullish', 'signal_ts': hm(10, 45).isoformat(), 'signal_close': 100.0,
+                             'units': 1, 'lots': 2, 'token': FRONT.token}}
+    e._on_outcome(RequestOutcome('r1', OutcomeStatus.LIMIT_REFUSED, RequestKind.FLIP, 4, hm(11, 0), detail='unit cap: 12 lots would exceed 10'))
+    assert e.state.pending_flip['new_lots'] == 0 and not e.state.pending and e.state.status == 'in_trade'

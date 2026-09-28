@@ -445,3 +445,6 @@ research/prometheus_p2_single_lot/single_lot_trades.csv
 
 # Hestia runtime data (state, flags, logs, caches, trade logs, session lock)
 hestia_data/
+
+# Delos-only Hestia overrides (which engines may trade on this machine)
+hestia_local.py

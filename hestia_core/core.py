@@ -551,6 +551,11 @@ class HestiaCore:
         held = self._held(eng, token)
         info = self.data.info(r.contract)
         kind = r.kind
+        close = getattr(self.data, 'session_close', None)
+        if close is not None and self.now >= close:
+            # production refused every order after the closing time; a stop fired by a tick after the close, or a request from the bar
+            # that completes at the close, can never fill and must not be sent
+            return OutcomeStatus.LIMIT_REFUSED, f'market closed: {self.now:%H:%M:%S} is at or after the session close {close:%H:%M}'
 
         def dirn(n):
             return Direction.BULLISH if n > 0 else Direction.BEARISH

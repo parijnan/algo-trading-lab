@@ -539,3 +539,22 @@ def test_the_simulated_ports_satisfy_the_port_protocols(hestias):
     from hestia_core.ports import BrokerPort, DataPort, Scheduler
     h = hestias([])
     assert isinstance(h.kernel, Scheduler) and isinstance(h.broker, BrokerPort) and isinstance(h.data, DataPort)
+
+
+def test_no_request_is_admitted_at_or_after_the_session_close(hestias):
+    """Production refused every order after the closing time; a stop fired by a tick after the close can never fill."""
+    log, acks, seen = [], [], {}
+
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.wait((23 * 3600 + 31 * 60) - (9 * 3600))                    # 23:31, past the last minute of data (23:29)
+            seen['close'] = ctx.session_open()
+            acks.append(ctx.submit(open_req('late')))
+            acks.append(ctx.submit(FlattenRequest('late-flat', FRONT, ExitReason.STOP_LOSS)))
+    h = hestias([('a', factory(log=log, act=act))])
+    h.start_session(SESSION_DATE)
+    h.run_until(datetime(2026, 9, 3, 23, 45))
+    outs = {o.request_id: o for o in outcomes(log)}
+    assert outs['late'].status == OutcomeStatus.LIMIT_REFUSED and 'market closed' in outs['late'].detail
+    assert outs['late-flat'].status == OutcomeStatus.LIMIT_REFUSED
+    assert not h.orders

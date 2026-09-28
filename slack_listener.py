@@ -37,6 +37,12 @@ PROMETHEUS_STATE = os.path.join(BASE_DIR, "prometheus_production", "data", "prom
 # NSE/BSE strategies; an operator managing one side shouldn't accidentally
 # also kill the other).
 PROMETHEUS_COMMAND_FLAG = os.path.join(BASE_DIR, "prometheus_production", "data", "prometheus_command.flag")
+# Once Hestia hosts Prometheus (hestia_config.SLACK_PROMETHEUS_VIA_HESTIA), the same buttons write Hestia's files instead.
+import hestia_config          # noqa: E402  (repo-root module; a different name from every strategy's own configs)
+from hestia_core import slack_bridge  # noqa: E402
+PROMETHEUS_VIA_HESTIA = slack_bridge.via_hestia(hestia_config)
+PROMETHEUS_COMMAND_FLAG = slack_bridge.command_flag_path(hestia_config, BASE_DIR)
+SIZING_OVERRIDE_PATHS['Prometheus'] = slack_bridge.sizing_override_path(hestia_config, BASE_DIR)
 PROMETHEUS_INSTRUMENT_OVERRIDE = os.path.join(BASE_DIR, "prometheus_production", "data", "instrument_override.json")
 
 # Ensure logs directory exists
@@ -87,7 +93,9 @@ def write_sizing_override(strategy, lot_calc, lot_count):
     try:
         path = SIZING_OVERRIDE_PATHS[strategy]
         with open(path, 'w') as f:
-            json.dump({'lot_calc': lot_calc, 'lot_count': lot_count}, f)
+            payload = (slack_bridge.sizing_override_payload(hestia_config, lot_calc, lot_count) if strategy == 'Prometheus'
+                       else {'lot_calc': lot_calc, 'lot_count': lot_count})
+            json.dump(payload, f)
         logger.info(f"Sizing override set for {strategy}: lot_calc={lot_calc}, lot_count={lot_count}")
         return True
     except Exception as e:
@@ -560,7 +568,8 @@ def handle_prometheus_start(ack, body, say):
 
     # Check if Prometheus is already running
     try:
-        pgrep = subprocess.run(["pgrep", "-f", "python.*prometheus_production/prometheus.py"],
+        argv, pattern, log_prefix = slack_bridge.start_command(hestia_config, sys.executable)
+        pgrep = subprocess.run(["pgrep", "-f", pattern],
                                capture_output=True, text=True)
         if pgrep.stdout.strip():
             say(channel=_CH, text="❌ Prometheus is already running. Duplicate process prevented.")
@@ -571,10 +580,11 @@ def handle_prometheus_start(ack, body, say):
     # Launch Prometheus
     try:
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        log_name = os.path.join(BASE_DIR, "prometheus_production", "logs", f"prometheus_manual_{timestamp}.log")
+        log_dir = os.path.join(BASE_DIR, "logs" if PROMETHEUS_VIA_HESTIA else os.path.join("prometheus_production", "logs"))
+        log_name = os.path.join(log_dir, f"{log_prefix}_manual_{timestamp}.log")
         with open(log_name, "w") as log_f:
             subprocess.Popen(
-                [sys.executable, "prometheus_production/prometheus.py"],
+                argv,
                 stdout=log_f,
                 stderr=log_f,
                 start_new_session=True,
@@ -1057,6 +1067,11 @@ def handle_prometheus_instrument_btn(ack, body, client):
 
 @app.view("view_prometheus_instrument")
 def handle_prometheus_instrument_submission(ack, body, view, say, client):
+    if PROMETHEUS_VIA_HESTIA:
+        ack()
+        client.chat_postMessage(channel=_CH_ERRORS, text="❌ The instrument override is not supported while Hestia hosts Prometheus: "
+                                                         "Hestia's engine is bound to CRUDEOILM in hestia_config.ENGINES.")
+        return
     symbol = view["state"]["values"]["block_instrument"]["select_instrument"]["selected_option"]["value"]
     margin_str = view["state"]["values"]["block_margin"]["input_margin"]["value"]
     user_id = body["user"]["id"]

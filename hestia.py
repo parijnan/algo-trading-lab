@@ -74,7 +74,17 @@ def stop_feeds() -> None:
         f.stop()
 
 
+def check() -> int:
+    """`python hestia.py --check`: the preflight report. No login, no network, writes nothing."""
+    from hestia_core.preflight import FAIL, format_report, run_checks
+    checks = run_checks(cfg)
+    print(format_report(checks))
+    return 1 if any(c.status == FAIL for c in checks) else 0
+
+
 def main() -> int:
+    if '--check' in sys.argv[1:]:
+        return check()
     cfg.LOG_DIR.mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s',
                         handlers=[logging.FileHandler(cfg.LOG_DIR / f'hestia_{datetime.now():%Y%m%d}.log'),

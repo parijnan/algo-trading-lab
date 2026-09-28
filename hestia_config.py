@@ -25,6 +25,10 @@ SESSION_LOCK_FILE = HESTIA_DIR / 'angel_session.lock'
 # one of these pid files names a live process (a second login would evict its order capability). Read only.
 LEGACY_PID_FILES = {'standalone Prometheus': REPO_ROOT / 'prometheus_production' / 'data' / 'prometheus.pid'}
 
+# Where the Slack listener sends Prometheus's operator commands and sizing overrides (hestia_core/slack_bridge.py). False while the
+# standalone process trades; True at cutover, False again on rollback.
+SLACK_PROMETHEUS_VIA_HESTIA = False
+
 PIPELINE_DATA_DIR = REPO_ROOT / 'data_pipeline' / 'data'
 MCX_DATA_DIR = PIPELINE_DATA_DIR / 'mcx'
 INSTRUMENT_MASTER_FILE = PIPELINE_DATA_DIR / 'mcx_instrument_master.csv'
@@ -91,3 +95,34 @@ ENGINES = {
     'prometheus': EngineEntry(instrument='CRUDEOILM', factory='prometheus_engine.engine:build', enabled=False, lots_per_unit=2),
     'selene': EngineEntry(instrument='SILVERMIC', factory='selene_engine.engine:build', enabled=False, paper=True),
 }
+
+
+# ---- machine-local overrides (Delos only) ------------------------------------------------------------------------------------
+# Nothing is enabled in the committed configuration, so a `python hestia.py` on any other machine (the laptop) exits before it logs
+# in: the session lock and the legacy pid check are per machine and could not see Delos's process, and a second login would evict its
+# order capability. The machine allowed to trade carries a gitignored hestia_local.py:
+#
+#     ENGINES = {'prometheus': dict(enabled=True, paper=True, static_units=5, unit_cap=10)}
+#     SLACK_PROMETHEUS_VIA_HESTIA = True
+#
+# Only fields of an existing registry entry can be changed; an unknown engine or field is an error, not a silent no-op.
+
+def apply_local_overrides(engines, local):
+    """The registry with `local.ENGINES` applied (a dict of engine name to field overrides); `local` may be None."""
+    import dataclasses
+    changes = getattr(local, 'ENGINES', None) or {}
+    out = dict(engines)
+    for name, fields in changes.items():
+        if name not in out:
+            raise KeyError(f'hestia_local.ENGINES names {name!r}, which is not in the registry {sorted(out)}')
+        out[name] = dataclasses.replace(out[name], **fields)
+    return out
+
+
+try:
+    import hestia_local as _local          # noqa: E402  (gitignored; absent on every machine that must not trade)
+except ImportError:
+    _local = None
+ENGINES = apply_local_overrides(ENGINES, _local)
+SLACK_PROMETHEUS_VIA_HESTIA = bool(getattr(_local, 'SLACK_PROMETHEUS_VIA_HESTIA', SLACK_PROMETHEUS_VIA_HESTIA))
+LOCAL_OVERRIDES_PRESENT = _local is not None
