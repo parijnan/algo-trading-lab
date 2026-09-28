@@ -500,3 +500,42 @@ def test_stop_is_not_queued_behind_saturated_entries_when_workers_are_scarce(hes
     slow = [t for t, e in log_a if isinstance(e, RequestOutcome)]
     assert t_stop - T0 < timedelta(seconds=2)
     assert [round((t - T0).total_seconds()) for t in slow] == [30, 60], 'entries were held to one worker, in submit order'
+
+
+def _pending_broker(lots=None, pending_for=120.0):
+    return lambda c: (BrokerReply('unconfirmed', lots=lots, pending_for=pending_for)
+                      if c.request.request_id == 'r1' else BrokerReply('fill'))
+
+
+def test_order_still_working_at_the_broker_is_never_reported_as_no_fill(hestias):
+    """A DPL lock can hold a market order open. While the broker's row says working, the request stays UNCONFIRMED, a later
+    close waits, Hestia keeps re-reading, and the close then acts on what the order finally did."""
+    log = []
+    close = CloseRequest('c1', FRONT, Direction.BULLISH, ExitReason.TREND_FLIP)
+    h = hestias([('a', factory(log=log, act=_react_on_unconfirmed(close)))], broker=_pending_broker())
+    go(h, 400)
+    out = [(o.request_id, o.status) for o in outcomes(log)]
+    assert out == [('r1', OutcomeStatus.UNCONFIRMED), ('r1', OutcomeStatus.FILLED), ('c1', OutcomeStatus.FILLED)]
+    t = {(e.request_id, e.status): when for when, e in log if isinstance(e, RequestOutcome)}
+    placed = h.orders[0].ts
+    assert t[('r1', OutcomeStatus.FILLED)] - placed >= timedelta(seconds=120), 'not settled while the order was still working'
+    assert h.request_record('a', 'r1').pending_reads >= 15, 'kept re-reading every few seconds'
+    assert [(o.request_id, o.side, o.lots) for o in h.orders] == [('r1', 'BUY', 3), ('c1', 'SELL', 3)]
+    assert h.held('a', FRONT) == 0
+    assert sum('still working' in a.text for a in h.alerts_for('critical')) == 1
+
+
+def test_a_working_order_that_finally_shows_no_fill_is_rejected_only_when_the_broker_says_so(hestias):
+    log = []
+    h = hestias([('a', factory(log=log, act=submit_on_start(open_req('r1'))))], broker=_pending_broker(lots=0, pending_for=100.0))
+    go(h, 90)
+    assert [o.status for o in outcomes(log)] == [OutcomeStatus.UNCONFIRMED], 'still working at 90 s: not a no-fill'
+    h.run_until(T0 + timedelta(seconds=300))
+    assert [o.status for o in outcomes(log)] == [OutcomeStatus.UNCONFIRMED, OutcomeStatus.REJECTED]
+    assert h.held('a', FRONT) == 0
+
+
+def test_the_simulated_ports_satisfy_the_port_protocols(hestias):
+    from hestia_core.ports import BrokerPort, DataPort, Scheduler
+    h = hestias([])
+    assert isinstance(h.kernel, Scheduler) and isinstance(h.broker, BrokerPort) and isinstance(h.data, DataPort)

@@ -56,6 +56,11 @@ class SimKernel:
     def after(self, seconds: float, fn: Callable[[], None]) -> Handle:
         return self.at(self.now + timedelta(seconds=seconds), fn)
 
+    def post(self, fn: Callable[[], None]) -> Handle:
+        """Run `fn` on the dispatcher as soon as possible. The live reactor's version is thread-safe (worker threads post
+        their completions with it); this one is single-threaded and is used with an inline executor."""
+        return self.after(0, fn)
+
     def run_until(self, t_end: datetime) -> None:
         """Runs callbacks up to `t_end`. Two budgets turn a runaway engine into a failure instead of a hang: at most
         `max_same_time` callbacks at one simulated instant (a loop that never advances time) and `max_callbacks` in one

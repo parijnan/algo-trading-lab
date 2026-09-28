@@ -13,7 +13,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from hestia_core.calendar import count_trading_days_inclusive, is_trading_day, next_trading_day  # noqa: E402
+from hestia_core.trading_calendar import count_trading_days_inclusive, is_trading_day, next_trading_day  # noqa: E402
 
 
 def _production_functions(holidays_df):
