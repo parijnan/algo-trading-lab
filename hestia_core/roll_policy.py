@@ -72,6 +72,22 @@ def effective_contract(contracts: Iterable[ContractRef], on_date: date, fully_cl
     return Effective(front, left, False, False)
 
 
+def effective_from_days_left(contracts_with_days: Iterable[Tuple[ContractRef, int]],
+                             roll_window_days: int = ROLL_WINDOW_DAYS, days_offset: int = 0) -> Effective:
+    """`effective_contract` for an engine that knows each contract's trading days left today but has no holiday calendar: the front
+    contract's days left is `days_offset` fewer than today's (an offset of 1 answers "what is tomorrow's effective contract", because
+    tomorrow's trading day is the next trading day, exactly one fewer trading day from expiry)."""
+    live = sorted(contracts_with_days, key=lambda cd: cd[0].expiry)
+    if not live:
+        raise NoContract('no live contract')
+    front, left = live[0][0], live[0][1] - days_offset
+    if left <= roll_window_days:
+        if len(live) > 1:
+            return Effective(live[1][0], left, True, False)
+        return Effective(front, left, False, True)
+    return Effective(front, left, False, False)
+
+
 class NoNextAction(str, Enum):
     FLATTEN = 'flatten'                  # the plan's policy: never carry a position into the tender window
     CARRY = 'carry'                      # Prometheus's current behaviour, kept only for parity checks

@@ -250,3 +250,24 @@ def test_the_module_is_pure():
                if isinstance(n, (ast.Import, ast.ImportFrom)) for a in (n.names if isinstance(n, ast.Import) else [n])}
     assert imports <= {'__future__', 'dataclasses', 'datetime', 'enum', 'typing', 'hestia_core', 'hestia_core.interface'}, imports
     assert 'datetime.now' not in src and 'time.sleep' not in src
+
+
+def test_effective_from_days_left_agrees_with_the_calendar_version_including_tomorrow():
+    refs = [FRONT, NEXT, FAR]
+    closed = frozenset({date(2026, 10, 15)})
+    d = date(2026, 10, 1)
+    checked = 0
+    while d < date(2026, 10, 22):
+        if hcal_is_trading(d, closed):
+            pairs = [(r, rp.days_left(d, r.expiry, closed)) for r in refs if r.expiry >= d]
+            assert rp.effective_from_days_left(pairs).contract == rp.effective_contract(refs, d, closed).contract, d
+            tomorrow = rp.hcal.next_trading_day(d, closed)
+            if tomorrow <= FRONT.expiry:
+                assert rp.effective_from_days_left(pairs, days_offset=1).contract == rp.effective_contract(refs, tomorrow, closed).contract, d
+            checked += 1
+        d += timedelta(days=1)
+    assert checked > 10
+
+
+def hcal_is_trading(d, closed):
+    return rp.hcal.is_trading_day(d, closed)

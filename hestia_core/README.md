@@ -2,7 +2,7 @@
 
 Hestia is the MCX multi-strategy host: one process, one Angel One login, several strategy engines (Prometheus, Selene, later Helios and Typhon) running side by side. Engines decide (entries, exits, stops, the roll); Hestia does the work (orders, fills, retries, reconciliation, data, alerts, teardown). Plans and decisions: `plans/selene-production.md` (design), `plans/hestia-interface-spec.md` (the engine interface, v1.1), `plans/hestia-p1-inventory.md`, `plans/hestia-p4-live-services.md` (this build).
 
-**Status:** built and tested against doubles; **not connected to Angel One and not scheduled.** Every entry in `hestia_config.ENGINES` is disabled (the engines are ported or written in later phases), and with none enabled `hestia.py` exits before it logs in, so running it cannot evict another process's session. The first real login is a separate, explicitly approved step.
+**Status:** built and tested against doubles; **not connected to Angel One and not scheduled.** Every entry in `hestia_config.ENGINES` is disabled (the Prometheus engine is ported in `../prometheus_engine/` and tested against the fake Hestia, not yet replayed against recorded days; Selene is written in a later phase), and with none enabled `hestia.py` exits before it logs in, so running it cannot evict another process's session. The first real login is a separate, explicitly approved step.
 
 ## How it fits together
 
