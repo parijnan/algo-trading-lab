@@ -65,6 +65,7 @@ class PrometheusEngine:
         self.session_date: Optional[date] = None
         self.session_open: Optional[datetime] = None
         self.rollover_at: Optional[datetime] = None
+        self.session_close: Optional[datetime] = None                # derived: SessionStart carries the rollover time, not the close
         self.provisional_disabled = False
         self.provisional_pending: Optional[dict] = None
         self.exit_requested = False
@@ -225,6 +226,7 @@ class PrometheusEngine:
     def _on_session_start(self, ev: SessionStart) -> None:
         ctx = self.ctx
         self.session_date, self.session_open, self.rollover_at = ev.session_date, ev.session_open, ev.rollover_time
+        self.session_close = ev.rollover_time + timedelta(minutes=rp.ROLLOVER_BEFORE_CLOSE_MIN)
         self.infos = {i.ref.token: i for i in ev.contracts}
         pairs = [(i.ref, i.trading_days_left) for i in ev.contracts]
         eff_today = rp.effective_from_days_left(pairs, self.cfg.roll_window_days)
@@ -359,6 +361,8 @@ class PrometheusEngine:
     def _on_bar(self, ev: BarComplete) -> None:
         if self.state.frozen:
             return
+        if self._at_or_after_close(ev.boundary_ts):
+            return
         if ev.quality == BarQuality.GAP or ev.bar is None or ev.st is None:
             self._say('critical', f'no data for the 15-minute window ending {ev.boundary_ts:%H:%M}: the series has a gap', key='gap')
             return
@@ -375,6 +379,15 @@ class PrometheusEngine:
         self.state.last_processed_boundary = window_start.isoformat()
         self._save()
         self._act_on_signal(direction_now, ev.st.flip, window_start, ev.bar.close, provisional=False)
+
+    def _at_or_after_close(self, boundary: datetime) -> bool:
+        """The last boundary of a session is the close itself: that bar completes after the market is shut, so it can never be traded
+        (production refused orders after the closing time). It is left unprocessed and the watermark untouched, so the next session's
+        missed-flip reconcile handles it, as it did live on 2026-09-23."""
+        if self.session_close is not None and boundary >= self.session_close:
+            log.info('bar at boundary %s is at or after the close %s: not acted on, watermark unchanged', boundary, self.session_close)
+            return True
+        return False
 
     def _act_on_signal(self, direction_now: str, flip: bool, window_start: datetime, close: float, provisional: bool) -> bool:
         """The shared branching of a real bar and a provisional one. Returns True if it acted."""
@@ -405,7 +418,7 @@ class PrometheusEngine:
 
     def _on_provisional(self, ev: ProvisionalBar) -> None:
         cfg = self.cfg
-        if self.state.frozen or ev.st.trend is None or ev.st.value is None:
+        if self.state.frozen or ev.st.trend is None or ev.st.value is None or self._at_or_after_close(ev.boundary_ts):
             return
         if ev.prev_st is None:
             log.warning('provisional boundary %s: the previous bar has no supertrend (warm-up); skipped', ev.boundary_ts)

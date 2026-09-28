@@ -35,7 +35,7 @@ BAR, ORDER, FILL, ENTRY, EXIT, TRADE_CLOSED = 'bar', 'order', 'fill', 'entry', '
 RULE7_RESOLVED, RULE7_STUCK, RULE7_ABANDONED = 'rule7_resolved', 'rule7_stuck', 'rule7_abandoned'
 PROVISIONAL, SEED, RESUME, RECONCILED, START, SESSION_END = 'provisional', 'seed', 'resume', 'reconciled', 'start', 'session_end'
 KILL, EXIT_COMMAND, MISSED_FLIP, INCOMPLETE, EFFECTIVE, REJECTED = 'kill', 'exit_command', 'missed_flip', 'incomplete', 'effective', 'rejected'
-EXIT_FAILED, CIRCUIT = 'exit_failed', 'circuit'
+EXIT_FAILED, CIRCUIT, LAST_FLIP = 'exit_failed', 'circuit', 'last_flip'
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,7 @@ _PATTERNS: List[Tuple[str, re.Pattern]] = [
     (EFFECTIVE, re.compile(r'^Effective contract: (\S+) \(token (\d+), expiry (\S+)\)( \(rolled early)?')),
     (REJECTED, re.compile(r'^Order rejected \((\d+)/(\d+)\): (\S+) — (.*)')),
     (EXIT_FAILED, re.compile(r'^Lot(\d) exit order FAILED to place')),
+    (LAST_FLIP, re.compile(r'^Last 15m flip: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) -> (\w+)\s+close=([\d.]+)\s+ST=([\d.]+)')),
     (CIRCUIT, re.compile(r'^DPL (upper|lower) circuit limit reached: LTP=([\d.]+)')),
 ]
 
@@ -126,6 +127,8 @@ def _convert(kind: str, m: re.Match, ts: datetime) -> dict:
         return {'attempt': int(g[0]), 'of': int(g[1]), 'symbol': g[2], 'reason': g[3]}
     if kind == EXIT_FAILED:
         return {'lot': int(g[0])}
+    if kind == LAST_FLIP:
+        return {'bar_start': datetime.strptime(g[0], '%Y-%m-%d %H:%M:%S'), 'direction': g[1], 'close': float(g[2]), 'st': float(g[3])}
     if kind == CIRCUIT:
         return {'side': g[0], 'ltp': float(g[1])}
     return {}
@@ -332,7 +335,7 @@ class LoggedReplayData(ReplayData):
     def add_logged_contract(self, spec: ContractSpec, expiry_key: str) -> None:
         """Register `spec` (its `minutes` are the pipeline frame) and build its logged bars from every session that traded it."""
         self.add_contract(spec)
-        rows, partial = [], {}
+        rows, partial, extra = [], {}, []
         prov_delay: Dict[datetime, float] = {}
         provisional_close: Dict[datetime, float] = {}
         for s in self._sessions:
@@ -341,6 +344,12 @@ class LoggedReplayData(ReplayData):
                 continue
             incompletes = {e.data['window_start']: e.data['rows'] for e in s.of(INCOMPLETE)}
             provs = {e.data['bar_start']: e for e in s.of(PROVISIONAL)}
+            for e in s.of(LAST_FLIP):
+                d = e.data
+                # the bar a previous session ended before reaching: the next session's seed reports it (added below only if no session
+                # logged it, so a logged bar keeps its own Supertrend)
+                extra.append({'time_stamp': pd.Timestamp(d['bar_start']), 'close': d['close'], 'st': d['st'], 'flip': True,
+                              'minutes': BAR_MIN})
             for e in s.bars:
                 d = e.data
                 start = d['bar_start']
@@ -353,7 +362,11 @@ class LoggedReplayData(ReplayData):
                     delay = (e.ts - boundary).total_seconds()
                     prov_delay[boundary] = max(delay, 1.0)
                     provisional_close[boundary] = provs[start].data['close']
-        df = pd.DataFrame(rows).drop_duplicates('time_stamp', keep='last').sort_values('time_stamp').reset_index(drop=True)
+        df = pd.DataFrame(rows).drop_duplicates('time_stamp', keep='last')
+        unlogged = [x for x in extra if x['time_stamp'] not in set(df['time_stamp'])]
+        if unlogged:
+            df = pd.concat([df, pd.DataFrame(unlogged).drop_duplicates('time_stamp')], ignore_index=True)
+        df = df.sort_values('time_stamp').reset_index(drop=True)
         pipe = computed_pipeline_bars(self._minute_frames[expiry_key])
         merged = df.merge(pipe, on='time_stamp', how='left', suffixes=('', '_pipe'))
         bars = pd.DataFrame({'time_stamp': merged['time_stamp'], 'open': merged['open'].fillna(merged['close']),

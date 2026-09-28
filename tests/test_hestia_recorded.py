@@ -114,7 +114,9 @@ def test_the_ten_recorded_sessions_parse_with_a_full_day_of_bars_each(sessions):
     assert [s.day for s in sessions][0] == date(2026, 9, 15) and len(sessions) == 10
     full = [s for s in sessions if s.day != date(2026, 9, 28)]
     assert all(len(s.bars) >= 54 for s in full), [len(s.bars) for s in full]
-    assert sum(len(s.of(rec.ENTRY)) for s in sessions) == 30 and sum(len(s.of(rec.EXIT)) for s in sessions) == 56
+    last = sessions[-1]                                                                       # 09-28: stopped out at 21:50, killed by the user at 21:55
+    assert last.day == date(2026, 9, 28) and len(last.bars) == 51 and len(last.of(rec.KILL)) == 1
+    assert sum(len(s.of(rec.ENTRY)) for s in sessions) == 31 and sum(len(s.of(rec.EXIT)) for s in sessions) == 60
 
 
 @needs_pull
@@ -130,13 +132,12 @@ def test_the_data_path_table_of_the_p5_plan_is_reproduced_exactly(sessions, minu
 
 
 @needs_pull
-def test_every_logged_exit_is_a_trade_and_the_only_unmatched_entries_are_the_two_known_ones(sessions):
+def test_every_logged_exit_is_a_trade_and_the_only_unmatched_entry_is_the_known_one(sessions):
     cc = rec.check_logs_against_trades(sessions, rec.load_trades(PULL / 'data' / 'prometheus_trades.csv'))
-    assert cc.exits_logged == cc.exits_matched == 56
-    assert cc.entries_logged == 30 and cc.entries_matched == 28 and cc.trades_in_window == cc.trades_with_entry_logged == 28
-    assert len(cc.problems) == 2
+    assert cc.exits_logged == cc.exits_matched == 60
+    assert cc.entries_logged == 31 and cc.entries_matched == 30 and cc.trades_in_window == cc.trades_with_entry_logged == 30
+    assert len(cc.problems) == 1
     assert any('2026-09-15 09:45' in p for p in cc.problems), 'trade 21 (09-15, the expired-token day) has a running-row file but no trades row'
-    assert any('2026-09-28 17:45' in p for p in cc.problems), 'trade 50 was still open when the file was pulled'
 
 
 def _fake_over(sessions, minute_frames, day, start_hm='08:50'):
