@@ -123,12 +123,14 @@ def test_the_ten_recorded_sessions_parse_with_a_full_day_of_bars_each(sessions):
 def test_the_data_path_table_of_the_p5_plan_is_reproduced_exactly(sessions, minute_frames):
     rows = {s.day: rec.compare_bar_path(s, minute_frames) for s in sessions}
     rows = {d: c for d, c in rows.items() if c is not None and c.bars}
-    assert sum(c.bars for c in rows.values()) == 510 and sum(c.matched for c in rows.values()) == 308
-    assert sum(c.close_differs for c in rows.values()) == 45 and sum(c.flip_differs for c in rows.values()) == 2
+    assert sum(c.bars for c in rows.values()) == 561 and sum(c.matched for c in rows.values()) == 353
+    assert sum(c.close_differs for c in rows.values()) == 51 and sum(c.flip_differs for c in rows.values()) == 2
     assert sum(c.st_differs for c in rows.values()) == 179
     clean = rows[date(2026, 9, 24)]
     assert clean.st_differs == 0 and clean.worst_st_diff < 0.006 and clean.flip_differs == 0, 'a clean day matches to the logged precision'
     assert rows[date(2026, 9, 23)].flip_differs == 2, 'the one thin cross'
+    also_clean = rows[date(2026, 9, 28)]                        # the second pull's day: also matches ST exactly (51 bars, session ends at the kill)
+    assert also_clean.st_differs == 0 and also_clean.worst_st_diff < 0.006 and also_clean.bars == 51
 
 
 @needs_pull

@@ -21,7 +21,7 @@ PULL = REPO / 'hestia_data' / 'replay_pull'
 PIPE = REPO / 'data_pipeline' / 'data' / 'mcx'
 needs_pull = pytest.mark.skipif(not (PULL / 'logs').exists() or not (PIPE / 'CRUDEOILM' / '2026-10-19_futures.csv').exists(),
                                 reason='the pulled recorded days (hestia_data/replay_pull) are not present')
-DAYS = [date(2026, 9, d) for d in (16, 17, 18, 21, 22, 23, 24, 25)]
+DAYS = [date(2026, 9, d) for d in (16, 17, 18, 21, 22, 23, 24, 25, 28)]
 
 
 @pytest.fixture(scope='module')
