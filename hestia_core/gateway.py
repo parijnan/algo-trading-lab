@@ -151,5 +151,9 @@ class BrokerGateway:
     def ltp(self, exchange: str, symbol: str, token: str, high: bool = False):
         return self._call('ltp', lambda: self._obj.ltpData(exchange, symbol, token), high)
 
+    def market_data(self, mode: str, exchange_tokens: dict, high: bool = False):
+        """getMarketData (the quote endpoint that carries the exchange's circuit limits); shares the LTP budget."""
+        return self._call('ltp', lambda: self._obj.getMarketData(mode=mode, exchangeTokens=exchange_tokens), high)
+
     def candles(self, params: dict, high: bool = False):
         return self._call('candles', lambda: self._obj.getCandleData(params), high)

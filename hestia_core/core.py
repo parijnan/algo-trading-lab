@@ -832,6 +832,9 @@ class CoreContext:
 
     def set_trading_contract(self, contract):
         self._t.trading_token = contract.token
+        hook = getattr(self._h.data, 'trading_contract_set', None)   # a live data source starts serving the contract
+        if hook is not None:
+            hook(self._t, contract)
 
     def track(self, contract):
         self._h.data.track(self._t, contract)

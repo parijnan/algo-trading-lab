@@ -109,3 +109,72 @@ class ScriptedSmartConnect:
             self.rms_failures -= 1
             raise Exception('AB1007 Invalid Token')
         return {'status': True, 'data': {'availablecash': str(self.cash)}}
+
+
+class CandleSmartConnect:
+    """Serves 1-minute candles from prepared frames as of `now_fn()` (a candle is available once its minute has closed), with
+    scriptable failures: `fail(token, frm, to, now) -> bool` makes a call raise AB1021, `missing` drops specific minutes
+    until removed, `ltps` and `circuit_limits` feed the quote calls."""
+
+    def __init__(self, now_fn, frames, tz='+05:30'):
+        self.now_fn, self.frames, self.tz = now_fn, frames, tz
+        self.calls = []
+        self.fail = None
+        self.missing = set()
+        self.ltps = {}
+        self.circuit_limits = {}
+        self.ltp_calls = 0
+
+    def _rows(self, token, frm, to):
+        now = self.now_fn()
+        df = self.frames[str(token)]
+        lo, hi = datetime.strptime(frm, '%Y-%m-%d %H:%M'), datetime.strptime(to, '%Y-%m-%d %H:%M')
+        out = []
+        for r in df[(df['time_stamp'] >= lo) & (df['time_stamp'] <= hi)].itertuples():
+            ts = r.time_stamp.to_pydatetime()
+            if ts + timedelta(minutes=1) <= now and (str(token), ts) not in self.missing:
+                out.append([ts.strftime('%Y-%m-%dT%H:%M:%S') + self.tz, r.open, r.high, r.low, r.close, r.volume])
+        return out
+
+    def getCandleData(self, params):
+        now = self.now_fn()
+        self.calls.append((params['symboltoken'], params['fromdate'], params['todate'], now))
+        if self.fail is not None and self.fail(params['symboltoken'], params['fromdate'], params['todate'], now):
+            raise DataException('Access denied because of exceeding access rate')
+        return {'status': True, 'data': self._rows(params['symboltoken'], params['fromdate'], params['todate'])}
+
+    def ltpData(self, exchange, symbol, token):
+        self.ltp_calls += 1
+        return {'status': True, 'data': {'ltp': self.ltps.get(str(token))}}
+
+    def getMarketData(self, mode, exchangeTokens):
+        toks = [t for ts in exchangeTokens.values() for t in ts]
+        uc, lc = self.circuit_limits.get(toks[0], (None, None))
+        if uc is None:
+            return {'status': True, 'data': {'fetched': []}}
+        return {'status': True, 'data': {'fetched': [{'upperCircuit': uc, 'lowerCircuit': lc}]}}
+
+
+class FakeFeed:
+    """A FeedPort double."""
+
+    def __init__(self):
+        self.ltp, self.ohlc, self.age = {}, {}, {}
+        self.subscribed = []
+
+    def subscribe(self, tokens):
+        self.subscribed += list(tokens)
+
+    def unsubscribe(self, tokens):
+        for t in tokens:
+            if t in self.subscribed:
+                self.subscribed.remove(t)
+
+    def get_ltp(self, token):
+        return self.ltp.get(token)
+
+    def get_ohlc(self, token):
+        return self.ohlc.pop(token, None)
+
+    def last_tick_age(self, token):
+        return self.age.get(token)
