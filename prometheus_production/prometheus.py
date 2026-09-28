@@ -792,13 +792,24 @@ class Prometheus:
         bar = row.iloc[-1]
         direction_prov = 'bullish' if bool(bar['trend']) else 'bearish'
         flip_prov = bool(bar['trend_flip'])
-        band_distance_pct = (abs(bar['close'] - bar['supertrend']) / bar['close'] * 100
+        # 2026-09-28 (user-directed fix): the margin is the provisional close's distance from the PREVIOUS
+        # bar's supertrend, the line the price had to cross for this flip. It used to be measured against
+        # THIS bar's supertrend, which on a flip bar has already switched to the opposite band ~2.5 ATR away,
+        # so it passed essentially every flip (median 1.35% on CRUDEOILM against a 0.15% threshold) and
+        # never gated anything. A razor-thin cross, where a tick-derived close and the exchange candle's
+        # close could land on opposite sides, is exactly what the margin exists to hold back.
+        prev_rows = provisional_series[provisional_series['time_stamp'] < window_start]
+        prev_st = prev_rows.iloc[-1]['supertrend'] if not prev_rows.empty else float('nan')
+        if pd.isna(prev_st):
+            logger.warning('Provisional boundary check: previous bar has no supertrend (warm-up) — skipping.')
+            return
+        band_distance_pct = (abs(bar['close'] - prev_st) / bar['close'] * 100
                              if bar['close'] else 0.0)
         clears_margin = band_distance_pct > PROVISIONAL_MARGIN_PCT
 
         logger.info(f'Provisional boundary {window_start:%H:%M}: close={bar["close"]:.2f} '
-                   f'ST={bar["supertrend"]:.2f} direction={direction_prov} flip={flip_prov} '
-                   f'band_dist_pct={band_distance_pct:.3f} (margin={PROVISIONAL_MARGIN_PCT}) '
+                   f'ST={bar["supertrend"]:.2f} prev_ST={prev_st:.2f} direction={direction_prov} flip={flip_prov} '
+                   f'clear_prev_st_pct={band_distance_pct:.3f} (margin={PROVISIONAL_MARGIN_PCT}) '
                    f'clears_margin={clears_margin} '
                    f'gating={"ON" if PROVISIONAL_BOUNDARY_ENABLED else "OFF"} — SHADOW LOG, '
                    f'reconciled against the real bar once it computes.')
@@ -819,7 +830,7 @@ class Prometheus:
             if direction_prov != self.state.direction:
                 _slack(f'⚠️ {tag}: PROVISIONAL flip -> {direction_prov} at '
                       f'{window_start:%H:%M} (REST data incomplete, acting on a '
-                      f'tick-reconstructed candle; band_dist={band_distance_pct:.3f}%). '
+                      f'tick-reconstructed candle; cleared prev ST by {band_distance_pct:.3f}%). '
                       f'Will reconcile against the real bar once REST recovers.',
                       SLACK_TRADEBOT_CHANNEL)
                 self._execute_rule7_flip(direction_prov, window_start, bar['close'])
@@ -829,7 +840,7 @@ class Prometheus:
                     and self._check_1h_alignment(direction_prov)):
                 _slack(f'⚠️ {tag}: PROVISIONAL entry {direction_prov.upper()} at '
                       f'{window_start:%H:%M} (REST data incomplete, acting on a '
-                      f'tick-reconstructed candle; band_dist={band_distance_pct:.3f}%). '
+                      f'tick-reconstructed candle; cleared prev ST by {band_distance_pct:.3f}%). '
                       f'Will reconcile against the real bar once REST recovers.',
                       SLACK_TRADEBOT_CHANNEL)
                 self._execute_entry(direction_prov, window_start, bar['close'])

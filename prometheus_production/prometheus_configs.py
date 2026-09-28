@@ -434,8 +434,13 @@ DEFERRED_BAR_CUTOFF_MIN = 1
 # it actually behaved under DRY_RUN -- agreement rate, any disagreement
 # escalations, whether the margin needs recalibrating.
 PROVISIONAL_BOUNDARY_ENABLED = True
-PROVISIONAL_MARGIN_PCT = 0.15   # % of price the provisional close must clear the provisional
-                                 # Supertrend band by before acting -- PLACEHOLDER, not calibrated
+PROVISIONAL_MARGIN_PCT = 0.15   # % of price the provisional close must clear the PREVIOUS bar's
+                                 # supertrend (the line it had to cross) by before acting -- PLACEHOLDER,
+                                 # not calibrated. Until 2026-09-28 this was measured against the provisional
+                                 # bar's OWN supertrend, which on a flip bar is the opposite band and passed
+                                 # ~every flip; now a real gate: on 2024-26 data 0.15% holds back about 44%
+                                 # of CRUDEOILM flips (ST 2.0) from provisional action, which then wait for
+                                 # the real bar exactly as if the feature were off.
 
 # ── Order execution ──────────────────────────────────────────────────────────
 ORDER_TIMEOUT_SEC = 30     # seconds to wait for order fill (WS fast path + REST fallback)
