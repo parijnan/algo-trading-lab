@@ -352,6 +352,11 @@ class SeleneEngine:
             return
         window_start = ev.bar.ts
         direction_now = _name(ev.st.trend)
+        if ev.st.flip:
+            # the raw signal itself, independent of what the engine goes on to decide -- same per-bar Slack line Prometheus's
+            # engine sends (ported from prometheus.py's own "ST_15 flip -> *direction*"), so Selene's alerts match Prometheus's.
+            self._say('info', f'ST_15 flip -> {direction_now} at {window_start:%H:%M} (close={ev.bar.close:.2f}, '
+                              f'ST={ev.st.value:.2f})', channel='tradebot-updates')
         self.state.last_processed_boundary = window_start.isoformat()
         self._save()
         self._act_on_signal(direction_now, ev.st.flip, window_start, ev.bar.close)

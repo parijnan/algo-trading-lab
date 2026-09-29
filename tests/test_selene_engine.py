@@ -280,3 +280,15 @@ def test_first_minutes_are_guarded():
     e = made[-1]
     assert not e._past_first_minute_guard(hm(9, 0)) and e._past_first_minute_guard(hm(9, 1))
     assert not e._past_min_entry_guard(hm(9, 14)) and e._past_min_entry_guard(hm(9, 15))
+
+
+def test_every_flip_sends_the_raw_signal_alert_independent_of_the_outcome():
+    made = []
+    h = scripted_world(ZIGZAG, made=made)
+    run(h, hm(23, 40))
+    flips = [t for t in alert_texts(h) if t.startswith('ST_15 flip -> ')]
+    assert len(flips) >= 3
+    assert 'close=' in flips[0] and 'ST=' in flips[0]
+    hits = [a for a in h.alerts if a.text.startswith('ST_15 flip -> ') and a.channel == 'tradebot-updates']
+    assert len(hits) == len(flips)
+    assert flips[0].startswith('ST_15 flip -> bearish at')

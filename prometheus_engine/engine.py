@@ -377,6 +377,11 @@ class PrometheusEngine:
             self.state.last_processed_boundary = window_start.isoformat()
             self._save()
             return
+        if ev.st.flip:
+            # the raw signal itself, independent of what the engine goes on to decide -- production's own per-bar Slack
+            # line (prometheus.py: "ST_15 flip -> *direction*"), ported here after being missed in the original build.
+            self._say('info', f'ST_15 flip -> {direction_now} at {window_start:%H:%M} (close={ev.bar.close:.2f}, '
+                              f'ST={ev.st.value:.2f})', channel='tradebot-updates')
         self.state.last_processed_boundary = window_start.isoformat()
         self._save()
         self._act_on_signal(direction_now, ev.st.flip, window_start, ev.bar.close, provisional=False)

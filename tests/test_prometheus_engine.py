@@ -506,3 +506,15 @@ def test_a_refused_flip_reentry_falls_back_to_closing_the_old_side_only():
                              'units': 1, 'lots': 2, 'token': FRONT.token}}
     e._on_outcome(RequestOutcome('r1', OutcomeStatus.LIMIT_REFUSED, RequestKind.FLIP, 4, hm(11, 0), detail='unit cap: 12 lots would exceed 10'))
     assert e.state.pending_flip['new_lots'] == 0 and not e.state.pending and e.state.status == 'in_trade'
+
+
+def test_every_flip_sends_the_raw_signal_alert_independent_of_the_outcome():
+    made = []
+    h = scripted_world(ZIGZAG, made=made)
+    run(h, hm(23, 40))
+    flips = [t for t in alert_texts(h) if t.startswith('ST_15 flip -> ')]
+    assert len(flips) >= 3                                              # ZIGZAG has 3 real flips (its 3 entries)
+    assert 'close=' in flips[0] and 'ST=' in flips[0]
+    hits = [a for a in h.alerts if a.text.startswith('ST_15 flip -> ') and a.channel == 'tradebot-updates']
+    assert len(hits) == len(flips)                                      # every one lands on #tradebot-updates
+    assert flips[0].startswith('ST_15 flip -> bearish at')              # ZIGZAG's first real flip
