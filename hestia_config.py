@@ -106,8 +106,15 @@ ENGINES = {
 
 TRADING_HOSTS = {
     # Delos, from the first live session (2026-09-29): Prometheus live at 1 unit (2 lots), hard cap 10 units. The Slack Exit, Kill,
-    # Disable and sizing buttons drive Hestia's files. Selene is not written yet (P7) and stays disabled.
-    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10)},
+    # Disable and sizing buttons drive Hestia's files.
+    # Selene DRY_RUN alongside it, prepared 2026-09-29 (P8, plans/selene-production.md): paper only, no real order ever reaches the
+    # broker (BrokerRouter routes a paper engine's orders to PaperBroker, never AngelBrokerPort); 1 unit, cap 10, matching
+    # Prometheus's own conservative first-session sizing even though a paper cap risks nothing real. NOT yet enabled here --
+    # PENDING the user's go-ahead once today's Prometheus live session is confirmed smooth. Enabling requires a Hestia restart
+    # (every engine restarts together), best done while Prometheus is flat or right after an EXIT, per plans/hestia-p6-cutover.md's
+    # no-restart-window guidance -- never mid-position on a whim.
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
+                           'selene': dict(enabled=False, paper=True, static_units=1, unit_cap=10)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True),
 }
 

@@ -197,7 +197,7 @@ A note for later: because engines are decision functions over Hestia's events, t
 | **P5** | **Prometheus engine parity** against replay of recorded live days | Decision-for-decision agreement |
 | **P6** | **Hestia live with Prometheus only**, cutover with rollback ready | Clean sessions and a roll, QC report |
 | **P7** | **Selene engine** (small), new tests, replay vs the parity backtest | Trade-for-trade agreement |
-| **P8** | **Selene DRY_RUN inside Hestia** through a SILVERMIC roll; QC skill | Clean roll |
+| **P8** | **Selene DRY_RUN inside Hestia**, a paper run (the SILVERMIC roll is ~2026-11-20, well after this phase; not a gate here); QC skill | Clean sessions, no unexpected alerts |
 | **P9** | Selene live at 1 unit, then ramp | User's call at each step |
 
 The effort is in P4 and P5: building the shared engine out of Prometheus's proven execution and data code without changing its behaviour. Selene itself (P7) is small once the interface exists, and each later instrument is an engine plus a checklist.
