@@ -167,6 +167,14 @@ class SharedFeed:
             auth_token, api_key, client_code, feed_token,
             max_retry_attempt=0   # no auto-reconnect — caller decides
         )
+        # SmartWebSocketV2.__init__ calls logzero.logfile(..., loglevel=INFO) itself, which RESETS the shared
+        # 'logzero_default' logger's level even if a caller (real_login) already suppressed it after its own
+        # SmartConnect() construction — logzero.logfile() lowers the level whenever the new one is lower than the
+        # current one (see project_smartapi_logger_credential_exposure memory / 2026-09-09). Re-suppress here, after
+        # construction, or every SDK log call (including a raw X-PrivateKey/x-api-key dump on a connection or fetch
+        # failure) leaks to stderr again for the rest of the process. Found live 2026-09-29: 3 leaked X-PrivateKey
+        # lines in logs/hestia_cron_20260929.out within ~15 minutes of a Hestia restart.
+        logging.getLogger('logzero_default').setLevel(logging.CRITICAL)
 
         self._sws.on_open  = self._on_open
         self._sws.on_data  = self._on_data
@@ -504,6 +512,7 @@ class SharedFeed:
                     self._client_code, self._feed_token,
                     max_retry_attempt=0
                 )
+                logging.getLogger('logzero_default').setLevel(logging.CRITICAL)   # see the __init__ construction site's own note
                 new_sws.on_open  = self._on_open
                 new_sws.on_data  = self._on_data
                 new_sws.on_error = self._on_error
