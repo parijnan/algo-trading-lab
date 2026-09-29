@@ -90,11 +90,12 @@ class EngineEntry:
     unit_cap: int = 50                          # HARD LIMIT enforced at admission; an override file can never raise it
 
 
-# The registry. Engines are ported or written in later phases (plans/selene-production.md section 10: P5 Prometheus, P7 Selene);
-# until then every entry is disabled and Hestia starts with no engines.
+# The registry. Engines are ported or written in later phases (plans/selene-production.md section 10: P5 Prometheus, P7 Selene,
+# P8 Helios); until then every entry is disabled and Hestia starts with no engines.
 ENGINES = {
     'prometheus': EngineEntry(instrument='CRUDEOILM', factory='prometheus_engine.engine:build', enabled=False, lots_per_unit=2),
     'selene': EngineEntry(instrument='SILVERMIC', factory='selene_engine.engine:build', enabled=False, paper=True),
+    'helios': EngineEntry(instrument='GOLDPETAL', factory='helios_engine.engine:build', enabled=False, paper=True, lots_per_unit=20),
 }
 
 
@@ -114,8 +115,13 @@ TRADING_HOSTS = {
     # (user's go-ahead, after Prometheus's first live session confirmed smooth). Restart timing is unrestricted (the
     # user's call, same day): restart-recovery (bootstrap against the broker ledger, UNCONFIRMED settled by reading the
     # order, never re-sent blind) is trusted to handle a restart mid-position or mid-transition, not just while flat.
+    # Helios DRY_RUN alongside both (plans/hestia-p8-helios-engine.md), enabled 2026-09-29: paper only, same posture as
+    # Selene's own paper deployment. 1 unit (= lots_per_unit above, 20 lots), cap 10 units -- matching the other two
+    # engines' own conservative first-session sizing, not derived from any Helios-specific risk analysis (position
+    # sizing and risk of ruin are explicitly deferred, plan §4h's own "Not yet done").
     'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
-                           'selene': dict(enabled=True, paper=True, static_units=1, unit_cap=10)},
+                           'selene': dict(enabled=True, paper=True, static_units=1, unit_cap=10),
+                           'helios': dict(enabled=True, paper=True, static_units=1, unit_cap=10)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True),
 }
 

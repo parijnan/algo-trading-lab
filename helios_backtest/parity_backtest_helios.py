@@ -1,0 +1,408 @@
+"""
+Helios - production-parity backtest (plan §4h). Verbatim port of Selene's own parity backtest
+(selene_backtest/parity_backtest_selene.py) -- Selene's simulate() is already single-lot,
+SL-only/trend-flip-exit with no target machinery at all, which is exactly Helios's own decided
+design (plan §4g: ST_MULTIPLIER 3.5, SL 1.6%, no target, 1 unit = 20 lots, single tranche). Only
+the imports (helios_configs/helios_data_loader in place of Selene's) and the final spliced-
+reference comparison (exit_calib_helios's run_variant has a different signature than Selene's
+2-lot-shaped one) are genuinely adapted; the event-driven roll machinery itself is untouched.
+
+The sweep/exit work so far ran the raw signal on ONE spliced continuous price series and
+overlaid exits per trade. Production never sees a spliced series: it trades one real contract at
+a time, computes ST_15 from that contract's OWN recent history (ST_SEED_DAYS), and handles a
+contract roll with explicit machinery. This simulator mirrors that machinery instead of
+approximating it, for the decided config:
+
+  * Per-contract ST: every session's ST is computed from the trading contract's own
+    trailing ST_SEED_DAYS calendar days of 1-minute bars plus the day's bars. No splice.
+  * Which contract trades on a day: prometheus_functions.resolve_effective_contract,
+    i.e. the front contract, rolled to the next one once <= TENDER_ROLL_TRADING_DAYS
+    trading days remain to its expiry (data_loader_p3's own mirror of it).
+  * Eve of a roll (tomorrow resolves to a different contract), per production's own §18 rule:
+      - FLAT at the start of the day, or as soon as the position closes for any
+        reason (stop, flip): switch to the new contract immediately, watch its own signal.
+      - IN TRADE: both contracts' ST are tracked all day. If the old contract's flip
+        closes the position and the new contract flips to the same direction on the
+        SAME 15-minute bar, close old and open a fresh position on the new contract
+        (two orders, never netted); if no coincident flip, close and switch, watching.
+      - STILL IN TRADE at ROLLOVER_TIME: veto check (new contract's ST direction vs the
+        position); GO -> flatten old, reopen on the new contract with the stop recalibrated
+        off the historical basis (the new contract's price at the ORIGINAL entry time, so
+        stop distance keeps the trade's progress); NO-GO -> flatten only, then watch.
+  * Fills: at the open of the bar after the signal bar (same convention as every other
+    phase); stop at its level or the bar's open on an adverse gap; a session's first
+    1-minute bar is exempt from stop checks; entries need >= MIN_ENTRY_BUFFER_MIN since the
+    session open.
+Not modelled: missed-rollover recovery (process assumed alive), costs/slippage, sizing. A rolled
+position is one *trade* made of linked legs; P&L is the sum of the legs' real fills -- no spread
+gain from a splice.
+
+Output (data_sweep/): parity_legs.csv (one row per leg), parity_trades.csv (one per trade).
+"""
+
+import os
+import sys
+import datetime as dt
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import helios_configs as configs
+import helios_data_loader as loader
+from helios_data_loader import _p3, resample_ohlcv, compute_st
+
+MIN15 = pd.Timedelta(minutes=15)
+
+
+class Contract:
+    """One contract's 1-minute arrays, 15-minute bars, and per-day ST windows."""
+
+    def __init__(self, expiry, df_1m: pd.DataFrame):
+        self.expiry = expiry
+        df_1m = df_1m.sort_values('time_stamp').drop_duplicates('time_stamp').set_index('time_stamp')
+        self.idx = df_1m.index
+        self.o, self.h, self.l, self.c = (df_1m[k].to_numpy(float) for k in ('open', 'high', 'low', 'close'))
+        self.v = df_1m['volume'].to_numpy(float)
+        day = self.idx.normalize()
+        first = pd.Series(self.idx, index=self.idx).groupby(day).transform('min')
+        self.guarded = (self.idx == first.to_numpy())
+        self.first_ts = pd.Series(self.idx, index=self.idx).groupby(day).min().to_dict()
+        self.last_ts = pd.Series(self.idx, index=self.idx).groupby(day).max().to_dict()
+        d15 = df_1m.copy()
+        d15['contract_expiry'] = str(expiry)
+        self.bars = resample_ohlcv(d15, '15min')
+        self._st = {}
+
+    def has_day(self, d) -> bool:
+        return pd.Timestamp(d) in self.first_ts
+
+    def day_rows(self, d) -> dict:
+        """ts -> row (open, close, trend, trend_flip) for day d, ST seeded from the trailing window."""
+        key = pd.Timestamp(d)
+        if key not in self._st:
+            lo = key - pd.Timedelta(days=configs.ST_SEED_DAYS)
+            win = self.bars[(self.bars.index >= lo) & (self.bars.index < key + pd.Timedelta(days=1))]
+            rows = {}
+            if len(win) > configs.ST_PERIOD + 2:
+                st = compute_st(win, configs.ST_PERIOD, configs.DECIDED_MULTIPLIER)
+                today = st[st.index.normalize() == key]
+                for ts, r in today.iterrows():
+                    rows[ts] = {'open': float(r['open']), 'close': float(r['close']),
+                                'trend': None if pd.isna(r['trend']) else bool(r['trend']),
+                                'flip': bool(r['trend_flip']) and not pd.isna(r['trend'])}
+            self._st[key] = rows
+        return self._st[key]
+
+    def open_at(self, ts):
+        i = self.idx.searchsorted(ts, side='left')
+        return float(self.o[i]) if i < len(self.idx) else None
+
+    def elapsed_since_open(self, ts) -> float:
+        fb = self.first_ts.get(pd.Timestamp(ts).normalize())
+        return (ts - fb).total_seconds() / 60.0 if fb is not None else None
+
+    def scan_stop(self, direction, sl, t0, t1):
+        """First 1-min bar in [t0, t1) whose range crosses the stop -> (ts, fill), else None."""
+        lo, hi = self.idx.searchsorted(t0, side='left'), self.idx.searchsorted(t1, side='left')
+        if hi <= lo:
+            return None
+        act = ~self.guarded[lo:hi]
+        hit = ((self.l[lo:hi] <= sl) if direction == 'bullish' else (self.h[lo:hi] >= sl)) & act
+        if not hit.any():
+            return None
+        k = int(hit.argmax())
+        op = self.o[lo + k]
+        fill = (op if op < sl else sl) if direction == 'bullish' else (op if op > sl else sl)
+        return self.idx[lo + k], float(fill)
+
+
+def load_contracts(symbol, seg_start, seg_end) -> dict:
+    """Per-contract 1-minute frames: Fyers where it has the contract's day, AngelOne only where it doesn't.
+
+    AngelOne rows are used two ways (helios_configs.ANGELONE_OWN_FROM): from that date a file's rows are its
+    own contract's; before it they are the then-front-month contract's real prices, so each such date is
+    relabelled to that day's front-month contract (smallest expiry >= the date) -- and only where Fyers has no
+    row for that contract on that date, so Fyers always wins. This fills the 2026-04-01..06-29 Fyers void
+    (same systemic gap Selene found for SILVERMIC, confirmed for GOLDPETAL 2026-09-29, plan §4h) and nothing else."""
+    cal = _p3._discover_expiries(symbol)
+    fy = {e: _p3._read_contract_file(_p3.FYERS_DATA_DIR, symbol, e) for e in cal}
+    fy_days = {e: set(d['time_stamp'].dt.date) for e, d in fy.items() if len(d)}
+    parts = {e: [fy[e]] if len(fy[e]) else [] for e in cal}
+    own_from = pd.Timestamp(configs.ANGELONE_OWN_FROM)
+    for e in cal:
+        ao = _p3._read_contract_file(_p3.ANGELONE_DATA_DIR, symbol, e)
+        if ao.empty:
+            continue
+        own = ao[ao['time_stamp'] >= own_from]
+        if len(own):
+            parts[e].append(own)
+        pre = ao[ao['time_stamp'] < own_from]
+        for day, chunk in pre.groupby(pre['time_stamp'].dt.date):
+            f = _p3._naive_front_month_for_date(day, cal)
+            if f is not None and day not in fy_days.get(f, set()):
+                parts[f].append(chunk)
+    out = {}
+    for e, ps in parts.items():
+        ps = [x for x in ps if len(x)]
+        if ps:
+            df = pd.concat(ps, ignore_index=True).drop_duplicates('time_stamp', keep='first')
+            out[e] = Contract(e, df)
+    return out
+
+
+def simulate(seg_start: str, seg_end: str) -> pd.DataFrame:
+    symbol = configs.SYMBOL
+    cal = _p3._discover_expiries(symbol)
+    closed = loader._load_fully_closed_dates()
+    contracts = load_contracts(symbol, seg_start, seg_end)
+    sgn = {'bullish': 1.0, 'bearish': -1.0}
+    sl_frac = configs.DECIDED_SL_PCT / 100
+
+    legs, stats = [], {'flat_switch': 0, 'coincident': 0, 'noncoincident_switch': 0, 'stop_switch': 0,
+                       'fallback_go': 0, 'fallback_nogo': 0, 'fallback_nodata': 0, 'forced_roll': 0, 'naive_day': 0}
+    pos = None        # dict(trade_id, contract, direction, entry_ts, entry_px, sl, ref_px, parent_leg)
+    pending = None    # dict(close, entry_dir, entry_contract)
+    trade_id = 0
+
+    def open_pos(contract, direction, ts, px, ref_px=None, tid=None, parent=None):
+        nonlocal trade_id
+        if tid is None:
+            trade_id += 1
+            tid = trade_id
+        ref = px if ref_px is None else ref_px
+        return {'trade_id': tid, 'contract': contract, 'direction': direction, 'entry_ts': ts, 'entry_px': px,
+                'ref_px': ref, 'sl': ref * (1 - sgn[direction] * sl_frac), 'parent': parent,
+                'leg_no': 1 if parent is None else parent['leg_no'] + 1}
+
+    def close_pos(ts, px, reason):
+        nonlocal pos
+        p = pos
+        legs.append({'trade_id': p['trade_id'], 'leg_no': p['leg_no'], 'contract': str(p['contract']),
+                     'direction': p['direction'], 'entry_ts': p['entry_ts'], 'entry_px': p['entry_px'],
+                     'ref_px': p['ref_px'], 'sl_px': round(p['sl'], 2), 'exit_ts': ts, 'exit_px': px,
+                     'exit_reason': reason, 'pnl_pts': round(sgn[p['direction']] * (px - p['entry_px']), 2)})
+        pos = None
+        return p
+
+    days = [d.date() for d in pd.bdate_range(seg_start, seg_end) if d.date() not in closed]
+    for d in days:
+        dts = pd.Timestamp(d)
+
+        def has(c):
+            return c in contracts and contracts[c].has_day(d)
+
+        C = _p3._plain_resolve(d, cal, closed)
+        N = _p3._effective_contract_for_date(d, cal, closed)   # = plain resolve of the next trading day
+        if not has(C):
+            # production's contract has no data today (Fyers void, or a contract not tracked yet): fall back to
+            # the front-month contract, as the spliced loader does; no roll eve is possible without new-contract data
+            nf = _p3._naive_front_month_for_date(d, cal)
+            if nf is None or not has(nf):
+                continue
+            C = nf
+            stats['naive_day'] += 1
+        eve = N != C and has(N)
+
+        if pos is not None and pos['contract'] != C:
+            # The held contract is not today's and no production roll handled it (its successor had no data on the
+            # eve, or the held contract expired): roll now at real prices on both sides -- same instant when both
+            # trade today, else old contract's last close -> new contract's first open. Position keeps direction and
+            # trade id; the stop is re-based on the new fill (no historical basis exists for these).
+            old = pos['contract']
+            first_new = contracts[C].first_ts[dts]
+            if has(old):
+                ts_roll, px_old = first_new, contracts[old].open_at(first_new)
+            else:
+                j = contracts[old].idx.searchsorted(dts) - 1
+                ts_roll, px_old = contracts[old].idx[j], float(contracts[old].c[j])
+            p_old = close_pos(ts_roll, px_old, 'forced_roll')
+            new_open = contracts[C].open_at(first_new)
+            pos = open_pos(C, p_old['direction'], first_new, new_open, ref_px=new_open, tid=p_old['trade_id'], parent=p_old)
+            stats['forced_roll'] += 1
+
+        if pos is not None:
+            A = pos['contract']
+            dual = N if eve and A == C else None
+        else:
+            A, dual = (N, None) if eve else (C, None)
+            if eve:
+                stats['flat_switch'] += 1
+
+        rows = {c: contracts[c].day_rows(d) for c in {A, C, N} if c in contracts and contracts[c].has_day(d)}
+        times = sorted(set().union(*[set(r) for r in rows.values()]))
+        last = contracts[C].last_ts[pd.Timestamp(d)]
+        rollover_ts = last - pd.Timedelta(minutes=configs.ROLLOVER_BUFFER_MIN)
+        fallback_done = False
+
+        def enter(contract, direction, ts, ref_px=None, tid=None, parent=None):
+            """Entry at the open of the bar starting at ts, subject to the session-open buffer."""
+            cobj = contracts[contract]
+            r = rows.get(contract, {}).get(ts)
+            el = cobj.elapsed_since_open(ts)
+            if r is None or el is None or el < configs.MIN_ENTRY_BUFFER_MIN:
+                return None
+            return open_pos(contract, direction, ts, r['open'], ref_px, tid, parent)
+
+        for ts in times:
+            bar_end = ts + MIN15
+            # --- 1. fill whatever the previous bar's close decided, at this bar's open ---
+            if pending is not None:
+                if pending['close'] and pos is not None:
+                    r = rows.get(pos['contract'], {}).get(ts)
+                    close_pos(ts, r['open'] if r else contracts[pos['contract']].open_at(ts), 'trend_flip')
+                if pending.get('switch') and dual is not None:
+                    A, dual = dual, None                 # old contract is done; new one takes over
+                if pending['entry_dir'] is not None and pos is None:
+                    pos = enter(pending['entry_contract'] or A, pending['entry_dir'], ts)
+                pending = None
+                if pos is None and dual is not None:
+                    A, dual = dual, None                 # flat mid-day on a roll eve -> switch now
+                    stats['stop_switch'] += 1
+
+            # --- 2. stop check on the held contract up to the fallback moment / bar end ---
+            seg_t1 = bar_end
+            do_fallback = (dual is not None and pos is not None and not fallback_done and ts <= rollover_ts < bar_end)
+            if do_fallback:
+                seg_t1 = rollover_ts
+            if pos is not None:
+                hit = contracts[pos['contract']].scan_stop(pos['direction'], pos['sl'], ts, seg_t1)
+                if hit:
+                    close_pos(hit[0], hit[1], 'stop_loss')
+                    if dual is not None:
+                        A, dual = dual, None
+                        stats['stop_switch'] += 1
+                    do_fallback = False
+
+            # --- 3. rollover fallback: position survived to ROLLOVER_TIME on the old contract ---
+            if do_fallback and pos is not None:
+                old, newc = pos['contract'], dual
+                fallback_done = True
+                # veto: new contract's ST direction from bars completed before this moment
+                prior = [k for k in rows[newc] if k + MIN15 <= rollover_ts]
+                new_tr = rows[newc][max(prior)]['trend'] if prior else None
+                old_px = contracts[old].open_at(rollover_ts)
+                new_px = contracts[newc].open_at(rollover_ts)
+                # historical basis: new contract's close nearest the ORIGINAL entry time
+                nidx = contracts[newc].idx
+                ci = nidx.searchsorted(pos['entry_ts'])
+                cands = [j for j in (ci - 1, ci) if 0 <= j < len(nidx)]
+                basis = None
+                if cands:
+                    j = min(cands, key=lambda j: abs(nidx[j] - pos['entry_ts']))
+                    if abs(nidx[j] - pos['entry_ts']) <= pd.Timedelta(minutes=configs.BASIS_MAX_GAP_MIN):
+                        basis = float(contracts[newc].c[j])
+                p_old = close_pos(rollover_ts, old_px, 'rollover')
+                A, dual = newc, None
+                agree = new_tr is not None and (('bullish' if new_tr else 'bearish') == p_old['direction'])
+                if new_tr is None or new_px is None:
+                    stats['fallback_nodata'] += 1
+                elif agree and basis is not None:
+                    pos = open_pos(newc, p_old['direction'], rollover_ts, new_px, ref_px=basis, tid=p_old['trade_id'], parent=p_old)
+                    pos['reopen_basis'] = basis
+                    stats['fallback_go'] += 1
+                else:
+                    stats['fallback_nogo'] += 1
+                if pos is not None:   # stop monitoring on the new contract for the rest of this bar
+                    hit = contracts[pos['contract']].scan_stop(pos['direction'], pos['sl'], rollover_ts, bar_end)
+                    if hit:
+                        close_pos(hit[0], hit[1], 'stop_loss')
+
+            # --- 4. bar close: what does the signal say? ---
+            r = rows.get(A, {}).get(ts)
+            if r is None or r['trend'] is None or not r['flip']:
+                continue
+            dir_now = 'bullish' if r['trend'] else 'bearish'
+            if pos is not None and dir_now != pos['direction']:
+                if dual is not None and pos['contract'] != dual:
+                    rn = rows.get(dual, {}).get(ts)
+                    coinc = bool(rn and rn['flip'] and rn['trend'] is not None and (('bullish' if rn['trend'] else 'bearish') == dir_now))
+                    stats['coincident' if coinc else 'noncoincident_switch'] += 1
+                    pending = {'close': True, 'entry_dir': dir_now if coinc else None,
+                               'entry_contract': dual if coinc else None, 'switch': True}
+                else:
+                    pending = {'close': True, 'entry_dir': dir_now, 'entry_contract': None}
+            elif pos is None and pending is None:
+                pending = {'close': False, 'entry_dir': dir_now, 'entry_contract': None}
+
+    df = pd.DataFrame(legs)
+    df.attrs['stats'] = stats
+    df.attrs['open_at_end'] = pos is not None
+    return df
+
+
+def to_trades(legs: pd.DataFrame) -> pd.DataFrame:
+    g = legs.groupby('trade_id')
+    t = g.agg(direction=('direction', 'first'), entry_ts=('entry_ts', 'first'), exit_ts=('exit_ts', 'last'),
+              entry_px=('entry_px', 'first'), legs=('leg_no', 'max'), pnl_pts=('pnl_pts', 'sum'),
+              last_reason=('exit_reason', 'last')).reset_index()
+    t['pnl_pct'] = t['pnl_pts'] / t['entry_px'] * 100
+    return t.sort_values('exit_ts').reset_index(drop=True)
+
+
+def metrics(t: pd.DataFrame) -> dict:
+    cum = t['pnl_pts'].cumsum()
+    dd = (cum - cum.cummax()).min()
+    cp = t['pnl_pct'].cumsum()
+    ddp = (cp - cp.cummax()).min()
+    return {'trades': len(t), 'win_pct': round((t['pnl_pts'] > 0).mean() * 100, 1), 'pnl_pts': round(t['pnl_pts'].sum()),
+            'max_dd_pts': round(dd), 'calmar': round(t['pnl_pts'].sum() / abs(dd), 2) if dd else float('nan'),
+            'sum_pct': round(t['pnl_pct'].sum(), 1), 'calmar_pct': round(t['pnl_pct'].sum() / abs(ddp), 2) if ddp else float('nan')}
+
+
+def main():
+    end = sys.argv[1] if len(sys.argv) > 1 else configs.PARITY_END_EXTENDED
+    os.makedirs(configs.DATA_SWEEP_DIR, exist_ok=True)
+    legs = simulate(configs.DATA_START, end)
+    legs.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_legs.csv'), index=False)
+    trades = to_trades(legs)
+    trades.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_trades.csv'), index=False)
+    from parity_trade_logs_helios import write_trade_logs
+    summ = write_trade_logs(legs.assign(contract=pd.to_datetime(legs['contract']).dt.date))
+    trades = trades.merge(summ, on='trade_id', how='left')
+    trades.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_trades.csv'), index=False)
+    print('window', configs.DATA_START, '->', end)
+    print('roll events:', legs.attrs['stats'], '| position open at end:', legs.attrs['open_at_end'])
+    print('exit reasons (legs):', legs['exit_reason'].value_counts().to_dict(), '| multi-leg trades:', int((trades['legs'] > 1).sum()))
+
+    # Spliced-reference comparison, same purpose as Selene's own (plan §13): cross-check the
+    # event-driven parity result against the single-spliced-series exit calibrator. Signature
+    # differs from Selene's 2-lot-shaped exit_calib_selene.run_variant -- exit_calib_helios's is
+    # (trades, p, sl, target_pcts: list, n_tranches), single tranche here (DISABLED target, n=1).
+    #
+    # UNIT SCALING, found and fixed 2026-09-29 (a real bug on the first run of this script):
+    # trades['pnl_pts'] (from to_trades(legs)) is RAW PER-LOT points -- Selene's own convention,
+    # correct there because Selene's LOTS=1 (one unit is one lot). exit_calib_helios's run_variant
+    # returns pnl_rs already scaled by UNIT_LOTS (=20, Helios's own "1 unit = 20 lots" decision,
+    # plan §4c) -- comparing the two columns directly under the same name (as the first cut of
+    # this script did) silently compared per-lot points against per-20-lot-unit rupees, a clean
+    # 20x mismatch that showed up as parity looking ~16x worse than spliced (23,787 vs 388,024)
+    # before this fix -- caught by spot-checking individual non-roll trades in a stretch with no
+    # rolls at all (2022-03..05), where the ratio between matched trades was an exact, constant
+    # 20.00x for every pair, the signature of a units bug rather than a legitimate roll-jump
+    # effect (Selene's own roll-jump effect was a few percent, not a clean 20x). parity_trades.csv
+    # itself is left as raw per-lot points (same convention as Selene's parity_trades.csv, useful
+    # for downstream sizing work) -- the UNIT_LOTS scaling is applied here only for the comparison.
+    import exit_calib_helios as ec
+    prices = ec.PriceSeries(loader.load_futures_1min())
+    sp_trades = ec.load_trades(configs.DECIDED_MULTIPLIER, prices)
+    sp = ec.run_variant(sp_trades, prices, configs.DECIDED_SL_PCT, [configs.DISABLED_PCT], 1)
+    sp = sp.rename(columns={'pnl_rs': 'pnl_pts'})   # already scaled to the 20-lot unit by run_variant
+    sp = sp[sp['entry_ts'] <= pd.Timestamp(end) + pd.Timedelta(days=1)].sort_values('trade_id').reset_index(drop=True)
+    sp.to_csv(os.path.join(configs.DATA_SWEEP_DIR, 'parity_spliced_reference.csv'), index=False)
+
+    trades_unit = trades.copy()
+    trades_unit['pnl_pts'] = trades_unit['pnl_pts'] * configs.UNIT_LOTS   # per-lot -> the 20-lot unit, for comparison only
+
+    split = pd.Timestamp('2026-04-01')   # first day of the Fyers void: data from here on is AngelOne-filled
+    for name, t in (('parity ', trades_unit), ('spliced', sp)):
+        print(f'{name} all      :', metrics(t.sort_values("exit_ts" if "exit_ts" in t else "entry_ts").reset_index(drop=True)))
+        clean = t[t['entry_ts'] < split]
+        late = t[t['entry_ts'] >= split]
+        print(f'{name} < 2026-04:', metrics(clean.reset_index(drop=True)))
+        if len(late):
+            print(f'{name} >= 2026-04:', metrics(late.reset_index(drop=True)))
+
+
+if __name__ == '__main__':
+    main()
