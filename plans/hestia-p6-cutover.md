@@ -51,7 +51,7 @@ Each numbered step that reaches Delos needs its own approval, stated with host, 
 
 **Rollback (any time, any stage)**: with the position flat (use the Slack Exit button first; if the position cannot be closed, reconstruct the standalone state by hand per the state-reconstruction rule): remove `hestia_active.flag` (graceful stop) or Kill; comment the Hestia cron line; uncomment the standalone line; remove the Slack switch from `hestia_local.py` (or set it False) and restart the listener; disable the engine in `hestia_local.py`; copy `trade_counter` forward if Hestia took trades (the standalone reads `trade_counter.txt`; write the current counter from Hestia's state). The standalone entry point is untouched in the repo.
 
-**No-restart window**: do not restart Hestia while a position has an open transition (a pending flip, an unconfirmed exit, a roll in progress): read `hestia_data/state/prometheus_state.json` and the ledger first.
+**Restarting Hestia**: no position-timing condition — user's call, 2026-09-29: restart whenever, including mid-position or mid-transition (a pending flip, an unconfirmed exit, a roll in progress). The restart-recovery path is trusted to handle it: bootstrap takes the broker's ledger as truth for a live engine, and an UNCONFIRMED request at the time of the restart is settled by reading that order at the broker, never blindly re-sent. `hestia_data/state/prometheus_state.json` and the ledger are still worth a read afterward, to confirm the resume landed as expected — not as a precondition before restarting.
 
 ## 6. Decisions for the user
 
