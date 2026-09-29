@@ -25,7 +25,7 @@ from hestia_core.ports import BrokerPort, DataPort, OrderRead, OrderSpec, PlaceR
 from hestia_core.interface import (
     AckStatus, CommandEvent, CommandKind, ContractInfo, ContractRef, Direction, Engine, Fill, FillSummary,
     LedgerPosition, MarginSnapshot, OutcomeStatus, PriorityClass, RequestAck, RequestKind, RequestOutcome, SessionStart,
-    SizingConfig, Stop, StopReason, TRADE_RECORD_COLUMNS, priority_class,
+    RUNNING_ROW_COLUMNS, SizingConfig, Stop, StopReason, TRADE_RECORD_COLUMNS, priority_class,
 )
 
 log = logging.getLogger('hestia_core')
@@ -146,6 +146,7 @@ class HestiaCore:
         self.sizing_provider = sizing_provider                       # live-read sizing (SizingStore.get) or None
         self.alert_sinks: List[Callable[[Alert], None]] = []
         self.trade_sinks: List[Callable[[str, dict], None]] = []
+        self.running_row_sinks: List[Callable[[str, dict], None]] = []
         broker.set_order_listener(self._on_order_update)
         data.attach(self)
         # registration
@@ -176,6 +177,7 @@ class HestiaCore:
         # observations
         self.alerts: List[Alert] = []
         self.trades: List[Tuple[str, dict]] = []
+        self.running_rows: List[Tuple[str, dict]] = []
         self.warnings: List[str] = []
         self.event_log: List[Tuple[datetime, str, str]] = []
         self.dispatch_log: List[Tuple[datetime, Tuple[Tuple[str, str], ...]]] = []
@@ -1093,3 +1095,15 @@ class CoreContext:
                 sink(self._t.name, row)
             except Exception:                                        # noqa: BLE001 - reporting never stops trading
                 log.exception('trade sink failed')
+
+    def report_running_row(self, record):
+        extra = sorted(set(record) - set(RUNNING_ROW_COLUMNS))
+        if extra:
+            self._h.warnings.append(f'{self._t.name}: running-row keys dropped: {extra}')
+        row = {c: record.get(c) for c in RUNNING_ROW_COLUMNS}
+        self._h.running_rows.append((self._t.name, row))
+        for sink in self._h.running_row_sinks:
+            try:
+                sink(self._t.name, row)
+            except Exception:                                        # noqa: BLE001 - reporting never stops trading
+                log.exception('running-row sink failed')

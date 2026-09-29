@@ -73,6 +73,8 @@ class PrometheusEngine:
         self.flatten_done = False                                    # a no-next-contract roll flattened: no re-entry for the rest of tonight
         self.next_retry_at: Optional[datetime] = None
         self._alerted: Dict[str, datetime] = {}
+        self._last_trade_update: Optional[datetime] = None                # periodic #trade-updates cadence, this life only
+        self._last_running_row: Optional[datetime] = None                 # per-trade running-log cadence, this life only
         self.last_ltp: Optional[float] = None
 
     # ------------------------------------------------------------------------------------------------------------------------
@@ -529,9 +531,12 @@ class PrometheusEngine:
         now = self._now()
         if self.market_closed or (self.session_close is not None and now >= self.session_close):
             return                                                    # nothing can fill after the close; Stop arrives momentarily
+        s = self.state
+        if s.status == 'in_trade':
+            self._maybe_send_trade_update(now)
+            self._maybe_send_running_row(now)
         if self.next_retry_at is not None and now < self.next_retry_at:
             return
-        s = self.state
         if self._busy():
             return
         if self.exit_requested and s.status == 'in_trade':
@@ -548,6 +553,93 @@ class PrometheusEngine:
         self._check_roll_timing(now)
         if not self._busy() and s.status == 'in_trade':
             self._check_exit_conditions(now)
+
+    def _running_row(self, ltp: float, exit_reason: Optional[str] = None) -> dict:
+        """One row of the per-trade running log (production's own `_append_running_row`): each lot's P&L at `ltp` -- its real
+        exit price if already booked, `ltp` otherwise (so a lot still open gets marked to the SAME price the exiting lot just
+        filled at, on an exit-time row, exactly as production's own call does by passing the fill price as `ltp`)."""
+        s = self.state
+        lot_size = self._lot_size(s.contract_token)
+
+        def lot_pnl(lot: int) -> Tuple[float, float]:
+            status = s.lot1_status if lot == 1 else s.lot2_status
+            exit_price = s.lot1_exit_price if lot == 1 else s.lot2_exit_price
+            lots = s.lot1_lots if lot == 1 else s.lot2_lots
+            if not lots:
+                return 0.0, 0.0
+            price = exit_price if (status == 'booked' and exit_price is not None) else ltp
+            pts = lot_pnl_points(s.direction, s.entry_price, price)
+            return round(pts, 2), round(pts * lots * lot_size, 2)
+
+        lot1_pts, lot1_rs = lot_pnl(1)
+        lot2_pts, lot2_rs = lot_pnl(2)
+        entry_ts = datetime.fromisoformat(s.entry_ts) if s.entry_ts else self._now()
+        now = self._now()
+        return {'trade_id': s.trade_counter, 'entry_ts': s.entry_ts, 'ts': now.isoformat(),
+               'minutes_since_entry': int((now - entry_ts).total_seconds() // 60), 'ltp': ltp, 'sl_price': s.sl_price,
+               'lot1_target': s.lot1_target, 'lot2_target': s.lot2_target, 'lot1_pnl_points': lot1_pts, 'lot1_pnl_rs': lot1_rs,
+               'lot2_pnl_points': lot2_pts, 'lot2_pnl_rs': lot2_rs, 'total_pnl_points': round(lot1_pts + lot2_pts, 2),
+               'total_pnl_rs': round(lot1_rs + lot2_rs, 2), 'exit_reason': exit_reason}
+
+    def _maybe_send_running_row(self, now: datetime) -> None:
+        if (self._last_running_row is not None
+                and (now - self._last_running_row).total_seconds() < self.cfg.running_row_sec):
+            return
+        self._last_running_row = now
+        ltp = self._ltp_value(self._ref(self.state.contract_token) or self.contract)
+        if not ltp:
+            return
+        self.ctx.report_running_row(self._running_row(ltp))
+
+    def _maybe_send_trade_update(self, now: datetime) -> None:
+        """The periodic in-trade P&L ticker to #trade-updates (production's `_send_trade_update`, every `TRADE_UPDATE_SEC`,
+        Slack-only, never logged). Ported 2026-09-29 after being missed in the original build -- the user flagged its
+        absence live. Fires regardless of a pending request or the retry cooldown: it is read-only and never itself
+        touches a request, so nothing about the request lifecycle should gate it."""
+        if self._last_trade_update is not None and (now - self._last_trade_update).total_seconds() < self.cfg.trade_update_sec:
+            return
+        self._last_trade_update = now
+        s = self.state
+        ref = self._ref(s.contract_token) or self.contract
+        ltp = self._ltp_value(ref) or 0.0
+        pnl = self._compute_trade_pnl(ltp)
+        units = s.units or 1
+        msg = (f'{s.direction.upper()}  {ref.symbol if ref else s.contract_symbol}  Units: {units}\n'
+              f'Entry: {s.entry_price or 0:.2f}  LTP: {ltp:.2f}\n'
+              f'Realised: {pnl["realised_pts"]:+.2f} pts (Rs.{pnl["realised_rs"] / units:+,.0f}/unit)  '
+              f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{pnl["unrealised_rs"] / units:+,.0f}/unit)  '
+              f'Total: Rs.{(pnl["realised_rs"] + pnl["unrealised_rs"]) / units:+,.0f}/unit')
+        self.ctx.alert('info', msg, channel='trade-updates')
+
+    def _compute_trade_pnl(self, ltp: Optional[float]) -> dict:
+        """Realised (booked lots) plus unrealised (still-open lots at `ltp`) P&L in points and rupees, per production's own
+        `_compute_trade_pnl` shape (lot1/lot2, not per-unit -- the caller divides by units for display)."""
+        s = self.state
+        lot_size = self._lot_size(s.contract_token)
+
+        def realised(lot: int) -> Tuple[float, float]:
+            status = s.lot1_status if lot == 1 else s.lot2_status
+            price = s.lot1_exit_price if lot == 1 else s.lot2_exit_price
+            lots = s.lot1_lots if lot == 1 else s.lot2_lots
+            if status != 'booked' or price is None or not lots:
+                return 0.0, 0.0
+            pts = lot_pnl_points(s.direction, s.entry_price, price)
+            return pts, pts * lots * lot_size
+
+        def unrealised(lot: int) -> Tuple[float, float]:
+            status = s.lot1_status if lot == 1 else s.lot2_status
+            lots = s.lot1_lots if lot == 1 else s.lot2_lots
+            if status != 'open' or not lots or not ltp:
+                return 0.0, 0.0
+            pts = lot_pnl_points(s.direction, s.entry_price, ltp)
+            return pts, pts * lots * lot_size
+
+        r1_pts, r1_rs = realised(1)
+        r2_pts, r2_rs = realised(2)
+        u1_pts, u1_rs = unrealised(1)
+        u2_pts, u2_rs = unrealised(2)
+        return {'realised_pts': round(r1_pts + r2_pts, 2), 'realised_rs': round(r1_rs + r2_rs, 2),
+               'unrealised_pts': round(u1_pts + u2_pts, 2), 'unrealised_rs': round(u1_rs + u2_rs, 2)}
 
     def _check_exit_conditions(self, now: datetime) -> None:
         if not self._past_first_minute_guard(now):
@@ -801,6 +893,7 @@ class PrometheusEngine:
             s.lot2_status, s.lot2_exit_price = 'booked', round(price, 2)
         s.trade_row.update({f'lot{lot}_exit_ts': now, f'lot{lot}_exit_price': round(price, 2), f'lot{lot}_exit_reason': reason,
                             f'lot{lot}_pnl_points': round(pts, 2), f'lot{lot}_pnl_rs': rs})
+        self.ctx.report_running_row(self._running_row(price, exit_reason=f'lot{lot}_{reason}'))
         per_unit = rs / (s.units or 1)
         self._say('info', f'Lot{lot} exit: {reason}  (Units: {s.units})  Entry {s.entry_price:.2f} -> Exit {price:.2f} | P&L: {pts:+.2f} pts '
                           f' Rs.{per_unit:+,.0f}/unit', channel='trade-alerts')

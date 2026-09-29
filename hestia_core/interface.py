@@ -457,6 +457,15 @@ TRADE_RECORD_COLUMNS = (
 )
 
 
+# The per-minute running-row log: one row roughly every 60s while a trade is open, appended (never rewritten, so a crash never
+# loses earlier rows), one file per trade -- same columns as production's own TRADE_LOG_COLUMNS (prometheus_functions.py). A row
+# with `exit_reason` set is the trade's last one, written at the moment a lot exits.
+RUNNING_ROW_COLUMNS = (
+    'trade_id', 'entry_ts', 'ts', 'minutes_since_entry', 'ltp', 'sl_price', 'lot1_target', 'lot2_target',
+    'lot1_pnl_points', 'lot1_pnl_rs', 'lot2_pnl_points', 'lot2_pnl_rs', 'total_pnl_points', 'total_pnl_rs', 'exit_reason',
+)
+
+
 # ---------------------------------------------------------------------------
 # The two protocols
 # ---------------------------------------------------------------------------
@@ -501,6 +510,7 @@ class EngineContext(Protocol):
     # reporting
     def alert(self, level: str, text: str, channel: Optional[str] = None) -> None: ...
     def report_trade(self, record: dict) -> None: ...      # keys from TRADE_RECORD_COLUMNS
+    def report_running_row(self, record: dict) -> None: ...  # keys from RUNNING_ROW_COLUMNS, in-trade, roughly once a minute
 
 
 @runtime_checkable

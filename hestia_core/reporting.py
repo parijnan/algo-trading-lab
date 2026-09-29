@@ -4,6 +4,10 @@ Trade logs and the combined session report (plan section 2, Reporting; section 7
 TradeLogWriter appends each `report_trade` record to `<dir>/<engine>_trades.csv` in Prometheus's fixed 26-column format
 (interface.TRADE_RECORD_COLUMNS), so the file's shape never depends on which keys a trade happened to carry.
 
+RunningRowWriter appends each `report_running_row` record to `<dir>/<engine>/trade_{id:04d}_{entry_ts}.csv` (interface.
+RUNNING_ROW_COLUMNS) -- one file per trade, one row roughly every 60s while it is open, ported 2026-09-29 from production's
+own `append_trade_log_row`/`_append_running_row` after the user found it missing from the original build.
+
 `build_session_report` is one message for all engines: per engine its state, open position, realised P&L this session and
 request counts; the account's free cash; anything left UNCONFIRMED; ledger mismatches; alert counts. Rs P&L is summed from the
 engines' own trade records (`total_pnl_rs`), so the report inherits each engine's per-unit convention.
@@ -18,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
-from hestia_core.interface import OutcomeStatus, TRADE_RECORD_COLUMNS
+from hestia_core.interface import OutcomeStatus, RUNNING_ROW_COLUMNS, TRADE_RECORD_COLUMNS
 
 
 class TradeLogWriter:
@@ -38,6 +42,30 @@ class TradeLogWriter:
             if new:
                 w.writeheader()
             w.writerow({c: ('' if record.get(c) is None else record.get(c)) for c in TRADE_RECORD_COLUMNS})
+
+
+class RunningRowWriter:
+
+    def __init__(self, directory: os.PathLike):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def path(self, engine: str, record: dict) -> Path:
+        d = self.dir / engine
+        d.mkdir(parents=True, exist_ok=True)
+        trade_id = record.get('trade_id')
+        entry_ts = record.get('entry_ts') or record.get('ts') or ''       # RUNNING_ROW_COLUMNS carries entry_ts on every row,
+        stamp = str(entry_ts).replace(':', '').replace('-', '')[:13]      # precisely so the filename can be stable per trade
+        return d / f'trade_{int(trade_id or 0):04d}_{stamp}.csv'
+
+    def write(self, engine: str, record: dict) -> None:
+        p = self.path(engine, record)
+        new = not p.exists()
+        with open(p, 'a', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(RUNNING_ROW_COLUMNS))
+            if new:
+                w.writeheader()
+            w.writerow({c: ('' if record.get(c) is None else record.get(c)) for c in RUNNING_ROW_COLUMNS})
 
 
 def build_session_report(core, now: datetime, session_trades: List[tuple]) -> str:

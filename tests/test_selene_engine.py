@@ -292,3 +292,32 @@ def test_every_flip_sends_the_raw_signal_alert_independent_of_the_outcome():
     hits = [a for a in h.alerts if a.text.startswith('ST_15 flip -> ') and a.channel == 'tradebot-updates']
     assert len(hits) == len(flips)
     assert flips[0].startswith('ST_15 flip -> bearish at')
+
+
+def test_the_periodic_trade_update_fires_every_20s_and_reports_live_pnl(caplog):
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    with caplog.at_level('DEBUG'):
+        h.run_until(hm(10, 20))
+    updates = [a for a in h.alerts if a.channel == 'trade-updates']
+    assert len(updates) >= 10
+    gaps = [(updates[i + 1].ts - updates[i].ts).total_seconds() for i in range(len(updates) - 1)]
+    assert all(19.0 <= g <= 21.0 for g in gaps)
+    assert 'Entry:' in updates[0].text and 'LTP:' in updates[0].text and 'Realised: +0.00 pts' in updates[0].text
+    assert updates[0].text.startswith('BEARISH')
+    assert not any('Realised:' in r.getMessage() for r in caplog.records)
+
+
+def test_the_running_row_log_writes_one_row_a_minute_per_trade_and_an_exit_row_at_close():
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    h.run_until(hm(13, 1))
+    rows = h.running_rows
+    assert len(rows) >= 100
+    assert sorted({r['trade_id'] for _, r in rows}) == [1, 2]
+    exits = [r for _, r in rows if r['exit_reason']]
+    assert {e['exit_reason'] for e in exits} == {'trend_flip'} and len(exits) == 1     # a single lot, one exit row
+    assert all(r['entry_ts'] for _, r in rows)
+    assert all(r['lot2_target'] is None and r['lot2_pnl_points'] is None for _, r in rows)  # Selene has no lot2

@@ -17,8 +17,9 @@ from hestia_core.core import Alert
 from hestia_core.fake import BrokerReply, FakeConfig
 from hestia_core.flags import FlagFiles, FlagWatcher
 from hestia_core.interface import (AckStatus, CloseRequest, CommandEvent, CommandKind, Direction, ExitReason, FlattenRequest,
-                                   OpenRequest, OutcomeStatus, RequestOutcome, SessionStart, SizingConfig, TRADE_RECORD_COLUMNS)
-from hestia_core.reporting import TradeLogWriter, build_session_report
+                                   OpenRequest, OutcomeStatus, RequestOutcome, RUNNING_ROW_COLUMNS, SessionStart, SizingConfig,
+                                   TRADE_RECORD_COLUMNS)
+from hestia_core.reporting import RunningRowWriter, TradeLogWriter, build_session_report
 from hestia_core.session_lock import LockHeld, SessionLock, holder, pid_alive, refuse_if_held, wait_for_pid_exit
 from hestia_core.sizing import SizingStore
 from hestia_core.slack_queue import SlackQueue
@@ -474,6 +475,30 @@ def test_trade_records_are_written_in_the_fixed_column_format_and_reach_the_sink
     lines = writer.path('a').read_text().splitlines()
     assert lines[0].split(',') == list(TRADE_RECORD_COLUMNS) and len(lines) == 3
     assert lines[1].startswith('7,') and got == [7, 8]
+
+
+def test_running_rows_are_written_one_file_per_trade_in_the_fixed_column_format_and_reach_the_sinks(tmp_path, hestias):
+    writer = RunningRowWriter(tmp_path)
+    got = []
+
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.report_running_row({'trade_id': 7, 'entry_ts': '2026-09-03T10:00:00', 'ts': '2026-09-03T10:01:00',
+                                    'minutes_since_entry': 1, 'ltp': 100.0, 'stray': 1})
+            ctx.report_running_row({'trade_id': 7, 'entry_ts': '2026-09-03T10:00:00', 'ts': '2026-09-03T10:02:00',
+                                    'minutes_since_entry': 2, 'ltp': 100.5})
+            ctx.report_running_row({'trade_id': 8, 'entry_ts': '2026-09-03T11:00:00', 'ts': '2026-09-03T11:01:00',
+                                    'minutes_since_entry': 1, 'ltp': 99.0})
+    h = hestias([('a', factory(act=act))])
+    h.running_row_sinks += [writer.write, lambda e, r: got.append(r['trade_id'])]
+    go(h, 10)
+    p7 = writer.path('a', {'trade_id': 7, 'entry_ts': '2026-09-03T10:00:00'})
+    p8 = writer.path('a', {'trade_id': 8, 'entry_ts': '2026-09-03T11:00:00'})
+    assert p7 != p8 and p7.parent == p8.parent == tmp_path / 'a'            # one file per trade, under an <engine> subdirectory
+    lines = p7.read_text().splitlines()
+    assert lines[0].split(',') == list(RUNNING_ROW_COLUMNS) and len(lines) == 3       # header + 2 rows for trade 7, not 3
+    assert lines[1].split(',')[0] == '7' and got == [7, 7, 8]
+    assert len(p8.read_text().splitlines()) == 2                                       # header + 1 row for trade 8
 
 
 def test_the_session_report_is_one_message_covering_every_engine(hestias):

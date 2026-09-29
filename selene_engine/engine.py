@@ -58,6 +58,8 @@ class SeleneEngine:
         self.flatten_done = False
         self.next_retry_at: Optional[datetime] = None
         self._alerted: Dict[str, datetime] = {}
+        self._last_trade_update: Optional[datetime] = None                # periodic #trade-updates cadence, this life only
+        self._last_running_row: Optional[datetime] = None                 # per-trade running-log cadence, this life only
 
     # ------------------------------------------------------------------------------------------------------------------------
     # The loop
@@ -445,9 +447,12 @@ class SeleneEngine:
         now = self._now()
         if self.market_closed or (self.session_close is not None and now >= self.session_close):
             return
+        s = self.state
+        if s.status == 'in_trade':
+            self._maybe_send_trade_update(now)
+            self._maybe_send_running_row(now)
         if self.next_retry_at is not None and now < self.next_retry_at:
             return
-        s = self.state
         if self._busy():
             return
         if self.exit_requested and s.status == 'in_trade':
@@ -464,6 +469,55 @@ class SeleneEngine:
         self._check_roll_timing(now)
         if not self._busy() and s.status == 'in_trade':
             self._check_stop(now)
+
+    def _running_row(self, ltp: float, exit_reason: Optional[str] = None) -> dict:
+        """One row of the per-trade running log, same shape as Prometheus's own (`prometheus_engine/engine.py`'s own
+        `_running_row`) -- Selene's single lot maps onto the shared schema's lot1_* fields, lot2_* stays at 0/None."""
+        s = self.state
+        lot_size = self._lot_size(s.contract_token)
+        lots = s.lots or 0
+        price = s.trade_row.get('lot1_exit_price') if s.trade_row and s.trade_row.get('lot1_exit_price') is not None else ltp
+        pts = lot_pnl_points(s.direction, s.entry_price, price) if lots else 0.0
+        rs = round(pts * lots * lot_size, 2)
+        entry_ts = datetime.fromisoformat(s.entry_ts) if s.entry_ts else self._now()
+        now = self._now()
+        return {'trade_id': s.trade_counter, 'entry_ts': s.entry_ts, 'ts': now.isoformat(),
+               'minutes_since_entry': int((now - entry_ts).total_seconds() // 60), 'ltp': ltp, 'sl_price': s.sl_price,
+               'lot1_target': None, 'lot2_target': None, 'lot1_pnl_points': round(pts, 2), 'lot1_pnl_rs': rs,
+               'lot2_pnl_points': None, 'lot2_pnl_rs': None, 'total_pnl_points': round(pts, 2), 'total_pnl_rs': rs,
+               'exit_reason': exit_reason}
+
+    def _maybe_send_running_row(self, now: datetime) -> None:
+        if (self._last_running_row is not None
+                and (now - self._last_running_row).total_seconds() < self.cfg.running_row_sec):
+            return
+        self._last_running_row = now
+        ltp = self._ltp_value(self._ref(self.state.contract_token) or self.contract)
+        if not ltp:
+            return
+        self.ctx.report_running_row(self._running_row(ltp))
+
+    def _maybe_send_trade_update(self, now: datetime) -> None:
+        """The periodic in-trade P&L ticker to #trade-updates, same shape and cadence as Prometheus's own (ported there
+        2026-09-29 after being missed originally). Slack-only, never logged -- fires regardless of a pending request."""
+        if self._last_trade_update is not None and (now - self._last_trade_update).total_seconds() < self.cfg.trade_update_sec:
+            return
+        self._last_trade_update = now
+        s = self.state
+        ref = self._ref(s.contract_token) or self.contract
+        ltp = self._ltp_value(ref) or 0.0
+        realised_pts = realised_rs = 0.0
+        unrealised_pts = unrealised_rs = 0.0
+        if ltp:
+            pts = lot_pnl_points(s.direction, s.entry_price, ltp)
+            unrealised_pts, unrealised_rs = pts, pts * s.open_lots() * self._lot_size(s.contract_token)
+        units = s.units or 1
+        msg = (f'{s.direction.upper()}  {ref.symbol if ref else s.contract_symbol}  Units: {units}\n'
+              f'Entry: {s.entry_price or 0:.2f}  LTP: {ltp:.2f}\n'
+              f'Realised: {realised_pts:+.2f} pts (Rs.{realised_rs / units:+,.0f}/unit)  '
+              f'Unrealised: {unrealised_pts:+.2f} pts (Rs.{unrealised_rs / units:+,.0f}/unit)  '
+              f'Total: Rs.{(realised_rs + unrealised_rs) / units:+,.0f}/unit')
+        self.ctx.alert('info', msg, channel='trade-updates')
 
     def _check_stop(self, now: datetime) -> None:
         if not self._past_first_minute_guard(now):
@@ -664,6 +718,7 @@ class SeleneEngine:
         s.trade_row.update({'lot1_exit_ts': now, 'lot1_exit_price': round(price, 2), 'lot1_exit_reason': reason,
                             'lot1_pnl_points': round(pts, 2), 'lot1_pnl_rs': rs, 'total_pnl_points': round(pts, 2),
                             'total_pnl_rs': rs})
+        self.ctx.report_running_row(self._running_row(price, exit_reason=reason))
         per_unit = rs / (s.units or 1)
         self._say('info', f'Exit: {reason}  (Units: {s.units})  Entry {s.entry_price:.2f} -> Exit {price:.2f} | P&L: {pts:+.2f} pts '
                           f' Rs.{per_unit:+,.0f}/unit', channel='trade-alerts')

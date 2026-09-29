@@ -43,7 +43,7 @@ def test_engine_config_matches_production_configs():
              'no_exit_before_buffer_min': 'NO_EXIT_BEFORE_BUFFER_MIN', 'min_entry_buffer_min': 'MIN_ENTRY_BUFFER_MIN',
              'provisional_enabled': 'PROVISIONAL_BOUNDARY_ENABLED', 'provisional_margin_pct': 'PROVISIONAL_MARGIN_PCT',
              'margin_contract_value_divisor': 'MARGIN_CONTRACT_VALUE_DIVISOR', 'margin_sizing_multiplier': 'MARGIN_SIZING_MULTIPLIER',
-             'fallback_margin_per_unit': 'MARGIN_PER_UNIT'}
+             'fallback_margin_per_unit': 'MARGIN_PER_UNIT', 'trade_update_sec': 'TRADE_UPDATE_SEC'}
     for mine, theirs in pairs.items():
         want = p[theirs]
         if mine == 'target2_source':
@@ -518,3 +518,55 @@ def test_every_flip_sends_the_raw_signal_alert_independent_of_the_outcome():
     hits = [a for a in h.alerts if a.text.startswith('ST_15 flip -> ') and a.channel == 'tradebot-updates']
     assert len(hits) == len(flips)                                      # every one lands on #tradebot-updates
     assert flips[0].startswith('ST_15 flip -> bearish at')              # ZIGZAG's first real flip
+
+
+def test_the_periodic_trade_update_fires_every_20s_and_reports_live_pnl(caplog):
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    with caplog.at_level('DEBUG'):
+        h.run_until(hm(10, 20))
+    updates = [a for a in h.alerts if a.channel == 'trade-updates']
+    assert len(updates) >= 10                                        # ~5 min of in-trade time at a 20s cadence
+    gaps = [(updates[i + 1].ts - updates[i].ts).total_seconds() for i in range(len(updates) - 1)]
+    assert all(19.0 <= g <= 21.0 for g in gaps)
+    assert 'Entry:' in updates[0].text and 'LTP:' in updates[0].text and 'Realised:' in updates[0].text
+    assert updates[0].text.startswith('BEARISH')                       # FLIP_PATH's first leg
+    # production's own convention: Slack-only, never written to the log -- confirms _maybe_send_trade_update bypasses _say
+    assert not any('Realised:' in r.getMessage() for r in caplog.records)
+
+
+def test_the_trade_update_stops_once_the_position_closes():
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    run(h, hm(13, 1))
+    updates = [a for a in h.alerts if a.channel == 'trade-updates']
+    assert updates and made[-1].state.status == 'in_trade'              # a new (flipped) position re-arms the ticker
+    assert updates[-1].ts <= h.kernel.now
+
+
+def test_the_running_row_log_writes_one_row_a_minute_per_trade_and_an_exit_row_per_lot():
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    h.run_until(hm(13, 1))
+    rows = h.running_rows
+    assert len(rows) >= 100                                            # ~2h45m of in-trade time at a 60s cadence, two trades
+    gaps = [(rows[i + 1][1]['ts'], rows[i][1]['ts']) for i in range(len(rows) - 1) if rows[i][1]['trade_id'] == rows[i + 1][1]['trade_id']]
+    assert all(t1 >= t0 for t1, t0 in gaps)                             # non-decreasing (the two Rule 7 exit rows share an instant)
+    assert sorted({r['trade_id'] for _, r in rows}) == [1, 2]
+    exits = [r for _, r in rows if r['exit_reason']]
+    assert {e['exit_reason'] for e in exits} == {'lot1_trend_flip', 'lot2_trend_flip'}     # Rule 7 closes both lots
+    assert all(r['entry_ts'] for _, r in rows)                          # needed to build a stable per-trade filename
+
+
+def test_the_running_row_survives_a_stale_ltp_by_simply_not_writing_that_tick():
+    made = []
+    h = scripted_world(FLIP_PATH, made=made)
+    h.start_session(SESSION_DATE, SESSION_OPEN)
+    h.run_until(hm(10, 20))
+    h.inject_feed_stale('prometheus', FRONT, hm(10, 20), hm(10, 40))
+    h.run_until(hm(10, 40))
+    rows_before = len(h.running_rows)
+    h.run_until(hm(10, 45))
+    assert len(h.running_rows) >= rows_before                           # resumes once the feed is fresh again, no crash meanwhile

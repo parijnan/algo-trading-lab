@@ -19,6 +19,7 @@ STATE_DIR = HESTIA_DIR / 'state'              # engine decision state, ledger.js
 FLAG_DIR = HESTIA_DIR / 'flags'               # hestia_active.flag and <engine>_command.flag (EXIT | KILL | DISABLE)
 CACHE_DIR = HESTIA_DIR / 'cache'              # per-token intraday cache and private backfill files
 TRADES_DIR = HESTIA_DIR / 'trades'            # <engine>_trades.csv in Prometheus's 26-column format
+RUNNING_ROW_DIR = HESTIA_DIR / 'trades' / 'running_rows'   # <engine>/trade_NNNN_<entry_ts>.csv, one row/minute while in-trade
 LOG_DIR = REPO_ROOT / 'logs'                  # hestia_<YYYYMMDD>.log (the host); engines log under their own names
 SESSION_LOCK_FILE = HESTIA_DIR / 'angel_session.lock'
 # Other processes that log in to the same Angel One account without knowing about the session lock. Hestia will not start while

@@ -41,7 +41,7 @@ from hestia_core.mcx_market import ContractCatalog, MarketCalendar
 from hestia_core.order_feed import OrderUpdateFeed
 from hestia_core.paper_broker import PaperBroker
 from hestia_core.reactor import RealReactor
-from hestia_core.reporting import TradeLogWriter, build_session_report
+from hestia_core.reporting import RunningRowWriter, TradeLogWriter, build_session_report
 from hestia_core.session_lock import LockHeld, SessionLock, holder, pid_alive
 from hestia_core.sizing import SizingStore
 from hestia_core.slack_queue import SlackQueue
@@ -110,7 +110,7 @@ class HestiaHost:
 
     def run(self) -> HostResult:
         cfg, deps = self.cfg, self.deps
-        for d in (cfg.STATE_DIR, cfg.FLAG_DIR, cfg.CACHE_DIR, cfg.TRADES_DIR):
+        for d in (cfg.STATE_DIR, cfg.FLAG_DIR, cfg.CACHE_DIR, cfg.TRADES_DIR, cfg.RUNNING_ROW_DIR):
             d.mkdir(parents=True, exist_ok=True)
         today = deps.clock().date()
         slack = SlackQueue(deps.slack_token, deps.slack_post)
@@ -249,8 +249,10 @@ class HestiaHost:
         core_ref['core'] = core
         result.core = core
         trade_log = TradeLogWriter(cfg.TRADES_DIR)
+        running_rows = RunningRowWriter(cfg.RUNNING_ROW_DIR)
         core.alert_sinks.append(router)
         core.trade_sinks += [trade_log.write, router.trade]
+        core.running_row_sinks.append(running_rows.write)
 
         for name, entry in engines.items():
             factory = deps.engine_factories.get(name) or load_factory(entry.factory)
