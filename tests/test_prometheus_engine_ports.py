@@ -28,7 +28,7 @@ class Ctx:
         self.sent.append(request)
         return RequestAck(request.request_id, AckStatus.ACCEPTED)
 
-    def alert(self, level, text, channel=None):
+    def alert(self, level, text, channel=None, emoji=None):
         self.alerts.append((level, text))
 
     def save_state(self, blob):

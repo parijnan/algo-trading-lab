@@ -444,6 +444,20 @@ def test_alerts_go_to_the_channel_of_their_level_tagged_with_the_engine_and_repe
                     ('#error-alerts', '\U0001f6a8\U0001f6a8 *Hestia [a]*: silent'),
                     ('#trade-updates', '⚠️ *Hestia*: host thing')]
     assert router.suppressed == 1
+
+
+def test_an_explicit_emoji_overrides_the_severity_default_in_the_posted_text():
+    """Added 2026-09-29 alongside the engines' own session-start announcement -- an engine's `ctx.alert(..., emoji=...)`
+    must actually change what AlertRouter posts to Slack, not just ride along on the Alert object unused."""
+    sent = []
+    router = AlertRouter(SlackQueue(post=lambda ch, t: sent.append((ch, t))), CHANNELS, cooldown_s=30.0)
+    router(Alert(T0, 'info', 'a', 'starting — trading X', emoji='⚡'))
+    router(Alert(T0, 'info', 'a', 'plain info, no override'))                     # 'info' has no default emoji
+    router(Alert(T0, 'warning', 'a', 'a warning with a custom emoji', emoji='🔔'))  # override wins over the level default too
+    router.slack.flush(5)
+    assert sent == [('#tradebot-updates', '⚡*Hestia [a]*: starting — trading X'),
+                    ('#tradebot-updates', '*Hestia [a]*: plain info, no override'),
+                    ('#error-alerts', '🔔*Hestia [a]*: a warning with a custom emoji')]
     router.trade('a', {'trade_id': 7, 'direction': 'bullish', 'total_pnl_rs': 1234.5})
     router.slack.flush(5)
     assert sent[-1] == ('#trade-alerts', '*Hestia [a]*: trade 7 bullish closed, P&L Rs 1,234')
@@ -518,6 +532,39 @@ def test_the_session_report_is_one_message_covering_every_engine(hestias):
     assert 'a (live, running): XX30OCT26FUT +2 @ 100.00; 1 trade(s), Rs 700' in text
     assert 'p (paper, running): flat; 0 trade(s), Rs 0' in text
     assert 'combined realised Rs 700' in text and 'account free cash' in text
+
+
+def test_the_session_report_lists_each_closed_trade_and_the_open_position(hestias):
+    """Added 2026-09-29 after the user found the report much thinner than the standalone Prometheus process's own
+    per-trade session report -- nested detail lines under each engine's own summary line."""
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.submit(OpenRequest('o1', FRONT, Direction.BULLISH, 2, trade_ref=1))
+            ctx.report_trade({'trade_id': 3, 'direction': 'bullish', 'units': 2, 'entry_ts': '2026-09-03T09:30:00',
+                              'entry_price': 100.0, 'lot1_exit_ts': '2026-09-03T09:45:00', 'lot1_exit_reason': 'target1',
+                              'total_pnl_points': 5.0, 'total_pnl_rs': 100.0})
+    h = hestias([('a', factory(act=act))])
+    go(h)
+    h.set_price('T1', 104.0)                                            # the still-open position from the OpenRequest above
+    text = build_session_report(h, h.now, h.trades)
+    assert '    #3 Bullish (units 2): entry 09:30 @ 100.00, exit 09:45 target1, P&L +5.0 pts (+50 Rs/unit)' in text
+    assert '    open: XX30OCT26FUT +2 @ 100.00, LTP 104.00 (+4.00 pts unrealised/lot)' in text
+    h.close()
+
+
+def test_the_session_report_open_position_line_survives_a_missing_quote(hestias):
+    """A quote failure at report-build time degrades to the plain held-position line, never raises and never drops the
+    report -- same defensive posture as every other report_trade field (`.get(..., default)`, not bare indexing)."""
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    orig = h.data.ltp_quote
+    h.data.ltp_quote = lambda token: (_ for _ in ()).throw(RuntimeError('feed down'))
+    try:
+        text = build_session_report(h, h.now, h.trades)
+    finally:
+        h.data.ltp_quote = orig
+    assert '    open: XX30OCT26FUT +2 @ 100.00' in text and 'unrealised' not in text
+    h.close()
 
 
 # ---- restart: in-doubt requests are settled from the broker, never counted twice --------------------------------------------

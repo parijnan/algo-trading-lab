@@ -3,8 +3,11 @@ Routes the core's alerts and trade reports to Slack channels and the log (plan s
 
 Channels follow the repo's convention (hestia_config): lifecycle and info to #tradebot-updates, warnings and worse to
 #error-alerts, an engine's own explicit channel wins (`ctx.alert(..., channel='trade-alerts')`). Every message carries a tag naming
-the engine and an emoji for the level. A short per-text cooldown stops a repeating message from flooding a channel (the silence
-alert repeats on purpose every few minutes, well outside the cooldown).
+the engine and an emoji: an explicit per-event one if the caller passed `ctx.alert(..., emoji=...)` (e.g. an engine's own
+"starting"/"seeded" messages, matching the standalone Prometheus process's own per-event-type vocabulary), otherwise the
+severity-based default in EMOJI below (added 2026-09-29; previously severity was the only source of emoji). A short per-text
+cooldown stops a repeating message from flooding a channel (the silence alert repeats on purpose every few minutes, well
+outside the cooldown).
 """
 
 from __future__ import annotations
@@ -40,7 +43,8 @@ class AlertRouter:
         self._last[key] = alert.ts
         channel = self.channels.get(alert.channel) if alert.channel else None
         channel = channel or self.channels.get(alert.level) or self.channels.get('info')
-        self.slack.send(channel, f'{EMOJI.get(alert.level, "")}{tag}: {alert.text}')
+        emoji = alert.emoji if getattr(alert, 'emoji', None) else EMOJI.get(alert.level, "")
+        self.slack.send(channel, f'{emoji}{tag}: {alert.text}')
 
     def trade(self, engine: str, record: dict) -> None:
         """A closed trade, for #trade-alerts."""

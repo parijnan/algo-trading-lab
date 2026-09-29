@@ -116,8 +116,8 @@ class HestiaHost:
         slack = SlackQueue(deps.slack_token, deps.slack_post)
         router = AlertRouter(slack, cfg.ALERT_CHANNELS, cfg.ALERT_COOLDOWN_S)
 
-        def host_alert(level: str, text: str) -> None:
-            router(Alert(deps.clock(), level, None, text))
+        def host_alert(level: str, text: str, emoji: Optional[str] = None) -> None:
+            router(Alert(deps.clock(), level, None, text, emoji=emoji))
 
         calendar = MarketCalendar(cfg.MCX_HOLIDAYS_FILE)
         if calendar.missing:
@@ -219,8 +219,8 @@ class HestiaHost:
                                                                              f'scheduled callback failed: {exc!r}')))
         rt.executor = executor = ThreadPoolExecutor(max_workers=deps.executor_workers, thread_name_prefix='hestia-io')
 
-        def host_alert(level: str, text: str) -> None:
-            router(Alert(reactor.now, level, None, text))
+        def host_alert(level: str, text: str, emoji: Optional[str] = None) -> None:
+            router(Alert(reactor.now, level, None, text, emoji=emoji))
 
         gateway = BrokerGateway(login.obj)
         feed = deps.make_feed(login, lambda m: host_alert('warning', m))
@@ -302,7 +302,7 @@ class HestiaHost:
             reason = lifecycle.run_until_shutdown(data.session_close)
             result.reason = f'ended: {reason.value}'
             result.teardown = lifecycle.teardown(reason)
-            host_alert('info', f'Hestia stopped ({reason.value}); session terminated: {result.teardown.terminated}')
+            host_alert('info', f'Hestia stopped ({reason.value}); session terminated: {result.teardown.terminated}', emoji='⏹')
         finally:
             watcher.stop()
             lifecycle.restore_signals()

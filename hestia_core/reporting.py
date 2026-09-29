@@ -68,15 +68,32 @@ class RunningRowWriter:
             w.writerow({c: ('' if record.get(c) is None else record.get(c)) for c in RUNNING_ROW_COLUMNS})
 
 
+def _hm(ts) -> str:
+    """HH:MM off an ISO string or datetime; '?' if unparseable. Session-report trades are always same-day (session_trades
+    is this session's own list), so no date qualifier is needed the way the standalone Prometheus process's own
+    multi-day CSV-backed report needed one."""
+    if not ts:
+        return '?'
+    try:
+        return (ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))).strftime('%H:%M')
+    except (ValueError, TypeError):
+        return '?'
+
+
 def build_session_report(core, now: datetime, session_trades: List[tuple]) -> str:
-    """`session_trades` is the list of (engine, record) reported this session."""
+    """`session_trades` is the list of (engine, record) reported this session. Per-trade detail and an open-position line
+    per engine, added 2026-09-29 after the user found this report much thinner than the standalone Prometheus process's
+    own per-trade session report (entry/exit price+time+reason, P&L) -- kept as nested lines under each engine's own
+    summary line rather than the standalone's flat per-instrument shape, since Hestia can host several engines in one
+    report where the standalone only ever reported on itself."""
     lines = [f'*Hestia session report* {now:%Y-%m-%d %H:%M}']
     by_engine: Dict[str, list] = {}
     for eng, rec in session_trades:
         by_engine.setdefault(eng, []).append(rec)
     total = 0.0
     for name in sorted(core._factories):
-        pnl = sum(float(r['total_pnl_rs']) for r in by_engine.get(name, []) if r.get('total_pnl_rs') not in (None, ''))
+        recs = by_engine.get(name, [])
+        pnl = sum(float(r['total_pnl_rs']) for r in recs if r.get('total_pnl_rs') not in (None, ''))
         total += pnl
         positions = [(tok, v[0], v[1]) for (e, tok), v in core._ledger.items() if e == name and v[0]]
         held = ', '.join(f"{(core.data.ref_for(t).symbol if core.data.ref_for(t) else t)} {n:+d} @ {a:.2f}" if a else f'{t} {n:+d}'
@@ -84,8 +101,34 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
         statuses = Counter(r.outcome.status.value for r in core._registry.values()
                            if r.engine == name and r.outcome is not None)
         mode = 'paper' if core.broker.pool_of(name) != 'live' else 'live'
-        lines.append(f"- {name} ({mode}, {core.engine_state.get(name, '?')}): {held}; {len(by_engine.get(name, []))} trade(s), "
+        lines.append(f"- {name} ({mode}, {core.engine_state.get(name, '?')}): {held}; {len(recs)} trade(s), "
                      f"Rs {pnl:,.0f}; requests {dict(statuses) or '-'}")
+
+        for r in sorted(recs, key=lambda r: r.get('trade_id') or 0):
+            direction = str(r.get('direction') or '?').capitalize()
+            entry_price = r.get('entry_price')
+            entry_str = f'{entry_price:.2f}' if isinstance(entry_price, (int, float)) else str(entry_price)
+            exit_ts = max((t for t in (r.get('lot1_exit_ts'), r.get('lot2_exit_ts')) if t), default=None)
+            exit_reason = r.get('lot2_exit_reason') or r.get('lot1_exit_reason') or '?'
+            trade_units = r.get('units') or 1
+            pnl_pts = r.get('total_pnl_points') or 0
+            pnl_rs_per_unit = (r.get('total_pnl_rs') or 0) / trade_units
+            lines.append(f"    #{r.get('trade_id')} {direction} (units {trade_units}): entry {_hm(r.get('entry_ts'))} @ "
+                         f"{entry_str}, exit {_hm(exit_ts)} {exit_reason}, "
+                         f"P&L {pnl_pts:+.1f} pts ({pnl_rs_per_unit:+,.0f} Rs/unit)")
+
+        for tok, net, avg in positions:
+            ref = core.data.ref_for(tok)
+            symbol = ref.symbol if ref else tok
+            try:
+                q = core.data.ltp_quote(tok)
+            except Exception:                                         # noqa: BLE001 - a quote failure never blocks the report
+                q = None
+            if q is not None and avg:
+                pts = (q.price - avg) if net > 0 else (avg - q.price)
+                lines.append(f"    open: {symbol} {net:+d} @ {avg:.2f}, LTP {q.price:.2f} ({pts:+.2f} pts unrealised/lot)")
+            else:
+                lines.append(f"    open: {symbol} {net:+d} @ {avg:.2f}" if avg else f"    open: {symbol} {net:+d}")
     lines.append(f'- combined realised Rs {total:,.0f}')
     try:
         lines.append(f"- account free cash Rs {core.broker.free_cash(''):,.0f}")               # the live account, not a paper pool

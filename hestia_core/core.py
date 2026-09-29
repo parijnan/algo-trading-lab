@@ -67,6 +67,8 @@ class Alert:
     engine: Optional[str]
     text: str
     channel: Optional[str] = None
+    emoji: Optional[str] = None   # explicit per-event emoji (e.g. an engine's own session-start message); None falls back
+                                   # to AlertRouter's severity-based default, same as before this field existed
 
 
 class _Bucket:
@@ -917,8 +919,9 @@ class HestiaCore:
 
     # ---- monitoring and crashes ------------------------------------------------------------------------------------
 
-    def _alert(self, level: str, engine: Optional[str], text: str, channel: Optional[str] = None) -> None:
-        alert = Alert(self.now, level, engine, text, channel)
+    def _alert(self, level: str, engine: Optional[str], text: str, channel: Optional[str] = None,
+              emoji: Optional[str] = None) -> None:
+        alert = Alert(self.now, level, engine, text, channel, emoji)
         self.alerts.append(alert)
         for sink in self.alert_sinks:
             try:
@@ -1081,8 +1084,8 @@ class CoreContext:
                 self._h._saved_state[self._t.name] = blob
         return blob
 
-    def alert(self, level, text, channel=None):
-        self._h._alert(level, self._t.name, text, channel)
+    def alert(self, level, text, channel=None, emoji=None):
+        self._h._alert(level, self._t.name, text, channel, emoji)
 
     def report_trade(self, record):
         extra = sorted(set(record) - set(TRADE_RECORD_COLUMNS))

@@ -401,7 +401,7 @@ class StubCtx:
         self.sent.append(request)
         return RequestAck(request.request_id, AckStatus.ACCEPTED)
 
-    def alert(self, level, text, channel=None):
+    def alert(self, level, text, channel=None, emoji=None):
         self.alerts.append((level, text))
 
     def save_state(self, blob):
@@ -518,6 +518,22 @@ def test_every_flip_sends_the_raw_signal_alert_independent_of_the_outcome():
     hits = [a for a in h.alerts if a.text.startswith('ST_15 flip -> ') and a.channel == 'tradebot-updates']
     assert len(hits) == len(flips)                                      # every one lands on #tradebot-updates
     assert flips[0].startswith('ST_15 flip -> bearish at')              # ZIGZAG's first real flip
+
+
+def test_session_start_announces_the_contract_and_the_seeded_st_with_the_standalones_own_emoji():
+    """The standalone Prometheus process's own two-message session-open announcement, ported back 2026-09-29 -- found
+    missing entirely (no engine said anything on a clean start before this). Checks both the content and that the
+    per-event emoji override (not Hestia's own severity-based default, which is empty for 'info') actually reaches the
+    Alert."""
+    made = []
+    h = scripted_world(ZIGZAG, made=made)
+    run(h, hm(9, 1))
+    tb = [a for a in h.alerts if a.channel == 'tradebot-updates']
+    starting = next(a for a in tb if a.text.startswith('starting — trading'))
+    seeded = next(a for a in tb if a.text.startswith('ST_15 seeded'))
+    assert starting.text == f'starting — trading {FRONT.symbol} (session 09:00–23:30)' and starting.emoji == '⚡'
+    assert seeded.emoji == '✅' and 'bars). Trend:' in seeded.text and 'ST=' in seeded.text
+    assert tb.index(starting) < tb.index(seeded), 'starting is announced before the seed confirmation'
 
 
 def test_the_periodic_trade_update_fires_every_20s_and_reports_live_pnl(caplog):

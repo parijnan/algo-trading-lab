@@ -508,7 +508,9 @@ class EngineContext(Protocol):
     def load_state(self) -> Optional[str]: ...
 
     # reporting
-    def alert(self, level: str, text: str, channel: Optional[str] = None) -> None: ...
+    def alert(self, level: str, text: str, channel: Optional[str] = None, emoji: Optional[str] = None) -> None: ...
+    # emoji: an explicit per-event override (e.g. an engine's own "starting"/"seeded" messages) -- None (the default) falls
+    # back to AlertRouter's severity-based emoji, unchanged from before this parameter existed.
     def report_trade(self, record: dict) -> None: ...      # keys from TRADE_RECORD_COLUMNS
     def report_running_row(self, record: dict) -> None: ...  # keys from RUNNING_ROW_COLUMNS, in-trade, roughly once a minute
 

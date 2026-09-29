@@ -116,7 +116,8 @@ class HeliosEngine:
     def _save(self) -> None:
         self.ctx.save_state(self.state.to_json())
 
-    def _say(self, level: str, text: str, key: Optional[str] = None, channel: Optional[str] = None) -> None:
+    def _say(self, level: str, text: str, key: Optional[str] = None, channel: Optional[str] = None,
+            emoji: Optional[str] = None) -> None:
         now = self._now()
         if key is not None:
             last = self._alerted.get(key)
@@ -125,7 +126,7 @@ class HeliosEngine:
                 return
             self._alerted[key] = now
         log.log({'info': logging.INFO, 'warning': logging.WARNING}.get(level, logging.ERROR), text)
-        self.ctx.alert(level, text, channel)
+        self.ctx.alert(level, text, channel, emoji=emoji)
 
     def _rid(self, purpose: str) -> str:
         trade = self.state.trade_counter + (1 if self.state.status == 'watching' else 0)
@@ -244,6 +245,7 @@ class HeliosEngine:
         self.contract = target
         ctx.set_trading_contract(target)
         self.started = True
+        self._announce_session_start()
         self._reconcile_with_ledger()
         if self.state.frozen:
             return
@@ -257,6 +259,22 @@ class HeliosEngine:
         self._arm_roll(eff_today)
         self._reconcile_missed_flip()
         self._save()
+
+    def _announce_session_start(self) -> None:
+        """The standalone Prometheus process's own two-message session-open announcement, ported 2026-09-29 (found missing
+        entirely -- no engine said anything at all on a clean start, only on the critical paths). Same per-event emoji
+        vocabulary as the standalone's (`_tag`/`_slack` there), not Hestia's own severity-only default -- an explicit
+        `emoji=` override on `_say`/`ctx.alert` (added the same day for this purpose)."""
+        self._say('info', f'starting — trading {self.contract.symbol} (session {self.session_open:%H:%M}–'
+                          f'{self.session_close:%H:%M})', channel='tradebot-updates', emoji='⚡')
+        series = self.ctx.st_series(self.contract, 300)
+        latest = series[-1][1] if series else None
+        if latest is not None and latest.trend is not None:
+            trend_str, st_str = _name(latest.trend), f'{latest.value:.2f}'
+        else:
+            trend_str, st_str = 'warmup', 'n/a (warmup)'
+        self._say('info', f'ST_15 seeded ({len(series)} bars). Trend: {trend_str}. ST={st_str}.',
+                  channel='tradebot-updates', emoji='✅')
 
     def _own_rollover_time(self, ev: SessionStart) -> datetime:
         """Helios's own rollover buffer (14 min, not Prometheus's 15, `helios_configs.ROLLOVER_BUFFER_MIN`): `ev.rollover_time` is
