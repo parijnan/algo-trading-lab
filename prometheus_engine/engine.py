@@ -614,7 +614,12 @@ class PrometheusEngine:
         """The periodic in-trade P&L ticker to #trade-updates (production's `_send_trade_update`, every `TRADE_UPDATE_SEC`,
         Slack-only, never logged). Ported 2026-09-29 after being missed in the original build -- the user flagged its
         absence live. Fires regardless of a pending request or the retry cooldown: it is read-only and never itself
-        touches a request, so nothing about the request lifecycle should gate it."""
+        touches a request, so nothing about the request lifecycle should gate it.
+
+        `log_locally=False` on the alert call actually makes "never logged" true -- until 2026-09-30 it went through
+        the ordinary `ctx.alert()` path like everything else and AlertRouter logged it unconditionally, flooding the
+        local log with a duplicate of information already on Slack (found by the user directly: "I don't need the
+        20 second update from each trade to be recorded there")."""
         if self._last_trade_update is not None and (now - self._last_trade_update).total_seconds() < self.cfg.trade_update_sec:
             return
         self._last_trade_update = now
@@ -628,7 +633,7 @@ class PrometheusEngine:
               f'Realised: {pnl["realised_pts"]:+.2f} pts (Rs.{pnl["realised_rs"] / units:+,.0f}/unit)  '
               f'Unrealised: {pnl["unrealised_pts"]:+.2f} pts (Rs.{pnl["unrealised_rs"] / units:+,.0f}/unit)  '
               f'Total: Rs.{(pnl["realised_rs"] + pnl["unrealised_rs"]) / units:+,.0f}/unit')
-        self.ctx.alert('info', msg, channel='trade-updates')
+        self.ctx.alert('info', msg, channel='trade-updates', log_locally=False)
 
     def _compute_trade_pnl(self, ltp: Optional[float]) -> dict:
         """Realised (booked lots) plus unrealised (still-open lots at `ltp`) P&L in points and rupees, per production's own

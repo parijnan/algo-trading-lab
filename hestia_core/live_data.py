@@ -571,7 +571,16 @@ class LiveData:
         row = st.iloc[idx]
         prev = st.iloc[idx - 1] if idx >= 1 else None
         prev_st = None if prev is None or pd.isna(prev['supertrend']) else float(prev['supertrend'])
-        return BarComplete(s.ref, h['boundary'], self._bar(s.bars.iloc[idx]), self._point(row), prev_st, h['quality'],
+        point = self._point(row)
+        if h['token'] == task.trading_token:
+            # The trading contract's own ST at every 15m boundary, not just on a flip -- user, 2026-09-30: the log was
+            # too noisy with the 20s trade-update ticker (Slack-only info, never useful here) while missing the one
+            # thing worth seeing every boundary regardless of a flip.
+            st_str = f'{point.value:.2f}' if point.value is not None else 'n/a (warmup)'
+            trend_str = point.trend.value if point.trend is not None else 'n/a'
+            log.info('%s: 15m boundary %s close=%.2f ST=%s trend=%s flip=%s',
+                     s.ref.symbol, h['start'].strftime('%H:%M'), float(row['close']), st_str, trend_str, point.flip)
+        return BarComplete(s.ref, h['boundary'], self._bar(s.bars.iloc[idx]), point, prev_st, h['quality'],
                            h['minutes'], h['reconciles'])
 
     # ---- feed staleness, DPL, REST prices --------------------------------------------------------------------------------

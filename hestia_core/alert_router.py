@@ -7,7 +7,9 @@ the engine and an emoji: an explicit per-event one if the caller passed `ctx.ale
 "starting"/"seeded" messages, matching the standalone Prometheus process's own per-event-type vocabulary), otherwise the
 severity-based default in EMOJI below (added 2026-09-29; previously severity was the only source of emoji). A short per-text
 cooldown stops a repeating message from flooding a channel (the silence alert repeats on purpose every few minutes, well
-outside the cooldown).
+outside the cooldown). An alert with `log_locally=False` (added 2026-09-30, the periodic trade-update ticker) still reaches
+Slack as usual but skips the local log.log() call, for a Slack-only, high-frequency message that would otherwise flood
+the log file with information Slack already has.
 """
 
 from __future__ import annotations
@@ -34,7 +36,8 @@ class AlertRouter:
 
     def __call__(self, alert) -> None:
         tag = f'*Hestia [{alert.engine}]*' if alert.engine else '*Hestia*'
-        log.log(LOG_LEVEL.get(alert.level, logging.INFO), '[%s] %s', alert.engine or 'host', alert.text)
+        if getattr(alert, 'log_locally', True):
+            log.log(LOG_LEVEL.get(alert.level, logging.INFO), '[%s] %s', alert.engine or 'host', alert.text)
         key = (alert.engine, alert.level, alert.text)
         last = self._last.get(key)
         if last is not None and (alert.ts - last).total_seconds() < self.cooldown_s:

@@ -79,6 +79,23 @@ def test_the_seed_is_reported_and_the_first_bars_continue_the_seeded_series(worl
     assert first.prev_st is not None
 
 
+def test_the_trading_contracts_st_is_logged_at_every_15m_boundary_not_just_on_a_flip(worlds, caplog):
+    """User, 2026-09-30: the log was noisy with the trade-update ticker while missing the ST value at every 15m
+    boundary -- more useful information than a flip-only log line, since a flip is rare and this is the actual signal
+    driving every decision. Only the trading contract's own bar is logged, not a merely-tracked next-contract one."""
+    log = []
+    with caplog.at_level('INFO', logger='hestia_live_data'):
+        w = worlds([('a', factory(log=log))]).start()
+        w.run_until(datetime(2026, 9, 3, 9, 20))
+    first = events_of(log, BarComplete)[0]
+    assert first.boundary_ts == datetime(2026, 9, 3, 9, 15)
+    boundary_lines = [r.message for r in caplog.records if 'XX30OCT26FUT' in r.message and '15m boundary 09:00' in r.message]
+    assert len(boundary_lines) == 1, 'exactly one boundary log line for the trading contract, not the tracked next one'
+    assert f'ST={first.st.value:.2f}' in boundary_lines[0]
+    assert f"trend={first.st.trend.value}" in boundary_lines[0]
+    assert f'flip={first.st.flip}' in boundary_lines[0]
+
+
 def test_an_ab1021_stretch_defers_the_bar_provisional_first_then_the_recovered_real_bar(worlds):
     feed = FakeFeed()
     log = []

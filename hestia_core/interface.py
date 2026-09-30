@@ -508,9 +508,12 @@ class EngineContext(Protocol):
     def load_state(self) -> Optional[str]: ...
 
     # reporting
-    def alert(self, level: str, text: str, channel: Optional[str] = None, emoji: Optional[str] = None) -> None: ...
+    def alert(self, level: str, text: str, channel: Optional[str] = None, emoji: Optional[str] = None,
+             log_locally: bool = True) -> None: ...
     # emoji: an explicit per-event override (e.g. an engine's own "starting"/"seeded" messages) -- None (the default) falls
     # back to AlertRouter's severity-based emoji, unchanged from before this parameter existed.
+    # log_locally: False for a Slack-only, high-frequency message (e.g. the periodic trade-update ticker) that would
+    # otherwise flood the local log file with no new information -- Slack still gets it either way.
     def report_trade(self, record: dict) -> None: ...      # keys from TRADE_RECORD_COLUMNS
     def report_running_row(self, record: dict) -> None: ...  # keys from RUNNING_ROW_COLUMNS, in-trade, roughly once a minute
 

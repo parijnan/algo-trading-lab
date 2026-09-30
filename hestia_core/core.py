@@ -69,6 +69,9 @@ class Alert:
     channel: Optional[str] = None
     emoji: Optional[str] = None   # explicit per-event emoji (e.g. an engine's own session-start message); None falls back
                                    # to AlertRouter's severity-based default, same as before this field existed
+    log_locally: bool = True      # False for a Slack-only, high-frequency message (e.g. the periodic trade-update
+                                   # ticker) that would otherwise flood the local log file with no new information --
+                                   # AlertRouter still sends it to Slack, just skips the log.log() call
 
 
 class _Bucket:
@@ -920,8 +923,8 @@ class HestiaCore:
     # ---- monitoring and crashes ------------------------------------------------------------------------------------
 
     def _alert(self, level: str, engine: Optional[str], text: str, channel: Optional[str] = None,
-              emoji: Optional[str] = None) -> None:
-        alert = Alert(self.now, level, engine, text, channel, emoji)
+              emoji: Optional[str] = None, log_locally: bool = True) -> None:
+        alert = Alert(self.now, level, engine, text, channel, emoji, log_locally)
         self.alerts.append(alert)
         for sink in self.alert_sinks:
             try:
@@ -1084,8 +1087,8 @@ class CoreContext:
                 self._h._saved_state[self._t.name] = blob
         return blob
 
-    def alert(self, level, text, channel=None, emoji=None):
-        self._h._alert(level, self._t.name, text, channel, emoji)
+    def alert(self, level, text, channel=None, emoji=None, log_locally=True):
+        self._h._alert(level, self._t.name, text, channel, emoji, log_locally)
 
     def report_trade(self, record):
         extra = sorted(set(record) - set(TRADE_RECORD_COLUMNS))

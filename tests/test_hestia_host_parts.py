@@ -463,6 +463,22 @@ def test_an_explicit_emoji_overrides_the_severity_default_in_the_posted_text():
     assert sent[-1] == ('#trade-alerts', '*Hestia [a]*: trade 7 bullish closed, P&L Rs 1,234')
 
 
+def test_log_locally_false_still_reaches_slack_but_is_never_written_to_the_local_log(caplog):
+    """Added 2026-09-30, the periodic trade-update ticker -- user directly flagged the local log as too noisy from this
+    exact message repeating every 20s while duplicating what Slack already has."""
+    sent = []
+    router = AlertRouter(SlackQueue(post=lambda ch, t: sent.append((ch, t))), CHANNELS, cooldown_s=30.0)
+    with caplog.at_level('INFO', logger='hestia_alerts'):
+        router(Alert(T0, 'info', 'a', 'BULLISH X Units: 1', channel='trade-updates', log_locally=False))
+        router(Alert(T0, 'info', 'a', 'an ordinary alert, logged as usual'))
+    router.slack.flush(5)
+    assert sent == [('#trade-updates', '*Hestia [a]*: BULLISH X Units: 1'),
+                    ('#tradebot-updates', '*Hestia [a]*: an ordinary alert, logged as usual')]
+    logged_texts = [r.message for r in caplog.records]
+    assert 'BULLISH X Units: 1' not in ' '.join(logged_texts)
+    assert any('an ordinary alert, logged as usual' in t for t in logged_texts)
+
+
 def test_a_failing_alert_sink_never_stops_the_core(hestias):
     def boom(alert):
         raise RuntimeError('sink down')

@@ -525,7 +525,9 @@ class HeliosEngine:
 
     def _maybe_send_trade_update(self, now: datetime) -> None:
         """The periodic in-trade P&L ticker to #trade-updates, same shape and cadence as Prometheus's own (ported there
-        2026-09-29 after being missed originally). Slack-only, never logged -- fires regardless of a pending request."""
+        2026-09-29 after being missed originally). Slack-only, never logged (`log_locally=False`, 2026-09-30 -- until
+        then AlertRouter logged it like everything else, flooding the local log with a duplicate of what's on Slack)
+        -- fires regardless of a pending request."""
         if self._last_trade_update is not None and (now - self._last_trade_update).total_seconds() < self.cfg.trade_update_sec:
             return
         self._last_trade_update = now
@@ -543,7 +545,7 @@ class HeliosEngine:
               f'Realised: {realised_pts:+.2f} pts (Rs.{realised_rs / units:+,.0f}/unit)  '
               f'Unrealised: {unrealised_pts:+.2f} pts (Rs.{unrealised_rs / units:+,.0f}/unit)  '
               f'Total: Rs.{(realised_rs + unrealised_rs) / units:+,.0f}/unit')
-        self.ctx.alert('info', msg, channel='trade-updates')
+        self.ctx.alert('info', msg, channel='trade-updates', log_locally=False)
 
     def _check_stop(self, now: datetime) -> None:
         if not self._past_first_minute_guard(now):
