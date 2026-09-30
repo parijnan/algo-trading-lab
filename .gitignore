@@ -431,6 +431,7 @@ prometheus_backtest/phase3/data_sweep/
 selene_backtest/data_sweep/
 helios_backtest/data_sweep/
 helios_backtest_goldten/data_sweep/
+typhon_backtest/data_sweep/
 prometheus_backtest/phase3_crudeoil/data/
 prometheus_backtest/phase3_crudeoil/data_sweep/
 prometheus_backtest/phase3_fyers/data/

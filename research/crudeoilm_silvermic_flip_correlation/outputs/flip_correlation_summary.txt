@@ -1,0 +1,58 @@
+Loading CRUDEOILM 1-min data...
+  146,909 1-min bars, 2026-01-30 09:00:00 -> 2026-09-28 23:29:00
+Loading SILVERMIC 1-min data...
+  142,334 1-min bars, 2026-01-30 09:00:00 -> 2026-09-28 23:29:00
+
+CRUDEOILM (mult 2.0): 443 flips over 9826 15-min bars
+SILVERMIC (mult 2.5): 293 flips over 9679 15-min bars
+
+Common 15-min bars across both series: 9,499 (2026-01-30 09:00:00 -> 2026-09-28 23:15:00)
+CRUDEOILM flip bars within the common grid: 430
+SILVERMIC flip bars within the common grid: 284
+
+Exact-same-bar co-occurrences: 32 (out of 430 CRUDEOILM flips, 7.4% of them)
+Within +/-1 bar (<=15 min) co-occurrences: 52 (12.1% of CRUDEOILM flips)
+
+Permutation test (N=5000, SILVERMIC flip bars randomly reshuffled across the common grid, CRUDEOILM flip bars held fixed):
+  null mean overlap: 12.80, null std: 3.47, null max: 26
+  observed overlap: 32
+  P(null overlap >= observed) = 0.0000  <-- statistically significant at 5%
+
+Of 32 exact-same-bar co-occurring flip pairs: 27 inverse-direction (84.4%), 5 same-direction (15.6%)
+Binomial test vs. a fair 50/50 coin: p-value = 0.0001  <-- statistically significant at 5%
+95% CI on the inverse-direction rate: [67.2%, 94.7%]
+
+Per-pair detail:
+                 ts crudeoilm_direction silvermic_direction  inverse
+2026-02-09 20:00:00             bullish             bullish    False
+2026-02-10 09:00:00             bearish             bearish    False
+2026-02-11 09:00:00             bullish             bullish    False
+2026-02-13 19:00:00             bullish             bullish    False
+2026-02-13 20:00:00             bearish             bearish    False
+2026-02-23 09:00:00             bearish             bullish     True
+2026-03-09 09:00:00             bullish             bearish     True
+2026-03-11 09:00:00             bullish             bearish     True
+2026-03-27 09:00:00             bearish             bullish     True
+2026-04-02 19:15:00             bearish             bullish     True
+2026-04-15 17:15:00             bearish             bullish     True
+2026-04-15 20:45:00             bullish             bearish     True
+2026-04-17 22:45:00             bullish             bearish     True
+2026-04-24 16:30:00             bearish             bullish     True
+2026-04-27 18:00:00             bullish             bearish     True
+2026-05-06 17:15:00             bullish             bearish     True
+2026-05-20 11:45:00             bearish             bullish     True
+2026-05-20 19:45:00             bearish             bullish     True
+2026-05-26 09:00:00             bullish             bearish     True
+2026-05-27 09:00:00             bearish             bullish     True
+2026-05-29 19:45:00             bullish             bearish     True
+2026-05-29 20:30:00             bearish             bullish     True
+2026-06-11 17:45:00             bullish             bearish     True
+2026-06-15 20:30:00             bullish             bearish     True
+2026-07-15 09:00:00             bullish             bearish     True
+2026-07-23 09:00:00             bullish             bearish     True
+2026-07-24 20:30:00             bearish             bullish     True
+2026-08-11 15:45:00             bearish             bullish     True
+2026-08-20 18:15:00             bearish             bullish     True
+2026-08-27 09:00:00             bearish             bullish     True
+2026-09-16 09:00:00             bearish             bullish     True
+2026-09-24 21:45:00             bearish             bullish     True
