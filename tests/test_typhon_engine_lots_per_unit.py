@@ -91,3 +91,20 @@ def test_the_engine_and_the_hestia_registry_agree_on_lots_per_unit():
     import types
     base = hc.resolve_for_host(hc.ENGINES, {}, 'nowhere')[0]        # the committed registry, no host overrides
     assert base['typhon'].lots_per_unit == DEFAULT.lots_per_unit
+
+
+def test_a_one_lot_position_opened_before_the_change_survives_and_the_next_entry_is_two_lots():
+    """Typhon opened paper trades at 1 lot per unit before lots_per_unit became 2. Such a position (units=1, lots=1, ledger -1)
+    must resume without a ledger complaint, close exactly the 1 lot it holds on the flip, and open the NEW side at 2 lots."""
+    made = []
+    h = scripted_world(FLIP_PATH, cfg=CFG2, made=made, lots_per_unit=LPU)
+    st = EngineState(status='in_trade', direction='bearish', units=1, entry_price=99.5, entry_ts='2026-09-03T09:20:00',
+                     contract_token=FRONT.token, contract_symbol=FRONT.symbol, contract_expiry=FRONT.expiry.isoformat(),
+                     sl_price=99.5 * (1 + CFG2.sl_pct / 100), target_price=99.5 * (1 - CFG2.target_pct / 100), lots=1,
+                     trade_counter=1, trade_row={'trade_id': 1, 'entry_price': 99.5, 'units': 1, 'direction': 'bearish'})
+    h._saved_state['typhon'] = st.to_json()
+    h.seed_position('typhon', FRONT, -1, 99.5)
+    run(h, hm(13, 1))
+    assert not [a for a in h.alerts if a.level == 'critical'], [a.text for a in h.alerts if a.level == 'critical']
+    assert [(o.side, o.lots) for o in h.orders[:1]] == [('BUY', 3)]                  # Rule 7: close the 1 lot held + open 2
+    assert made[-1].state.status == 'in_trade' and made[-1].state.direction == 'bullish' and made[-1].state.lots == 2
