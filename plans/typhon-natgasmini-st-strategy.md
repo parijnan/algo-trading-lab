@@ -214,8 +214,110 @@ trades - checked directly, only 0.1% of trades' raw-signal MFE ever reaches 20% 
 1.30%, p90 4.84%) - not a flaw, a legitimate finding that a near-uncapped second leg beats a
 tighter one.
 
-**DECIDED (2026-09-30): mult 4.0, 2-lot scale-out (Prometheus-style), SL 0.5%, T1 0.5%, T2 20%.**
-Calmar% 16.91 (best full-window of all 8 combos), holds up on walk-forward (9.11 -> 8.21), and
-the 0.5% SL/T1 confirmed robust to realistic slippage stress rather than a zero-cost artifact.
-This also settles the unit-sizing question: 2 lots = 1 unit, scale-out beat SL-only at every
-multiplier tested.
+**~~DECIDED~~ PROVISIONAL (2026-09-30, same day): mult 4.0, 2-lot scale-out, SL 0.5%, T1 0.5%,
+T2 20%.** Downgraded from "decided" the same day it was made -- see the "percentage-bug
+correction" section immediately below. Every percentage-based number in this Step 3 section
+(and Step 2's regime/vol-tercile numbers) is SUPERSEDED, kept only as a record of what was
+found and why the approach changed, not as a number to trust. The per-lot comparison (scale-out
+gives up ~32% of per-lot return for ~45% less drawdown at mult 4.0, Calmar/lot still favours it)
+is a genuine correction worth carrying forward, independent of the percentage bug.
+
+### Percentage-bug correction (2026-09-30, same day as the "decision" above)
+
+Found via advisor review, verified directly before acting on it: additive back-adjustment
+preserves POINT distances across history, not percentages. Every SL/target grid, `calmar_pct`,
+and MFE-reach-rate in Step 3 (and the realized-vol terciles in Step 2) was computed as "X% of
+the back-adjusted entry price" -- but for an old trade the adjusted price sits far above the
+real price (the earliest offset is +338.4 points on a real price of ~195), so "0.5%" tested on
+2023 trades was actually ~1.35% of the real price, while a current trade's offset is ~0 so
+"0.5%" is genuinely 0.5%. Verified by computing `back_adjust_offset` at each trade's own entry
+bar and confirming the ratio grows from 1.0 (now) to ~2.7 (2023).
+
+**What this does and doesn't affect**: Step 2's own raw walk-forward (points/Rs P&L, no SL or
+targets) is UNAFFECTED -- additive back-adjustment preserves points exactly, so "mult 3.0/3.5
+weaken post-2025" stands on its own. It is specifically Step 3's CALIBRATED walk-forward
+(percentage-based SL/target levels) and the slippage-robustness check run afterward (which
+ranked those same percentage-of-adjusted-price SL values) that are confounded -- older trades
+were tested with an effectively much wider, more forgiving stop than newer trades, purely from
+this measurement artifact, which plausibly (not certainly) contributed to mult 3.0/3.5 looking
+weaker walk-forward than they may really be.
+
+**Decision, per the user (2026-09-30)**: rather than patch `exit_calib_typhon.py` to compute
+percentages against the real (unadjusted) entry price and rerun, build Step 4 (the
+production-parity backtest) now instead -- it uses real per-contract prices with real roll
+execution throughout, so it never needs back-adjustment and sidesteps the bug entirely, and is
+needed for production regardless. Advisor-reviewed scope for that build:
+- Calibration must run inside the roll-aware simulator (a trade spanning a roll is flattened and
+  possibly reopened with a basis-recalibrated stop; whether it's even still open at the roll
+  eve depends on the SL/targets) -- not a flat slice like `exit_calib_typhon.py`'s current one.
+  ~300+ simulator runs across the shortlist x candidates; time Helios's own parity script first
+  to decide whether a per-segment overlay (walk each contract segment, translate levels across
+  each roll via `basis_price`, prove it matches the full simulator on 2-3 grid points) is needed.
+- Call `hestia_core.roll_policy` functions directly (`effective_contract`, `coincident_flip`,
+  `decide_rollover`, `basis_price`, `reopen_plan`) so the backtest and the future live engine
+  can't drift apart -- same discipline as Prometheus/Selene/Helios's own parity backtests.
+- The 2-lot scale-out candidate needs lot1/lot2 roll handling (`reopen_plan` covers this) that
+  neither Helios's nor Selene's own parity scripts needed (both single-tranche) -- check what
+  Prometheus's own parity backtest already has for this before writing anything fresh.
+- Regime metrics (daily returns, MFE%) must be computed WITHIN each contract, not off the
+  effective-contract close across a roll (which reintroduces the same fake-jump problem
+  back-adjustment existed to fix) -- use the prior close of the SAME contract on a switch day.
+- Scope: rerun the raw pass (no SL/targets) across the full 1.0-6.0 grid (~11 runs, cheap) to
+  reconfirm which multipliers survive, then calibrate only the survivors. The parity window
+  stops 2026-03-31 (the Fyers void) then resumes on AngelOne data -- the post-2025 walk-forward
+  sample will be shorter than Step 2's own, worth flagging in the eventual report.
+- This is a Helios-parity-sized build (a few hundred lines of roll state machine), not a patch.
+
+## Step 5 - the production engine (2026-09-30)
+
+Built `typhon_engine/` (engine.py, levels.py, state.py, engine_configs.py, __init__.py), ported
+from `selene_engine/` -- Typhon's decided shape (single lot, one target alongside the stop) is
+structurally much closer to Selene's/Helios's own single-lot engines than to Prometheus's 2-lot
+scale-out (Rule 7, per-lot partial exits, lot1/lot2 coordination) -- none of that machinery is
+needed here, since a target hit on a single lot exits the whole position exactly like the stop
+already does (`_send_exit_all`, not `_send_exit_lot`).
+
+The only genuinely new capability: `levels.py`'s `build_levels()` gained a `target_price` field
+alongside `sl_price`, computed from the SAME `threshold_price` the stop already uses (a normal
+entry's real fill, or a roll's historical-basis recalibration price) -- so the target survives a
+roll's basis translation automatically, no separate code path. `_check_stop` now checks the
+target after the stop (stop wins if both were somehow reachable, though a single LTP can never
+actually cross both sides of a real position at once). Exit-reason plumbing reuses
+`ExitReason.OTHER` with a `'target'` descriptive string, exactly Prometheus's own convention for
+its own target legs -- no change to the shared `hestia_core.interface.ExitReason` enum needed.
+
+**Porting the test suite (mirrored from Selene's own 4 files, ~780 lines) surfaced two real
+categories of bugs, both fixed:**
+1. Mechanical sed-port artifacts: several assertions hardcoded Selene's own 3% SL / 8-4 margin
+   divisor-multiplier pair rather than deriving from `DEFAULT` -- fixed to reference
+   `DEFAULT.sl_pct`/`DEFAULT.target_pct`/`DEFAULT.margin_contract_value_divisor`/
+   `DEFAULT.margin_sizing_multiplier` directly, so a future config change can't silently
+   desync the tests again.
+2. A genuine scripted-price-path incompatibility: Typhon's decided SL (0.8%) is far tighter than
+   Selene's (3%) or Helios's (1.6%) -- two tests (`test_ledger_holds_a_position_the_engine_never_
+   knew_about`, and implicitly the shared `FLIP_PATH`/`HOLD_PATH` fixtures other roll tests reuse)
+   seeded a position close enough to the scripted path's own opening price that the TIGHT stop
+   fired almost immediately, turning an intended ledger-adoption/roll test into an unrelated
+   stop-out test. Fixed by widening the seeded entry price's margin from the path's opening level
+   (99.0 -> 99.5, matching the margin `seed_bearish()`'s own default already used successfully in
+   the roll tests) rather than changing the shared price paths themselves.
+- `typhon_configs.py`'s own `PROVISIONAL_*` constants (from the percentage-bug correction, Step 3
+  above) were themselves stale by the time the engine was built -- they still held the OLD
+  back-adjusted decision (mult 4.0, SL 0.5%, 2-lot). Replaced with `DECIDED_*` constants holding
+  the real, parity-calibrated Step 4 values (mult 3.0, SL 0.8%, target 15%, 1 lot) -- a
+  `test_engine_config_matches_the_decided_backtest_config` test (ported from Selene's/Helios's
+  own equivalent) pins the engine's config to these so the two can never silently drift again.
+- All target-specific behaviour (a target hit exiting the whole position, the stop being checked
+  first, direction-correct target math, a target surviving both a fallback-roll basis
+  recalibration and a coincident-flip re-entry) has no Selene/Helios precedent to port from --
+  written fresh and mutation-tested (reverted the target-setting/checking code, confirmed the new
+  tests catch it, restored) rather than assumed to work by analogy.
+
+Registered in `hestia_config.ENGINES['typhon']` (`NATGASMINI`, factory
+`typhon_engine.engine:build`, `enabled=False, paper=True`) -- not yet deployed anywhere. Full
+suite (63 engine-specific tests + the wider Hestia regression suite) green.
+
+**Not yet built**: `typhon_engine/replay_check.py` (the trade-for-trade validation against
+`typhon_backtest/parity_backtest_typhon.py`'s own deterministic output, same tool Selene's/
+Helios's own P7.2 build phase used as its final gate) -- a real, valuable next step, deliberately
+scoped out of this same session rather than silently skipped.

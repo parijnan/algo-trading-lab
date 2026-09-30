@@ -126,7 +126,9 @@ def test_local_overrides_enable_an_engine_only_by_naming_it_and_its_fields():
     assert not got['selene'].enabled and not hc.ENGINES['prometheus'].enabled               # the original registry is not touched
     assert hc.apply_local_overrides(hc.ENGINES, None) == hc.ENGINES
     with pytest.raises(KeyError):
-        hc.apply_local_overrides(hc.ENGINES, types.SimpleNamespace(ENGINES={'typhon': dict(enabled=True)}))
+        # 'typhon' used to be this placeholder (an engine name not yet in the registry) until it
+        # was registered for real 2026-09-30 -- a genuinely nonexistent name is needed here now.
+        hc.apply_local_overrides(hc.ENGINES, types.SimpleNamespace(ENGINES={'not_a_real_engine': dict(enabled=True)}))
     with pytest.raises(TypeError):
         hc.apply_local_overrides(hc.ENGINES, types.SimpleNamespace(ENGINES={'prometheus': dict(enabeld=True)}))
 

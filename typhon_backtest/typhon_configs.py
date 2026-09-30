@@ -171,17 +171,70 @@ TARGET_GRID = [0.5, 0.8, 1.2, 1.6, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0
 NO_EXIT_BEFORE_BUFFER_MIN = 1
 
 # ---------------------------------------------------------------------------
-# Decided config (plan Step 3, 2026-09-30): mult 4.0, 2-lot scale-out (Prometheus-style),
-# SL 0.5%, T1 0.5%, T2 20% -- Calmar% 16.91, the best full-window result of all 8
-# (multiplier x candidate) combos tested, holds up on walk-forward (9.11 -> 8.21 pre/post
-# 2025-01-01), and the 0.5% SL/T1 confirmed robust to a realistic slippage-stress check
-# (remained the best SL choice at every round-trip cost from 0-4 ticks tested), not a zero-cost
-# artifact. T2 at 20% is a near-uncapped safety cap, not a commonly-reached target (only 0.1% of
-# trades' raw-signal MFE ever reaches it) -- functionally the trend-flip is the real exit for
-# lot 2. This also decides unit sizing: 2 lots = 1 unit (scale-out beat SL-only at every
-# multiplier tested, plan Step 3).
+# SUPERSEDED (kept as a record, not read anywhere): the 2026-09-30 back-adjusted Step 3 result
+# (mult 4.0, SL 0.5%, targets [0.5%, 20%], 2-lot scale-out) was found the SAME DAY to be
+# confounded -- every percentage in Step 2/3 was computed against the back-adjusted price, not
+# the real one. Additive back-adjustment preserves point distances, not percentages -- for an
+# old trade the adjusted price sits far above the real price (the earliest offset is +338.4 on a
+# real price of ~195, so "0.5%" tested there was actually ~1.35% of the real price), while a
+# current trade's offset is ~0 so "0.5%" is genuinely 0.5%. This confounded the walk-forward
+# comparison that moved the pick away from mult 3.0/3.5. Rebuilt Step 4 (the production-parity
+# backtest, real per-contract prices, real roll execution -- typhon_backtest/
+# parity_backtest_typhon.py, exit_calib_parity_typhon.py) as the corrected source of truth
+# instead of patching the back-adjusted scripts, per the user's own suggestion.
 # ---------------------------------------------------------------------------
-DECIDED_MULTIPLIER = 4.0
-DECIDED_SL_PCT = 0.5
-DECIDED_TARGET_PCTS = (0.5, 20.0)
-DECIDED_UNIT_LOTS = 2
+
+# ---------------------------------------------------------------------------
+# DECIDED config (plan Step 4, 2026-09-30): mult 3.0, SL 0.8%, target 15%, single lot -- the
+# REAL-price, real-roll-execution parity calibration's own winner, confirmed independently four
+# ways (raw-signal full-window Calmar, raw-signal walk-forward, calibrated full-window Calmar,
+# calibrated walk-forward all agree on mult 3.0). Full stats: profit factor 1.31 full-window
+# (1.57 pre-2025 / 1.15 post-2025, the best post-2025 profit factor of every multiplier tested),
+# Calmar% 14.07, max drawdown only 10.7% of total return. The target is a near-uncapped safety
+# cap in practice (hit on only 0.5% of trades) -- trend-flip does almost all the real work, same
+# character as Helios's/Selene's own decided designs, but the calibration found this ONE target
+# genuinely helps here (unlike Selene's/Helios's own SL-only decisions) -- not assumed, tested:
+# scale-out (2 lots, 2 targets) beat SL-only at every multiplier in the (superseded) back-adjusted
+# comparison, and a single lot with one target beat pure SL-only in this real-price one too.
+# typhon_backtest/data_sweep/parity_decided_trades.csv/parity_decided_legs.csv are the full trade
+# log (1,392 closed trades, 2023-04-03 to 2026-09-29).
+# ---------------------------------------------------------------------------
+DECIDED_MULTIPLIER = 3.0
+DECIDED_SL_PCT = 0.8
+DECIDED_TARGET_PCT = 15.0
+DECIDED_UNIT_LOTS = 1
+
+# ---------------------------------------------------------------------------
+# Production-parity backtest (parity_backtest_typhon.py, plan Step 4). Mirrors how
+# prometheus_production/, Selene's, and Helios's own event-driven parity simulators handle
+# contracts: per-contract ST (no splice, no back-adjustment -- the whole point of this phase is
+# to sidestep the percentage bug back-adjustment caused, plan Step 3's correction section),
+# production's early-roll rule, and the real roll machinery (coincident-flip re-entry,
+# close-and-switch, rollover-time veto with historical-basis stop recalibration).
+# ---------------------------------------------------------------------------
+# Each session's ST is seeded from this many calendar days of the CONTRACT'S OWN 1-minute
+# history, then extended bar by bar -- same value Prometheus/Selene/Helios all use.
+ST_SEED_DAYS = 18
+
+# Rollover fallback (position still open late on the eve of a roll): (last 1-min bar of the
+# session) - ROLLOVER_BUFFER_MIN, same convention/value as Selene's/Helios's.
+ROLLOVER_BUFFER_MIN = 14
+# historical_basis_price refuses a lookup further than this from the original entry time.
+BASIS_MAX_GAP_MIN = 5
+
+# Fyers-complete segment: from DATA_START to the last day before the same systemic Fyers void
+# Selene/Helios both hit also affects NATGASMINI (checked 2026-09-30): the April-2026 and
+# May-2026 contract files both effectively end 2026-03-31, and the next real contract data
+# (July-2026 file) starts 2026-06-30 -- identical window, 2026-04-01 -> 2026-06-29.
+PARITY_END = '2026-03-31'
+
+# Extension to the end of the data: AngelOne fills where Fyers has nothing. AngelOne's
+# per-contract files hold their OWN contract only from this date (a pipeline-wide behavior, not
+# instrument-specific -- same date Selene's/Helios's own loaders use); earlier rows are the
+# then-front-month contract's real prices under a not-yet-front token, relabelled accordingly.
+ANGELONE_OWN_FROM = '2026-09-02'
+PARITY_END_EXTENDED = '2026-09-29'   # last date with real data in data_pipeline/data/mcx/NATGASMINI/
+
+# Winners are also reported on each side of this date -- same convention as Step 2/3's own
+# WALKFORWARD_SPLIT_DATE, now computed on real prices instead of the back-adjusted series.
+PARITY_WALKFORWARD_SPLIT_DATE = WALKFORWARD_SPLIT_DATE
