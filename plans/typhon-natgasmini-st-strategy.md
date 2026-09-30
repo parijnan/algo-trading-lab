@@ -317,7 +317,16 @@ Registered in `hestia_config.ENGINES['typhon']` (`NATGASMINI`, factory
 `typhon_engine.engine:build`, `enabled=False, paper=True`) -- not yet deployed anywhere. Full
 suite (63 engine-specific tests + the wider Hestia regression suite) green.
 
-**Not yet built**: `typhon_engine/replay_check.py` (the trade-for-trade validation against
-`typhon_backtest/parity_backtest_typhon.py`'s own deterministic output, same tool Selene's/
-Helios's own P7.2 build phase used as its final gate) -- a real, valuable next step, deliberately
-scoped out of this same session rather than silently skipped.
+## Step 6 - replay_check.py, the trade-for-trade gate (2026-09-30)
+
+Built `typhon_engine/replay_check.py` (ported from `selene_engine/replay_check.py`): the engine replayed on FakeHestia over real NATGASMINI 1-minute data, 2026-09-02 -> 2026-09-29 (where AngelOne-only data == what the parity backtest used), compared against `parity_decided_trades.csv`/`parity_decided_legs.csv`. **Final result: 61/61 oracle decisions reproduced exactly, fill price gap 0.00 mean/max.** One trailing replay entry (09-29 18:30 bearish) has no oracle row, proven benign (below). Getting there found and fixed five real issues, none in the engine's decision logic:
+
+1. **Expired-contract token drop**: `mcx_instrument_master.csv` is a live snapshot with no row for the already-expired Sep-2026 contract, so the token lookup silently dropped it (price file was on disk). Token is pure ledger bookkeeping in FakeHestia, so a synthetic `SYN<expiry>` token is used as fallback.
+2. **Registering the full multi-year archive broke front-contract selection**: `roll_policy.effective_from_days_left()` sorts every REGISTERED contract by expiry and takes the two earliest as front/next; `count_trading_days_inclusive` clamps past expiries to 0, so an ancient contract displaced the real one and the engine went dead silent after its first exit. Live Hestia only ever knows 2-3 current contracts, so this is a replay-tool-only problem. Fix: register only contracts with expiry >= REPLAY_START (the full dict is kept as a lookup table for the carried-leg seed). Shared code untouched.
+3. **Harness price feed is coarser than the backtest's exit model**: `ReplayData._price_at` exposes only a bar's open (first 30s) then close to a poller, never the intrabar high/low that the oracle's `scan_exit()` uses. With Typhon's tight 0.8% stop, a wick that touches the stop and retreats is invisible to the replay, so exits fire later (up to hours) and at worse prices than the oracle's idealized fill, sometimes cascading into a later trend-flip exit instead. A wider time tolerance was tried first and rejected (its "no gap over ~90s" comment was falsified by 20-60 minute gaps). Replaced with `predict_live_exit()`, which mirrors the harness's open/close sampling exactly (including the per-session first-minute guard) and is what exits are compared against; verified exact on timestamp AND price. This is a limit of the test harness, not the engine: production polls real broker LTP ticks, which fixes stop-detection TIMING, though a stop still fills at market rather than exactly at the stop level.
+4. **Carried-position seed** now also sets `target_price` (Selene's/Helios's seed only had a stop).
+5. **Open-at-end position missing from the oracle CSVs**: `simulate()` only writes a leg in `close_pos()`, so a position still open when data ends (`legs.attrs['open_at_end']` is True) has no row in the trades/legs files. A traced copy of `simulate()` confirmed the oracle opens the same 18:30 bearish position the engine does. Re-running against a later end date would show it as an ordinary matching entry.
+
+Known approximation: the predictor's guard start for the first bar uses entry_ts + 1 min and treats a >60 min bar gap as a session boundary; a rare edge (a stop breaching in the first bar of a session the position was entered at the very open of) would surface as a residual diff to investigate, not silently pass. Multi-leg (rolled) trades fall back to the oracle's raw exit.
+
+**Next (not yet asked)**: paper deployment alongside Selene/Helios, per the established precedent.
