@@ -177,7 +177,7 @@ A note for later: because engines are decision functions over Hestia's events, t
 
 ## 9. Operations
 
-- **Cron:** one entry for Hestia at `00 9 * * 1-5`; the old Prometheus entry stays as the rollback and is unscheduled after cutover.
+- **Cron:** one entry for Hestia, `55 8 * * 1-5` (moved from `00 9` on 2026-09-30 -- login + seeding was taking up to 8 minutes on a bad AB1021 morning, so the cron now starts 5 minutes early to absorb that before the market opens; `hestia_core.live_data.LiveDataConfig.min_start_buffer_min` keeps the tick loop itself from polling for live candles/LTP before `session_open + 1 minute`, even though `begin_session()` runs earlier). The old Prometheus entry stays as the rollback and is unscheduled after cutover.
 - **Deploy coupling:** restarting Hestia to ship any engine's fix restarts every engine and redoes the login. Add a **no-restart window** around open-position events (an open roll transition, an in-flight intent, an unconfirmed exit) and make the restart procedure read engine and ledger state first; update the restart skill to a Hestia restart.
 - **QC:** `hestia-qc` (reads Hestia's log, the ledger, and each engine's log and trade file) replacing per-engine QC skills as the primary check; per-engine views as sub-checks.
 - **Delos:** every command that reaches Delos still needs the user's per-command approval.

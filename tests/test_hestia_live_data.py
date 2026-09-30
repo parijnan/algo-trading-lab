@@ -96,6 +96,21 @@ def test_the_trading_contracts_st_is_logged_at_every_15m_boundary_not_just_on_a_
     assert f'flip={first.st.flip}' in boundary_lines[0]
 
 
+def test_the_first_poll_never_fires_before_a_minute_past_the_open_even_when_the_process_starts_early(worlds):
+    """User, 2026-09-30: the cron moved to 08:55 (from 09:00) specifically so login/seeding finishes before the open,
+    but ticking itself must never issue a live candle/LTP fetch for a pre-market window -- wasted against the
+    AB1021-limited budget and meaningless before the exchange has actually opened. begin_session() itself running at
+    08:55 must not be enough on its own to start real polling before 09:01 (session_open + min_start_buffer_min)."""
+    w = worlds([('a', factory())], start=datetime(2026, 9, 3, 8, 55))
+    w.start()
+    w.sc.calls.clear()               # only calls made AFTER begin_session() -- seeding's own calls are a separate concern
+    w.run_until(datetime(2026, 9, 3, 9, 0, 59))
+    assert w.sc.calls == [], 'no live candle fetch at all before 09:01'
+    w.run_until(datetime(2026, 9, 3, 9, 2))
+    assert w.sc.calls, 'polling does start once 09:01 is reached'
+    assert all(c[3] >= datetime(2026, 9, 3, 9, 1) for c in w.sc.calls), 'and never with a call timestamped before it'
+
+
 def test_an_ab1021_stretch_defers_the_bar_provisional_first_then_the_recovered_real_bar(worlds):
     feed = FakeFeed()
     log = []

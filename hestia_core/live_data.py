@@ -50,6 +50,10 @@ class LiveDataConfig:
     seed_skip_dates: tuple = ()
     bar_min: int = 15
     session_start: str = '09:00'
+    min_start_buffer_min: float = 1.0           # the first minute-tick/LTP-tick never fires before session_open + this
+                                                 # many minutes, even if begin_session() itself runs earlier (2026-09-30,
+                                                 # the cron moved to 08:55 so seeding finishes before the open -- ticking
+                                                 # itself must still wait for the market to actually be open)
     poll_window_min: int = 5
     poll_stagger_s: float = 5.0                 # offset between tokens inside a minute, so candle calls never bunch up
     deferred_bar_cutoff_min: float = 1.0        # wait this long past a boundary for an incomplete window
@@ -369,14 +373,21 @@ class LiveData:
         self.session_date = d
         self.session_open = self.calendar.session_open(d)
         self.session_close = self.calendar.session_close(d)
+        now = self.kernel.now
+        # If begin_session() itself runs before the market opens (e.g. cron starts early specifically so login/seeding
+        # finishes before the open), neither loop may fire its first real poll before this -- a bare `now + 1` would
+        # otherwise issue live candle/LTP fetches for a pre-market window that both wastes an AB1021-budget call and
+        # returns nothing useful. A same-day restart well after the open is unaffected: `earliest` is already in the
+        # past, so `max()` reduces to the previous now+1 behaviour.
+        earliest = self.session_open + timedelta(minutes=self.cfg.min_start_buffer_min)
         if not self._ticking:
             self._ticking = True
-            now = self.kernel.now
-            first = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            first = max(now.replace(second=0, microsecond=0) + timedelta(minutes=1), earliest)
             self.kernel.at(first, lambda: self._minute_tick(first))
         if self.cfg.ltp_refresh_s and not self._ltp_started:
             self._ltp_started = True
-            self.kernel.after(self.cfg.ltp_refresh_s, self._ltp_tick)
+            first_ltp = max(now + timedelta(seconds=self.cfg.ltp_refresh_s), earliest)
+            self.kernel.at(first_ltp, self._ltp_tick)
 
     def _active_tokens(self) -> List[str]:
         wanted = []
