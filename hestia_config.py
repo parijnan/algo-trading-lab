@@ -123,10 +123,13 @@ TRADING_HOSTS = {
     # Selene's own paper deployment. 1 unit (= lots_per_unit above, 20 lots), cap 10 units -- matching the other two
     # engines' own conservative first-session sizing, not derived from any Helios-specific risk analysis (position
     # sizing and risk of ruin are explicitly deferred, plan §4h's own "Not yet done").
+    # Selene LIVE from 2026-10-01 (user's decision 2026-09-30, after a few paper trades): 1 unit, cap 10. Her open paper position is
+    # reset to flat beforehand by selene_engine/cutover_reset.py (a one-shot Delos cron at 00:30 on 2026-10-01), because a
+    # paper position cannot be closed through the live broker and would otherwise be dropped with critical alerts at start.
     # Typhon DRY_RUN alongside all three, enabled 2026-09-30 (user's go-ahead after replay_check.py reproduced 61/61 oracle
     # decisions, plan Step 6): paper only, 1 unit (= 1 lot), cap 10, same posture as Selene's and Helios's.
     'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
-                           'selene': dict(enabled=True, paper=True, static_units=1, unit_cap=10),
+                           'selene': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
                            'helios': dict(enabled=True, paper=True, static_units=1, unit_cap=10),
                            'typhon': dict(enabled=True, paper=True, static_units=1, unit_cap=10)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True),
