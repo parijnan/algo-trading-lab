@@ -65,8 +65,9 @@ def test_pnl_and_margin_arithmetic():
     # Typhon's own margin_contract_value_divisor/margin_sizing_multiplier (a single observed
     # NATGASMINI quote) differ from Selene's/Prometheus's 8/4 pair -- derive from DEFAULT rather
     # than hardcoding the mismatched formula.
+    # per-lot formula, scaled by the unit's lot count (DEFAULT.lots_per_unit, 2 since 2026-09-30)
     assert margin_per_unit(6000.0, 1, DEFAULT) == pytest.approx(
-        6000 * 1 / DEFAULT.margin_contract_value_divisor * DEFAULT.margin_sizing_multiplier)
+        6000 * 1 / DEFAULT.margin_contract_value_divisor * DEFAULT.margin_sizing_multiplier * DEFAULT.lots_per_unit)
     assert margin_per_unit(None, 1, DEFAULT) == DEFAULT.fallback_margin_per_unit
 
 

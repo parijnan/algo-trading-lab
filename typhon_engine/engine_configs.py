@@ -26,6 +26,7 @@ class EngineConfig:
     # own SL-only decided designs, Typhon's own calibration found a target genuinely helps here
     sl_pct: float = 0.8
     target_pct: float = 15.0
+    lots_per_unit: int = 2                   # 1 unit = 2 lots (owner's decision 2026-09-30: matches Selene's/Helios's margin per unit)
     # timing guards, minutes since the session's actual open
     no_exit_before_buffer_min: float = 1.0
     min_entry_buffer_min: float = 15.0

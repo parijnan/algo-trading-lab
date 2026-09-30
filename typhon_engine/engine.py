@@ -311,7 +311,7 @@ class TyphonEngine:
             direction = BULL if held > 0 else BEAR
             lots = abs(held)
             price = pos.avg_price or self._ltp_value(ref) or 0.0
-            units = max(1, lots)
+            units = max(1, lots // self.cfg.lots_per_unit)      # a lot count that is not a multiple of lots_per_unit is itself an anomaly; floor to a sane minimum
             s.contract_token, s.contract_symbol, s.contract_expiry = ref.token, ref.symbol, ref.expiry.isoformat()
             self._install_position(direction, units, price, lots, signal_ts=None, signal_close=None, adopted=True)
         self._save()
@@ -417,7 +417,7 @@ class TyphonEngine:
         units = self._current_units()
         if not self._margin_sufficient(units):
             return
-        lots = units
+        lots = units * self.cfg.lots_per_unit
         trade_ref = self.state.trade_counter + 1
         req = OpenRequest(self._rid('entry'), self.contract, _dir(direction), lots, trade_ref=trade_ref)
         self._send(req, {'purpose': 'entry', 'direction': direction, 'signal_ts': signal_ts.isoformat(), 'signal_close': signal_close,
@@ -431,7 +431,7 @@ class TyphonEngine:
         old_open = self.state.open_lots()
         allowed = self._reentry_allowed(self._now())
         units = self._current_units()
-        new_lots = units if allowed else 0
+        new_lots = units * self.cfg.lots_per_unit if allowed else 0
         if new_lots > 0 and not self._margin_sufficient(units):
             new_lots = 0
         self.state.pending_flip = {'direction': direction_now, 'signal_ts': signal_ts.isoformat(), 'signal_close': signal_close,
@@ -909,7 +909,7 @@ class TyphonEngine:
         if coincident and self._past_min_entry_guard(self._now()):
             units = self._current_units()
             if self._margin_sufficient(units):
-                lots = units
+                lots = units * self.cfg.lots_per_unit
                 self._send(OpenRequest(self._rid('coin_open'), new, _dir(direction_now), lots, trade_ref=s.trade_counter + 1,
                                        depends_on=close_req.request_id),
                            {'purpose': 'coin_open', 'token': new.token, 'direction': direction_now, 'units': units, 'lots': lots,

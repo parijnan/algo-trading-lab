@@ -96,10 +96,11 @@ ENGINES = {
     'prometheus': EngineEntry(instrument='CRUDEOILM', factory='prometheus_engine.engine:build', enabled=False, lots_per_unit=2),
     'selene': EngineEntry(instrument='SILVERMIC', factory='selene_engine.engine:build', enabled=False, paper=True),
     'helios': EngineEntry(instrument='GOLDPETAL', factory='helios_engine.engine:build', enabled=False, paper=True, lots_per_unit=20),
-    # NATGASMINI, decided config mult 3.0 / SL 0.8% / target 15%, single lot (1 unit = 1 lot, same shape as Selene's own
-    # entry above -- no lots_per_unit override needed). Real-price/real-roll-execution parity calibration, plan
-    # Step 4 (plans/typhon-natgasmini-st-strategy.md). Registered disabled: not yet deployed anywhere.
-    'typhon': EngineEntry(instrument='NATGASMINI', factory='typhon_engine.engine:build', enabled=False, paper=True),
+    # NATGASMINI, decided config mult 3.0 / SL 0.8% / target 15%, one position group. 1 unit = 2 lots (owner's decision
+    # 2026-09-30: brings its margin per unit level with Selene's and Helios's; keep equal to typhon_engine.engine_configs
+    # lots_per_unit, which a test pins). Real-price/real-roll-execution parity calibration, plan Step 4
+    # (plans/typhon-natgasmini-st-strategy.md). Registered disabled here; enabled paper on Delos via TRADING_HOSTS below.
+    'typhon': EngineEntry(instrument='NATGASMINI', factory='typhon_engine.engine:build', enabled=False, paper=True, lots_per_unit=2),
 }
 
 

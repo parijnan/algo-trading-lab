@@ -157,10 +157,10 @@ def seed_from_carried_leg(h: FakeHestia, legs: pd.DataFrame, start: datetime, co
     lv = build_levels(direction, entry_px, DEFAULT)
     st = EngineState(status='in_trade', direction=direction, units=1, entry_price=entry_px, entry_ts=str(leg['entry_ts']),
                      contract_token=ref.token, contract_symbol=ref.symbol, contract_expiry=ref.expiry.isoformat(),
-                     sl_price=lv.sl_price, target_price=lv.target_price, lots=1, trade_counter=0,
+                     sl_price=lv.sl_price, target_price=lv.target_price, lots=DEFAULT.lots_per_unit, trade_counter=0,
                      trade_row={'trade_id': 0, 'entry_price': entry_px, 'units': 1, 'direction': direction})
     h._saved_state['typhon'] = st.to_json()
-    h.seed_position('typhon', ref, 1 if direction == 'bullish' else -1, entry_px)
+    h.seed_position('typhon', ref, DEFAULT.lots_per_unit if direction == 'bullish' else -DEFAULT.lots_per_unit, entry_px)
     print(f'seeded a carried {direction} position on {ref.symbol}, entry {entry_px}')
 
 
@@ -234,7 +234,7 @@ def replay(end: date, verbose: bool = True) -> ReplayReport:
     for spec in contracts.values():
         if REPLAY_START <= spec.ref.expiry <= end + timedelta(days=60):
             h.add_contract(spec)
-    h.register('typhon', make, lots_per_unit=1, sizing=SizingConfig(dynamic=False, static_units=1, unit_cap=50))
+    h.register('typhon', make, lots_per_unit=DEFAULT.lots_per_unit, sizing=SizingConfig(dynamic=False, static_units=1, unit_cap=50))
     seed_from_carried_leg(h, legs, datetime.combine(REPLAY_START, datetime.min.time()), contracts)
     for d in days:
         midnight = datetime.combine(d, datetime.min.time())

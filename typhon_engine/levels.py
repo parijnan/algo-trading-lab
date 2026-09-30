@@ -47,8 +47,10 @@ def lot_pnl_points(direction: str, entry: float, exit_price: float) -> float:
 
 
 def margin_per_unit(ltp: Optional[float], lot_size: int, cfg: EngineConfig) -> float:
-    """LTP x lot size / divisor x multiplier, the same conservative live formula shape as
-    Prometheus's/Selene's/Helios's; the static figure when no usable price is available."""
+    """(LTP x lot size / divisor x multiplier) x lots_per_unit: the per-LOT figure (the multiplier was derived from a one-lot
+    margin quote, plan Step 1) scaled by the unit's lot count, as Helios's own formula does. The static figure is returned when
+    no usable price is available."""
     if not ltp:
         return cfg.fallback_margin_per_unit
-    return (ltp * lot_size / cfg.margin_contract_value_divisor) * cfg.margin_sizing_multiplier
+    per_lot = (ltp * lot_size / cfg.margin_contract_value_divisor) * cfg.margin_sizing_multiplier
+    return per_lot * cfg.lots_per_unit
