@@ -39,6 +39,7 @@ from hestia_core.interface import (Bar, BarComplete, BarQuality, ContractInfo, C
                                    FeedRecovered, FeedStale, LtpQuote, ProvisionalBar, SupertrendPoint, TrackFailed,
                                    TrackReady)
 from hestia_core.mcx_market import ContractCatalog, ContractRow, MarketCalendar, closing_time_str
+from hestia_core.roll_policy import tracked_contracts
 
 log = logging.getLogger('hestia_live_data')
 
@@ -331,13 +332,26 @@ class LiveData:
                 self._sleep(self.cfg.seed_retry_interval_s)
         return None
 
+    def _tracked_rows(self, live: List[ContractRow], today: date) -> List[ContractRow]:
+        """The contracts out of `live` (every not-yet-expired one, front to back) actually worth seeding --
+        `roll_policy.tracked_contracts`, the same 5-working-day tender-margin early-roll rule every engine's own trading
+        decisions already use. `infos()`/`live_rows()` themselves are untouched: engines still need the full
+        not-yet-expired list for their own roll-transition decisions (e.g. checking the next contract's own Supertrend
+        for a coincident-flip roll) -- only seeding is roll-aware here."""
+        refs = tracked_contracts([row.ref for row in live], today, self.calendar.fully_closed_dates(),
+                                 self.cfg.seed_contracts_per_instrument)
+        wanted = set(refs)
+        return [row for row in live if row.ref in wanted]
+
     def prepare(self, instruments: List[str]) -> Dict[str, bool]:
-        """Blocking: seed the front live contracts of each instrument. Call from the host's main thread before the engines
-        launch. Returns {symbol: seeded}. A contract that cannot be seeded is alerted and left out of `seeded()`."""
+        """Blocking: seed the currently-effective (roll-aware) live contracts of each instrument. Call from the host's
+        main thread before the engines launch. Returns {symbol: seeded}. A contract that cannot be seeded is alerted and
+        left out of `seeded()`."""
         out = {}
         today = self._today()
         for instrument in instruments:
-            for row in self.catalog.live_rows(instrument, today)[:self.cfg.seed_contracts_per_instrument]:
+            live = self.catalog.live_rows(instrument, today)
+            for row in self._tracked_rows(live, today):
                 stream = self._seed_with_retry(row)
                 if stream is None:
                     self._alert('critical', f'could not seed {row.ref.symbol}; engines will not see it as seeded')

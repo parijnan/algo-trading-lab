@@ -11,8 +11,8 @@ import pytest
 from hestia_data_helpers import DAY, LiveWorld
 from hestia_fake_helpers import FRONT, NEXT, SPEC, RecEngine, events_of, factory, world
 from smartapi_double import FakeFeed
-from hestia_core.interface import (BarComplete, BarQuality, DplFrozen, FeedRecovered, FeedStale, ProvisionalBar, SessionStart,
-                                   TrackFailed, TrackReady)
+from hestia_core.interface import (BarComplete, BarQuality, ContractRef, DplFrozen, FeedRecovered, FeedStale, ProvisionalBar,
+                                   SessionStart, TrackFailed, TrackReady)
 from hestia_core.live_data import LiveDataConfig
 
 END = datetime(2026, 9, 3, 23, 40)
@@ -185,6 +185,31 @@ def test_seeding_refuses_a_series_with_a_hole(tmp_path):
     assert w.data.prepare(['XX']) == {FRONT.symbol: False, NEXT.symbol: True}
     assert any('could not seed' in a.text for a in w.core.alerts_for('critical'))
     assert w.data.seeded('XX') == (NEXT,)
+    w.close()
+
+
+def test_a_contract_already_rolled_past_is_never_seeded_even_with_days_left_before_its_own_expiry(tmp_path):
+    """Found 2026-09-30: prepare() used to take the raw front-N-by-expiry ('not yet expired'), which kept trying to seed
+    an already-rolled-off, about-to-expire contract right up through its own expiry date -- and a genuine data hole on
+    that stale contract then blocked the WHOLE host's startup (prepare() is a hard blocking call every engine's
+    session-start waits on), not just the one engine that used to trade it. DAY (2026-09-03, Thursday) is inside
+    CLOSE_FRONT's own 5-trading-day roll window (it expires the very next trading day), so the effective contract is
+    already FAR_NEXT -- a hole in CLOSE_FRONT's own data must never be attempted or alerted on."""
+    CLOSE_FRONT = ContractRef('XX', 'T1', 'XX04SEP26FUT', pd.Timestamp('2026-09-04').date())
+    FAR_NEXT = ContractRef('XX', 'T2', 'XX30NOV26FUT', pd.Timestamp('2026-11-30').date())
+    w = LiveWorld(tmp_path, [], refs=(CLOSE_FRONT, FAR_NEXT), seed_first=False)
+    df = w.frames['T1']
+    hole = df[(df['time_stamp'].dt.date == pd.Timestamp('2026-09-02').date())
+              & (df['time_stamp'] >= '2026-09-02 12:00') & (df['time_stamp'] < '2026-09-02 12:15')]
+    from hestia_core.history import merge_and_save
+    import os
+    path = w.catalog.row('T1').filepath
+    kept = df[df['time_stamp'].dt.date.isin([pd.Timestamp('2026-09-01').date(), pd.Timestamp('2026-09-02').date()])]
+    os.remove(path)
+    merge_and_save(path, kept.drop(hole.index))
+    assert w.data.prepare(['XX']) == {FAR_NEXT.symbol: True}, 'CLOSE_FRONT is never attempted, holed or not'
+    assert not w.core.alerts_for('critical'), 'no alert for a contract that was never even supposed to be tracked'
+    assert w.data.seeded('XX') == (FAR_NEXT,)
     w.close()
 
 

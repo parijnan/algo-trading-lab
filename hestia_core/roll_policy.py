@@ -72,6 +72,29 @@ def effective_contract(contracts: Iterable[ContractRef], on_date: date, fully_cl
     return Effective(front, left, False, False)
 
 
+def tracked_contracts(contracts: Iterable[ContractRef], on_date: date, fully_closed: AbstractSet[date], n: int = 2,
+                      roll_window_days: int = ROLL_WINDOW_DAYS) -> List[ContractRef]:
+    """The `n` contracts actually worth tracking price data for on `on_date`: the currently-EFFECTIVE contract
+    (`effective_contract`) plus the next `n - 1` after it by expiry. A contract that has already rolled past drops out
+    of tracking immediately, even if its own calendar expiry hasn't arrived yet -- unlike a raw "not yet expired" cut
+    (`sorted(c for c in contracts if c.expiry >= on_date)[:n]`), which keeps an already-rolled-off, about-to-expire
+    contract in the tracked set right up through its own expiry date.
+
+    Found 2026-09-30: that raw cut is what both `LiveData.prepare()` (the live seeding step) and `--check` used to
+    apply directly. A genuine data gap on an already-rolled-off contract's near-expiry, thin trading blocked
+    `prepare()` -- a hard blocking call every engine's session-start waits on -- for 8 minutes, for every engine, not
+    just the one that traded the stale contract."""
+    live = sorted((c for c in contracts if c.expiry >= on_date), key=lambda c: c.expiry)
+    if not live:
+        return live
+    try:
+        eff = effective_contract(live, on_date, fully_closed, roll_window_days)
+    except NoContract:
+        return live[:n]
+    idx = next((i for i, c in enumerate(live) if c == eff.contract), 0)
+    return live[idx:idx + n]
+
+
 def effective_from_days_left(contracts_with_days: Iterable[Tuple[ContractRef, int]],
                              roll_window_days: int = ROLL_WINDOW_DAYS, days_offset: int = 0) -> Effective:
     """`effective_contract` for an engine that knows each contract's trading days left today but has no holiday calendar: the front

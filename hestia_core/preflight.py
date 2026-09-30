@@ -22,6 +22,7 @@ import pandas as pd
 
 from hestia_core.flags import FlagFiles
 from hestia_core.mcx_market import ContractCatalog, MarketCalendar
+from hestia_core.roll_policy import tracked_contracts
 from hestia_core.session_lock import holder, pid_alive
 
 OK, WARN, FAIL = 'ok', 'warn', 'fail'
@@ -117,16 +118,22 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
         add(f'{e.instrument} contracts', OK if len(rows) >= 2 else WARN,
             ', '.join(f'{i.ref.symbol} ({i.trading_days_left} trading days left)' for i in info[:3])
             + ('' if len(rows) >= 2 else ' | no next contract listed: a roll would flatten'))
-        for r in rows[:2]:
+        # Roll-aware: the contracts prepare() will actually try to seed today, not just the raw front-2-by-expiry --
+        # a stale, already-rolled-off contract's own data gap must not be reported as ok just because rows[:2] happened
+        # to include it (the 2026-09-30 incident this check exists to catch).
+        n_track = cfg.LIVE_DATA.get('seed_contracts_per_instrument', 2)
+        tracked_refs = set(tracked_contracts([r.ref for r in rows], today, calendar.fully_closed_dates(), n_track))
+        tracked_rows = [r for r in rows if r.ref in tracked_refs]
+        for r in tracked_rows:
             path = Path(r.filepath)
             if not path.exists():
-                add(f'{r.ref.symbol} data', FAIL if r is rows[0] else WARN, f'{path.name} not found')
+                add(f'{r.ref.symbol} data', FAIL if r is tracked_rows[0] else WARN, f'{path.name} not found')
                 continue
             first, last = _tail_ts(path)
             need = today - timedelta(days=cfg.LIVE_DATA['seed_days'])
             stale = last is None or (today - last.date()).days > STALE_DATA_DAYS
             short = first is None or first.date() > need
-            status = FAIL if (r is rows[0] and (stale or short)) else (WARN if (stale or short) else OK)
+            status = FAIL if (r is tracked_rows[0] and (stale or short)) else (WARN if (stale or short) else OK)
             add(f'{r.ref.symbol} data', status, f'{path.name}: {first} to {last}' + ('; STALE' if stale else '')
                 + (f'; history shorter than the {cfg.LIVE_DATA["seed_days"]}-day seed: start-up will fetch the older days from the '
                    f'broker into a private file (one-off broker candle calls)' if short else ''))
