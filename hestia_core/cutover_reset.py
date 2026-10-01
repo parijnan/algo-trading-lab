@@ -1,25 +1,27 @@
 """
-One-shot: reset Selene to flat so it can go from paper to live without a stale paper position.
+One-shot: reset an engine to flat so it can go from paper to live without a stale paper position.
 
 A paper engine's open position lives only in Hestia's ledger and the engine's own state. Switch the engine to live with that position
 still recorded and the next start finds the broker book empty, raises criticals and drops the position with no trade record. This
-resets Selene deliberately instead, after the session, with the paper trade's details saved so its row can be written later with the
-true exit.
+resets the engine deliberately instead, after the session, with the paper trade's details saved so its row can be written later with
+the true exit. Used for Selene (2026-10-01) and Helios (2026-10-02); any engine whose package has a `<engine>_engine.state.EngineState`
+with the shared fields works.
 
-    python -m selene_engine.cutover_reset [--dry-run] [--wait-min N]
+    python -m hestia_core.cutover_reset --engine NAME [--only-date YYYY-MM-DD] [--dry-run] [--wait-min N]
 
 Runs nothing unless ALL hold, otherwise exits 1 having changed nothing:
   * (if --only-date is given) today is that date, so a leftover one-shot cron line can never reset a live engine next year;
   * Hestia is not running (flag gone, no process), so it cannot overwrite the files;
-  * hestia_config says Selene is LIVE on this host (the paper=False change has been pulled) -- resetting a still-paper engine would
+  * hestia_config says the engine is LIVE on this host (the paper=False change has been pulled) -- resetting a still-paper engine would
     only throw its trade away;
-  * Selene has no request in flight, no pending flip and is not frozen (an unexpected state is left for a human).
+  * the engine has no request in flight, no pending flip and is not frozen (an unexpected state is left for a human).
 Other engines' ledger rows and state files are never touched, and are compared before and after.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import shutil
 import subprocess
@@ -32,9 +34,7 @@ from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hestia_core.state_store import StateStore                    # noqa: E402
-from selene_engine.state import EngineState                        # noqa: E402
 
-ENGINE = 'selene'
 KEEP_FIELDS = ('trade_counter', 'last_processed_boundary', 'roll_executed_date', 'attempts')
 
 
@@ -45,11 +45,16 @@ class Result:
     messages: List[str] = field(default_factory=list)
 
 
-def reset(state_dir: Path, now: Optional[datetime] = None, dry_run: bool = False, engine: str = ENGINE) -> Result:
+def engine_state_class(engine: str):
+    return importlib.import_module(f'{engine}_engine.state').EngineState
+
+
+def reset(state_dir: Path, engine: str, now: Optional[datetime] = None, dry_run: bool = False) -> Result:
     """Back up, then reset `engine` to flat and drop its ledger rows. Verifies by reading everything back."""
     now = now or datetime.now()
     tag = now.strftime('%Y%m%d_%H%M%S')
     store = StateStore(state_dir)
+    EngineState = engine_state_class(engine)
     res = Result(ok=False)
 
     def say(msg):
@@ -129,13 +134,14 @@ def hestia_running(flag_dir: Path) -> bool:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument('--engine', required=True, help='registry name, e.g. selene or helios')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--wait-min', type=float, default=180.0, help='how long to wait for Hestia to exit before giving up')
     ap.add_argument('--only-date', help='YYYY-MM-DD: do nothing on any other date (a one-shot cron line re-fires every year)')
     args = ap.parse_args(argv)
     import hestia_config as hc
 
-    log_path = hc.REPO_ROOT / 'logs' / f'selene_cutover_{datetime.now():%Y%m%d}.log'
+    log_path = hc.REPO_ROOT / 'logs' / f'{args.engine}_cutover_{datetime.now():%Y%m%d}.log'
     log_path.parent.mkdir(exist_ok=True)
 
     def log(msg):
@@ -147,12 +153,12 @@ def main(argv=None) -> int:
     if args.only_date and args.only_date != datetime.now().date().isoformat():
         log(f'today is not {args.only_date}; changed nothing')
         return 1
-    entry = hc.ENGINES.get(ENGINE)
+    entry = hc.ENGINES.get(args.engine)
     if entry is None or entry.paper:
-        log(f'{ENGINE} is still PAPER in hestia_config on this host (the paper=False change is not here yet); changed nothing')
+        log(f'{args.engine} is still PAPER in hestia_config on this host (the paper=False change is not here yet); changed nothing')
         return 1
     if not entry.enabled:
-        log(f'{ENGINE} is not enabled on this host; changed nothing')
+        log(f'{args.engine} is not enabled on this host; changed nothing')
         return 1
     deadline = time.time() + args.wait_min * 60
     while hestia_running(hc.FLAG_DIR):
@@ -160,7 +166,7 @@ def main(argv=None) -> int:
             log('Hestia is still running after the wait limit; changed nothing')
             return 1
         time.sleep(30)
-    res = reset(hc.STATE_DIR, dry_run=args.dry_run)
+    res = reset(hc.STATE_DIR, args.engine, dry_run=args.dry_run)
     for m in res.messages:
         log(m)
     return 0 if res.ok else 1
