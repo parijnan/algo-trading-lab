@@ -28,6 +28,7 @@ from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional
 
 from hestia_core.alert_router import AlertRouter
+from hestia_core.display import display_name
 from hestia_core.angel_broker import AngelBrokerPort, AngelConfig
 from hestia_core.broker_router import BrokerRouter
 from hestia_core.core import Alert, CoreConfig, HestiaCore
@@ -259,7 +260,7 @@ class HestiaHost:
             core.register(name, factory, lots_per_unit=entry.lots_per_unit, sizing=defaults[name], paper=entry.paper)
         for name, flag in gated.items():
             core.engine_state[name] = 'killed'
-            host_alert('warning', f'{name} is gated at startup by its {flag} flag and will not run')
+            host_alert('warning', f'{display_name(name)} is gated at startup by its {flag} flag and will not run')
 
         core.restore()
         restored = bool(core._ledger) or bool(core._registry)
@@ -298,7 +299,7 @@ class HestiaHost:
                 data.begin_session(today)
                 core.begin_session()
                 watcher.start()
-            host_alert('info', f'Hestia running: engines {sorted(engines)} (session {data.session_open:%H:%M}-{data.session_close:%H:%M})')
+            host_alert('info', f"Hestia running: engines {', '.join(display_name(n) for n in sorted(engines))} (session {data.session_open:%H:%M}-{data.session_close:%H:%M})")
             reason = lifecycle.run_until_shutdown(data.session_close)
             result.reason = f'ended: {reason.value}'
             result.teardown = lifecycle.teardown(reason)

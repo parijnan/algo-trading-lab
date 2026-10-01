@@ -439,9 +439,9 @@ def test_alerts_go_to_the_channel_of_their_level_tagged_with_the_engine_and_repe
     router(Alert(T0 + timedelta(seconds=40), 'critical', 'a', 'silent'))          # after it: sent again
     router(Alert(T0, 'warning', None, 'host thing', channel='trade-updates'))     # an explicit channel wins
     router.slack.flush(5)
-    assert sent == [('#tradebot-updates', '*Hestia [a]*: engine started'),
-                    ('#error-alerts', '\U0001f6a8\U0001f6a8 *Hestia [a]*: silent'),
-                    ('#error-alerts', '\U0001f6a8\U0001f6a8 *Hestia [a]*: silent'),
+    assert sent == [('#tradebot-updates', '*Hestia [A]*: engine started'),
+                    ('#error-alerts', '\U0001f6a8\U0001f6a8 *Hestia [A]*: silent'),
+                    ('#error-alerts', '\U0001f6a8\U0001f6a8 *Hestia [A]*: silent'),
                     ('#trade-updates', '⚠️ *Hestia*: host thing')]
     assert router.suppressed == 1
 
@@ -455,12 +455,12 @@ def test_an_explicit_emoji_overrides_the_severity_default_in_the_posted_text():
     router(Alert(T0, 'info', 'a', 'plain info, no override'))                     # 'info' has no default emoji
     router(Alert(T0, 'warning', 'a', 'a warning with a custom emoji', emoji='🔔'))  # override wins over the level default too
     router.slack.flush(5)
-    assert sent == [('#tradebot-updates', '⚡*Hestia [a]*: starting — trading X'),
-                    ('#tradebot-updates', '*Hestia [a]*: plain info, no override'),
-                    ('#error-alerts', '🔔*Hestia [a]*: a warning with a custom emoji')]
+    assert sent == [('#tradebot-updates', '⚡*Hestia [A]*: starting — trading X'),
+                    ('#tradebot-updates', '*Hestia [A]*: plain info, no override'),
+                    ('#error-alerts', '🔔*Hestia [A]*: a warning with a custom emoji')]
     router.trade('a', {'trade_id': 7, 'direction': 'bullish', 'total_pnl_rs': 1234.5})
     router.slack.flush(5)
-    assert sent[-1] == ('#trade-alerts', '*Hestia [a]*: trade 7 bullish closed, P&L Rs 1,234')
+    assert sent[-1] == ('#trade-alerts', '*Hestia [A]*: trade 7 bullish closed, P&L Rs 1,234')
 
 
 def test_log_locally_false_still_reaches_slack_but_is_never_written_to_the_local_log(caplog):
@@ -472,8 +472,8 @@ def test_log_locally_false_still_reaches_slack_but_is_never_written_to_the_local
         router(Alert(T0, 'info', 'a', 'BULLISH X Units: 1', channel='trade-updates', log_locally=False))
         router(Alert(T0, 'info', 'a', 'an ordinary alert, logged as usual'))
     router.slack.flush(5)
-    assert sent == [('#trade-updates', '*Hestia [a]*: BULLISH X Units: 1'),
-                    ('#tradebot-updates', '*Hestia [a]*: an ordinary alert, logged as usual')]
+    assert sent == [('#trade-updates', '*Hestia [A]*: BULLISH X Units: 1'),
+                    ('#tradebot-updates', '*Hestia [A]*: an ordinary alert, logged as usual')]
     logged_texts = [r.message for r in caplog.records]
     assert 'BULLISH X Units: 1' not in ' '.join(logged_texts)
     assert any('an ordinary alert, logged as usual' in t for t in logged_texts)
@@ -544,10 +544,12 @@ def test_the_session_report_is_one_message_covering_every_engine(hestias):
                 extra=extra)
     go(h)
     text = build_session_report(h, h.now, h.trades)
-    assert text.startswith('*Hestia session report*')
-    assert 'a (live, running): XX30OCT26FUT +2 @ 100.00; 1 trade(s), Rs 700' in text
-    assert 'p (paper, running): flat; 0 trade(s), Rs 0' in text
-    assert 'combined realised Rs 700' in text and 'account free cash' in text
+    assert text.startswith('\U0001f4ca *Hestia \u2014 Session Report*  |  ')
+    assert '*A* [XX]  \u00b7  Live' in text and '*P* [YY]  \u00b7  Paper' in text
+    assert '*Trade #1*' in text and '  \u21b3 Realized   : *+700 Rs/unit*' in text
+    assert '*Open Position*  \u00b7  Bullish  |  Units: 2' in text
+    assert '  \u21b3 No trade today' in text                               # the paper engine did nothing
+    assert 'Account free cash: Rs' in text
 
 
 def test_the_session_report_lists_each_closed_trade_and_the_open_position(hestias):
@@ -563,8 +565,10 @@ def test_the_session_report_lists_each_closed_trade_and_the_open_position(hestia
     go(h)
     h.set_price('T1', 104.0)                                            # the still-open position from the OpenRequest above
     text = build_session_report(h, h.now, h.trades)
-    assert '    #3 Bullish (units 2): entry 09:30 @ 100.00, exit 09:45 target1, P&L +5.0 pts (+50 Rs/unit)' in text
-    assert '    open: XX30OCT26FUT +2 @ 100.00, LTP 104.00 (+4.00 pts unrealised/lot)' in text
+    assert '*Trade #3*  \u00b7  Bullish  |  Units: 2' in text
+    assert '  \u21b3 Entry: 09:30 @ 100.00   Exit: 09:45  \u00b7  Target1' in text
+    assert '  \u21b3 P&L        : *+5.0 pts  (+50 Rs/unit)*' in text
+    assert '  \u21b3 Unrealised : +4.0 pts  (+40 Rs/unit)   LTP 104.00' in text      # 4 pts x lot size 10 x 1 lot per unit
     h.close()
 
 
@@ -579,7 +583,7 @@ def test_the_session_report_open_position_line_survives_a_missing_quote(hestias)
         text = build_session_report(h, h.now, h.trades)
     finally:
         h.data.ltp_quote = orig
-    assert '    open: XX30OCT26FUT +2 @ 100.00' in text and 'unrealised' not in text
+    assert '*Open Position*' in text and '  \u21b3 Unrealised : price unavailable' in text and 'LTP' not in text
     h.close()
 
 
@@ -724,7 +728,7 @@ def test_with_no_engine_named_the_cash_is_the_live_account_even_when_only_a_pape
     h = hestias([('p', factory(name='p'), {'paper': True})], config=FakeConfig(available_cash=7_000_000.0, paper_cash=123_000.0))
     assert h.available_cash() == 7_000_000.0 and h.available_cash('p') == 123_000.0
     go(h, 5)
-    assert 'account free cash Rs 7,000,000' in build_session_report(h, h.now, [])
+    assert 'Account free cash: Rs 7,000,000' in build_session_report(h, h.now, [])
 
 
 # ---- the real login, with the SDK and the TOTP library stubbed ------------------------------------------------------------------
@@ -771,3 +775,46 @@ def test_the_shipped_credentials_path_is_the_one_prometheus_uses():
     assert str(hestia_config.CREDS_FILE).endswith('data/user_credentials.csv')
     src = (os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'prometheus_production', 'prometheus_configs.py'))
     assert "CREDS_FILE   = REPO_ROOT / 'data' / 'user_credentials.csv'" in open(src).read()
+
+
+def test_the_session_report_is_readable_slack_text_with_no_raw_python_in_it(hestias):
+    """Replaced 2026-10-01: the old report carried request-status dicts, an alerts dict and a combined rupee total across paper and
+    live engines. Nothing of that shape may come back."""
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    text = build_session_report(h, h.now, h.trades)
+    for junk in ('{', '}', "'", 'requests', 'combined', 'XX30OCT26FUT +2', ', Rs '):
+        assert junk not in text, junk
+    assert text.count('━' * 37) >= 2 and text.endswith('\n')
+    h.close()
+
+
+def test_the_session_report_only_mentions_alerts_that_are_worth_reading(hestias):
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    h._alert('info', 'a', 'routine')
+    assert 'Alerts this session' not in build_session_report(h, h.now, [])
+    h._alert('warning', 'a', 'w1')
+    h._alert('critical', 'a', 'c1')
+    assert '⚠️ Alerts this session: 1 critical, 1 warning' in build_session_report(h, h.now, [])
+    h.close()
+
+
+def test_engine_names_are_capitalised_wherever_a_person_reads_them():
+    from hestia_core.display import display_name
+    assert [display_name(n) for n in ('prometheus', 'selene', 'a', '')] == ['Prometheus', 'Selene', 'A', '']
+
+
+def test_a_trade_entered_on_an_earlier_day_carries_its_date_in_the_report(hestias):
+    """A position can run across sessions: a bare 22:15 entry from the previous evening must not read like a same-day 22:15 (the
+    standalone Prometheus report's own fix, 2026-09-11). A same-day time stays a bare HH:MM."""
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.report_trade({'trade_id': 9, 'direction': 'bearish', 'units': 1, 'entry_ts': '2026-09-02T22:15:00',
+                              'entry_price': 100.0, 'lot1_exit_ts': '2026-09-03T09:45:00', 'lot1_exit_reason': 'trend_flip',
+                              'total_pnl_points': -2.0, 'total_pnl_rs': -20.0})
+    h = hestias([('a', factory(act=act))])
+    go(h)
+    text = build_session_report(h, h.now, h.trades)
+    assert '  ↳ Entry: 02-Sep 22:15 @ 100.00   Exit: 09:45  ·  Trend Flip' in text
+    h.close()

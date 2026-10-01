@@ -18,6 +18,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional
 
+from hestia_core.display import display_name
 from hestia_core.slack_queue import SlackQueue
 
 log = logging.getLogger('hestia_alerts')
@@ -35,7 +36,7 @@ class AlertRouter:
         self.suppressed = 0
 
     def __call__(self, alert) -> None:
-        tag = f'*Hestia [{alert.engine}]*' if alert.engine else '*Hestia*'
+        tag = f'*Hestia [{display_name(alert.engine)}]*' if alert.engine else '*Hestia*'
         if getattr(alert, 'log_locally', True):
             log.log(LOG_LEVEL.get(alert.level, logging.INFO), '[%s] %s', alert.engine or 'host', alert.text)
         key = (alert.engine, alert.level, alert.text)
@@ -52,6 +53,6 @@ class AlertRouter:
     def trade(self, engine: str, record: dict) -> None:
         """A closed trade, for #trade-alerts."""
         pnl = record.get('total_pnl_rs')
-        text = (f"*Hestia [{engine}]*: trade {record.get('trade_id')} {record.get('direction')} closed"
+        text = (f"*Hestia [{display_name(engine)}]*: trade {record.get('trade_id')} {record.get('direction')} closed"
                 + (f", P&L Rs {pnl:,.0f}" if isinstance(pnl, (int, float)) else ''))
         self.slack.send(self.channels.get('trade'), text)

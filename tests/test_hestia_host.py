@@ -147,9 +147,9 @@ def test_a_full_session_logs_in_once_trades_and_tears_down_in_order(tmp_path):
     assert r.core.held('a', FRONT) == 3, 'shutdown leaves the position open'
     assert not run.cfg.SESSION_LOCK_FILE.exists() and not (run.cfg.FLAG_DIR / 'hestia_active.flag').exists()
     texts = run.texts()
-    assert any('logging in' in t for t in texts) and any('Hestia running' in t for t in texts)
-    report = [t for t in texts if t.startswith('*Hestia session report*')]
-    assert len(report) == 1 and 'a (live, ended): XX30OCT26FUT +3' in report[0]
+    assert any('logging in' in t for t in texts) and any('Hestia running: engines A (session' in t for t in texts)
+    report = [t for t in texts if t.startswith('\U0001f4ca *Hestia \u2014 Session Report*')]
+    assert len(report) == 1 and '*A* [XX]  \u00b7  Live' in report[0] and 'Units: 3' in report[0]
     stopped = [t for t in texts if 'Hestia stopped' in t]
     assert len(stopped) == 1 and texts.index(report[0]) < texts.index(stopped[0]), 'the report goes out before the final message'
 
@@ -205,7 +205,7 @@ def test_a_paper_engine_runs_through_the_same_host_without_touching_the_broker(t
     r = run.join()
     assert run.double.orders.orders == [], 'a paper engine sends nothing to the broker'
     assert r.core.held('a', FRONT) == 3 and r.core.broker.pool_of('a') == 'paper:a'
-    assert any('a (paper' in t for t in run.texts())
+    assert any('*A* [XX]  \u00b7  Paper' in t for t in run.texts())
 
 
 def test_the_unit_cap_from_configuration_is_enforced_at_admission(tmp_path):

@@ -53,6 +53,8 @@ Nothing is enabled in the committed `hestia_config.py`. The machine allowed to t
 
 ## Adding an engine
 
+**Slack wording.** Engine names are capitalised wherever a person reads them (`*Hestia [Selene]*`, the startup line, the session report) through `display.display_name`; logs, file names and the registry keep the lower-case name so greps and paths do not change. The end-of-session report (`reporting.build_session_report`) uses the standalone Prometheus report's layout: a section per engine (instrument, Live or Paper), a block per trade closed this session (entry and exit time and price, reason, points and Rs per unit; an entry from an earlier day carries its date), an Open Position block with unrealised P&L, and a Realized / Unrealized total in Rs per unit; then free cash and, only when present, unconfirmed requests, ledger mismatches and warning-or-worse alert counts. A part-booked position shows only its open lots until the trade closes.
+
 An `EngineEntry` in `hestia_config.ENGINES` (instrument, `package.module:callable` factory, paper or live, lots per unit, sizing, unit cap) plus the engine package implementing `interface.Engine` against `EngineContext`. No host, flag or report code changes. A new engine is tested against the fake Hestia first, then replayed against recorded days.
 
 ## Tests

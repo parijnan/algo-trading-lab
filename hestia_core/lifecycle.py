@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, List, Optional
 
+from hestia_core.display import display_name
 from hestia_core.interface import StopReason
 
 log = logging.getLogger('hestia_lifecycle')
@@ -134,7 +135,7 @@ class Lifecycle:
             report.engines_hung = alive
             report.steps.append('engines_finished' if not alive else 'engines_hung')
             if alive:
-                self._alert('critical', f'engine(s) {", ".join(alive)} did not stop within {cfg.engine_join_timeout_s:.0f}s')
+                self._alert('critical', f'engine(s) {", ".join(display_name(n) for n in alive)} did not stop within {cfg.engine_join_timeout_s:.0f}s')
 
             deadline = self._clock() + cfg.drain_timeout_s                              # 3. let in-flight requests finish
             while True:
