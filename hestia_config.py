@@ -130,12 +130,15 @@ TRADING_HOSTS = {
     # Helios LIVE from 2026-10-02 (user's decision 2026-10-01, after a paper trade was followed through its whole lifecycle; margin
     # confirmed available): 1 unit = 20 lots, cap 10 units. Its open paper position is reset to flat beforehand by
     # hestia_core/cutover_reset.py --engine helios (a one-shot Delos cron at 00:30 on 2026-10-02), as Selene's was.
-    # Typhon DRY_RUN alongside all three, enabled 2026-09-30 (user's go-ahead after replay_check.py reproduced 61/61 oracle
-    # decisions, plan Step 6): paper only, 1 unit (= 1 lot), cap 10, same posture as Selene's and Helios's.
+    # Typhon LIVE from 2026-10-02 (user's decision 2026-10-01, after one full paper trade -- entry, netted flip exit, re-entry -- at
+    # the real 2-lot size; margin confirmed): 1 unit = 2 lots, cap 10 units. Its open paper position is reset to flat beforehand by
+    # hestia_core/cutover_reset.py --engine typhon (a one-shot Delos cron at 00:35 on 2026-10-02), as Selene's and Helios's were.
+    # (Before that Typhon ran paper alongside the others from 2026-09-30, after replay_check.py reproduced 61/61 oracle decisions,
+    # plan Step 6.)
     'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
                            'selene': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
                            'helios': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
-                           'typhon': dict(enabled=True, paper=True, static_units=1, unit_cap=10)},
+                           'typhon': dict(enabled=True, paper=False, static_units=1, unit_cap=10)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True),
 }
 

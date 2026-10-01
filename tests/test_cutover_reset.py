@@ -175,3 +175,22 @@ def test_main_resets_the_named_engine_once_its_config_says_live(tmp_path, monkey
     assert cr.main(['--engine', 'helios']) == 0
     assert HeliosState.from_json(s.load_engine_state('helios')).status == 'watching'
     assert not any(k[0] == 'helios' for k in s.load_ledger())
+
+
+def test_typhon_is_reset_to_flat_and_its_target_is_saved_with_the_paper_trade(tmp_path):
+    from typhon_engine.state import EngineState as TyphonState
+    s = StateStore(tmp_path)
+    s.save_engine_state('typhon', TyphonState(status='in_trade', direction='bearish', units=1, lots=2, entry_price=287.6,
+                                              sl_price=289.9008, target_price=244.46, contract_token='570751',
+                                              contract_symbol='NATGASMINI27OCT26FUT', contract_expiry='2026-10-27',
+                                              trade_counter=2, last_processed_boundary='2026-10-01T22:15:00',
+                                              trade_row={'trade_id': 2, 'entry_price': 287.6, 'lot1_target': 244.46}).to_json())
+    s.save_ledger({('typhon', '570751'): [-2, 287.6, NOW], ('helios', '571306'): [-20, 14933.0, NOW]})
+    res = cr.reset(tmp_path, 'typhon', now=NOW)
+    assert res.ok and res.changed, res.messages
+    st = TyphonState.from_json(s.load_engine_state('typhon'))
+    assert st.status == 'watching' and st.lots is None and st.target_price is None and st.sl_price is None
+    assert st.trade_counter == 2 and st.last_processed_boundary == '2026-10-01T22:15:00'
+    assert not any(k[0] == 'typhon' for k in s.load_ledger()) and s.load_ledger()[('helios', '571306')][:2] == [-20, 14933.0]
+    saved = json.loads((tmp_path / 'typhon_paper_trade_20260930_234500.json').read_text())
+    assert saved['state']['target_price'] == 244.46 and saved['state']['lots'] == 2
