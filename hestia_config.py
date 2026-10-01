@@ -61,7 +61,7 @@ CORE = dict(
 LIVE_DATA = dict(
     seed_days=18,                              # calendar days of 1-minute history behind the Supertrend seed
     deferred_bar_cutoff_min=1.0,               # wait this long past a 15-minute boundary for an incomplete window
-    poll_stagger_s=1.0,                        # offset between tokens inside a minute (candle calls never bunch up); 5.0 until 2026-10-01, cut to 1.0 at the owner's request: a flip's poll-decide-order took ~1.3s, so 5s per engine was mostly idle wait. The gateway's single HTTP lock and 3/s candle budget still serialise bunched calls; keep above 0 so engine order stays deterministic
+    poll_stagger_s=0.0,                        # offset between tokens inside a minute; 5.0 until 2026-10-01, then 1.0, then 0.0 at the owner's request: when no Prometheus order is in flight, any other engine's flip should act at the lowest possible delay. With 0 all active tokens poll at the same instant; the gateway's single HTTP lock and 3/s candle budget serialise them, in thread-race rather than registration order
     seed_contracts_per_instrument=2,           # front live contract and the next (for a roll)
 )
 MCX_FO_WS_EXCHANGE_TYPE = 5                    # websocket_feed exchange type for MCX F&O
