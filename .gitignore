@@ -451,3 +451,6 @@ hestia_data/
 
 # Delos-only Hestia overrides (which engines may trade on this machine)
 hestia_local.py
+
+# Phase 0 Fyers-vs-Angel comparison output (regenerable; numbers are summarised in plans/hestia-fyers-candle-source.md section 7a)
+research/fyers_mcx_validation/phase0_results.csv
