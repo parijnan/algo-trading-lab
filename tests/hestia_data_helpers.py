@@ -35,7 +35,7 @@ class LiveWorld:
     """`frames` are the full 1-minute frames the double serves; the pipeline files hold only the days before today."""
 
     def __init__(self, tmp_path, engines, refs=(FRONT, NEXT), start=datetime(2026, 9, 3, 8, 50), cfg=None, core_cfg=None,
-                 feed=None, seed_first=True, pipeline_days=(date(2026, 9, 1), date(2026, 9, 2)), calendar=None, today_from=None):
+                 feed=None, seed_first=True, pipeline_days=(date(2026, 9, 1), date(2026, 9, 2)), calendar=None, today_from=None, shadow=None):
         self.tmp = Path(tmp_path)
         self.tmp.mkdir(parents=True, exist_ok=True)
         self.refs = list(refs)
@@ -59,7 +59,7 @@ class LiveWorld:
         data_cfg = cfg or LiveDataConfig(seed_retry_attempts=1, ltp_refresh_s=0)
         data_cfg.seed_days = 2                       # the pipeline files hold the two days before today
         self.data = LiveData(self.kernel, self.gateway, InlineExecutor(), self.catalog, self.calendar, feed, self.tmp / 'cache',
-                             data_cfg, sleep=self.clock.sleep)
+                             data_cfg, sleep=self.clock.sleep, shadow=shadow)
         margin = lambda tok, net, avg: abs(net) * avg * 5.0                       # noqa: E731
         sim = SimBroker(self.kernel, lambda c: BrokerReply('fill'), self.data.price, margin, 1e9, 0.0, 30.0, 2.0, 1.0)
         paper = PaperBroker(self.kernel, self.data.price, margin)

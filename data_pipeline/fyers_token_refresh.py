@@ -139,11 +139,21 @@ def exchange(auth_code: str, creds: dict, post: Optional[Callable] = None) -> Tu
 
 # ---- the token file ----------------------------------------------------------------------------------------------------------
 
+EXPIRY_HOUR, EXPIRY_MINUTE = 6, 30                                        # Fyers: "access tokens expire daily at 6:30 AM" (measured ~06:00-06:30)
+
+
+def next_expiry(now: datetime) -> datetime:
+    """The next 06:30 IST strictly after `now`: a token issued at 06:35 lives until 06:30 tomorrow, one issued at 06:00 until 06:30
+    today. (This file used to say midnight; the docs and a decoded JWT say 06:30.)"""
+    now = now.astimezone(IST)
+    today = now.replace(hour=EXPIRY_HOUR, minute=EXPIRY_MINUTE, second=0, microsecond=0)
+    return today if now < today else today + timedelta(days=1)
+
+
 def token_record(app_id: str, access_token: str, now: Optional[datetime] = None) -> dict:
     now = (now or now_ist()).astimezone(IST)
-    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return {'app_id': app_id, 'access_token': access_token, 'issued_at': now.isoformat(timespec='seconds'),
-            'expires_at': midnight.isoformat(timespec='seconds')}
+            'expires_at': next_expiry(now).isoformat(timespec='seconds')}
 
 
 def write_token_file(path: Path, record: dict) -> None:
@@ -182,6 +192,11 @@ def check_token_file(path: Path, now: Optional[datetime] = None) -> Tuple[List[s
         return problems + [f'unreadable or malformed ({type(exc).__name__})'], None
     if issued.date() != now.date():
         problems.append(f'issued_at {issued:%Y-%m-%d %H:%M} is not today ({now:%Y-%m-%d})')
+    try:
+        if now >= datetime.fromisoformat(record['expires_at']).astimezone(IST):
+            problems.append(f"past expires_at {record['expires_at']}")
+    except (KeyError, ValueError):
+        problems.append('expires_at missing or malformed')
     return problems, record
 
 

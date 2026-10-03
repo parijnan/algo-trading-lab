@@ -102,7 +102,7 @@ def test_the_token_file_is_mode_600_atomic_and_complete(tmp_path):
     assert not list(p.parent.glob('*.tmp'))
     rec = json.loads(p.read_text())
     assert rec['access_token'] == ACCESS and rec['app_id'] == 'ABCDE12345-100'
-    assert rec['issued_at'] == '2026-10-05T09:41:07+05:30' and rec['expires_at'] == '2026-10-06T00:00:00+05:30'
+    assert rec['issued_at'] == '2026-10-05T09:41:07+05:30' and rec['expires_at'] == '2026-10-06T06:30:00+05:30'
 
 
 def make_file(tmp_path, issued=NOW, mtime=NOW, mode=0o600):
@@ -245,3 +245,25 @@ def test_verify_fails_on_a_stale_token_and_on_a_rejected_one(monkeypatch, capsys
     monkeypatch.setattr(ft, '_get', lambda url, params, auth: {'s': 'error', 'code': -16, 'message': 'authenticate'})
     rc, out = run(monkeypatch, capsys, ['verify', '--token-file', str(fresh)])
     assert rc == 1 and 'rejected' in out
+
+
+# ---- expiry: 06:30 IST, not midnight (docs and a decoded JWT, 2026-10-03) --------------------------------------------------------
+
+def test_the_next_expiry_is_the_next_0630_ist_after_the_issue_time():
+    assert ft.next_expiry(datetime(2026, 10, 5, 6, 35, tzinfo=IST)) == datetime(2026, 10, 6, 6, 30, tzinfo=IST)
+    assert ft.next_expiry(datetime(2026, 10, 5, 6, 0, tzinfo=IST)) == datetime(2026, 10, 5, 6, 30, tzinfo=IST)
+    assert ft.next_expiry(datetime(2026, 10, 5, 6, 30, tzinfo=IST)) == datetime(2026, 10, 6, 6, 30, tzinfo=IST)   # at 06:30 it has expired
+    assert ft.next_expiry(datetime(2026, 10, 5, 23, 59, tzinfo=IST)) == datetime(2026, 10, 6, 6, 30, tzinfo=IST)
+
+
+def test_a_token_past_its_expires_at_is_flagged_even_when_issued_and_written_today(tmp_path):
+    early = datetime(2026, 10, 5, 6, 0, tzinfo=IST)                   # issued 06:00, so it expired at 06:30 the same day
+    p = make_file(tmp_path, issued=early, mtime=early)
+    assert ft.check_token_file(p, datetime(2026, 10, 5, 6, 20, tzinfo=IST))[0] == []
+    assert any('expires_at' in x for x in ft.check_token_file(p, datetime(2026, 10, 5, 6, 45, tzinfo=IST))[0])
+
+
+def test_a_token_issued_at_0635_is_good_for_the_whole_trading_day(tmp_path):
+    issued = datetime(2026, 10, 5, 6, 35, tzinfo=IST)
+    p = make_file(tmp_path, issued=issued, mtime=issued)
+    assert ft.check_token_file(p, datetime(2026, 10, 5, 23, 55, tzinfo=IST))[0] == []

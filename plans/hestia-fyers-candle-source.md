@@ -1,12 +1,12 @@
 # Hestia: Fyers as a minute-candle source, with Angel One fallback
 
-**Status (2026-10-02): the token-refresh piece is built (section 4); the candle source itself is still PLANNING ONLY.** This document is for review and revision before any code is written. Sections marked *open decision* need an answer from the strategy owner. Related history: `plans/fyers-mcx-data-integration.md` (validation, backfill, and the finding that headless Fyers auth is impossible under the SEBI framework), `hestia_core/README.md` (Hestia's own data path).
+**Status (2026-10-03): the daily token is automated and delivered to Delos (section 4); Phase 0, the offline verification, is done (section 7a); Phase 1 (shadow) is built and tested but NOT enabled anywhere (section 7b).** This document is for review and revision before any code is written. Sections marked *open decision* need an answer from the strategy owner. Related history: `plans/fyers-mcx-data-integration.md` (validation, backfill, and the finding that headless Fyers auth is impossible under the SEBI framework), `hestia_core/README.md` (Hestia's own data path).
 
 ## 1. Goal and constraint
 
 Reduce Hestia's dependence on Angel One's `getCandleData`, which produces the AB1021 refusals, exhausted retry bursts and occasional gaps that block seeding (for example the missing GOLDPETAL 21:15 bar on 2026-09-29). When a fresh Fyers token is available on Delos that day, query Fyers for the one-minute candles and fall back to Angel One on any failure. When the token is stale or absent, use Angel One alone. Angel One order execution, the WebSocket feed and LTP polling are untouched.
 
-The hard constraint: Fyers cannot be re-authenticated unattended (`plans/fyers-mcx-data-integration.md` section 3.6: `send_login_otp_v2` returns -1025 and `validate-refresh-token` is disabled for SEBI compliance). The access token expires at midnight IST whatever time it was issued. So a Fyers token exists on Delos only on days the owner logs in manually and copies it across. Fyers is therefore an opportunistic layer, and the system must behave exactly as it does today, with no degradation, on every day without a token.
+The hard constraint: Fyers cannot be re-authenticated unattended (`plans/fyers-mcx-data-integration.md` section 3.6: `send_login_otp_v2` returns -1025 and `validate-refresh-token` is disabled for SEBI compliance). The access token expires daily at about 06:30 IST (the docs say so, and a decoded token agreed), not at midnight as this plan first assumed. Since 2026-10-03 a laptop cron job generates and delivers it (section 4), so on most days a fresh token is on Delos before Hestia's 08:55 start. It is still an opportunistic layer: the laptop has to be awake at 06:35, so the system must behave exactly as it does today, with no degradation, on every day without a fresh token.
 
 ## 2. What exists today
 
@@ -49,7 +49,7 @@ No schema change. The first source to supply a closed minute wins, exactly as th
 
 ## 4. Logistics
 
-- **Daily login (automated 2026-10-03; supersedes the 2026-10-02 manual skill as the daily path).** `run_fyers_auto_token.sh` (laptop, 06:35 IST cron) generates the day's token unattended — straight-through redirect off the persistent browser profile's live Fyers session, or a full TOTP auto-login when that session has expired — writes the token locally and to `hestia_data/fyers_token.json` on Delos (mode 600, over ssh stdin, atomically), and runs the same verify on Delos as the skill did (file mode, mtime and `issued_at` both today in IST, one live History call). Full story: `plans/fyers-auto-token.md`. The `fyers-token` skill (`.claude/skills/fyers-token/`) remains the manual recovery path when automation fails. Fyers now helps every day, with the same graceful no-token degradation when it can't. Nothing on Delos reads the file until the candle source is built; its token gate will apply the same freshness rule `fyers_token_refresh.check_token_file` already implements.
+- **Daily login (automated 2026-10-03; supersedes the 2026-10-02 manual skill as the daily path).** `run_fyers_auto_token.sh` (laptop, 06:35 IST cron) generates the day's token unattended — straight-through redirect off the persistent browser profile's live Fyers session, or a full TOTP auto-login when that session has expired — writes the token locally and to `hestia_data/fyers_token.json` on Delos (mode 600, over ssh stdin, atomically), and runs the same verify on Delos as the skill did (file mode, mtime and `issued_at` both today in IST, one live History call). Full story: `plans/fyers-auto-token.md`. The `fyers-token` skill (`.claude/skills/fyers-token/`) remains the manual recovery path when automation fails. Fyers now helps every day, with the same graceful no-token degradation when it can't. `expires_at` in the file is the next 06:30 IST (corrected 2026-10-03; it used to say midnight). Nothing on Delos reads the file until the candle source is built; its token gate will apply the same rule `fyers_token_refresh.check_token_file` already implements: mode 600, the file's mtime and `issued_at` both today in IST, and now before `expires_at`.
 - **Token timing.** Hestia starts at 08:55, so a token pushed before then is used from the first seed. A token pushed later is picked up at the next poll.
 - **Security.** The current Fyers app has order-placement scope (`plans/fyers-mcx-data-integration.md` section 2.1), so a token on Delos could place orders. Mitigations: mode 600, never logged (a test fails if the token string appears in any log output, the SmartAPI logger precedent), and the source code hard-codes only the History endpoint. *Open decision:* create a second Fyers app with data-only scope for Delos, which removes the risk at the cost of a one-time app creation and consent, or reuse the current token.
 - **No new cron, no crontab change, no repo secrets.** `hestia_data/` is already gitignored.
@@ -78,13 +78,36 @@ No schema change. The first source to supply a closed minute wins, exactly as th
 
 | Phase | What | Exit gate |
 |---|---|---|
-| 0 | Verify offline: symbol resolution for CRUDEOILM, SILVERMIC, GOLDPETAL and NATGASMINI live contracts; whether Fyers returns the forming bar; zero-volume placeholder effect on 15-minute bars; documented rate limits | Fyers candles match Angel One's on OHLC for every instrument; placeholder handling understood |
+| 0 | **DONE 2026-10-03 (section 7a).** Verify offline: symbol resolution for CRUDEOILM, SILVERMIC, GOLDPETAL and NATGASMINI live contracts; whether Fyers returns the forming bar; zero-volume placeholder effect on 15-minute bars; documented rate limits | Fyers candles match Angel One's on OHLC for every instrument; placeholder handling understood |
 | 1 | **Shadow.** Angel One remains the source of truth. When the token is fresh, Fyers is also queried each minute and per-minute diffs, latency and failures are written to a CSV. No decision is affected | Several sessions: at least 99% of minutes match, identical 15-minute Supertrend flips, failure and latency rates acceptable |
 | 2 | **Rescue.** Angel One first; Fyers is tried only after Angel One's burst is exhausted, so Fyers can only add data | A week with no bad data and visible benefit (fewer deferred windows) |
-| 3 | **Smart** (Fyers first) on paper-only instruments. GOLDPETAL and NATGASMINI first. SILVERMIC is not a safe pilot once Selene is live (2026-10-01) | 1 to 2 weeks clean |
-| 4 | Smart on SILVERMIC, then CRUDEOILM last, since it feeds Prometheus, the live strategy | Owner sign-off |
+| 3 | **Smart** (Fyers first) on **CRUDEOILM only** (Prometheus): the instrument most likely to flip (103 flips in 60 days) and so the one that gains most from faster, more reliable flip detection, and the one where Phase 1 produces the most evidence. Prometheus is live, so this phase starts only after Phase 1 and 2 have run clean | 1 to 2 weeks clean on CRUDEOILM |
+| 4 | Smart on the other instruments, each only after its own shadow flip agreement meets the gate | Owner sign-off per instrument |
 
 Rollback at any phase: set `mode='angel'` and restart (restarts are unrestricted), or drop the kill-switch flag for an immediate effect. Each phase ships as its own commit with tests, and the plan and `hestia_core/README.md` are updated in the same commit as the code, per repo convention.
+
+## 7a. Phase 0 results (2026-10-03, offline, read-only)
+
+Scripts: `research/fyers_mcx_validation/phase0_hestia_candles.py` (minute level) and `phase0_flip_agreement.py` (Supertrend flips). Fyers History calls only, compared with the Angel One files in `data_pipeline/data/mcx/`, using Hestia's own resampler and each engine's own Supertrend settings.
+
+- **Symbols.** All eight live contracts (front and next, four instruments) resolve as `MCX:<UNDERLYING><YY><MON>FUT`; for example SILVERMIC30NOV26 is `MCX:SILVERMIC26NOVFUT` and NATGASMINI27OCT26 is `MCX:NATGASMINI26OCTFUT`.
+- **Alignment.** Minute timestamps line up exactly: shifting either source by one minute collapses the match to near zero.
+- **Coverage.** Fyers has every minute Angel One has, plus extra zero-volume placeholder minutes (about 0% to 3% of minutes: 5 for the Crude Oct contract, over 200 for some thin next-month contracts), the same placeholders found in the 2026-09-15 validation.
+- **Minute-level agreement is close but not exact.** Highs and lows match about 95% of the time, opens 76% to 82%, closes 82% to 92%. The differences are mostly 1 to 2 ticks at the median, with rare large outliers (a few dozen ticks for Typhon and Prometheus, a few thousand rupees on Selene), and they do not depend on volume. Open and close differing while high and low do not is the pattern two feeds capturing slightly different first and last prints in a minute would produce. Volumes agree on the median but are rarely identical.
+- **Supertrend flips, the result that matters.** Over the last 21 to 60 days on the front contracts, 168 Angel flips: 159 (95%) land on the identical 15-minute bar in Fyers, 5 (3%) are one bar off, and 4 (2%) have no counterpart. Helios 15 of 15 identical, Prometheus 99 of 103, Selene 27 of 29, Typhon 18 of 21. The trend itself disagrees on 0 bars for Helios, 14 of 2,056 for Prometheus, 8 of 780 for Selene and 14 of 780 for Typhon.
+- **Reading it.** Neither source is "true": both are feed prints. They are statistically equivalent, not identical, so a flip can land a bar apart or disappear in about 5% of cases. That is the same size of gap that already exists between the live engines (Angel One) and the backtests they were calibrated on (Fyers-preferred data), so moving live to Fyers would narrow that gap rather than widen it. A series that mixes sources within a bar window (keep-first, after a fallback) should behave like either pure series to within the same tick noise.
+- **Against the original exit gate** ("Fyers candles match Angel One's on OHLC for every instrument"): not met literally, because opens and closes differ by ticks. It needs restating; see decision 7.
+- **Not testable offline** (markets closed): the forming-bar behaviour, how soon a closed minute becomes available, and live reliability. Phase 1 measures these.
+
+## 7b. Phase 1 as built (2026-10-03)
+
+Code: `hestia_core/fyers_shadow.py`, hooks in `hestia_core/live_data.py` (`begin` at the minute tick, `angel_result` when the Angel One poll for that tick is done), wiring in `hestia_core/host.py`, config in `hestia_config.CANDLE_SOURCE` (default `mode='angel'`), a `--check` line in `hestia_core/preflight.py`, and `research/fyers_mcx_validation/phase1_shadow_report.py`. Tests: `tests/test_fyers_shadow.py`, `tests/test_hestia_live_data_shadow.py`, `tests/test_hestia_host_shadow.py`, `tests/test_phase1_shadow_report.py`, plus new preflight cases; each safety property was broken on purpose and the tests caught it. Shaped by an independent review before building:
+
+- **Measured at the tick, on both sides.** The Fyers measurement starts at the minute tick, not after the Angel One job, so its timing never includes Angel One's. The Angel One side is recorded too (attempts, exhaustion, seconds from the tick until the just-closed minute was present), because the case for Phases 2 and 3 is Fyers succeeding where Angel One exhausted and arriving no later at the boundary minutes. Boundary minutes (xx:00, 15, 30, 45) are reported separately.
+- **Isolated.** Its own daemon pool (never joined at exit, so a hung call cannot delay the engine join, the drain or `terminateSession`), at least one worker per active token so retry waits never queue behind each other, a per-token in-flight guard, copies of the Angel One frames, no kernel posts, no alerts, no Slack. A 429 is never retried. The forming minute is dropped from Fyers results as it is from Angel One's.
+- **Compared against what the engines acted on.** The report compares Fyers-built Supertrend against Hestia's own `15m boundary` log lines, not the pipeline files (those come from a later historical fetch) and not the intraday cache (pruned on read). The Fyers series is about 20 days of Fyers history plus the day's shadow minutes as they were seen live, because the Supertrend is path dependent.
+- **Not enabled on 2026-10-05.** Monday is the first live session for Helios and Typhon and the first with zero poll stagger; three new things at once would make a problem hard to attribute. Enable by adding `'CANDLE_SOURCE': {'mode': 'shadow'}` to the `delos` entry of `TRADING_HOSTS` after Monday's session has been checked. Reversible at once: delete that entry, or touch `hestia_data/flags/fyers_off.flag` (no restart needed, stops every Fyers call at the next poll).
+- **Gate for Phase 2.** The suggested gate (section 9) plus, from the availability tables: Fyers must have the just-closed minute no later than Angel One at boundary minutes in most polls, and must have it in a meaningful share of the polls where Angel One exhausted.
 
 ## 8. Risks and things not yet verified
 
@@ -95,11 +118,14 @@ Rollback at any phase: set `mode='angel'` and restart (restarts are unrestricted
 - Coverage depends on the owner logging in daily. On days without a token the benefit is zero, by design.
 - Fyers could change or disable the History endpoint or its access rules, as it did with refresh tokens. The fallback design contains this, but it should be expected.
 
-## 9. Open decisions
+## 9. Decisions
 
-1. Data-only Fyers app for Delos, or reuse the current order-scoped token?
-2. Sequence: shadow, then rescue, then smart (recommended), or straight to smart?
-3. Is a daily manual login acceptable, knowing coverage follows the days it is done?
-4. Should seeding and backfill (`fetch_history`, and gap-fill at start-up) also try Fyers first? It would have helped the 2026-09-29 missing-bar seed failure, but it widens the change.
-5. Keep both the mtime check and the embedded `issued_at`, or mtime only?
-6. Which instruments pilot in phase 3, given SILVERMIC goes live tomorrow?
+**Resolved**
+- **Token (decision 1, 2026-10-03):** reuse the current order-scoped token. No data-only app has been created. The mitigations in section 4 stand (mode 600, never logged, only the History endpoint is called).
+- **Sequence (decision 2):** shadow, then rescue, then smart.
+- **Seeding and backfill (decision 4):** stay on Angel One. The purpose is the live-polling phase: the AB1021 errors and the delay in detecting flips while monitoring. Seeding starts well before the open and is not where the delay matters. `fetch_history` and start-up gap-fill are not touched.
+- **Pilot (decisions 6 and 7):** CRUDEOILM (multiplier 2.0), the instrument most likely to flip. Shadow still records all four instruments' active contracts, because it changes no decision and the flip-agreement figures are what later phases will be gated on. The gate suggested in section 7a (at least 95% of flips on the identical bar and none missing outright, per instrument, with acceptable failure and latency) stands unless revised after seeing live shadow data.
+- **Daily login:** automated (section 4); coverage is every day the laptop is awake at 06:35.
+- **Freshness rule:** file mtime and `issued_at` both today in IST, and now before `expires_at` (next 06:30 IST).
+
+**Still open:** none that block Phase 1.

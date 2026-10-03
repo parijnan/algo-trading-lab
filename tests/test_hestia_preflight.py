@@ -40,6 +40,7 @@ def cfg(tmp_path):
     ns.SESSION_LOCK_FILE = tmp_path / 'lock'
     ns.LEGACY_PID_FILES = {'standalone Prometheus': tmp_path / 'prometheus.pid'}
     ns.MCX_DATA_DIR, ns.INSTRUMENT_MASTER_FILE, ns.MCX_HOLIDAYS_FILE, ns.CREDS_FILE = data / 'mcx', data / 'master.csv', data / 'holidays.csv', creds
+    ns.FYERS_TOKEN_FILE, ns.FYERS_OFF_FLAG, ns.SHADOW_DIR = tmp_path / 'fyers_token.json', tmp_path / 'fyers_off.flag', tmp_path / 'shadow'
     ns.ENGINES = {'prometheus': dataclasses.replace(real.ENGINES['prometheus'], enabled=True, static_units=5)}
     return ns
 
@@ -153,3 +154,41 @@ def test_the_committed_configuration_enables_nothing_on_an_unlisted_machine():
     assert not any(e.enabled for e in hc.ENGINES.values()) or hc._local is not None
     assert hc.SLACK_PROMETHEUS_VIA_HESTIA is False or hc._local is not None
     assert 'hestia_local.py' in (Path(hc.__file__).parent / '.gitignore').read_text()
+
+
+# ---- the candle source and the Fyers token (Phase 1 of plans/hestia-fyers-candle-source.md) ----------------------------------------
+
+def _fresh_token(path, when=NOW):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'data_pipeline'))
+    import fyers_token_refresh as ftr
+    ist = ftr.IST
+    issued = when.replace(tzinfo=ist, hour=6, minute=35)
+    ftr.write_token_file(path, ftr.token_record('APP-100', 'TOK', issued))
+    os.chmod(path, 0o600)
+    os.utime(path, (issued.timestamp(), issued.timestamp()))
+
+
+def test_the_default_candle_source_is_angel_only_and_a_missing_token_is_not_a_warning(cfg):
+    st = by_name(pf.run_checks(cfg, NOW))
+    assert st['candle source'].status == pf.OK and 'angel only' in st['candle source'].detail
+    assert st['fyers token'].status == pf.OK and 'no token file' in st['fyers token'].detail
+
+
+def test_shadow_mode_with_no_usable_token_warns_that_it_would_record_nothing(cfg):
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='shadow')
+    st = by_name(pf.run_checks(cfg, NOW))
+    assert st['candle source'].status == pf.OK and 'shadow' in st['candle source'].detail
+    assert st['fyers token'].status == pf.WARN and 'would record nothing' in st['fyers token'].detail
+
+
+def test_a_fresh_token_is_reported_with_its_fingerprint_and_never_its_text(cfg):
+    _fresh_token(cfg.FYERS_TOKEN_FILE)
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='shadow')
+    st = by_name(pf.run_checks(cfg, NOW))
+    assert st['fyers token'].status == pf.OK and 'fingerprint' in st['fyers token'].detail and 'TOK' not in st['fyers token'].detail.replace('fingerprint', '')
+
+
+def test_an_unknown_candle_source_mode_fails_the_preflight(cfg):
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='smart')
+    assert by_name(pf.run_checks(cfg, NOW))['candle source'].status == pf.FAIL

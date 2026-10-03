@@ -29,6 +29,7 @@ from typing import Callable, Dict, List, Optional
 
 from hestia_core.alert_router import AlertRouter
 from hestia_core.display import display_name
+from hestia_core.fyers_shadow import build_shadow
 from hestia_core.angel_broker import AngelBrokerPort, AngelConfig
 from hestia_core.broker_router import BrokerRouter
 from hestia_core.core import Alert, CoreConfig, HestiaCore
@@ -78,6 +79,7 @@ class HostDeps:
     install_signals: bool = True
     engine_factories: Dict[str, Callable] = field(default_factory=dict)      # overrides the config's dotted paths
     executor_workers: int = 4
+    make_shadow: Optional[Callable[[object], Optional[object]]] = None     # tests: a recorder double; default is fyers_shadow.build_shadow(cfg)
 
 
 @dataclass
@@ -164,7 +166,7 @@ class HestiaHost:
 
         result = HostResult(True)
         login: Optional[LoginResult] = None
-        runtime = SimpleNamespace(reactor=None, executor=None)
+        runtime = SimpleNamespace(reactor=None, executor=None, shadow=None)
         try:
             if calendar.evening_only(today):
                 wait = seconds_until_evening_open(deps.clock(), calendar.session_open(today), cfg.EVENING_SESSION_WAKE_BUFFER_MIN)
@@ -208,6 +210,8 @@ class HestiaHost:
                 runtime.reactor.stop()
             if runtime.executor is not None:
                 runtime.executor.shutdown(wait=False)
+            if runtime.shadow is not None:
+                runtime.shadow.close()
 
     # ---- the session -------------------------------------------------------------------------------------------------------
 
@@ -227,8 +231,11 @@ class HestiaHost:
         feed = deps.make_feed(login, lambda m: host_alert('warning', m))
         order_feed = deps.make_order_feed(login)
         catalog = ContractCatalog(cfg.INSTRUMENT_MASTER_FILE, cfg.MCX_DATA_DIR)
+        rt.shadow = shadow = deps.make_shadow(cfg) if deps.make_shadow else build_shadow(cfg)      # None unless CANDLE_SOURCE mode is 'shadow'
+        if shadow is not None:
+            host_alert('info', f"Fyers candle shadow ON for {', '.join(cfg.CANDLE_SOURCE.get('instruments', []))}: recording only, no decision uses it")
         data = LiveData(reactor, gateway, executor, catalog, calendar, feed, cfg.CACHE_DIR, LiveDataConfig(**cfg.LIVE_DATA),
-                        sleep=deps.sleep, alert=host_alert)
+                        sleep=deps.sleep, alert=host_alert, shadow=shadow)
 
         def lot_size(token: str) -> Optional[int]:
             row = catalog.row(token)
@@ -307,5 +314,7 @@ class HestiaHost:
         finally:
             watcher.stop()
             lifecycle.restore_signals()
+            if shadow is not None:
+                shadow.close()                                           # non-blocking: a hung Fyers call can never delay exit
             if result.teardown is None:                                  # an exception before the normal teardown
                 result.teardown = lifecycle.teardown()

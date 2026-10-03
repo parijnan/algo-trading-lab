@@ -64,6 +64,21 @@ LIVE_DATA = dict(
     poll_stagger_s=0.0,                        # offset between tokens inside a minute; 5.0 until 2026-10-01, then 1.0, then 0.0 at the owner's request: when no Prometheus order is in flight, any other engine's flip should act at the lowest possible delay. With 0 all active tokens poll at the same instant; the gateway's single HTTP lock and 3/s candle budget serialise them, in thread-race rather than registration order
     seed_contracts_per_instrument=2,           # front live contract and the next (for a roll)
 )
+# ---- the candle source (plans/hestia-fyers-candle-source.md) ---------------------------------------------------------------
+# 'angel' (the default): Angel One only, no Fyers code runs. 'shadow' (Phase 1): Angel One stays the only source any engine sees; Fyers is
+# queried in parallel and the comparison is RECORDED under hestia_data/shadow/ (rescue and smart arrive with Phases 2 and 3). A host or
+# hestia_local.py overrides keys of this dict through its own CANDLE_SOURCE entry.
+FYERS_TOKEN_FILE = HESTIA_DIR / 'fyers_token.json'      # written daily at 06:35 IST by the laptop job (plans/fyers-auto-token.md)
+FYERS_OFF_FLAG = FLAG_DIR / 'fyers_off.flag'            # touch it to stop every Fyers call at the next poll, no restart needed
+SHADOW_DIR = HESTIA_DIR / 'shadow'
+CANDLE_SOURCE = dict(
+    mode='angel',
+    instruments=('CRUDEOILM', 'SILVERMIC', 'GOLDPETAL', 'NATGASMINI'),
+    timeout_s=3.0,                                      # one Fyers call; a slow Fyers must never hold a bar boundary
+    retry_s=1.0,                                        # between attempts while the just-closed minute has not appeared
+    max_wait_s=6.0,                                     # stop waiting for it this long after the tick
+)
+
 MCX_FO_WS_EXCHANGE_TYPE = 5                    # websocket_feed exchange type for MCX F&O
 
 # ---- the Angel One adapter and the paper broker ------------------------------------------------------------------------------
@@ -166,6 +181,15 @@ def resolve_for_host(engines, hosts, hostname, local=None):
     return engines, switch
 
 
+def resolve_candle_source(base, hosts, hostname, local=None):
+    """`base` with the host's `CANDLE_SOURCE` dict, then the machine-local file's, merged over it key by key."""
+    out = dict(base)
+    for layer in (hosts.get(hostname, {}).get('CANDLE_SOURCE'), getattr(local, 'CANDLE_SOURCE', None)):
+        if layer:
+            out.update(layer)
+    return out
+
+
 try:
     import hestia_local as _local          # noqa: E402  (gitignored; absent unless someone adds a per-machine change)
 except ImportError:
@@ -173,4 +197,5 @@ except ImportError:
 import socket as _socket  # noqa: E402
 HOSTNAME = _socket.gethostname()
 ENGINES, SLACK_PROMETHEUS_VIA_HESTIA = resolve_for_host(ENGINES, TRADING_HOSTS, HOSTNAME, _local)
+CANDLE_SOURCE = resolve_candle_source(CANDLE_SOURCE, TRADING_HOSTS, HOSTNAME, _local)
 LOCAL_OVERRIDES_PRESENT = _local is not None or HOSTNAME in TRADING_HOSTS

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, List, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -162,6 +163,26 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
     ledger = state_path / 'ledger.json'
     if ledger.exists():
         add('ledger', OK, f'{ledger.name} present ({ledger.stat().st_size} bytes): the broker book will be checked against it at start')
+
+    # ---- the candle source and the Fyers token (no network: only reads the token file) ------------------------------------------
+    from hestia_core.fyers_shadow import MODES, TokenGate
+    cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
+    mode = cs.get('mode', 'angel')
+    if mode not in MODES:
+        add('candle source', FAIL, f'CANDLE_SOURCE mode {mode!r} is not one of {MODES}')
+    else:
+        add('candle source', OK, 'angel only: no Fyers code runs' if mode == 'angel' else
+            f"shadow: Fyers queried in parallel for {', '.join(cs.get('instruments', []))}, recorded to {cfg.SHADOW_DIR}; no decision uses it")
+        if hasattr(cfg, 'FYERS_TOKEN_FILE'):
+            ist = ZoneInfo('Asia/Kolkata')
+            gate = TokenGate(cfg.FYERS_TOKEN_FILE, getattr(cfg, 'FYERS_OFF_FLAG', None),
+                             clock=lambda: now.astimezone(ist) if now.tzinfo else now.replace(tzinfo=ist))
+            st = gate.check()
+            if st.ok:
+                add('fyers token', OK, f'usable (fingerprint {st.fingerprint}); Angel One stays the only source the engines see')
+            else:
+                add('fyers token', OK if mode == 'angel' else WARN,
+                    f'not usable: {st.reason}' + ('' if mode == 'angel' else '; shadow would record nothing today'))
 
     # ---- who else holds the account ----------------------------------------------------------------------------------------
     for label, pid_file in getattr(cfg, 'LEGACY_PID_FILES', {}).items():

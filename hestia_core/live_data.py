@@ -110,8 +110,9 @@ class LiveData:
 
     def __init__(self, kernel, gateway, executor, catalog: ContractCatalog, calendar: MarketCalendar, feed: Optional[FeedPort],
                  cache_dir, config: Optional[LiveDataConfig] = None, sleep: Callable[[float], None] = time.sleep,
-                 alert: Optional[Callable[[str, str], None]] = None):
+                 alert: Optional[Callable[[str, str], None]] = None, shadow=None):
         self.kernel, self.gateway, self.executor = kernel, gateway, executor
+        self.shadow = shadow            # a hestia_core.fyers_shadow.ShadowRecorder, or None; it only records, it never changes a decision
         self.catalog, self.calendar, self.feed = catalog, calendar, feed
         self.cfg = config or LiveDataConfig()
         self.cache = TodayCache(cache_dir)
@@ -431,6 +432,11 @@ class LiveData:
         self._check_dpl(s)
         win_to = self.kernel.now
         win_from = win_to - timedelta(minutes=self.cfg.poll_window_min)
+        if self.shadow is not None:                             # at the tick, independent of how long the Angel One poll takes
+            try:
+                self.shadow.begin(s.ref, win_to, win_from, win_to)
+            except Exception:                                   # noqa: BLE001 - the recorder never raises; this is belt and braces
+                log.exception('fyers shadow begin raised')
         if s.polling:                                           # the previous poll has not finished: queue this window
             s.pending_recovery.append((win_from, win_to))
             return
@@ -440,12 +446,13 @@ class LiveData:
         def job():
             results = []
             for (f, t) in pending + [(win_from, win_to)]:       # recovery first, then the current window
-                df = fetch_one_minute_window(self.gateway, token, f, t, self.cfg.fetch, self._sleep)
+                stats: dict = {}
+                df = fetch_one_minute_window(self.gateway, token, f, t, self.cfg.fetch, self._sleep, stats=stats)
                 if df is not None:
                     df = self._closed_minutes(df, t)
                     if not df.empty:
                         self.cache.merge(token, df)
-                results.append(((f, t), df))
+                results.append(((f, t), df, stats))
             return results
 
         def done(fut):
@@ -456,12 +463,18 @@ class LiveData:
                 log.error('poll job for %s failed: %r', token, exc)
                 s.pending_recovery.extend(pending + [(win_from, win_to)])
                 return
-            for window, df in results:
+            for window, df, _stats in results:
                 if df is None:
                     s.pending_recovery.append(window)
                 elif not df.empty:
                     self._merge_memory(s, df)
             self._after_merge(s, boundary)
+            if self.shadow is not None:                         # the Angel One side of the measurement; copies, so nothing is shared
+                try:
+                    self.shadow.angel_result(s.ref, win_to, [df for _w, df, _st in results], [st for _w, _df, st in results],
+                                             self.kernel.now)
+                except Exception:                               # noqa: BLE001
+                    log.exception('fyers shadow angel_result raised')
         self._async(job, done)
 
     @staticmethod
