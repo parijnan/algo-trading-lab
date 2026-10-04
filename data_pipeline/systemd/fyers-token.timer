@@ -1,0 +1,10 @@
+[Unit]
+Description=Fyers daily token at 06:35 IST, run as soon as the laptop is next awake if that slot was missed
+
+[Timer]
+OnCalendar=*-*-* 06:35:00
+Persistent=true
+Unit=fyers-token.service
+
+[Install]
+WantedBy=timers.target

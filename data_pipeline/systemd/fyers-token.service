@@ -1,0 +1,11 @@
+[Unit]
+Description=Fyers daily access token (unattended TOTP login in Chrome, then push to Delos)
+
+[Service]
+Type=oneshot
+# After a wake from sleep the Wi-Fi may take a moment to reconnect: wait up to two minutes for the Fyers host to answer (any HTTP
+# response counts), then run regardless -- a real failure is reported to Slack by the job itself.
+ExecStartPre=/usr/bin/bash -c 'for i in $(seq 1 30); do /usr/bin/curl -s -o /dev/null -m 3 https://api-t1.fyers.in/ && exit 0; sleep 4; done; exit 0'
+ExecStart=/home/parijnan/scripts/algo-trading-lab/data_pipeline/run_fyers_auto_token.sh
+TimeoutStartSec=15min
+Nice=10

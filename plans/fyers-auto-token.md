@@ -1,7 +1,7 @@
 # Fyers Automated Daily Token (unattended TOTP browser login)
 
 **Status (2026-10-03): BUILT and live-proven end-to-end.** Both execution paths
-ran unattended on 2026-10-03 through the exact cron wrapper (`run_fyers_auto_token.sh`):
+ran unattended on 2026-10-03 through the exact cron wrapper (`run_fyers_auto_token.sh`; scheduled by a systemd timer since 2026-10-04):
 full auto-login in 14s (client ID → Turnstile → TOTP → PIN → token) after session
 expiry, plus local token write, live verification, and Delos push. Related:
 `plans/fyers-mcx-data-integration.md` §2.3/§3.6 (the older "headless is blocked"
@@ -81,7 +81,7 @@ History call before anything reports success.
   not a plain `startswith` (which would accept `quant-grow.com.evil.example`).
 - The old repo claim "access tokens expire at midnight IST" is outdated:
   current docs say 6:30 AM, and the 2026-10-02-issued JWT decoded to an
-  ~06:00–06:30 IST expiry. Either way, the cron slot only needs to be after
+  ~06:00–06:30 IST expiry. Either way, the scheduled slot only needs to be after
   expiry.
 
 ## 5. What runs where
@@ -89,9 +89,14 @@ History call before anything reports success.
 - **Laptop** (this is deliberate — see §6): `data_pipeline/fyers_auto_token.py`
   (both paths, atomic token writes, Slack report, never logs a secret) inside
   `data_pipeline/run_fyers_auto_token.sh` (flock single-instance guard, stale
-  profile-lock cleanup, Delos push over ssh stdin, remote verify), cron
-  **06:35 IST daily** (after expiry, before Hestia's 08:55 start, before the
-  09:15 open).
+  profile-lock cleanup, Delos push over ssh stdin, remote verify), run by a
+  systemd **user timer** (`fyers-token.timer`, **06:35 IST daily**, after expiry,
+  before Hestia's 08:55 start and the 09:15 open) with `Persistent=true`: if the
+  laptop was asleep or off at 06:35 the job runs as soon as it is next awake and
+  logged in (changed from cron 2026-10-04, because cron never catches up a missed
+  slot). Unit files: `data_pipeline/systemd/` (copies installed in
+  `~/.config/systemd/user/`; re-copy and `systemctl --user daemon-reload` after
+  editing).
 - **Writes**: `data/user_credentials.csv` (both Fyers token columns — the
   laptop downloaders' input) and `hestia_data/fyers_token.json` (the exact
   format `fyers_token_refresh.py` defines; mode 600, atomic — the Delos
@@ -120,10 +125,20 @@ morning slot works equally well).
 
 ## 7. Operational notes
 
-- **Laptop must be awake at the slot.** If asleep/off, that day's token is
-  missed — tolerated by design (§5 fallbacks). If mornings prove unreliable,
-  move the slot later (e.g. 08:00); the only hard constraints are after ~06:30
-  expiry and before the consumer's first read (08:55 Hestia start on Delos).
+- **A missed 06:35 slot is caught up, not lost (since 2026-10-04).** The timer is
+  `Persistent=true`: on the laptop's next wake or login after a missed slot it
+  runs once, immediately (proven on this machine with a throwaway timer whose
+  "last run" stamp was backdated). A catch-up after 08:55 still helps, because
+  Hestia's token gate picks a new token up at its next poll. The job needs the
+  desktop session (it drives a visible Chrome window), so it cannot run while
+  the laptop is shut down or logged out; a Chrome window may appear briefly if
+  a catch-up fires while you are working. Before the first scheduled trigger the
+  timer's stamp file (`~/.local/share/systemd/timers/stamp-fyers-token.timer`)
+  was created by hand so the very first miss is also caught. Check with
+  `systemctl --user list-timers fyers-token.timer` and
+  `journalctl --user -u fyers-token.service`. A network that is not yet up
+  right after a wake is handled by a two-minute wait for the Fyers host before the
+  job starts.
 - **Session-expiry cadence** is Fyers's own policy ("It has been a while since
   you signed in…" re-login prompts); measured multi-day persistence in
   practice. Each expiry just exercises path 2 — no owner action needed.
