@@ -454,3 +454,6 @@ hestia_local.py
 
 # Phase 0 Fyers-vs-Angel comparison output (regenerable; numbers are summarised in plans/hestia-fyers-candle-source.md section 7a)
 research/fyers_mcx_validation/phase0_results.csv
+
+# Camarilla research: regenerable per-session event tables (the summary text is kept)
+janus_backtest/outputs/*.csv
