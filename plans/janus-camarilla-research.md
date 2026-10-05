@@ -18,7 +18,7 @@ The levels are the same, the trades are opposite. Which one (if either) is right
 For previous session high H, low L, close C, range R = H - L:
 
 - R1..R4 = C + R x (1.1/12, 1.1/6, 1.1/4, 1.1/2); S1..S4 = C - R x the same factors.
-- R5 = (H / L) x C and S5 = C - (R5 - C) (the common extension), R6 and S6 left as an option.
+- R5 = (H / L) x C and S5 = C - (R5 - C) (the common extension); R6 = R5 + 1.168 x (R5 - R4) and S6 mirrored about C (the usual second breakout target; computed from 2026-10-05, user's call: it costs nothing).
 - Pivot (the usual central level) = (H + L + C) / 3, kept as an optional reference, not part of the core levels.
 
 Choices to settle in configs and test one at a time: the session close C is the last 1-minute close of the previous session (MCX settlement prices differ slightly and are not in our data, so this is a stated approximation); session = one calendar trading day, 09:00 to 23:30 (23:55 in US DST periods), which already ends before midnight so there is no overnight-session ambiguity; the factor 1.1 is the standard value and the grid is fixed unless a later experiment varies it.

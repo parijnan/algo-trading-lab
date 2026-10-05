@@ -27,7 +27,7 @@ def row(rows, level):
 
 def test_untouched_levels_are_reported_as_untouched():
     rows = ev.analyse_session(session([(105, 106, 104, 105)] * 5))
-    assert all(not r['touched'] for r in rows) and len(rows) == 6        # R3,R4,R5,S3,S4,S5
+    assert all(not r['touched'] for r in rows) and len(rows) == 8        # R3,R4,R5,R6,S3,S4,S5,S6
 
 
 def test_a_fade_that_reaches_the_inward_level_first():
@@ -87,3 +87,11 @@ def test_the_driftless_benchmark_is_the_gamblers_ruin_probability():
 def test_open_zones():
     for open_px, zone in [(105.0, 'inside_S3_R3'), (108.5, 'R3_R4'), (111.0, 'above_R4'), (101.0, 'S3_S4'), (99.0, 'below_S4')]:
         assert ev.open_zone(session([(open_px, open_px, open_px, open_px)])) == zone
+
+
+def test_the_sixth_level_is_a_touch_target_and_the_r5_to_r6_pair_is_scored():
+    # R5 = 115.5, R6 = 121.34, R4 = 110.5: touch R5, then run to R6 -> 'out'; a second path falls back to R4 -> 'in'
+    to_r6 = ev.analyse_session(session([(105, 106, 104.5, 105.5), (105.5, 116.0, 105.5, 115.8), (115.8, 121.5, 115.5, 121.3)]))
+    assert row(to_r6, 'R5')['fp_6_4'] == 'out' and row(to_r6, 'R6')['touched']
+    back = ev.analyse_session(session([(105, 106, 104.5, 105.5), (105.5, 116.0, 105.5, 115.8), (115.8, 116.0, 110.0, 110.2)]))
+    assert row(back, 'R5')['fp_6_4'] == 'in' and not row(back, 'R6')['touched']
