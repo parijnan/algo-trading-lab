@@ -253,7 +253,9 @@ SESSION_END_TIME = CLOSING_TIME
 
 # ── Signal: ST_15, single timeframe (no regime gate — Phase 2 design) ───────
 ST_PERIOD     = 10
-ST_MULTIPLIER = 2.0   # Phase 3 live-test value, set 2026-09-04 -- Phase 3 was designed for
+ST_MULTIPLIER = 2.5   # CHANGED 2.0 -> 2.5 on 2026-10-05 (user's decision, with the mult-2.5 calibrated exits below): on the data to 2026-10-01 mult 2.5
+                       # beat 2.0 on drawdown, tail risk and every period since the 2026-09-04 decision (see plans/prometheus-mult-2.5-live.md). Previously
+                       # the Phase 3 live-test value, set 2026-09-04 -- Phase 3 was designed for
                        # 2.0/2.5 (vs. Phase 2's inherited 3.0); user chose 2.0 after confirming
                        # 3.0's live ST value matched the chart correctly first.
 
@@ -339,10 +341,13 @@ DPL_CIRCUIT_POLL_ENABLED = True   # kill switch — zero effect on trading eithe
 # prior 10.66 at T1=2.0, same 381-trade set/SL/T2), chosen over the
 # single-grid-point maximum (2.45%, Calmar 12.77) for distance from the cliff.
 # Still in-sample/CRUDEOILM-only — see caveat #1 for what's still open.
-TARGET1_PCT      = 2.2
+# 2026-10-05: exits switched to the mult-2.5 candidate's own calibration (SL 1.0 / T1 1.25 / T2 4.0, prometheus_backtest/phase3 two-candidate
+# table; a plateau check the same day found the stop between 0.8% and 1.2% to be a broad good region, and T1/T2 to matter little). The mult-2.0 values
+# above (SL 2.2 / T1 2.2 / T2 5.0) are the previous production combo.
+TARGET1_PCT      = 1.25
 TARGET2_MODE     = 'flat_pct'
-TARGET2_FLAT_PCT = 5.0
-SL_PCT           = 2.2
+TARGET2_FLAT_PCT = 4.0
+SL_PCT           = 1.0
 
 # ── Contract rollover — capital efficiency over parity (plan §1/§6) ─────────
 # Roll to the next contract out once fewer than this many TRADING days

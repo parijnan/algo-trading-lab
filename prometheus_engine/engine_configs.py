@@ -1,6 +1,6 @@
 """
 Parameters of the Prometheus engine. One place, no magic numbers in engine code (repo convention). The values are the LIVE ones in
-prometheus_production/prometheus_configs.py as of 2026-09-28 (CRUDEOILM, Phase 3, ST 10 / 2.0, positional 2-lot scale-out); a test
+prometheus_production/prometheus_configs.py as of 2026-09-28 (CRUDEOILM, Phase 3, ST 10 / 2.5 since 2026-10-05, positional 2-lot scale-out); a test
 pins them to production so the two cannot drift silently while both exist. Sizing is NOT here: the engine reads it live through
 `ctx.sizing()` (static units, or its own dynamic rule), and the hard unit cap is Hestia's.
 """
@@ -13,12 +13,12 @@ class EngineConfig:
     instrument: str = 'CRUDEOILM'
     # signal
     st_period: int = 10
-    st_multiplier: float = 2.0
+    st_multiplier: float = 2.5               # was 2.0 until 2026-10-05
     # position shape: 1 unit = 2 lots (lots_per_leg per leg); lot1 books at the first target, lot2 rides to the farther one
     lots_per_leg: int = 1
-    sl_pct: float = 2.2
-    target1_pct: float = 2.2
-    target2_flat_pct: float = 5.0
+    sl_pct: float = 1.0                      # was 2.2 / 2.2 / 5.0 with the 2.0 multiplier
+    target1_pct: float = 1.25
+    target2_flat_pct: float = 4.0
     target2_source: str = 'flat_pct'
     # timing guards, minutes since the session's actual open
     no_exit_before_buffer_min: float = 1.0
