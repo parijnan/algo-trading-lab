@@ -71,6 +71,58 @@ class RunningRowWriter:
 
 DIVIDER = '\u2501' * 37
 
+_TEXT_COLUMNS = frozenset({'contract_expiry', 'direction', 'entry_ts', 'signal_ts', 'lot2_target_source', 'lot1_exit_ts', 'lot1_exit_reason',
+                           'lot2_exit_ts', 'lot2_exit_reason'})
+
+
+def _from_csv_value(column: str, raw: str):
+    """One trades-CSV cell back to the type `report_trade` carries: text columns stay text, the rest become numbers, empty is None."""
+    if raw is None or raw == '':
+        return None
+    if column in _TEXT_COLUMNS:
+        return raw
+    try:
+        n = float(raw)
+    except ValueError:
+        return raw
+    return int(n) if column in ('trade_id', 'parent_trade_id') else n
+
+
+def read_closed_on(directory, engines, day) -> List[tuple]:
+    """(engine, record) for every trade in `<engine>_trades.csv` whose last exit happened on `day`, in the same shape the live
+    `core.trades` entries have. Added 2026-10-05: the report used only trades closed since this PROCESS started, so a mid-session
+    restart made every earlier trade of the day vanish from it (a day with four Prometheus trades read 'No trade today'); the
+    trades files are the durable record and also hold a trade added by hand. A missing or unreadable file contributes nothing and
+    never raises: the report must always go out."""
+    out = []
+    for engine in engines:
+        path = Path(directory) / f'{engine}_trades.csv'
+        try:
+            with open(path, newline='') as f:
+                for row in csv.DictReader(f):
+                    rec = {c: _from_csv_value(c, row.get(c)) for c in TRADE_RECORD_COLUMNS}
+                    exits = [t for t in (rec.get('lot1_exit_ts'), rec.get('lot2_exit_ts')) if t]
+                    if not exits or rec.get('trade_id') is None:
+                        continue
+                    try:
+                        last = max(datetime.fromisoformat(str(t)) for t in exits)
+                    except ValueError:
+                        continue
+                    if last.date() == day:
+                        out.append((engine, rec))
+        except (FileNotFoundError, OSError, csv.Error):
+            continue
+    return out
+
+
+def merge_session_trades(in_memory, from_files) -> List[tuple]:
+    """The union of this process's closed trades and the day's trades read from the files, one entry per (engine, trade id); the live
+    in-memory record wins when both hold the trade."""
+    merged: Dict[tuple, tuple] = {}
+    for eng, rec in list(from_files) + list(in_memory):
+        merged[(eng, rec.get('trade_id'))] = (eng, rec)
+    return list(merged.values())
+
 
 def _ts_str(ts, today) -> str:
     """HH:MM for a same-day timestamp, 'dd-Mon HH:MM' otherwise: a position can span sessions, and an entry from the

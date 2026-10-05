@@ -43,7 +43,7 @@ from hestia_core.mcx_market import ContractCatalog, MarketCalendar
 from hestia_core.order_feed import OrderUpdateFeed
 from hestia_core.paper_broker import PaperBroker
 from hestia_core.reactor import RealReactor
-from hestia_core.reporting import RunningRowWriter, TradeLogWriter, build_session_report
+from hestia_core.reporting import RunningRowWriter, TradeLogWriter, build_session_report, merge_session_trades, read_closed_on
 from hestia_core.session_lock import LockHeld, SessionLock, holder, pid_alive
 from hestia_core.sizing import SizingStore
 from hestia_core.slack_queue import SlackQueue
@@ -290,7 +290,12 @@ class HestiaHost:
         watcher = FlagWatcher(core, reactor, flags, watcher_stop, cfg.FLAG_POLL_S, cfg.EXIT_RETRY_S)
 
         def before_flush() -> None:
-            text = build_session_report(core, reactor.now, list(core.trades))
+            try:
+                today_closed = read_closed_on(cfg.TRADES_DIR, list(core._factories), reactor.now.date())
+            except Exception:                                           # noqa: BLE001 - the report must go out whatever the files hold
+                log.exception('reading the day\'s closed trades for the session report failed; reporting this process\'s trades only')
+                today_closed = []
+            text = build_session_report(core, reactor.now, merge_session_trades(list(core.trades), today_closed))
             result.session_report = text
             slack.send(cfg.SLACK_TRADEBOT_CHANNEL, text)
 
