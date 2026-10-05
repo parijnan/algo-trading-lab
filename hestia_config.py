@@ -154,7 +154,11 @@ TRADING_HOSTS = {
                            'selene': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
                            'helios': dict(enabled=True, paper=False, static_units=1, unit_cap=10),
                            'typhon': dict(enabled=True, paper=False, static_units=1, unit_cap=10)},
-                  SLACK_PROMETHEUS_VIA_HESTIA=True),
+                  SLACK_PROMETHEUS_VIA_HESTIA=True,
+                  # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md): Angel One stays the only
+                  # source any engine sees; Fyers is queried in parallel and the comparison is recorded under hestia_data/shadow/. Stop it at once,
+                  # no restart, with `touch hestia_data/flags/fyers_off.flag`; remove this line to switch it off at the next start.
+                  CANDLE_SOURCE={'mode': 'shadow'}),
 }
 
 
