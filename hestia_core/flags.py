@@ -2,6 +2,9 @@
 Flag files: the operator's way to talk to a running Hestia (plan section 2, Flags), keeping the semantics Prometheus users know.
 
   <dir>/hestia_active.flag         exists while Hestia runs; REMOVING it ends everything (host flag, a graceful shutdown)
+  <dir>/hestia_disabled.flag       a startup gate for the whole host: while it exists `hestia.py` (cron or Slack Start) logs, alerts and exits
+                                   before logging in. Written by the Slack panel's Stop/Disable button together with the removal of the
+                                   active flag, removed by its Clear button; nothing in a running Hestia reads it
   <dir>/<engine>_command.flag      one word: EXIT | KILL | DISABLE
       EXIT     liquidate this engine's position and re-arm; the flag stays until the engine is confirmed flat with nothing in
                flight, then is cleared (an unconfirmed liquidation leaves it, and the EXIT is re-delivered)
@@ -31,6 +34,7 @@ class FlagFiles:
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.host_flag = self.dir / 'hestia_active.flag'
+        self.host_disabled_flag = self.dir / 'hestia_disabled.flag'
 
     def command_path(self, engine: str) -> Path:
         return self.dir / f'{engine}_command.flag'
@@ -53,6 +57,15 @@ class FlagFiles:
 
     def drop_host_flag(self) -> None:
         self.host_flag.unlink(missing_ok=True)
+
+    def host_disabled(self) -> bool:
+        return self.host_disabled_flag.exists()
+
+    def set_host_disabled(self) -> None:
+        self.host_disabled_flag.touch()
+
+    def clear_host_disabled(self) -> None:
+        self.host_disabled_flag.unlink(missing_ok=True)
 
 
 class FlagWatcher:

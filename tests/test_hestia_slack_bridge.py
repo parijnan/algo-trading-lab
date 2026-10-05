@@ -49,7 +49,7 @@ def test_a_hosted_override_is_read_back_by_hestias_sizing_store(tmp_path):
 def test_the_listener_uses_the_bridge_for_every_prometheus_path():
     src = Path(__file__).resolve().parents[1].joinpath('slack_listener.py').read_text()
     ast.parse(src)
-    for needle in ('slack_bridge.command_flag_path', 'slack_bridge.sizing_override_path', 'slack_bridge.sizing_override_payload',
+    for needle in ('slack_bridge.command_flag_path', 'slack_bridge.engine_sizing_path', 'slack_bridge.sizing_override_payload',
                    'slack_bridge.start_command', 'PROMETHEUS_VIA_HESTIA'):
         assert needle in src, needle
 
@@ -86,7 +86,7 @@ def test_the_listener_loads_with_the_switch_off_and_keeps_the_old_standalone_pat
     mod, root = _load_listener(monkeypatch, tmp_path, False)
     assert mod.PROMETHEUS_COMMAND_FLAG == str(root / 'prometheus_production' / 'data' / 'prometheus_command.flag')
     assert mod.SIZING_OVERRIDE_PATHS['Prometheus'] == str(root / 'prometheus_production' / 'data' / 'sizing_override.json')
-    assert mod.PROMETHEUS_INSTRUMENT_OVERRIDE == str(root / 'prometheus_production' / 'data' / 'instrument_override.json')
+    assert not hasattr(mod, 'PROMETHEUS_INSTRUMENT_OVERRIDE'), 'the Switch Instrument button and its override file were removed 2026-10-05'
     assert mod.PROMETHEUS_STATE == str(root / 'prometheus_production' / 'data' / 'prometheus_state.csv')
     assert mod.PROMETHEUS_VIA_HESTIA is False
     for other in ('Artemis', 'Athena', 'Iris'):                                    # the other strategies' overrides are untouched

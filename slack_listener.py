@@ -42,8 +42,11 @@ import hestia_config          # noqa: E402  (repo-root module; a different name 
 from hestia_core import slack_bridge  # noqa: E402
 PROMETHEUS_VIA_HESTIA = slack_bridge.via_hestia(hestia_config)
 PROMETHEUS_COMMAND_FLAG = slack_bridge.command_flag_path(hestia_config, BASE_DIR)
-SIZING_OVERRIDE_PATHS['Prometheus'] = slack_bridge.sizing_override_path(hestia_config, BASE_DIR)
-PROMETHEUS_INSTRUMENT_OVERRIDE = os.path.join(BASE_DIR, "prometheus_production", "data", "instrument_override.json")
+from hestia_core.display import display_name  # noqa: E402
+ENGINE_NAMES = slack_bridge.panel_engines(hestia_config)                      # registry order; only Prometheus in the standalone world
+ENGINE_STRATEGIES = {display_name(n): n for n in ENGINE_NAMES}                # 'Prometheus' -> 'prometheus', ...
+for _strategy, _engine in ENGINE_STRATEGIES.items():
+    SIZING_OVERRIDE_PATHS[_strategy] = slack_bridge.engine_sizing_path(hestia_config, BASE_DIR, _engine)
 
 # Ensure logs directory exists
 os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
@@ -93,7 +96,7 @@ def write_sizing_override(strategy, lot_calc, lot_count):
     try:
         path = SIZING_OVERRIDE_PATHS[strategy]
         with open(path, 'w') as f:
-            payload = (slack_bridge.sizing_override_payload(hestia_config, lot_calc, lot_count) if strategy == 'Prometheus'
+            payload = (slack_bridge.sizing_override_payload(hestia_config, lot_calc, lot_count) if strategy in ENGINE_STRATEGIES
                        else {'lot_calc': lot_calc, 'lot_count': lot_count})
             json.dump(payload, f)
         logger.info(f"Sizing override set for {strategy}: lot_calc={lot_calc}, lot_count={lot_count}")
@@ -124,83 +127,59 @@ def clear_sizing_override(strategy):
         return False, False
 
 
-def write_instrument_override(symbol, margin_per_unit):
-    """Write symbol + margin_per_unit together to Prometheus's
-    instrument_override.json (plan §5/§6) — coupled deliberately: CRUDEOILM
-    and CRUDEOIL differ 10x in lot size, so switching one without the other
-    invites trading the wrong contract at the wrong size."""
-    try:
-        with open(PROMETHEUS_INSTRUMENT_OVERRIDE, 'w') as f:
-            json.dump({'symbol': symbol, 'margin_per_unit': margin_per_unit}, f)
-        logger.info(f"Instrument override set: symbol={symbol}, margin_per_unit={margin_per_unit}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to write instrument override: {e}")
-        return False
-
 # ---------------------------------------------------------------------------
 # Control Panel UI (Block Kit)
 # ---------------------------------------------------------------------------
+def _confirm(body, yes):
+    return {"title": {"type": "plain_text", "text": "Are you sure?"}, "text": {"type": "plain_text", "text": body},
+            "confirm": {"type": "plain_text", "text": yes}, "deny": {"type": "plain_text", "text": "Cancel"}}
+
+
+def _engine_panel_blocks(engine):
+    name = display_name(engine)
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{name}:* Exit liquidates its position and it keeps watching. Kill/Disable stops it "
+                                                              f"(position stays OPEN) and keeps it out at the next Hestia start. Clear removes "
+                                                              f"only {name}'s own flag."}},
+        {"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": f"⚠️ Exit {name}"}, "style": "danger", "action_id": f"btn_eng_{engine}_exit",
+             "confirm": _confirm(f"This liquidates any open {name} position. The engine keeps running and watches for its next entry.", f"Yes, Exit {name}")},
+            {"type": "button", "text": {"type": "plain_text", "text": f"🚨 Kill/Disable {name}"}, "style": "danger", "action_id": f"btn_eng_{engine}_kill",
+             "confirm": _confirm(f"This stops {name} now if it is running (any position stays OPEN, unmanaged) and keeps it out at the next Hestia start until you Clear it.", f"Yes, Kill {name}")},
+            {"type": "button", "text": {"type": "plain_text", "text": f"✅ Clear {name} Flag"}, "style": "primary", "action_id": f"btn_eng_{engine}_clear"},
+        ]},
+    ]
+
+
+def _hestia_panel_blocks():
+    """Hestia's own section (hosted world), then one section per engine. Standalone world: just Prometheus and a Start button."""
+    blocks = []
+    if PROMETHEUS_VIA_HESTIA:
+        blocks += [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*Hestia (MCX host for all engines):* Start launches it. Stop/Disable shuts it down "
+                                                                  "gracefully (every position stays OPEN, unmanaged) and blocks any start, cron included, "
+                                                                  "until Clear. Clear removes only Hestia's own flag."}},
+            {"type": "actions", "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "🚀 Start Hestia"}, "style": "primary", "action_id": "btn_hestia_start"},
+                {"type": "button", "text": {"type": "plain_text", "text": "🛑 Stop/Disable Hestia"}, "style": "danger", "action_id": "btn_hestia_stop",
+                 "confirm": _confirm("This stops ALL engines now. Every open position stays OPEN and nothing manages it. Hestia will not start again until you Clear.", "Yes, Stop Hestia")},
+                {"type": "button", "text": {"type": "plain_text", "text": "✅ Clear Hestia Flag"}, "style": "primary", "action_id": "btn_hestia_clear"},
+            ]},
+        ]
+    for engine in ENGINE_NAMES:
+        blocks += _engine_panel_blocks(engine)
+    if not PROMETHEUS_VIA_HESTIA:
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "🚀 Start Prometheus"}, "style": "primary", "action_id": "btn_hestia_start"}]})
+    return blocks
+
+
 CONTROL_PANEL_BLOCKS = [
     {
         "type": "header",
         "text": {"type": "plain_text", "text": "🕹️ Algo Trading Lab: Control Panel"}
     },
-    {
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*Prometheus (MCX):*\nSeparate circuit breaker — standalone cron, not Leto-routed, so this does NOT affect Artemis/Athena/Apollo/Iris and vice versa."}
-    },
-    {
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🚀 Start Prometheus"},
-                "style": "primary",
-                "action_id": "btn_prometheus_start"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⚠️ Exit Trade"},
-                "style": "danger",
-                "action_id": "btn_prometheus_exit",
-                "confirm": {
-                    "title": {"type": "plain_text", "text": "Are you sure?"},
-                    "text": {"type": "plain_text", "text": "This will liquidate any open Prometheus position. The bot keeps running and watches for the next entry — it does NOT stop the session (use Kill for that)."},
-                    "confirm": {"type": "plain_text", "text": "Yes, Exit Trade"},
-                    "deny": {"type": "plain_text", "text": "Cancel"}
-                }
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🚨 Kill Prometheus"},
-                "style": "danger",
-                "action_id": "btn_prometheus_kill",
-                "confirm": {
-                    "title": {"type": "plain_text", "text": "Are you sure?"},
-                    "text": {"type": "plain_text", "text": "This will drop control immediately. Any Prometheus position remains OPEN for manual management."},
-                    "confirm": {"type": "plain_text", "text": "Yes, Kill Prometheus"},
-                    "deny": {"type": "plain_text", "text": "Cancel"}
-                }
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "⏸️ Disable Prometheus"},
-                "action_id": "btn_prometheus_disable"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "✅ Clear Prometheus Flag"},
-                "style": "primary",
-                "action_id": "btn_prometheus_clear"
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "🛢️ Switch Instrument"},
-                "action_id": "btn_prometheus_instrument"
-            }
-        ]
-    },
+    *_hestia_panel_blocks(),
     {
         "type": "divider"
     },
@@ -511,89 +490,92 @@ def handle_clear(ack, body, say):
     else:
         say(channel=_CH, text="No active circuit breaker flag found.")
 
-def write_prometheus_flag(command, user_id):
+# ---------------------------------------------------------------------------
+# Hestia and per-engine controls (2026-10-05). Every button acts on its OWN flag file only (see hestia_core/slack_bridge.py): an engine's
+# Exit / Kill-Disable / Clear touch `<engine>_command.flag`; Hestia's Stop-Disable / Clear touch `hestia_disabled.flag` (Stop also
+# removes `hestia_active.flag`); Start launches the process unless the gate is set or Hestia is already running.
+# ---------------------------------------------------------------------------
+
+_ENGINE_ACTION_RE = re.compile(r"^btn_eng_(?P<engine>[a-z0-9]+)_(?P<action>exit|kill|clear)$")
+
+
+def _hestia_running():
     try:
-        with open(PROMETHEUS_COMMAND_FLAG, "w") as f:
-            f.write(command)
-        logger.info(f"Prometheus command '{command}' written by <@{user_id}>.")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to write Prometheus command flag: {e}")
-        return False
-
-@app.action("btn_prometheus_exit")
-def handle_prometheus_exit(ack, body, say):
-    ack()
-    user_id = body["user"]["id"]
-    if write_prometheus_flag("EXIT", user_id):
-        say(channel=_CH, text=f"⚠️ *PROMETHEUS EXIT INITIATED* by <@{user_id}>. Liquidating — bot stays up, watching for the next entry.")
-
-@app.action("btn_prometheus_kill")
-def handle_prometheus_kill(ack, body, say):
-    ack()
-    user_id = body["user"]["id"]
-    if write_prometheus_flag("KILL", user_id):
-        say(channel=_CH, text=f"🚨 *PROMETHEUS KILL SWITCH* engaged by <@{user_id}>. Control dropped. Position remains OPEN.")
-
-@app.action("btn_prometheus_disable")
-def handle_prometheus_disable(ack, body, say):
-    ack()
-    user_id = body["user"]["id"]
-    if write_prometheus_flag("DISABLE", user_id):
-        say(channel=_CH, text=f"⏸️ *PROMETHEUS DISABLED* by <@{user_id}>. Future runs paused.")
-
-@app.action("btn_prometheus_clear")
-def handle_prometheus_clear(ack, body, say):
-    ack()
-    user_id = body["user"]["id"]
-    if os.path.exists(PROMETHEUS_COMMAND_FLAG):
-        os.remove(PROMETHEUS_COMMAND_FLAG)
-        logger.info(f"Prometheus flag cleared by <@{user_id}>.")
-        say(channel=_CH, text=f"✅ *PROMETHEUS CIRCUIT BREAKER CLEARED* by <@{user_id}>. Resuming normal operations.")
-    else:
-        say(channel=_CH, text="No active Prometheus circuit breaker flag found.")
-
-@app.action("btn_prometheus_start")
-def handle_prometheus_start(ack, body, say):
-    ack()
-    user_id = body["user"]["id"]
-
-    # Check for blocking flag
-    if os.path.exists(PROMETHEUS_COMMAND_FLAG):
-        with open(PROMETHEUS_COMMAND_FLAG, "r") as f:
-            cmd = f.read().strip()
-        if cmd in ["EXIT", "KILL", "DISABLE"]:
-            say(channel=_CH, text=f"❌ Cannot start Prometheus. Persistent flag *{cmd}* is active. Clear it first.")
-            return
-
-    # Check if Prometheus is already running
-    try:
-        argv, pattern, log_prefix = slack_bridge.start_command(hestia_config, sys.executable)
-        pgrep = subprocess.run(["pgrep", "-f", pattern],
-                               capture_output=True, text=True)
-        if pgrep.stdout.strip():
-            say(channel=_CH, text="❌ Prometheus is already running. Duplicate process prevented.")
-            return
+        _, pattern, _ = slack_bridge.start_command(hestia_config, sys.executable)
+        return bool(subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True).stdout.strip())
     except Exception as e:
         logger.error(f"pgrep failed: {e}")
+        return False
 
-    # Launch Prometheus
+
+@app.action(_ENGINE_ACTION_RE)
+def handle_engine_button(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    m = _ENGINE_ACTION_RE.match(body["actions"][0]["action_id"])
+    engine, action = m.group("engine"), m.group("action")
+    if engine not in ENGINE_NAMES:
+        say(channel=_CH_ERRORS, text=f"❌ Unknown engine {engine!r} on the control panel; repost the panel.")
+        return
     try:
+        ok, msg = slack_bridge.apply_engine_action(hestia_config, BASE_DIR, engine, action,
+                                                   _hestia_running() if action == "exit" else False)
+    except Exception as e:
+        logger.error(f"engine {engine} {action} failed: {e}")
+        say(channel=_CH_ERRORS, text=f"🚨 {engine} {action} failed: {e}")
+        return
+    logger.info(f"{engine} {action} by <@{user_id}>: ok={ok}")
+    say(channel=_CH, text=f"{msg} (by <@{user_id}>)")
+
+
+@app.action("btn_hestia_stop")
+def handle_hestia_stop(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    try:
+        _, msg = slack_bridge.apply_hestia_action(hestia_config, "stop")
+    except Exception as e:
+        logger.error(f"hestia stop failed: {e}")
+        say(channel=_CH_ERRORS, text=f"🚨 Hestia stop failed: {e}")
+        return
+    logger.info(f"Hestia stop/disable by <@{user_id}>.")
+    say(channel=_CH, text=f"{msg} (by <@{user_id}>)")
+
+
+@app.action("btn_hestia_clear")
+def handle_hestia_clear(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    try:
+        _, msg = slack_bridge.apply_hestia_action(hestia_config, "clear")
+    except Exception as e:
+        logger.error(f"hestia clear failed: {e}")
+        say(channel=_CH_ERRORS, text=f"🚨 Hestia clear failed: {e}")
+        return
+    logger.info(f"Hestia flag cleared by <@{user_id}>.")
+    say(channel=_CH, text=f"{msg} (by <@{user_id}>)")
+
+
+@app.action("btn_hestia_start")
+def handle_hestia_start(ack, body, say):
+    ack()
+    user_id = body["user"]["id"]
+    label = "Hestia" if PROMETHEUS_VIA_HESTIA else "Prometheus"
+    why = slack_bridge.start_refusal(hestia_config, _hestia_running())
+    if why:
+        say(channel=_CH, text=f"❌ Cannot start {label}: {why}.")
+        return
+    try:
+        argv, _, log_prefix = slack_bridge.start_command(hestia_config, sys.executable)
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         log_dir = os.path.join(BASE_DIR, "logs" if PROMETHEUS_VIA_HESTIA else os.path.join("prometheus_production", "logs"))
         log_name = os.path.join(log_dir, f"{log_prefix}_manual_{timestamp}.log")
         with open(log_name, "w") as log_f:
-            subprocess.Popen(
-                argv,
-                stdout=log_f,
-                stderr=log_f,
-                start_new_session=True,
-                cwd=BASE_DIR
-            )
-        say(channel=_CH, text=f"🚀 *PROMETHEUS STARTED* manually by <@{user_id}>. Log: `{os.path.basename(log_name)}`")
-        logger.info(f"Prometheus manually started by <@{user_id}>.")
+            subprocess.Popen(argv, stdout=log_f, stderr=log_f, start_new_session=True, cwd=BASE_DIR)
+        say(channel=_CH, text=f"🚀 *{label.upper()} STARTED* manually by <@{user_id}>. Log: `{os.path.basename(log_name)}`")
+        logger.info(f"{label} manually started by <@{user_id}>.")
     except Exception as e:
-        err_msg = f"Failed to start Prometheus: {e}"
+        err_msg = f"Failed to start {label}: {e}"
         logger.error(err_msg)
         say(channel=_CH_ERRORS, text=f"🚨 {err_msg}")
 
@@ -830,6 +812,24 @@ def handle_athena_adjust_submission(ack, body, view, say):
 # Position Sizing Modal
 # ---------------------------------------------------------------------------
 
+_ENGINE_OPTION_LABELS = {'prometheus': 'Prometheus (Crude Oil)', 'selene': 'Selene (Silver Mic)', 'helios': 'Helios (Gold Petal)',
+                         'typhon': 'Typhon (Natural Gas Mini)'}
+
+
+def _strategy_options():
+    """The sizing modals' strategy list: the three Leto-era strategies, then every engine on the panel."""
+    legacy = [("Artemis (Sensex IC)", "Artemis"), ("Athena (Nifty Calendar)", "Athena"), ("Iris (Nifty Scalping)", "Iris")]
+    engines = [(_ENGINE_OPTION_LABELS.get(e, display_name(e)), display_name(e)) for e in ENGINE_NAMES]
+    return [{"text": {"type": "plain_text", "text": label}, "value": value} for label, value in legacy + engines]
+
+
+def _lots_label(strategy):
+    """'Units (1 unit = N lots)' for a Hestia engine (N from the registry), 'Lot Count' for the Leto-era strategies."""
+    if strategy in ENGINE_STRATEGIES:
+        return slack_bridge.engine_units_label(hestia_config, ENGINE_STRATEGIES[strategy])
+    return "Lot Count"
+
+
 def _pos_sizing_blocks(lots_label):
     """Build the modal's blocks with block_lots' label parameterized —
     Prometheus counts in 'Units' (1 unit = 2 lots, plan §6), the other three
@@ -843,12 +843,7 @@ def _pos_sizing_blocks(lots_label):
             "element": {
                 "type": "static_select",
                 "action_id": "select_strategy",
-                "options": [
-                    {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
-                    {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
-                    {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"},
-                    {"text": {"type": "plain_text", "text": "Prometheus (Crude Oil)"}, "value": "Prometheus"}
-                ]
+                "options": _strategy_options()
             }
         },
         {
@@ -898,7 +893,7 @@ def handle_pos_sizing_strategy_select(ack, body, client):
     Prometheus is an option (plan §5)."""
     ack()
     selected = body["actions"][0]["selected_option"]["value"]
-    lots_label = "Units (1 unit = 2 lots)" if selected == "Prometheus" else "Lot Count"
+    lots_label = _lots_label(selected)
     client.views_update(
         view_id=body["view"]["id"],
         hash=body["view"]["hash"],
@@ -919,7 +914,7 @@ def handle_pos_sizing_submission(ack, body, view, say, client):
     mode = view["state"]["values"]["block_mode"]["radio_mode"]["selected_option"]["value"]
     lots_str = view["state"]["values"]["block_lots"]["input_lots"]["value"]
     user_id = body["user"]["id"]
-    unit_label = "unit(s)" if strategy == "Prometheus" else "lot(s)"
+    unit_label = "unit(s)" if strategy in ENGINE_STRATEGIES else "lot(s)"
 
     # Validate Lot Count / Units
     try:
@@ -962,18 +957,13 @@ def _clear_sizing_blocks():
             "element": {
                 "type": "static_select",
                 "action_id": "select_strategy",
-                "options": [
-                    {"text": {"type": "plain_text", "text": "Artemis (Sensex IC)"}, "value": "Artemis"},
-                    {"text": {"type": "plain_text", "text": "Athena (Nifty Calendar)"}, "value": "Athena"},
-                    {"text": {"type": "plain_text", "text": "Iris (Nifty Scalping)"}, "value": "Iris"},
-                    {"text": {"type": "plain_text", "text": "Prometheus (Crude Oil)"}, "value": "Prometheus"}
-                ]
+                "options": _strategy_options()
             }
         },
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": "Deletes the sizing override file — the strategy reverts to whatever "
-                    "its own configs.py currently has. *Prometheus* applies this live, on its very next entry, "
+                    "its own configs.py currently has. *The Hestia engines* apply this live, on their very next entry, "
                     "no restart needed. *Artemis/Athena/Iris* apply it on their next restart, same as any other "
                     "sizing change for those three today."}
         }
@@ -1014,88 +1004,6 @@ def handle_clear_sizing_submission(ack, body, view, client):
         client.chat_postMessage(channel=_CH,
                                 text=f"ℹ️ No active sizing override found for {strategy} — "
                                      f"already using configs.py's default.")
-
-# ---------------------------------------------------------------------------
-# Prometheus Instrument Switch Modal (plan §5/§6) — instrument and
-# margin-per-unit submitted together, deliberately coupled: CRUDEOILM and
-# CRUDEOIL differ 10x in lot size (10 vs 100 barrels), so a margin figure
-# sane for one is wrong by roughly an order of magnitude for the other.
-# ---------------------------------------------------------------------------
-
-@app.action("btn_prometheus_instrument")
-def handle_prometheus_instrument_btn(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "view_prometheus_instrument",
-            "title": {"type": "plain_text", "text": "Prometheus Instrument"},
-            "submit": {"type": "plain_text", "text": "Apply Changes"},
-            "close": {"type": "plain_text", "text": "Cancel"},
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": "Switching instrument requires a matching margin-per-unit figure — the two are submitted together so Prometheus never trades one contract sized for the other."}
-                },
-                {
-                    "type": "input",
-                    "block_id": "block_instrument",
-                    "label": {"type": "plain_text", "text": "Instrument"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "select_instrument",
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "CRUDEOILM"}, "value": "CRUDEOILM"},
-                            {"text": {"type": "plain_text", "text": "CRUDEOIL"}, "value": "CRUDEOIL"}
-                        ]
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "block_margin",
-                    "label": {"type": "plain_text", "text": "Margin per Unit (Rs)"},
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "input_margin",
-                        "placeholder": {"type": "plain_text", "text": "e.g. 100000"}
-                    }
-                }
-            ]
-        }
-    )
-
-@app.view("view_prometheus_instrument")
-def handle_prometheus_instrument_submission(ack, body, view, say, client):
-    if PROMETHEUS_VIA_HESTIA:
-        ack()
-        client.chat_postMessage(channel=_CH_ERRORS, text="❌ The instrument override is not supported while Hestia hosts Prometheus: "
-                                                         "Hestia's engine is bound to CRUDEOILM in hestia_config.ENGINES.")
-        return
-    symbol = view["state"]["values"]["block_instrument"]["select_instrument"]["selected_option"]["value"]
-    margin_str = view["state"]["values"]["block_margin"]["input_margin"]["value"]
-    user_id = body["user"]["id"]
-
-    try:
-        margin = float(margin_str)
-        if margin <= 0: raise ValueError
-    except ValueError:
-        ack(response_action="errors", errors={"block_margin": "Please enter a positive number for margin per unit."})
-        return
-
-    ack()
-    if write_instrument_override(symbol, margin):
-        msg = (f"🛢️ *Prometheus Instrument Updated* by <@{user_id}>\n"
-              f"*Instrument:* {symbol}\n*Margin per Unit:* Rs.{margin:,.0f}\n"
-              f"_Takes effect on Prometheus's next session start._")
-        client.chat_postMessage(channel=_CH, text=msg)
-        logger.info(f"Prometheus instrument updated by <@{user_id}>: symbol={symbol}, margin={margin}")
-    else:
-        client.chat_postMessage(channel=_CH_ERRORS, text="❌ *Error*: Failed to update Prometheus instrument override. Check daemon logs on VPS.")
-
-# ---------------------------------------------------------------------------
-# Initializer
-# ---------------------------------------------------------------------------
 
 def post_control_panel():
     try:

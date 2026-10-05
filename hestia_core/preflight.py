@@ -145,6 +145,9 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
         cmd = flags.read_command(name)
         if cmd:
             add(f'{name} flag', FAIL if cmd in ('DISABLE', 'KILL') else WARN, f'{cfg.FLAG_DIR}/{name}_command.flag says {cmd}')
+    if flags.host_disabled():
+        add('hestia disabled flag', FAIL, f'{cfg.FLAG_DIR}/hestia_disabled.flag exists: Hestia will log, alert and exit without starting. '
+                                          f'Clear it from the Slack panel (or remove the file)')
     if flags.host_flag_present():
         add('host flag', WARN, 'hestia_active.flag exists: a previous run did not shut down cleanly, or Hestia is running now')
     state_path = Path(cfg.STATE_DIR)

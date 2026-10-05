@@ -123,6 +123,11 @@ class HestiaHost:
         def host_alert(level: str, text: str, emoji: Optional[str] = None) -> None:
             router(Alert(deps.clock(), level, None, text, emoji=emoji))
 
+        if FlagFiles(cfg.FLAG_DIR).host_disabled():
+            host_alert('warning', 'Hestia is disabled: hestia_disabled.flag is present (set by the Slack Stop/Disable button); not starting '
+                                  '(and not logging in). Clear it from the Slack panel, then start Hestia.')
+            slack.flush(5.0)
+            return HostResult(False, 'disabled by flag')
         calendar = MarketCalendar(cfg.MCX_HOLIDAYS_FILE)
         if calendar.missing:
             host_alert('warning', f'{cfg.MCX_HOLIDAYS_FILE.name} not found: trading-day counts will only exclude weekends')
