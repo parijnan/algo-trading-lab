@@ -185,7 +185,9 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
                              clock=lambda: now.astimezone(ist) if now.tzinfo else now.replace(tzinfo=ist))
             st = gate.check()
             if st.ok:
-                add('fyers token', OK, f'usable (fingerprint {st.fingerprint}); Angel One stays the only source the engines see')
+                seen = ('the engines see only Angel One' if mode != 'rescue'
+                        else 'Angel One first; Fyers fills a window only after the whole Angel One burst has failed')
+                add('fyers token', OK, f'usable (fingerprint {st.fingerprint}); {seen}')
             else:
                 add('fyers token', OK if mode == 'angel' else WARN,
                     f'not usable: {st.reason}' + ('' if mode == 'angel' else f"; {mode} would record nothing and rescue nothing today"))

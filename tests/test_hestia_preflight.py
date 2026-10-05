@@ -200,3 +200,12 @@ def test_rescue_mode_is_described_with_its_attempts_settle_time_and_scope(cfg):
     d = st['candle source'].detail
     assert st['candle source'].status == pf.OK and d.startswith('rescue:') and 'after 2 failed Angel One attempt' in d and '7.5s' in d and 'fills only missing' in d
     assert 'would record nothing and rescue nothing' in st['fyers token'].detail
+
+
+def test_a_usable_token_line_says_what_the_engines_see_in_each_mode(cfg):
+    _fresh_token(cfg.FYERS_TOKEN_FILE)
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='shadow')
+    assert 'only Angel One' in by_name(pf.run_checks(cfg, NOW))['fyers token'].detail
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='rescue')
+    d = by_name(pf.run_checks(cfg, NOW))['fyers token'].detail
+    assert 'only Angel One' not in d and 'whole Angel One burst has failed' in d
