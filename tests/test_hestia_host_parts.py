@@ -818,3 +818,22 @@ def test_a_trade_entered_on_an_earlier_day_carries_its_date_in_the_report(hestia
     text = build_session_report(h, h.now, h.trades)
     assert '  ↳ Entry: 02-Sep 22:15 @ 100.00   Exit: 09:45  ·  Trend Flip' in text
     h.close()
+
+
+def test_the_session_report_mentions_rescues_only_when_there_were_some(hestias):
+    class Rescue:
+        def __init__(self, ok, failed):
+            self.c = (ok, failed)
+
+        def summary(self):
+            return self.c
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    assert 'rescues' not in build_session_report(h, h.now, [])                               # no rescue object at all: the line is absent
+    h.data.rescue = Rescue(0, 0)
+    assert 'rescues' not in build_session_report(h, h.now, [])
+    h.data.rescue = Rescue(84, 0)
+    assert 'Candle rescues from Fyers: 84 window(s) filled after Angel One failed\n' in build_session_report(h, h.now, [])
+    h.data.rescue = Rescue(80, 4)
+    assert 'filled after Angel One failed, 4 Fyers attempt(s) could not help' in build_session_report(h, h.now, [])
+    h.close()

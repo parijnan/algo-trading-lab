@@ -16,6 +16,10 @@ Isolation is the design. Nothing here can change a decision, a state file or the
   * it receives COPIES of the Angel frames and never touches LiveData's streams;
   * it never posts to the kernel and never raises an alert: state changes (token fresh, stale, tripped) are single log lines;
   * a per-token in-flight guard means a slow Fyers skips that token's next minute instead of queueing work.
+Phase 2 ('rescue' mode, `FyersRescue` below) adds ONE thing on top of the recording: when the Angel One burst for a window has failed, Fyers is asked for
+that window, and its answer is used ONLY for minutes the engine does not already have (never overwriting an Angel One minute), only if it contains the
+just-closed minute, and only once that minute has settled (Fyers's first-seen value of a minute is provisional: on 2026-10-05 22%-82% of first-seen
+minutes differed from the finalized ones). Every rescue is logged and recorded in `rescues_<date>.csv`. Nothing else in the live path changes.
 The token is read from hestia_data/fyers_token.json by `TokenGate` (mode 600, file mtime and `issued_at` both today in IST, now before
 `expires_at`, no kill-switch flag, breaker not tripped) and is never logged or written anywhere.
 """
@@ -36,7 +40,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -270,7 +274,7 @@ class ShadowRecorder:
         self._clock, self._sleep = clock, sleep
         self._lock = threading.Lock()
         self._inflight: Set[str] = set()
-        self._seen: Dict[Tuple[str, str], Set[pd.Timestamp]] = {}          # (token, side) -> minutes already written
+        self._seen: Dict[Tuple[str, str], Dict[pd.Timestamp, tuple]] = {}   # (token, side) -> minute -> the values last written for it
         self._warned: Set[str] = set()
         self.skipped_inflight = 0
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -358,7 +362,8 @@ class ShadowRecorder:
                     present = present or bool((f['time_stamp'] == expected).any())
                     self._write_minutes(ref.token, symbol, 'angel', f[MINUTE_COLS], returned_at)
             ok = bool(frames) and all(f is not None for f in frames)
-            self._write_poll(ref, tick, symbol, 'angel', ok=ok, kind='ok' if ok else 'exhausted',
+            kind = 'ok' if ok else ('rescued' if any(s.get('rescued') for s in stats) else 'exhausted')
+            self._write_poll(ref, tick, symbol, 'angel', ok=ok, kind=kind,
                              attempts=sum(s.get('attempts', 0) for s in stats),
                              after_s=(returned_at - tick).total_seconds() if present else None, rows=rows, expected_present=present,
                              exhausted=any(s.get('exhausted') for s in stats), note='')
@@ -367,24 +372,30 @@ class ShadowRecorder:
 
     # -- files --------------------------------------------------------------------------------------------------------------
     def _write_minutes(self, token: str, symbol: str, side: str, df: pd.DataFrame, seen_at: datetime) -> None:
+        """A minute is written the first time it is seen and again whenever a later poll shows DIFFERENT values for it (the 5-minute poll windows
+        overlap, so every minute is seen about five times). The file therefore holds each minute's whole history, first-seen to final, with the
+        time of each sighting; a consumer wanting the settled value takes the last row per minute, one wanting the provisional one the first."""
         if df is None or df.empty:
             return
         key = (token, side)
         with self._lock:
-            seen = self._seen.setdefault(key, set())
-            new = df[~df['time_stamp'].isin(seen)]
-            if new.empty:
+            seen = self._seen.setdefault(key, {})
+            rows = []
+            for r in df.itertuples(index=False):
+                vals = (r.open, r.high, r.low, r.close, r.volume)
+                if seen.get(r.time_stamp) != vals:
+                    seen[r.time_stamp] = vals
+                    rows.append((r.time_stamp, vals))
+            if not rows:
                 return
-            seen.update(new['time_stamp'])
             path = self.dir / f"{symbol.replace(':', '_')}_{side}_1m_{seen_at:%Y-%m-%d}.csv"
             exists = path.exists()
             with open(path, 'a', newline='') as f:
                 w = csv.writer(f)
                 if not exists:
                     w.writerow(SEEN_COLS)
-                for r in new.itertuples(index=False):
-                    w.writerow([r.time_stamp.isoformat(), r.open, r.high, r.low, r.close, r.volume,
-                                seen_at.isoformat(timespec='milliseconds')])
+                for ts, vals in rows:
+                    w.writerow([ts.isoformat(), *vals, seen_at.isoformat(timespec='milliseconds')])
 
     def _write_poll(self, ref, tick: datetime, symbol: str, side: str, ok: bool, kind: str, attempts: int, after_s, rows: int,
                     expected_present: bool, exhausted, note: str) -> None:
@@ -405,12 +416,111 @@ class ShadowRecorder:
             log.exception(message)
 
 
-MODES = ('angel', 'shadow')                       # rescue and smart arrive with Phases 2 and 3
+MODES = ('angel', 'shadow', 'rescue')            # smart arrives with Phase 3
+
+
+@dataclass
+class RescueConfig:
+    instruments: Sequence[str] = ('CRUDEOILM', 'SILVERMIC', 'GOLDPETAL', 'NATGASMINI')
+    after_attempts: int = 5                      # failed Angel One attempts before Fyers is asked; 5 = only once the whole burst has failed
+    settle_s: float = 0.0                        # a just-closed minute is trusted only this many seconds after it closed: measured 54% final at +0.1 s, 95% at +0.4 s, 100% from +0.8 s
+    timeout_s: float = 3.0
+
+
+RESCUE_COLS = ['ts', 'token', 'symbol', 'win_from', 'win_to', 'expected_minute', 'kind', 'minutes_returned', 'minutes_used', 'latency_ms', 'note']
+
+
+class FyersRescue:
+    """`fetch_window` is the fallback `candle_fetch.fetch_one_minute_window` calls after Angel One's burst has failed. It returns a frame of the
+    window's closed minutes that the engine does NOT already have (an empty frame if there is nothing new), or None when Fyers could not
+    answer, in which case the caller's burst ends exactly as it would have without a rescue. It never raises."""
+
+    def __init__(self, out_dir: os.PathLike, gate: TokenGate, client: FyersClient, config: Optional[RescueConfig] = None,
+                 clock: Callable[[], datetime] = datetime.now, sleep: Callable[[float], None] = time.sleep):
+        self.dir = Path(out_dir)
+        self.gate, self.client, self.cfg = gate, client, config or RescueConfig()
+        self._clock, self._sleep = clock, sleep
+        self._lock = threading.Lock()
+        self.counts = {'ok': 0, 'failed': 0}
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def after_attempts(self) -> int:
+        return self.cfg.after_attempts
+
+    def fetch_window(self, ref, win_from: datetime, win_to: datetime, known: Iterable = ()) -> Optional[pd.DataFrame]:
+        try:
+            return self._fetch(ref, win_from, win_to, set(known))
+        except Exception:                                           # noqa: BLE001
+            log.exception('fyers rescue failed')
+            self._count('failed')
+            return None
+
+    def _fetch(self, ref, win_from: datetime, win_to: datetime, known: set) -> Optional[pd.DataFrame]:
+        if ref.instrument not in self.cfg.instruments:
+            return None
+        state = self.gate.check()
+        if not state.ok:
+            return None                                             # the gate logs its own state change
+        symbol = fyers_symbol(ref.instrument, ref.expiry)
+        window_end = pd.Timestamp(win_to).floor('min')              # the just-closed minute is window_end - 1 min, and it closed AT window_end
+        expected = window_end - pd.Timedelta(minutes=1)
+        wait = self.cfg.settle_s - (pd.Timestamp(self._clock()) - window_end).total_seconds()
+        if wait > 0:
+            self._sleep(wait)
+        res = self.client.minutes(symbol, win_from, win_to, state.auth)
+        if res.kind == 'auth':
+            self.gate.trip('fyers refused the token')
+        returned = used = 0
+        out = None
+        note = res.detail
+        if res.kind in ('ok', 'empty') and res.frame is not None:
+            closed = res.frame[res.frame['time_stamp'] < window_end]
+            returned = len(closed)
+            if (closed['time_stamp'] == expected).any():
+                new = closed[~closed['time_stamp'].isin(known) & (closed['volume'] > 0)]
+                out = new[MINUTE_COLS].reset_index(drop=True)
+                used = len(out)
+            else:
+                note = 'the just-closed minute is not in the Fyers answer'
+        kind = 'stale' if out is None and res.kind in ('ok', 'empty') else res.kind
+        self._record(ref, symbol, win_from, win_to, expected, kind, returned, used, res.latency_ms, note)
+        if out is None:
+            self._count('failed')
+            log.info('fyers rescue: %s window %s->%s could not be filled (%s)', symbol, f'{win_from:%H:%M}', f'{win_to:%H:%M}', note or res.kind)
+            return None
+        self._count('ok')
+        log.info('fyers rescue: %s window %s->%s filled %d minute(s) from Fyers after Angel One failed', symbol, f'{win_from:%H:%M}',
+                 f'{win_to:%H:%M}', used)
+        return out
+
+    def _count(self, key: str) -> None:
+        with self._lock:
+            self.counts[key] += 1
+
+    def summary(self) -> Tuple[int, int]:
+        with self._lock:
+            return self.counts['ok'], self.counts['failed']
+
+    def _record(self, ref, symbol, win_from, win_to, expected, kind, returned, used, latency_ms, note) -> None:
+        try:
+            with self._lock:
+                path = self.dir / f'rescues_{win_to:%Y-%m-%d}.csv'
+                exists = path.exists()
+                with open(path, 'a', newline='') as f:
+                    w = csv.writer(f)
+                    if not exists:
+                        w.writerow(RESCUE_COLS)
+                    w.writerow([self._clock().isoformat(timespec='milliseconds'), ref.token, symbol, win_from.isoformat(timespec='minutes'),
+                                win_to.isoformat(timespec='minutes'), pd.Timestamp(expected).isoformat(), kind, returned, used,
+                                round(latency_ms, 1), note])
+        except Exception:                                           # noqa: BLE001
+            log.exception('fyers rescue record failed')
 
 
 def build_shadow(cfg) -> Optional[ShadowRecorder]:
-    """The recorder for the configured `CANDLE_SOURCE` mode, or None when the mode is 'angel' (the default: no Fyers code runs at all).
-    An unknown mode is an error at start-up, never a silent fallback."""
+    """The recorder for the configured `CANDLE_SOURCE` mode ('shadow' and 'rescue' both record), or None when the mode is 'angel' (the default:
+    no Fyers code runs at all). An unknown mode is an error at start-up, never a silent fallback."""
     cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
     mode = cs.get('mode', 'angel')
     if mode not in MODES:
@@ -420,3 +530,13 @@ def build_shadow(cfg) -> Optional[ShadowRecorder]:
     scfg = ShadowConfig(instruments=tuple(cs.get('instruments', ShadowConfig.instruments)), timeout_s=cs.get('timeout_s', 3.0),
                         retry_s=cs.get('retry_s', 1.0), max_wait_s=cs.get('max_wait_s', 6.0))
     return ShadowRecorder(cfg.SHADOW_DIR, TokenGate(cfg.FYERS_TOKEN_FILE, cfg.FYERS_OFF_FLAG), FyersClient(timeout_s=scfg.timeout_s), scfg)
+
+
+def build_rescue(cfg, shadow: Optional[ShadowRecorder]) -> Optional[FyersRescue]:
+    """The rescue fallback, only in 'rescue' mode; it shares the recorder's token gate (so one authentication refusal stops both) and client."""
+    cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
+    if cs.get('mode', 'angel') != 'rescue' or shadow is None:
+        return None
+    rcfg = RescueConfig(instruments=tuple(cs.get('instruments', RescueConfig.instruments)), after_attempts=int(cs.get('rescue_after_attempts', 5)),
+                        settle_s=float(cs.get('settle_s', 0.0)), timeout_s=cs.get('timeout_s', 3.0))
+    return FyersRescue(cfg.SHADOW_DIR, shadow.gate, shadow.client, rcfg)

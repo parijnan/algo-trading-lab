@@ -53,6 +53,23 @@ def angel_to_fyers(symbol: str):
     return None if not m else f'MCX:{m.group(1)}{m.group(4)}{m.group(3)}FUT'
 
 
+def settled_minutes(df: pd.DataFrame) -> pd.DataFrame:
+    """The recorder writes a minute again when a later poll shows different values, so a minute file holds each minute's history. The settled
+    value is the last row per minute (by sighting time); the first-seen value is the first."""
+    d = df.sort_values('seen_at', kind='stable')
+    return d.drop_duplicates('time_stamp', keep='last').sort_values('time_stamp').reset_index(drop=True)
+
+
+def provisional_stats(df: pd.DataFrame) -> dict:
+    """How often was the first-seen value of a minute not the settled one? (Fyers's first answer, ~0.07 s after the minute closes, is provisional.)"""
+    d = df.sort_values('seen_at', kind='stable')
+    first, last = d.drop_duplicates('time_stamp', keep='first').set_index('time_stamp'), d.drop_duplicates('time_stamp', keep='last').set_index('time_stamp')
+    cols = ['open', 'high', 'low', 'close', 'volume']
+    changed = (first[cols] != last[cols]).any(axis=1)
+    return {'minutes': len(last), 'changed_after_first_seen': int(changed.sum()), 'changed_pct': round(100 * float(changed.mean()), 1) if len(last) else None,
+            'close_changed_pct': round(100 * float((first['close'] != last['close']).mean()), 1) if len(last) else None}
+
+
 def pct(series: pd.Series, q: float):
     s = series.dropna()
     return None if s.empty else round(float(s.quantile(q)), 2)
@@ -141,6 +158,7 @@ def main() -> int:
     pd.set_option('display.width', 220)
     pd.set_option('display.max_columns', 30)
     print(f'== availability, {d} ==')
+    print('(a Fyers after_s is the time until its FIRST answer holding the just-closed minute; that first answer is provisional, see "first-seen vs settled" below)')
     for symbol, g in polls.groupby('symbol'):
         print(f'\n{symbol}')
         print(latency_summary(g).to_string(index=False))
@@ -171,7 +189,9 @@ def main() -> int:
         if res.kind != 'ok':
             print(f'{fy_symbol}: history fetch failed ({res.kind})')
             continue
-        series = fyers_series(pd.read_csv(f, parse_dates=['time_stamp']), res.frame, day)
+        raw = pd.read_csv(f, parse_dates=['time_stamp'])
+        print(fy_symbol, 'first-seen vs settled:', provisional_stats(raw))
+        series = fyers_series(settled_minutes(raw), res.frame, day)
         print(fy_symbol, compare_flips(series, boundaries[boundaries['fyers_symbol'] == fy_symbol], cfg.st_period, cfg.st_multiplier, day))
     return 0
 

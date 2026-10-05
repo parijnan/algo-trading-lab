@@ -29,7 +29,7 @@ from typing import Callable, Dict, List, Optional
 
 from hestia_core.alert_router import AlertRouter
 from hestia_core.display import display_name
-from hestia_core.fyers_shadow import build_shadow
+from hestia_core.fyers_shadow import build_rescue, build_shadow
 from hestia_core.angel_broker import AngelBrokerPort, AngelConfig
 from hestia_core.broker_router import BrokerRouter
 from hestia_core.core import Alert, CoreConfig, HestiaCore
@@ -80,6 +80,7 @@ class HostDeps:
     engine_factories: Dict[str, Callable] = field(default_factory=dict)      # overrides the config's dotted paths
     executor_workers: int = 4
     make_shadow: Optional[Callable[[object], Optional[object]]] = None     # tests: a recorder double; default is fyers_shadow.build_shadow(cfg)
+    make_rescue: Optional[Callable[[object, object], Optional[object]]] = None   # tests: a rescue double; default is fyers_shadow.build_rescue(cfg, shadow)
 
 
 @dataclass
@@ -231,11 +232,16 @@ class HestiaHost:
         feed = deps.make_feed(login, lambda m: host_alert('warning', m))
         order_feed = deps.make_order_feed(login)
         catalog = ContractCatalog(cfg.INSTRUMENT_MASTER_FILE, cfg.MCX_DATA_DIR)
-        rt.shadow = shadow = deps.make_shadow(cfg) if deps.make_shadow else build_shadow(cfg)      # None unless CANDLE_SOURCE mode is 'shadow'
-        if shadow is not None:
-            host_alert('info', f"Fyers candle shadow ON for {', '.join(cfg.CANDLE_SOURCE.get('instruments', []))}: recording only, no decision uses it")
+        rt.shadow = shadow = deps.make_shadow(cfg) if deps.make_shadow else build_shadow(cfg)      # None in 'angel' mode; the recorder in 'shadow' and 'rescue'
+        rescue = deps.make_rescue(cfg, shadow) if deps.make_rescue else (None if deps.make_shadow else build_rescue(cfg, shadow))   # only in 'rescue' mode
+        names = ', '.join(cfg.CANDLE_SOURCE.get('instruments', []))
+        if rescue is not None:
+            host_alert('info', f"Fyers candle RESCUE ON for {names}: Angel One first; Fyers is asked only after {rescue.after_attempts} failed Angel One "
+                               f"attempt(s), fills only minutes missing, and every rescue is logged")
+        elif shadow is not None:
+            host_alert('info', f"Fyers candle shadow ON for {names}: recording only, no decision uses it")
         data = LiveData(reactor, gateway, executor, catalog, calendar, feed, cfg.CACHE_DIR, LiveDataConfig(**cfg.LIVE_DATA),
-                        sleep=deps.sleep, alert=host_alert, shadow=shadow)
+                        sleep=deps.sleep, alert=host_alert, shadow=shadow, rescue=rescue)
 
         def lot_size(token: str) -> Optional[int]:
             row = catalog.row(token)

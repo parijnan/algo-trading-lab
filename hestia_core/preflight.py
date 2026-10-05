@@ -171,8 +171,14 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
     if mode not in MODES:
         add('candle source', FAIL, f'CANDLE_SOURCE mode {mode!r} is not one of {MODES}')
     else:
-        add('candle source', OK, 'angel only: no Fyers code runs' if mode == 'angel' else
-            f"shadow: Fyers queried in parallel for {', '.join(cs.get('instruments', []))}, recorded to {cfg.SHADOW_DIR}; no decision uses it")
+        if mode == 'angel':
+            detail = 'angel only: no Fyers code runs'
+        elif mode == 'shadow':
+            detail = f"shadow: Fyers queried in parallel for {', '.join(cs.get('instruments', []))}, recorded to {cfg.SHADOW_DIR}; no decision uses it"
+        else:
+            detail = (f"rescue: Angel One first; Fyers asked only after {cs.get('rescue_after_attempts', 5)} failed Angel One attempt(s), "
+                      f"minute must have settled {cs.get('settle_s', 0.0)}s, fills only missing minutes; also recording to {cfg.SHADOW_DIR}")
+        add('candle source', OK, detail)
         if hasattr(cfg, 'FYERS_TOKEN_FILE'):
             ist = ZoneInfo('Asia/Kolkata')
             gate = TokenGate(cfg.FYERS_TOKEN_FILE, getattr(cfg, 'FYERS_OFF_FLAG', None),
@@ -182,7 +188,7 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
                 add('fyers token', OK, f'usable (fingerprint {st.fingerprint}); Angel One stays the only source the engines see')
             else:
                 add('fyers token', OK if mode == 'angel' else WARN,
-                    f'not usable: {st.reason}' + ('' if mode == 'angel' else '; shadow would record nothing today'))
+                    f'not usable: {st.reason}' + ('' if mode == 'angel' else f"; {mode} would record nothing and rescue nothing today"))
 
     # ---- who else holds the account ----------------------------------------------------------------------------------------
     for label, pid_file in getattr(cfg, 'LEGACY_PID_FILES', {}).items():

@@ -169,6 +169,12 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
         lines.append(DIVIDER)
         lines.append('')
 
+    rescue = getattr(getattr(core, 'data', None), 'rescue', None)
+    if rescue is not None:
+        ok, failed = rescue.summary()
+        if ok or failed:
+            lines.append(f'Candle rescues from Fyers: {ok} window(s) filled after Angel One failed'
+                         + (f', {failed} Fyers attempt(s) could not help' if failed else ''))
     try:
         lines.append(f"Account free cash: Rs {core.broker.free_cash(''):,.0f}")          # the live account, not a paper pool
     except Exception:                                                # noqa: BLE001

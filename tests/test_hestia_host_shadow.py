@@ -21,7 +21,7 @@ def test_the_committed_default_is_angel_only_and_builds_no_fyers_code():
 
 
 def test_an_unknown_mode_is_an_error_not_a_silent_fallback():
-    for mode in ('rescue', 'smart', 'Shadow', ''):
+    for mode in ('smart', 'Shadow', 'Rescue', ''):
         with pytest.raises(ValueError, match='not one of'):
             fs.build_shadow(types.SimpleNamespace(CANDLE_SOURCE=dict(mode=mode)))
 
@@ -81,3 +81,35 @@ def test_in_angel_mode_no_shadow_announcement_is_made(tmp_path):
     (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()
     run.join()
     assert not any('Fyers' in t for t in run.texts())
+
+
+class RescueDouble:
+    after_attempts = 3
+
+    def summary(self):
+        return (0, 0)
+
+
+def test_a_session_in_rescue_mode_announces_it_hands_the_rescue_to_live_data_and_the_default_is_unchanged(tmp_path):
+    rec, rescue = Recorder(), RescueDouble()
+    run = HostRun(tmp_path, ENGINES, {'a': lambda: RecEngine('a')}, CANDLE_SOURCE=dict(mode='rescue', instruments=('XX',)))
+    run.deps.make_shadow = lambda cfg: rec
+    run.deps.make_rescue = lambda cfg, shadow: rescue if shadow is rec else None
+    run.start()
+    wait_until(lambda: rec.begins, what='the first shadow tick')
+    (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()
+    r = run.join()
+    assert r.core.data.rescue is rescue and r.core.data.shadow is rec
+    assert any('Fyers candle RESCUE ON for XX' in t and 'after 3 failed Angel One attempt' in t and 'fills only minutes missing' in t for t in run.texts())
+    assert not any('shadow ON' in t for t in run.texts()), 'one announcement, the stronger one'
+
+
+def test_shadow_mode_hands_live_data_no_rescue(tmp_path):
+    rec = Recorder()
+    run = HostRun(tmp_path, ENGINES, {'a': lambda: RecEngine('a')}, CANDLE_SOURCE=dict(mode='shadow', instruments=('XX',)))
+    run.deps.make_shadow = lambda cfg: rec
+    run.start()
+    wait_until(lambda: rec.begins, what='the first shadow tick')
+    (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()
+    r = run.join()
+    assert r.core.data.rescue is None and r.core.data.shadow is rec

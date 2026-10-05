@@ -45,13 +45,21 @@ def _to_frame(raw) -> pd.DataFrame:
 
 def fetch_one_minute_window(gateway, token: str, from_dt: datetime, to_dt: datetime, cfg: FetchConfig,
                             sleep: Callable[[float], None] = time.sleep, high: bool = False,
-                            stats: Optional[dict] = None) -> Optional[pd.DataFrame]:
-    """A frame (possibly empty: the fetch worked, nothing new yet) or None when the whole burst failed. `stats`, when given, is
-    filled with {'attempts': n, 'exhausted': bool} for the caller's own bookkeeping (the Fyers shadow's Angel-side record); it never
-    changes what is fetched or returned."""
+                            stats: Optional[dict] = None, fallback: Optional[Callable[[], Optional[pd.DataFrame]]] = None,
+                            fallback_after: Optional[int] = None) -> Optional[pd.DataFrame]:
+    """A frame (possibly empty: the fetch worked, nothing new yet) or None when the whole burst failed.
+
+    `stats`, when given, is filled with {'attempts': n, 'exhausted': bool, 'rescued': bool} for the caller's own bookkeeping (the Fyers
+    shadow's Angel-side record); it never changes what is fetched or returned.
+
+    `fallback` (Phase 2 of plans/hestia-fyers-candle-source.md, 'rescue' mode): called once, after `fallback_after` failed Angel One attempts
+    (default and cap: `cfg.inner_attempts`, i.e. only once the whole burst has failed). A frame it returns (possibly empty) is the result and
+    ends the burst; None, or any exception, leaves the burst exactly as it would have run without a fallback. The fallback can only ADD a
+    result where there would have been none: a successful Angel One attempt is never second-guessed."""
     from_str, to_str = from_dt.strftime('%Y-%m-%d %H:%M'), to_dt.strftime('%Y-%m-%d %H:%M')
     if stats is not None:
-        stats.update(attempts=0, exhausted=False)
+        stats.update(attempts=0, exhausted=False, rescued=False)
+    rescue_at = None if fallback is None else min(cfg.inner_attempts, fallback_after or cfg.inner_attempts)
     for attempt in range(1, cfg.inner_attempts + 1):
         if stats is not None:
             stats['attempts'] = attempt
@@ -68,6 +76,16 @@ def fetch_one_minute_window(gateway, token: str, from_dt: datetime, to_dt: datet
             code = 'AB1021' if 'exceeding access rate' in str(exc) else 'EXCEPTION'
             (log.warning if code == 'AB1021' else log.error)('fetch failed [%s -> %s] attempt %d/%d: %s - %s', from_str,
                                                              to_str, attempt, cfg.inner_attempts, code, exc)
+        if rescue_at is not None and attempt == rescue_at:
+            try:
+                rescued = fallback()
+            except Exception:                                       # noqa: BLE001 - a fallback never breaks the Angel One burst
+                log.exception('candle fallback raised [%s -> %s]', from_str, to_str)
+                rescued = None
+            if rescued is not None:
+                if stats is not None:
+                    stats['rescued'], stats['exhausted'] = True, attempt >= cfg.inner_attempts
+                return rescued
         if attempt < cfg.inner_attempts:
             sleep(cfg.inner_interval_s)
     log.error('inner burst exhausted [%s -> %s]: deferring to the recovery queue', from_str, to_str)

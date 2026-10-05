@@ -110,9 +110,10 @@ class LiveData:
 
     def __init__(self, kernel, gateway, executor, catalog: ContractCatalog, calendar: MarketCalendar, feed: Optional[FeedPort],
                  cache_dir, config: Optional[LiveDataConfig] = None, sleep: Callable[[float], None] = time.sleep,
-                 alert: Optional[Callable[[str, str], None]] = None, shadow=None):
+                 alert: Optional[Callable[[str, str], None]] = None, shadow=None, rescue=None):
         self.kernel, self.gateway, self.executor = kernel, gateway, executor
         self.shadow = shadow            # a hestia_core.fyers_shadow.ShadowRecorder, or None; it only records, it never changes a decision
+        self.rescue = rescue            # a hestia_core.fyers_shadow.FyersRescue ('rescue' mode), or None; it can only fill a window Angel One failed to give
         self.catalog, self.calendar, self.feed = catalog, calendar, feed
         self.cfg = config or LiveDataConfig()
         self.cache = TodayCache(cache_dir)
@@ -447,7 +448,11 @@ class LiveData:
             results = []
             for (f, t) in pending + [(win_from, win_to)]:       # recovery first, then the current window
                 stats: dict = {}
-                df = fetch_one_minute_window(self.gateway, token, f, t, self.cfg.fetch, self._sleep, stats=stats)
+                fallback = None
+                if self.rescue is not None:                     # only after Angel One's own attempts have failed; it fills minutes we lack, never replaces one
+                    fallback = lambda f=f, t=t: self.rescue.fetch_window(s.ref, f, t, known=set(s.raw_today['time_stamp']))   # noqa: E731
+                df = fetch_one_minute_window(self.gateway, token, f, t, self.cfg.fetch, self._sleep, stats=stats, fallback=fallback,
+                                             fallback_after=None if self.rescue is None else self.rescue.after_attempts)
                 if df is not None:
                     df = self._closed_minutes(df, t)
                     if not df.empty:
@@ -471,8 +476,8 @@ class LiveData:
             self._after_merge(s, boundary)
             if self.shadow is not None:                         # the Angel One side of the measurement; copies, so nothing is shared
                 try:
-                    self.shadow.angel_result(s.ref, win_to, [df for _w, df, _st in results], [st for _w, _df, st in results],
-                                             self.kernel.now)
+                    self.shadow.angel_result(s.ref, win_to, [None if st.get('rescued') else df for _w, df, st in results],
+                                             [st for _w, _df, st in results], self.kernel.now)
                 except Exception:                               # noqa: BLE001
                     log.exception('fyers shadow angel_result raised')
         self._async(job, done)

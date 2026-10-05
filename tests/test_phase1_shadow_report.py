@@ -103,3 +103,14 @@ def test_a_trend_disagreement_is_counted():
     b = engine_boundaries(m, 10, 2.0, day)
     b.loc[b.index[3], 'trend'] = 'bearish' if b.loc[b.index[3], 'trend'] == 'bullish' else 'bullish'
     assert rpt.compare_flips(m, b, 10, 2.0, day)['trend_mismatch'] == 1
+
+
+def test_the_settled_value_of_a_minute_is_its_last_sighting_and_the_provisional_rate_is_measured():
+    df = pd.DataFrame([
+        {'time_stamp': pd.Timestamp('2026-10-05 10:00'), 'open': 1, 'high': 2, 'low': 0, 'close': 1.5, 'volume': 5, 'seen_at': '2026-10-05T10:01:00.07'},
+        {'time_stamp': pd.Timestamp('2026-10-05 10:00'), 'open': 1, 'high': 2, 'low': 0, 'close': 1.9, 'volume': 9, 'seen_at': '2026-10-05T10:02:00.05'},
+        {'time_stamp': pd.Timestamp('2026-10-05 10:01'), 'open': 3, 'high': 4, 'low': 3, 'close': 3.5, 'volume': 7, 'seen_at': '2026-10-05T10:02:00.06'}])
+    s = rpt.settled_minutes(df)
+    assert list(s['close']) == [1.9, 3.5] and list(s['volume']) == [9, 7]
+    p = rpt.provisional_stats(df)
+    assert p == {'minutes': 2, 'changed_after_first_seen': 1, 'changed_pct': 50.0, 'close_changed_pct': 50.0}

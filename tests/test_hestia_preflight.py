@@ -192,3 +192,11 @@ def test_a_fresh_token_is_reported_with_its_fingerprint_and_never_its_text(cfg):
 def test_an_unknown_candle_source_mode_fails_the_preflight(cfg):
     cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='smart')
     assert by_name(pf.run_checks(cfg, NOW))['candle source'].status == pf.FAIL
+
+
+def test_rescue_mode_is_described_with_its_attempts_settle_time_and_scope(cfg):
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='rescue', rescue_after_attempts=2, settle_s=7.5)
+    st = by_name(pf.run_checks(cfg, NOW))
+    d = st['candle source'].detail
+    assert st['candle source'].status == pf.OK and d.startswith('rescue:') and 'after 2 failed Angel One attempt' in d and '7.5s' in d and 'fills only missing' in d
+    assert 'would record nothing and rescue nothing' in st['fyers token'].detail

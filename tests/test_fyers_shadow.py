@@ -261,6 +261,21 @@ def test_a_minute_is_written_once_however_many_polls_return_it(tmp_path):
     assert len(minutes) == 1
 
 
+def test_a_minute_is_written_again_when_a_later_poll_shows_different_values_and_the_file_keeps_every_version(tmp_path):
+    """Fyers's first-seen value of a minute is provisional (2026-10-05): the file must keep the first-seen AND the settled value."""
+    first = frame([EXPECTED], base=100.0)
+    settled = frame([EXPECTED], base=100.0)
+    settled.loc[:, 'close'] = 107.0
+    settled.loc[:, 'volume'] = 99
+    rec, _, _ = recorder(tmp_path, ScriptedClient([fs.FetchResult('ok', first, 90.0), fs.FetchResult('ok', settled, 90.0), fs.FetchResult('ok', settled, 90.0)]))
+    rec.begin(REF, TICK, M(10, 10), M(10, 15))
+    rec.begin(REF, TICK + timedelta(minutes=1), M(10, 11), M(10, 16))
+    rec.begin(REF, TICK + timedelta(minutes=2), M(10, 12), M(10, 17))
+    minutes = list(csv.DictReader(open(next((tmp_path / 'shadow').glob('*_fyers_1m_*.csv')))))
+    assert [float(r['close']) for r in minutes] == [100.5, 107.0], 'first-seen, then the changed value once; the unchanged repeat is not written'
+    assert [int(float(r['volume'])) for r in minutes] == [10, 99] and all(r['seen_at'] for r in minutes)
+
+
 def test_an_authentication_refusal_stops_at_once_and_trips_the_breaker_until_the_file_changes(tmp_path):
     client = ScriptedClient([fs.FetchResult('auth', detail='http 401 code -16')])
     rec, gate, _ = recorder(tmp_path, client)
@@ -342,6 +357,14 @@ def test_the_angel_side_records_success_latency_attempts_and_minutes(tmp_path):
     assert (row['side'], row['ok'], row['attempts'], row['expected_present'], row['exhausted'], row['boundary']) == ('angel', '1', '2', '1', '0', '1')
     assert float(row['after_s']) == pytest.approx(1.4)
     assert len(list(csv.DictReader(open(next((tmp_path / 'shadow').glob('*_angel_1m_*.csv')))))) == 2
+
+
+def test_a_rescued_angel_window_is_recorded_as_rescued_not_as_an_angel_frame(tmp_path):
+    rec, _, _ = recorder(tmp_path, ScriptedClient([ok_result([EXPECTED])]))
+    rec.angel_result(REF, TICK, [None], [{'attempts': 5, 'exhausted': True, 'rescued': True}], TICK + timedelta(seconds=8))
+    row = [r for r in polls(tmp_path) if r['side'] == 'angel'][0]
+    assert (row['ok'], row['kind'], row['exhausted'], row['attempts'], row['after_s']) == ('0', 'rescued', '1', '5', '')
+    assert not list((tmp_path / 'shadow').glob('*_angel_1m_*.csv')), 'no minute is attributed to Angel One that Fyers supplied'
 
 
 def test_an_exhausted_angel_burst_is_recorded_as_exhausted_with_no_latency(tmp_path):
