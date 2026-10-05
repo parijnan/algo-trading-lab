@@ -59,7 +59,8 @@ MARGIN_CONTRACT_VALUE_DIVISOR = 3   # keep in sync with prometheus_configs.py
 MARGIN_SIZING_MULTIPLIER = 4        # keep in sync with prometheus_configs.py
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MULT_2_0_DIR = os.path.join(HERE, 'data_sweep', 'mult_2.0')
+# PROM_SIM_MULT_DIR points the same script at another multiplier's folder (e.g. data_sweep/mult_2.5) without changing the default.
+MULT_2_0_DIR = os.environ.get('PROM_SIM_MULT_DIR') or os.path.join(HERE, 'data_sweep', 'mult_2.0')
 
 df = pd.read_csv(os.path.join(MULT_2_0_DIR, 'bespoke_trade_summary.csv'),
                   parse_dates=['entry_ts', 'lot1_exit_ts', 'lot2_exit_ts'])

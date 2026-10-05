@@ -49,6 +49,7 @@ Usage:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -61,21 +62,29 @@ INSTRUMENTS = {
     'crudeoil': HERE / 'phase3_crudeoil',
 }
 
+# Mult 2.5 is Prometheus's live multiplier since 2026-10-05 (SL 1.0 / T1 1.25 / T2 4.0), mult 2.0 the reference (SL 2.2 / T1 2.2 / T2 5.0). The first three stages
+# cover both in one run; the sizing and risk stages read one multiplier's folder (PROM_SIM_MULT_DIR) and run once per multiplier.
+MULTIPLIERS = ['2.5', '2.0']
+
 STAGES = [
-    ('sweep_p3.py', 'Raw signal sweep (mult 2.0 only) -- SLOWEST stage'),
-    ('bespoke_2lot_p3.py', 'Bespoke exit overlay (mult 2.0 T1=2.2%)'),
-    ('two_candidate_stats_p3.py', 'Per-lot-exit-event Calmar/drawdown stats'),
-    ('dynamic_sizing_sim.py', 'Dynamic-sizing equity simulation (no slippage)'),
-    ('dynamic_sizing_sim_slippage.py', 'Dynamic-sizing equity simulation (slippage-adjusted)'),
-    ('risk_of_ruin_p3.py', 'Risk-of-ruin Monte Carlo'),
+    ('sweep_p3.py', 'Raw signal sweep (mult 2.0 and 2.5) -- SLOWEST stage', False),
+    ('bespoke_2lot_p3.py', 'Bespoke exit overlay (2.0: SL 2.2 / T1 2.2 / T2 5.0; 2.5: SL 1.0 / T1 1.25 / T2 4.0)', False),
+    ('two_candidate_stats_p3.py', 'Per-lot-exit-event Calmar/drawdown stats', False),
+    ('dynamic_sizing_sim.py', 'Dynamic-sizing equity simulation (no slippage)', True),
+    ('dynamic_sizing_sim_slippage.py', 'Dynamic-sizing equity simulation (slippage-adjusted)', True),
+    ('risk_of_ruin_p3.py', 'Risk-of-ruin Monte Carlo', True),
 ]
 
 
-def run_stage(script_dir: Path, script_name: str, label: str) -> str:
+def run_stage(script_dir: Path, script_name: str, label: str, mult: str = None) -> str:
     script_path = script_dir / script_name
-    print(f'\n{"=" * 70}\n{script_dir.name} :: {script_name} -- {label}\n{"=" * 70}')
+    suffix = f' [mult {mult}]' if mult else ''
+    print(f'\n{"=" * 70}\n{script_dir.name} :: {script_name}{suffix} -- {label}\n{"=" * 70}')
+    env = dict(os.environ)
+    if mult:
+        env['PROM_SIM_MULT_DIR'] = str(script_dir / 'data_sweep' / f'mult_{mult}')
     t0 = time.time()
-    result = subprocess.run([sys.executable, str(script_path)], cwd=str(script_dir),
+    result = subprocess.run([sys.executable, str(script_path)], cwd=str(script_dir), env=env,
                              capture_output=True, text=True)
     elapsed = time.time() - t0
     print(result.stdout)
@@ -100,11 +109,15 @@ def main():
     for name, script_dir in instruments.items():
         print(f'\n{"#" * 70}\n# {name.upper()} ({script_dir})\n{"#" * 70}')
         outputs = {}
-        for script_name, label in STAGES:
+        for script_name, label, per_mult in STAGES:
             if args.skip_sweep and script_name == 'sweep_p3.py':
                 print(f'\n-- skipping {script_name} for {name} (--skip-sweep) --')
                 continue
-            outputs[script_name] = run_stage(script_dir, script_name, label)
+            if per_mult:
+                for mult in MULTIPLIERS:
+                    outputs[f'{script_name}@{mult}'] = run_stage(script_dir, script_name, label, mult)
+            else:
+                outputs[script_name] = run_stage(script_dir, script_name, label)
         all_output[name] = outputs
 
     print(f'\n\n{"#" * 70}\n# ALL STAGES COMPLETE -- {len(instruments)} instrument(s)\n{"#" * 70}')

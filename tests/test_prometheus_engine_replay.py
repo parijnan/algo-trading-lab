@@ -15,7 +15,6 @@ from hestia_core.interface import CommandKind  # noqa: E402
 from hestia_core.replay import BrokerReply  # noqa: E402
 from prometheus_engine import replay_check as rc  # noqa: E402
 from prometheus_engine.engine import PrometheusEngine  # noqa: E402
-from prometheus_engine.engine_configs import DEFAULT  # noqa: E402
 
 PULL = REPO / 'hestia_data' / 'replay_pull'
 PIPE = REPO / 'data_pipeline' / 'data' / 'mcx'
@@ -75,7 +74,7 @@ def test_the_recorded_window_covers_a_stop_a_target_scale_out_and_rule_7_flips(w
 def test_the_comparison_is_not_trivially_permissive(world):
     """With the first target moved from 2.2% to 1.0% the replay must differ from live (an engine that ignored its levels would not)."""
     sessions, frames, trades = world
-    rep = rc.check_day(date(2026, 9, 24), sessions, frames, trades, cfg=dataclasses.replace(DEFAULT, target1_pct=1.0))
+    rep = rc.check_day(date(2026, 9, 24), sessions, frames, trades, cfg=dataclasses.replace(rc.RECORDED_CONFIG, target1_pct=1.0))
     assert not rep.exact and any('target1' in d for d in rep.differences)
 
 
@@ -100,7 +99,7 @@ def test_engine_crash_mid_trade_resumes_without_a_second_order(world):
                 raise RuntimeError('injected crash')
             super()._tick()
     day = date(2026, 9, 24)
-    with replayed(world, day, engine_factory=lambda: Crashy(DEFAULT)) as (rep, h, made):
+    with replayed(world, day, engine_factory=lambda: Crashy(rc.RECORDED_CONFIG)) as (rep, h, made):
         assert crashed['n'] == 1 and len(made) >= 3                    # the probe, the first life, the resumed one
         assert rep.exact, rep.differences
         assert len(h.orders) == _baseline_orders(world, day)           # resumed from its saved state: not one order more

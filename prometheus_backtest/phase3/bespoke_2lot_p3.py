@@ -156,6 +156,7 @@ if __name__ == '__main__':
     # frozen at its 2026-09-12 values; see prometheus-refresh SKILL.md.
     runs = [
         (2.0, 2.2, 2.2, 5.0),
+        (2.5, 1.0, 1.25, 4.0),    # restored 2026-10-05: Prometheus's live combo from that day
     ]
     fbbd = first_bar_by_day()
     for mult, sl, t1, t2 in runs:

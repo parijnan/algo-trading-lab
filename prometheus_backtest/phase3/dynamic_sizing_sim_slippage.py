@@ -88,7 +88,8 @@ A_ANCHOR = 0.3           # pinned: 25% participation -> 1.5 ticks (README, 2026-
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
-MULT_2_0_DIR = os.path.join(HERE, 'data_sweep', 'mult_2.0')
+# PROM_SIM_MULT_DIR points the same script at another multiplier's folder (e.g. data_sweep/mult_2.5) without changing the default.
+MULT_2_0_DIR = os.environ.get('PROM_SIM_MULT_DIR') or os.path.join(HERE, 'data_sweep', 'mult_2.0')
 
 sys.path.insert(0, os.path.dirname(HERE))
 from data_loader_p3 import load_futures_1min  # noqa: E402

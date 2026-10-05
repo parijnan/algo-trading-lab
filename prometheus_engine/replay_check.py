@@ -17,6 +17,7 @@ prices differ for the same reason and are reported alongside.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import sys
 from dataclasses import dataclass, field
@@ -31,6 +32,11 @@ from hestia_core.fake import ContractSpec, FakeHestia
 from hestia_core.interface import CommandKind, ContractRef, SizingConfig
 from prometheus_engine.engine import PrometheusEngine
 from prometheus_engine.engine_configs import DEFAULT, EngineConfig
+
+# The config the recorded live days (2026-09-16 to 2026-09-28) actually ran under: ST multiplier 2.0 with SL 2.2 / T1 2.2 / T2 5.0. The engine's own
+# DEFAULT moved to 2.5 on 2026-10-05, but a replay of those days only reproduces what live did if the engine runs the config live had, so every
+# recorded-day entry point here defaults to this one.
+RECORDED_CONFIG = dataclasses.replace(DEFAULT, st_multiplier=2.0, sl_pct=2.2, target1_pct=2.2, target2_flat_pct=5.0)
 from prometheus_engine.levels import build_levels
 from prometheus_engine.state import EngineState
 
@@ -182,7 +188,7 @@ def _units_for(day: date, session: rec.SessionRecord, carried: Optional[EngineSt
 
 
 def replay_day(day: date, sessions: Sequence[rec.SessionRecord], frames: Dict[str, pd.DataFrame], trades: pd.DataFrame,
-               cfg: EngineConfig = DEFAULT, engine_factory: Optional[Callable[[], PrometheusEngine]] = None,
+               cfg: EngineConfig = RECORDED_CONFIG, engine_factory: Optional[Callable[[], PrometheusEngine]] = None,
                setup: Optional[Callable[[FakeHestia], None]] = None, until_hm: str = '23:40') -> Tuple[FakeHestia, List[PrometheusEngine]]:
     """Run one recorded day through the engine on the fake Hestia and return it (call `h.close()` when done). `setup` runs after the
     session starts and before time is advanced, for fault injection."""
@@ -227,7 +233,7 @@ def check_day(day: date, sessions, frames, trades, **kw) -> DayReport:
         h.close()
 
 
-def check_chain(days: Sequence[date], sessions, frames, trades, cfg: EngineConfig = DEFAULT, units: Optional[int] = None):
+def check_chain(days: Sequence[date], sessions, frames, trades, cfg: EngineConfig = RECORDED_CONFIG, units: Optional[int] = None):
     """Replay consecutive days on ONE fake Hestia: the engine's own saved state and the ledger carry from day to day (only the first
     day is seeded from the trades file), the way the daily cron run does it. Returns (reports, the fake, the engines made); the caller
     closes the fake."""

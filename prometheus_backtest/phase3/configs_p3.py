@@ -90,7 +90,10 @@ NO_EXIT_BEFORE_BUFFER_MIN = 1
 # ---------------------------------------------------------------------------
 ST_PERIOD = 10   # held fixed; not swept this round (grid is multiplier-only,
                  # matching the user's specific 10,3-vs-10,4 hypothesis)
-ST_MULTIPLIER_GRID = [2.0]
+ST_MULTIPLIER_GRID = [2.0, 2.5]
+# 2026-10-05: 2.5 restored next to 2.0 -- Prometheus went live on mult 2.5 (SL 1.0 / T1 1.25 / T2 4.0) that day, so the routine refresh tracks it; 2.0 is
+# kept as the reference. Multipliers 3.0 to 5.5 stay out of the routine run (their last full sweep is the 2026-10-05 one on data to 2026-10-01); add them
+# back to this list for a one-off grid.
 # Restricted to the decided production value 2026-09-13 (was
 # [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]) -- mult 2.0 was decided live
 # 2026-09-04 and the full grid was the slowest stage of every routine

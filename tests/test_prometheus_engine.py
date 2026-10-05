@@ -70,13 +70,13 @@ def test_levels_match_production_functions(price, direction):
 
 
 def test_build_levels_shape_like_finalize_new_position():
-    lv = build_levels('bullish', 6000.0, filled_lots=2, units=1, cfg=DEFAULT)
+    lv = build_levels('bullish', 6000.0, filled_lots=2, units=1, cfg=CFG)
     assert (lv.lot1_lots, lv.lot2_lots) == (1, 1)
     assert lv.sl_price == pytest.approx(6000 * (1 - 0.022))
     assert lv.lot1_target == pytest.approx(6000 * 1.022) and lv.lot2_target == pytest.approx(6000 * 1.05)
-    lv = build_levels('bearish', 6000.0, filled_lots=3, units=2, cfg=DEFAULT)        # partial fill: lot1 first, lot2 gets the rest
+    lv = build_levels('bearish', 6000.0, filled_lots=3, units=2, cfg=CFG)        # partial fill: lot1 first, lot2 gets the rest
     assert (lv.lot1_lots, lv.lot2_lots) == (2, 1)
-    lv = build_levels('bearish', 6000.0, filled_lots=1, units=1, cfg=DEFAULT, lot2_only=True)
+    lv = build_levels('bearish', 6000.0, filled_lots=1, units=1, cfg=CFG, lot2_only=True)
     assert (lv.lot1_lots, lv.lot2_lots, lv.lot1_target) == (0, 1, None)
     assert lv.sl_price == pytest.approx(6000 * 1.022) and lv.lot2_target == pytest.approx(6000 * 0.95)
 

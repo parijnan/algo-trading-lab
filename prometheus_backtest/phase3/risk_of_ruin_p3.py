@@ -26,7 +26,8 @@ import numpy as np
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MULT_2_0_DIR = os.path.join(HERE, 'data_sweep', 'mult_2.0')
+# PROM_SIM_MULT_DIR points the same script at another multiplier's folder (e.g. data_sweep/mult_2.5) without changing the default.
+MULT_2_0_DIR = os.environ.get('PROM_SIM_MULT_DIR') or os.path.join(HERE, 'data_sweep', 'mult_2.0')
 
 UNITS = 50
 CAPITAL_BASE = 50 * 100_000  # 50 units * MARGIN_PER_UNIT

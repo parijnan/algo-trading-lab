@@ -12,7 +12,11 @@ from hestia_core.fake import ContractSpec  # noqa: E402
 from prometheus_engine.engine import PrometheusEngine  # noqa: E402
 from prometheus_engine.engine_configs import DEFAULT  # noqa: E402
 
-CFG = dataclasses.replace(DEFAULT, instrument='XX')
+# The scripted price paths and hand-computed levels in these tests are built around ST 2.0 with SL 2.2 / T1 2.2 / T2 5.0 (the geometry the engine
+# logic is exercised on), so the test config pins those values explicitly instead of following the engine's live DEFAULT, which moved to 2.5 with
+# SL 1.0 / T1 1.25 / T2 4.0 on 2026-10-05. test_engine_config_matches_production_configs separately pins DEFAULT to production.
+FIXTURE_LEVELS = dict(st_multiplier=2.0, sl_pct=2.2, target1_pct=2.2, target2_flat_pct=5.0)
+CFG = dataclasses.replace(DEFAULT, instrument='XX', **FIXTURE_LEVELS)
 
 
 def hm(h: int, m: int = 0) -> datetime:
