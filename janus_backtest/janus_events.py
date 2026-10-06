@@ -19,10 +19,10 @@ def _frame(session: dict, side: int):
     b, lv = session['bars'], session['levels']
     if side == 1:
         h, lo, o, c = b['high'].values, b['low'].values, b['open'].values, b['close'].values
-        up = {'C': lv['C'], **{k: lv[f'R{k}'] for k in range(1, 7)}}
+        up = {'C': lv['C'], **{k: lv[f'R{k}'] for k in range(1, 8)}}
     else:
         h, lo, o, c = -b['low'].values, -b['high'].values, -b['open'].values, -b['close'].values
-        up = {'C': -lv['C'], **{k: -lv[f'S{k}'] for k in range(1, 7)}}
+        up = {'C': -lv['C'], **{k: -lv[f'S{k}'] for k in range(1, 8)}}
     return h, lo, o, c, up
 
 

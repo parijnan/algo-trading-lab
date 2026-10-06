@@ -27,7 +27,7 @@ def row(rows, level):
 
 def test_untouched_levels_are_reported_as_untouched():
     rows = ev.analyse_session(session([(105, 106, 104, 105)] * 5))
-    assert all(not r['touched'] for r in rows) and len(rows) == 8        # R3,R4,R5,R6,S3,S4,S5,S6
+    assert all(not r['touched'] for r in rows) and len(rows) == 10       # R3..R7, S3..S7
 
 
 def test_a_fade_that_reaches_the_inward_level_first():
@@ -95,3 +95,13 @@ def test_the_sixth_level_is_a_touch_target_and_the_r5_to_r6_pair_is_scored():
     assert row(to_r6, 'R5')['fp_6_4'] == 'out' and row(to_r6, 'R6')['touched']
     back = ev.analyse_session(session([(105, 106, 104.5, 105.5), (105.5, 116.0, 105.5, 115.8), (115.8, 116.0, 110.0, 110.2)]))
     assert row(back, 'R5')['fp_6_4'] == 'in' and not row(back, 'R6')['touched']
+
+
+def test_the_seventh_level_is_a_touch_target_and_the_r6_to_r7_pair_is_scored():
+    # R5 = 115.5, R6 = 121.34, R7 = 128.1611: touch R6, then run to R7 -> 'out'; a second path falls back to R5 -> 'in'
+    to_r7 = ev.analyse_session(session([(105, 106, 104.5, 105.5), (105.5, 122.0, 105.5, 121.8), (121.8, 128.5, 121.5, 128.3)]))
+    assert row(to_r7, 'R6')['fp_7_5'] == 'out' and row(to_r7, 'R7')['touched']
+    back = ev.analyse_session(session([(105, 106, 104.5, 105.5), (105.5, 122.0, 105.5, 121.8), (121.8, 122.0, 115.0, 115.2)]))
+    assert row(back, 'R6')['fp_7_5'] == 'in' and not row(back, 'R7')['touched']
+    r = row(to_r7, 'R6')
+    assert r['bm_7_5'] == pytest.approx((LV['R7'] - LV['R6']) / (LV['R7'] - LV['R5']))

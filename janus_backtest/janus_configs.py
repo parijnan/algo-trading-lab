@@ -28,9 +28,12 @@ DATA_END = None            # None: whatever the Fyers files hold
 #   R1..R4 = C + R * FACTOR * (1/12, 1/6, 1/4, 1/2);  S1..S4 mirror them below C.
 #   R5 = (H / L) * C;  S5 = C - (R5 - C).
 #   R6 = R5 + R6_FACTOR * (R5 - R4);  S6 mirrors it about C.
+#   R7 = R6 + R7_FACTOR * (R6 - R5);  S7 mirrors it about C (added 2026-10-06 as the breakout target beyond R6; no standard definition exists,
+#   this continues the same geometric ladder, each gap 1.168 times the one below, and is a convention to be revisited, not a published formula).
 CAMARILLA_FACTOR = 1.1
 LEVEL_DIVISORS = {1: 12.0, 2: 6.0, 3: 4.0, 4: 2.0}
 R6_FACTOR = 1.168          # the common convention for the sixth level (second breakout target)
+R7_FACTOR = 1.168          # same ratio applied once more for the seventh level (third breakout target)
 
 # The previous session counts as "the previous trading day" only if it is no more than this many calendar days back (weekends and one
 # holiday pass; a longer hole in the contract's own data means the levels would be stale, so that session is skipped).
@@ -43,10 +46,10 @@ MIN_BARS_PER_SESSION = 120
 # Touch events within this many minutes of the session's first bar are reported separately as "at open" (a gap beyond a level is not a touch).
 AT_OPEN_MINUTES = 1
 
-# Levels whose first touch is studied (level numbers; both sides, R and S). R6/S6 have no further outward level, so no first-passage pair.
-TOUCH_LEVELS = [3, 4, 5, 6]
+# Levels whose first touch is studied (level numbers; both sides, R and S). R7/S7 have no further outward level, so no first-passage pair.
+TOUCH_LEVELS = [3, 4, 5, 6, 7]
 # First-passage pairs (outward level, inward level) measured after the first touch of the keyed level, in the frame where the touched level
 # is an upper one (lower-side touches are mirrored). 'C' is the previous close. The outward level acts as the stop of a fade or the
 # continuation target of a breakout, the inward one as the fade target.
-FIRST_PASSAGE = {3: [(4, 2), (4, 'C')], 4: [(5, 3), (5, 2)], 5: [(6, 4)], 6: []}
+FIRST_PASSAGE = {3: [(4, 2), (4, 'C')], 4: [(5, 3), (5, 2)], 5: [(6, 4)], 6: [(7, 5)], 7: []}
 # Open-location zones, from the levels themselves (see janus_events.open_zone).

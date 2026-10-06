@@ -19,13 +19,15 @@ def test_levels_match_a_hand_computed_example():
     assert lv['R6'] == pytest.approx(115.5 + 1.168 * (115.5 - (105 + 5.5)))   # 121.34
     assert lv['S6'] == pytest.approx(105 - (lv['R6'] - 105))
     assert lv['S6'] - lv['S5'] == pytest.approx(-1.168 * (lv['S4'] - lv['S5']))   # mirror form of the same rule
+    assert lv['R7'] == pytest.approx(121.34 + 1.168 * (121.34 - 115.5))           # 128.1611
+    assert lv['S7'] == pytest.approx(105 - (lv['R7'] - 105))
 
 
 def test_levels_are_symmetric_about_the_close_and_ordered():
     lv = camarilla_levels(250.0, 240.0, 243.0)
-    for k in range(1, 7):
+    for k in range(1, 8):
         assert lv[f'R{k}'] - 243.0 == pytest.approx(243.0 - lv[f'S{k}'])
-    assert lv['C'] < lv['R1'] < lv['R2'] < lv['R3'] < lv['R4'] < lv['R5'] < lv['R6']
+    assert lv['C'] < lv['R1'] < lv['R2'] < lv['R3'] < lv['R4'] < lv['R5'] < lv['R6'] < lv['R7']
 
 
 def test_a_bad_range_is_refused():
