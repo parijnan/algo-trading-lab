@@ -592,12 +592,12 @@ See [`prometheus_backtest/README.md`](../prometheus_backtest/README.md) for the 
 | Metric | Phase 3 mult 2.5 (live since 2026-10-05) | Phase 3 mult 2.0 (previous production combo) | Phase 2 (superseded reference) |
 |---|---|---|---|
 | Config | `ST_MULTIPLIER=2.5`, `SL_PCT=1.0`, `TARGET1_PCT=1.25`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=4.0` | `ST_MULTIPLIER=2.0`, `SL_PCT=2.2`, `TARGET1_PCT=2.2`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=5.0` | `ST_MULTIPLIER=3.0`, `SL_PCT=1.8`, `TARGET1_PCT=1.0`, `TARGET2_MODE='flat_pct'`, `TARGET2_FLAT_PCT=2.3` |
-| Trades | 332 (refreshed 2026-10-05 through 2026-10-01's data) | 447 (same refresh) | 226 (refreshed 2026-09-04, through 2026-09-03) |
-| Win rate | 47.89% | 43.4% | 55.8% |
-| Total P&L | ₹128,989 | ₹189,349 | ₹42,778 |
-| Max drawdown | −₹11,973 (per-trade series) | −₹26,331 (per-trade series) | −₹14,943 |
-| Calmar | 10.77 (per-trade) | 7.19 (per-trade) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
-| Cross-validation | CRUDEOIL (full contract) 2026-10-05: Calmar 9.69, max drawdown −₹145,437, edge held | CRUDEOIL 2026-10-05: Calmar 7.67, max drawdown −₹245,966 | Confirmed on CRUDEOIL (full-size contract) before being trusted |
+| Trades | 338 (refreshed 2026-10-06 through 2026-10-05's data, Fyers void filled) | 452 (same refresh) | 226 (refreshed 2026-09-04, through 2026-09-03) |
+| Win rate | 47.04% | 42.26% | 55.8% |
+| Total P&L | ₹115,467 | ₹150,114 | ₹42,778 |
+| Max drawdown | −₹14,856 (per-trade series) | −₹35,896 (per-trade series) | −₹14,943 |
+| Calmar | 7.77 (per-trade) | 4.18 (per-trade) | 2.86 (unitless) / 4.84 (annualized, ₹1L capital basis) |
+| Cross-validation | CRUDEOIL (full contract) 2026-10-06: Calmar 8.47, max drawdown −₹149,902, edge held | CRUDEOIL 2026-10-06: Calmar 5.04, max drawdown −₹335,128 | Confirmed on CRUDEOIL (full-size contract) before being trusted |
 
 Trade count is much higher for Phase 3 because it's positional (no EOD square-off, no entry-time gate) — not directly comparable to Phase 2's win rate/trade-count without accounting for that structural difference; Calmar is the fairer cross-phase comparison.
 

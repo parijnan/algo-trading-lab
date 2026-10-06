@@ -24,3 +24,7 @@
 ## Rollback
 
 Revert the two config files, push, pull on Delos, restart (the `hestia-restart` skill). A position open under 2.5's levels would keep them until it exits.
+
+## Addendum 2026-10-06: figures re-run on the Fyers-filled data
+
+The figures above are from the first run (data to 2026-10-01, Angel One in the 2026-04 to 06 void). After the Fyers void was filled (63 of 64 weekdays covered; cross-checked against Angel One: median 85% to 97% of minute closes identical) and the data extended to 2026-10-05, the same pipeline gives, CRUDEOILM per unit: mult 2.0 452 trades, 42.26%, Rs 150,114, max drawdown Rs -35,896, Calmar 4.18; mult 2.5 338 trades, 47.04%, Rs 115,467, max drawdown Rs -14,856, Calmar 7.77. Entries since 2026-09-04: Rs -15,828 vs Rs 14,599. With sizing and slippage mult 2.5 now also leads on Calmar (3.82 vs 3.09), and P(drawdown > 40%) is 11.59% vs 0.67%. The decision stands and is stronger on drawdown; both multipliers look somewhat less profitable than the first run showed (April, the big month, shrank). The cross test and the plateau check were not repeated on the new data. Three changes are mixed in that comparison: the void on Fyers, the September contracts on Fyers (the loaders prefer Fyers wherever the effective contract has it), and two more trading days (mult 2.0 had five more losing trades on 2026-10-05).
