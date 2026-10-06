@@ -330,3 +330,21 @@ Built `typhon_engine/replay_check.py` (ported from `selene_engine/replay_check.p
 Known approximation: the predictor's guard start for the first bar uses entry_ts + 1 min and treats a >60 min bar gap as a session boundary; a rare edge (a stop breaching in the first bar of a session the position was entered at the very open of) would surface as a residual diff to investigate, not silently pass. Multi-leg (rolled) trades fall back to the oracle's raw exit.
 
 **Next (not yet asked)**: paper deployment alongside Selene/Helios, per the established precedent.
+
+## Re-run on the Fyers-filled data, 2026-10-06
+
+The Fyers void of 2026-04-01 to 2026-06-29 was filled on 2026-10-06 (63 of 64 weekdays; cross-checked against Angel One for NATGASMINI: 63 of 64 void days compared, median 97% of minute closes identical, none more than 0.5% apart), the September contracts were pulled from Fyers too, and the data runs to 2026-10-05. The loaders prefer Fyers wherever the effective contract's file has the date, so the 2026-04 to 06 stretch now comes from Fyers. `sweep_typhon.py`, `exit_calib_typhon.py`, `exit_calib_parity_typhon.py` and `parity_backtest_typhon.py` were re-run, and the decided-config oracle (`parity_decided_trades.csv`/`parity_decided_legs.csv`, produced by an ad-hoc call to `simulate` at mult 3.0 / SL 0.8% / target 15% / one lot through `PARITY_END_EXTENDED`, not by a committed script) was regenerated the same way. The earlier steps stay as the record of their own date.
+
+**The decided configuration (mult 3.0, SL 0.8%, target 15%, one lot) stands, and the real-price calibration picked exactly the same parameters again.**
+
+| | Before | After |
+|---|---|---|
+| Raw sweep, mult 3.0 / 3.5 (trades, points) | 1,398, 695.8 / 1,159, 723.8 | 1,403, 730.0 / 1,159, 716.8 |
+| Parity calibration winner, mult 3.0 | SL 0.8, target 15; 1,392 trades, win 27.2%, avg win/loss 1,845 / -533 Rs | the same; 1,395 trades, win 27.3%, 1,846 / -534 |
+| Parity calibration winner, mult 2.5 | SL 1.6, target 6.0 | SL 0.5, target 6.0 (not the decision) |
+| Decided config (trades, points, max DD, Calmar) | 1,392, 659.9, -70.5, 9.36 | 1,395, 669.3, -70.5 (2025-11-27), 9.50 |
+| Entries before 2026-04 | 1,199, 642.8 | identical |
+| Entries 2026-04 to 06 | 88, 57.1 | 94, 60.9 |
+| Entries from 2026-07 | 105, -40.0 | 102, -34.4 |
+
+Only the filled stretch changed: about 22 old trades and 25 new ones differ, all in April and May. **The `replay_check` gate passes against the regenerated oracle: 57 of 57 live decisions reproduced, fill price gap 0.00, with one replay-side extra (the known still-open-at-window-end entry on 2026-09-29).** (The oracle blend and the replay both read the same loader for this instrument, which is why the September Fyers contract does not disturb it the way it does Helios's replay test.)

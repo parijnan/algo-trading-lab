@@ -222,6 +222,8 @@ ROLLOVER_BUFFER_MIN = 14
 # historical_basis_price refuses a lookup further than this from the original entry time.
 BASIS_MAX_GAP_MIN = 5
 
+# UPDATE 2026-10-06: the Fyers void below was filled from Fyers that day (a Fyers-side gap, now closed); PARITY_END is
+# informational and left at its original value so before/after reports stay comparable.
 # Fyers-complete segment: from DATA_START to the last day before the same systemic Fyers void
 # Selene/Helios both hit also affects NATGASMINI (checked 2026-09-30): the April-2026 and
 # May-2026 contract files both effectively end 2026-03-31, and the next real contract data

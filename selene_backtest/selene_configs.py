@@ -163,8 +163,12 @@ ROLLOVER_BUFFER_MIN = 14
 BASIS_MAX_GAP_MIN = 5
 
 # Fyers-complete segment the parity run covers: from DATA_START to the last day the April-2026
-# and June-2026 contracts both have Fyers data. Fyers has nothing 2026-04-01..06-29 and no
-# unexpired-contract history for Nov-2026, so per-contract dual tracking is impossible after this.
+# and June-2026 contracts both have Fyers data. UPDATE 2026-10-06: the Fyers void 2026-04-01..06-29
+# was filled that day (it was a Fyers-side gap, now closed), so Fyers is complete through the
+# Aug-2026 contract's expiry; only the unexpired Nov-2026 contract still has no Fyers history, so
+# per-contract dual tracking stays impossible for the Aug-to-Nov roll (September onward). This
+# constant is informational (reports split at it) and is left at its original value so the
+# before/after reports stay comparable.
 PARITY_END = '2026-03-31'
 
 # Extension to the end of the data (user, 2026-09-24): AngelOne fills where Fyers has nothing.

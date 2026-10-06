@@ -19,6 +19,8 @@ Per-date source preference for the date's effective (early-rolled) contract:
   4. 'angelone_naive_fallback'  -- the un-rolled front contract's AngelOne file
   5. 'angelone_frontmonth_fill' -- ANY AngelOne file holding that date
 
+(UPDATE 2026-10-06: the void described here was filled from Fyers on that date, so tier 5 now only
+matters from September on, where the Nov-2026 contract has no Fyers history.)
 Tier 5 is the Fyers-void gap fill (user's instruction 2026-09-24: plug the
 Fyers gaps with AngelOne as best as possible). Fyers has no SILVERMIC data at
 all from 2026-04-01 through 2026-06-29 (its April-2026 contract ends 03-31,

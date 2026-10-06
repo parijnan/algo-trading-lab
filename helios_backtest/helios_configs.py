@@ -176,6 +176,8 @@ BASIS_MAX_GAP_MIN = 5
 # May-2026 contract files both effectively end 2026-03-31 (May's file has almost no real data --
 # 1,260 rows, all pre-void), and the next real contract data (July-2026 file) starts 2026-06-30.
 # So the void is 2026-04-01 -> 2026-06-29, identical in shape to Selene's own finding.
+# UPDATE 2026-10-06: the void was filled from Fyers that day (a Fyers-side gap, now closed); PARITY_END below is
+# informational and left at its original value so before/after reports stay comparable.
 PARITY_END = '2026-03-31'
 
 # Extension to the end of the data: AngelOne fills where Fyers has nothing. AngelOne's

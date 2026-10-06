@@ -246,3 +246,24 @@ The no-slippage 313× (§14) becomes 135× under the primary variant. Slippage f
 | 4 (`/ 8 × 2`) | 93.7% | 18.0% | 55.2% | 71.7% | 42.2× |
 
 **Reading.** At the chosen `× 4` sizing, one two-year path in five suffers a drawdown beyond 40% and one in twenty is ruined by this definition; the median path's worst drawdown is about 31%. Those figures are consistent with the −32.7% to −34% the real sequence produced. Leverage is by far the strongest lever: `L = 1.5` cuts P(ruin) to 1.4% and the median drawdown to 24% at 5.4× instead of 8.8× the money, while `L = 3` or `4` roughly triples it. The i.i.d. bootstrap is the more pessimistic of the two: keeping streaks intact lowers every drawdown figure, because in this strategy a stop-out is usually followed by a winner, so losses are less clustered than shuffling suggests. The cost variants are the warning: 3 bps per trade (about a fifth of the 0.14% average trade) more than doubles P(ruin) and 6 bps quintuples it, so the edge per trade is thin relative to friction, which is exactly what §15's slippage share of gross (12–30%) says. Not modelled: correlation with the unknown coefficient in §15, integer-unit rounding at small capital, margin calls at the broker, and any future gap larger than the 2026-02 ones.
+
+## 17. Re-run on the Fyers-filled data, 2026-10-06
+
+The Fyers void of 2026-04-01 to 2026-06-29 was filled on 2026-10-06 (63 of 64 weekdays; cross-checked against Angel One for SILVERMIC: 60 of 64 void days compared, median 85% of minute closes identical, 0.000% of minutes more than 0.5% apart), and SILVERMIC's Aug-2026 Fyers file was extended back to 2026-05-04 so the Jun-to-Aug roll has the next contract's own history (a stub file for the 2024-03-28 contract that the downloader also produced, 640 rows, was removed so the loaders' contract calendar is unchanged). The loaders prefer Fyers wherever the effective contract's file has the date, so the 2026-04 to 06 stretch that sections 10 to 16 took from Angel One's front-month fill now comes from Fyers, and the data runs to 2026-10-05. All seven stages were re-run in order (`sweep_selene.py`, `exit_calib_selene.py`, `exit_structures_selene.py`, `parity_backtest_selene.py`, `dynamic_sizing_selene.py`, `slippage_dynamic_selene.py`, `risk_of_ruin_selene.py`; about 12 minutes in total). Sections 11 to 16 above are kept as the record of their own date; this section is current.
+
+**The decision stands (mult 2.5, 3.0% stop, trend-flip exit, 1 lot, no targets); nothing moves materially.**
+
+| Stage | Before (2026-09-24/25) | After (2026-10-06) |
+|---|---|---|
+| Raw sweep, mult 2.0 / 2.5 / 3.0 (trades, P&L pts) | 3,405 / 634,388; 2,471 / 583,253; 1,950 / 634,381 | 3,424 / 582,068; 2,487 / 566,572; 1,961 / 614,788 |
+| Mult 2.5 raw, 2 lots (P&L Rs, Calmar) | 1,166,506, 13.59 | 1,133,144, 12.19 |
+| Mult 2.5 with the 3.0% stop, 2 lots | 1,189,942, 14.05 | 1,156,580, 12.59 |
+| Staged-calibration winners, Calmar for 2.0 / 2.5 / 3.0 | 9.67 / 17.51 / 23.47 | 8.69 / 17.10 / 23.40 |
+| Parity, whole window to 2026-09-23 (trades, P&L pts, max DD pts, Calmar) | 2,471, 620,494, -42,686, 14.54 | 2,470, 618,852, -45,917, 13.48 |
+| Parity, entries before 2026-04 | 2,268, 464,914, -42,686, 10.89 | unchanged |
+| Parity, entries from 2026-04 | 203, 155,580, -22,767, 6.83 | 202, 153,938, -22,722, 6.77 |
+| Dynamic sizing, no slippage (Rs 1L start) | x313, max DD -32.7% (2022-01-18) | x309, max DD -33.3% (2026-04-07) |
+| Dynamic sizing with slippage | x135, max DD -33.4% | x143, max DD -34.2% |
+| Risk of ruin, primary scenario: P(ruin), P(DD > 40%) | 5.11%, 18.94% | 5.54%, 18.47% |
+
+**Reading.** The multiplier ranking, the calibration conclusions (the trend-flip exit alone is essentially optimal; a 3% stop leaves P&L at raw level; 2.5 is the most consistent) and the sizing and ruin picture are unchanged within about 3% on P&L and within one point on drawdown and ruin probabilities. The April to August stretch gives almost the same trades and P&L on Fyers as on Angel One's fill (202 trades and 153,938 pts against 203 and 155,580), so the earlier "degraded roll handling" caveat for that stretch cost little. The one visible change is that the worst drawdown moved into the filled stretch: 2026-04-07, 3,231 pts deeper than the previous worst (-45,917 against -42,686), which also moves the sized-simulation drawdown date from 2022-01-18 to 2026-04-07. The Jun-to-Aug roll is now handled with real per-contract tracking (roll events: 18 coincident, 6 non-coincident, 2 fallback GO, 1 forced roll, 5 naive days). The Aug-to-Nov roll still has no Fyers history for the Nov-2026 contract (unexpired), so September stays on Angel One.
