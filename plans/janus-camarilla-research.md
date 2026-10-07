@@ -80,6 +80,8 @@ The scenario is chosen by where the session's first price sits relative to the l
 
 How the plan maps onto what Phase 0 measured (descriptive only, not yet a result): scenario 1 is the reversion reading at R3/S3 (the Phase 0 reversion excess was negative, so the fade side is the one most at risk), while scenarios 2 and 3 pair a breakout through R4/S4 with a reversion-style trade back toward the centre on the other side. R7/S7 exist to give the breakout targets in scenarios 2 and 3 a third step.
 
+The full branching of how a day can play out from each scenario, with numbered nodes, is in `plans/janus-scenario-tree.md` (written 2026-10-07).
+
 ### Open items to settle before building (none decided yet)
 
 1. **Trigger definition:** touch, 1-minute close, or 15-minute close beyond or back inside a level, for each entry and each stop; likely different for entries and stops.
@@ -92,6 +94,7 @@ How the plan maps onto what Phase 0 measured (descriptive only, not yet a result
 8. **Trailing profits:** whether and how profits are trailed (trail to entry or to the previous target once a target is hit, a trailing stop on the runner after Target 1 or 2, or a fixed level-to-level step such as R1 to R2), what triggers each step (touch or close beyond the target), and whether the runner is allowed to carry to the session close; to be tested as its own variable against the plain fixed-target exits.
 9. **Daily cut-off (user, 2026-10-06):** the strategy is pure intraday, since the levels are recomputed from each new session and a position has no meaning past the day it was built on. That makes the time window part of the design: the latest time a new entry is allowed (late enough entries have no time to reach even Target 1), and the hard exit time for anything still open (flat before the session close, with the close itself varying between 23:30 and 23:55 with US daylight saving, so it should be expressed relative to the session close rather than as a fixed clock time). The cut-offs can differ by instrument, and an entry cut-off may depend on the target, since Target 3 needs more time than Target 1.
 10. **Costs:** the costs and slippage model (always on, per section 5).
+11. **Scenario fixed by the open, or re-evaluated by zone (surfaced by the scenario tree, 2026-10-07; called N1 there):** is the scenario chosen by where the session opens and kept for the whole day, or re-evaluated as price moves into another zone? Almost every "no rule" leaf in the tree exists because the scenario was fixed at the open and price left that zone (a scenario-1 day that breaks R4, a scenario-2 short that reaches S3, a scenario-4 breakout). Phase 0 found continuation beyond R4 and S4 more often than a driftless walk, so those leaves are where a missed move is most likely.
 
 Phase 1 stays research only: nothing built until these are settled, and the Phase 0 R7/S7 numbers (README) are the only evidence so far for the third targets.
 
