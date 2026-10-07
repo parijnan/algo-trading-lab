@@ -18,8 +18,10 @@ SYMBOLS = ['CRUDEOILM', 'SILVERMIC', 'GOLDPETAL', 'NATGASMINI']
 DATA_START = {'CRUDEOILM': '2023-04-01', 'SILVERMIC': '2021-04-01', 'GOLDPETAL': '2021-10-01', 'NATGASMINI': '2023-04-01'}
 
 # Systemic Fyers data void shared by all instruments (found by the Selene/Helios/Typhon work): the April and May 2026 contract files
-# effectively end 2026-03-31 and the next real data starts 2026-06-30. Sessions inside the void are excluded, never filled.
-FYERS_VOID = ('2026-04-01', '2026-06-29')
+# effectively ended 2026-03-31 and the next real data started 2026-06-30. FILLED on 2026-10-05 (Fyers expired-contract pull): all four
+# instruments now have 63 of the 64 weekdays in the window (the one gap is Good Friday 2026-04-03), so nothing is skipped. Set to a
+# ('YYYY-MM-DD', 'YYYY-MM-DD') pair to exclude a window again, e.g. if a future gap is found; None means no exclusion.
+FYERS_VOID = None
 # Angel One per-contract files hold their OWN contract only from this date (earlier rows are a relabelled front month); Phase 0 uses
 # Fyers only, so the study ends where Fyers history ends and the Angel One tail is a later extension.
 DATA_END = None            # None: whatever the Fyers files hold

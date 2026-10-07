@@ -3,8 +3,8 @@ Per-session data for the Camarilla study: one record per trading session with th
 the Camarilla levels computed from the SAME contract's own previous session, so a level never mixes two contracts' prices on a roll day.
 Real, un-adjusted prices. Fyers history only (the closer match to the Zerodha chart; the Angel One tail from 2026-09-02 is a later extension).
 
-Contract choice per date reuses prometheus_backtest/data_loader_p3's early-roll rule (imported, not copied). Sessions in the shared Fyers
-data void (janus_configs.FYERS_VOID) are skipped, never filled. Fyers zero-volume placeholder minutes are kept as delivered: they carry
+Contract choice per date reuses prometheus_backtest/data_loader_p3's early-roll rule (imported, not copied). Sessions in a configured data void
+(janus_configs.FYERS_VOID, currently None: the 2026 void was filled on 2026-10-05) are skipped, never filled. Fyers zero-volume placeholder minutes are kept as delivered: they carry
 the previous close in all four prices, so they can never extend a high or low.
 """
 
@@ -26,6 +26,8 @@ def _closed_dates() -> set:
 
 
 def _in_void(d) -> bool:
+    if configs.FYERS_VOID is None:
+        return False
     return pd.Timestamp(configs.FYERS_VOID[0]).date() <= d <= pd.Timestamp(configs.FYERS_VOID[1]).date()
 
 
