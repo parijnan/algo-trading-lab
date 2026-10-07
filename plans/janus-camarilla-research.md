@@ -94,3 +94,7 @@ How the plan maps onto what Phase 0 measured (descriptive only, not yet a result
 10. **Costs:** the costs and slippage model (always on, per section 5).
 
 Phase 1 stays research only: nothing built until these are settled, and the Phase 0 R7/S7 numbers (README) are the only evidence so far for the third targets.
+
+## 10. Derived strategy names (user, 2026-10-07)
+
+If the research produces a strategy for an instrument, it takes its own name (one per instrument; Janus stays the name of the research track): **Oleus** for CRUDEOILM (*oleum*, oil), **Argus** for SILVERMIC (*argentum*, silver), **Aurus** for GOLDPETAL (*aurum*, gold) and **Caeus** for NATGASMINI (from Chaos, the root of the word "gas"). Names only: no engine exists, and each would need its own go/no-go from Phase 3.
