@@ -26,6 +26,7 @@ An engine registers a `DataSpec` and Hestia serves it from session start:
 | `st_period`, `st_multiplier` | 10, 2.0 | 10, 2.5 |
 | `seed_days` | 18 | 18 |
 | `provisional` | enabled (margin guard 0.15%, in the engine, against the previous bar's ST) | enabled (same rule; threshold to calibrate in the DRY_RUN) |
+| *(2026-10-08 note)* | | Selene, Helios and Typhon were built with it off. It is now in all three, **off by default**, each with a margin measured from history (SILVERMIC 0.46%, GOLDPETAL 0.71%, NATGASMINI 1.06%) and a shadow mode; see `plans/hestia-provisional-all-engines.md`. |
 | `watch_dpl` | yes | yes |
 
 The **trading contract** is not in the spec: the engine picks it from `ctx.contracts(instrument)` (a `ContractInfo` per listed contract with token, symbol, expiry, lot size, tick, freeze quantity and holiday-aware `trading_days_left`) and Hestia serves whichever contract the engine trades. Any other contract is a `ctx.track(contract)` request (§5 flow E), answered by `TrackReady` or `TrackFailed`. Stop-loss percentages, targets, sizing formula and roll rule are engine parameters, not part of the data spec.

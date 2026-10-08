@@ -348,3 +348,7 @@ The Fyers void of 2026-04-01 to 2026-06-29 was filled on 2026-10-06 (63 of 64 we
 | Entries from 2026-07 | 105, -40.0 | 102, -34.4 |
 
 Only the filled stretch changed: about 22 old trades and 25 new ones differ, all in April and May. **The `replay_check` gate passes against the regenerated oracle: 57 of 57 live decisions reproduced, fill price gap 0.00, with one replay-side extra (the known still-open-at-window-end entry on 2026-09-29).** (The oracle blend and the replay both read the same loader for this instrument, which is why the September Fyers contract does not disturb it the way it does Helios's replay test.)
+
+## Provisional-boundary trading in the engine, 2026-10-08
+
+The Typhon engine (`typhon_engine/`) was built with provisional-boundary trading off. It now has it, **off by default**, with a measured `provisional_margin_pct` of 1.06% (the pre-registered rule over NATGASMINI history; 0.65% if the post-boundary gap term is dropped), a shadow mode and the feed-staleness gate: `plans/hestia-provisional-all-engines.md`.

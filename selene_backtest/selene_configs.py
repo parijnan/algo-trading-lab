@@ -144,6 +144,15 @@ T1_WIDE_GRID = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
 T2_WIDE_GRID = [2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0]
 
 # ---------------------------------------------------------------------------
+# Single-lot ONE-target test (exit_single_target_selene.py, 2026-10-08): Typhon's shape (one lot, one stop, one target, trend-flip exit)
+# applied to Selene, which neither the staged calibration nor the structures comparison simulated (both used two lots). Full stop x target
+# grid; the DISABLED_PCT target row is the stop-only control and must reproduce the decided config. Research only: nothing here is read
+# by selene_engine, and the DECIDED_* values below are untouched.
+# ---------------------------------------------------------------------------
+SINGLE_TARGET_GRID = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 20.0]
+SINGLE_TARGET_LOTS_IN_SIM = 2          # the exit simulator runs two lots; one lot with one target is both lots on the SAME target, halved
+
+# ---------------------------------------------------------------------------
 # Production-parity backtest (parity_backtest_selene.py, plan §13). Mirrors how
 # prometheus_production/ actually handles contracts (plans/prometheus-phase3-
 # production.md §3-§9, §18), applied to SILVERMIC's decided config below.

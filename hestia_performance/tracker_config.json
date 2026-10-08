@@ -1,0 +1,42 @@
+{
+  "artifact_url": "https://claude.ai/artifact/9PSoW83m9mr6yQZhnt1XpU",
+  "artifact_title": "Hestia Performance Tracker",
+  "engines": {
+    "prometheus": {
+      "name": "Prometheus",
+      "instrument": "CRUDEOILM",
+      "lots_per_unit": 2,
+      "rs_per_point_per_lot": 10,
+      "first_live_trade_id": 64,
+      "live_since": "2026-10-05T20:41:21",
+      "note": "Counted from the 2.5 supertrend multiplier going live (SL 1.0%, T1 1.25%, T2 4.0%). Trades #1 to #63 ran on 2.0 and are left out."
+    },
+    "selene": {
+      "name": "Selene",
+      "instrument": "SILVERMIC",
+      "lots_per_unit": 1,
+      "rs_per_point_per_lot": 1,
+      "first_live_trade_id": 7,
+      "live_since": "2026-10-01T09:15:06",
+      "note": "Switched from paper to live on 2026-10-01 00:30; the first real order was trade #7. Trades #1 to #6 were paper."
+    },
+    "helios": {
+      "name": "Helios",
+      "instrument": "GOLDPETAL",
+      "lots_per_unit": 20,
+      "rs_per_point_per_lot": 1,
+      "first_live_trade_id": 6,
+      "live_since": "2026-10-06T14:15:06",
+      "note": "Switched from paper to live on 2026-10-02 00:30; the first real order was trade #6. Trades #1 to #5 were paper."
+    },
+    "typhon": {
+      "name": "Typhon",
+      "instrument": "NATGASMINI",
+      "lots_per_unit": 2,
+      "rs_per_point_per_lot": 250,
+      "first_live_trade_id": 3,
+      "live_since": "2026-10-05T09:15:03",
+      "note": "Switched from paper to live on 2026-10-02 00:35; the first real order was trade #3. Trades #1 and #2 were paper."
+    }
+  }
+}

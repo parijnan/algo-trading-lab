@@ -1,0 +1,357 @@
+<title>Hestia Performance Tracker</title>
+<style>
+/* Layout: one column of cards. Headline number and key stats first, then the portfolio curve and daily bars, one card per engine (small multiples on a shared time axis), open positions, and the full trade table as the table view of every chart. */
+:root {
+  --bg: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --pos: #2a78d6;
+  --neg: #e34948;
+  --wash: rgba(11, 11, 11, 0.05);
+  --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10); --pos: #3987e5; --neg: #e66767; --wash: rgba(255, 255, 255, 0.07);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10); --pos: #3987e5; --neg: #e66767; --wash: rgba(255, 255, 255, 0.07);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.5; padding-inline: 16px; padding-block: 24px 64px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+h1 { font-size: 1.6rem; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 0.95rem; font-weight: 600; margin: 0; }
+.sub { color: var(--ink2); margin: 4px 0 0; max-width: 78ch; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.cardhead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.cardhead .meta { color: var(--ink2); font-size: 0.8rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.controls .lbl { color: var(--ink2); font-size: 0.82rem; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 0.82rem; padding: 6px 12px; border: 0; background: transparent; color: var(--ink); cursor: pointer; border-left: 1px solid var(--border); }
+.seg button:first-child { border-left: 0; }
+.seg button:hover { background: var(--wash); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--pos); outline-offset: 2px; }
+.hint { color: var(--ink2); font-size: 0.78rem; flex-basis: 100%; }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.herovalue { font-size: 3.2rem; line-height: 1.05; font-weight: 600; letter-spacing: -0.02em; }
+.herolabel { color: var(--ink2); font-size: 0.85rem; }
+.heronote { color: var(--ink2); font-size: 0.82rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.tile .k { color: var(--ink2); font-size: 0.78rem; }
+.tile .v { font-size: 1.25rem; font-weight: 600; }
+.tile .d { color: var(--ink2); font-size: 0.74rem; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.engines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .engines { grid-template-columns: minmax(0, 1fr); } }
+.chip { display: inline-block; font-size: 0.72rem; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; color: var(--ink2); vertical-align: 1px; }
+.mini { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; margin: 8px 0 6px; }
+.mini .k { color: var(--ink2); font-size: 0.72rem; }
+.mini .v { font-size: 0.95rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--font); fill: var(--ink2); font-size: 11px; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .axisline { stroke: var(--axis); stroke-width: 1; }
+.chart .ln { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cross { stroke: var(--axis); stroke-width: 1; }
+.chart .pos { fill: var(--pos); }
+.chart .neg { fill: var(--neg); }
+.chart .ring { stroke: var(--surface); stroke-width: 2; }
+.chart .lbl { fill: var(--ink); font-weight: 600; }
+.chart .bar:hover, .chart .bar:focus { opacity: 0.8; }
+.legend { display: flex; gap: 14px; color: var(--ink2); font-size: 0.78rem; margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend i.p { background: var(--pos); } .legend i.n { background: var(--neg); }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 0.78rem; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); max-width: 260px; }
+.tip .tv { font-size: 0.95rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tip .tl { color: var(--ink2); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--ink2); font-weight: 600; font-size: 0.74rem; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+td.wrap { white-space: normal; min-width: 96px; }
+td .gl { font-size: 0.7rem; margin-right: 4px; }
+select { font: inherit; font-size: 0.82rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.notes { color: var(--ink2); font-size: 0.8rem; display: grid; gap: 6px; max-width: 90ch; }
+.notes b { color: var(--ink); }
+.warn { border: 1px solid var(--neg); border-radius: 8px; padding: 8px 12px; font-size: 0.82rem; }
+.empty { color: var(--ink2); padding: 8px 0; }
+@media (max-width: 520px) { .herovalue { font-size: 2.4rem; } .mini { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+
+<div class="wrap" id="app">
+  <div>
+    <h1>Hestia Performance Tracker</h1>
+    <p class="sub" id="sub"></p>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const DATA = __DATA__;
+
+(function () {
+  /* ---------- helpers ---------- */
+  const NS = 'http://www.w3.org/2000/svg';
+  function el(ns, tag, attrs, kids) {
+    const e = ns ? document.createElementNS(NS, tag) : document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined) continue;
+      if (k === 'class') e.setAttribute('class', v);
+      else if (k === 'text') e.textContent = v;
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v);
+    }
+    (kids || []).flat().forEach(c => { if (c !== null && c !== undefined) e.append(c.nodeType ? c : document.createTextNode(String(c))); });
+    return e;
+  }
+  const h = (tag, attrs, ...kids) => el(false, tag, attrs, kids);
+  const s = (tag, attrs, ...kids) => el(true, tag, attrs, kids);
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const ms = iso => { const m = /(\d+)-(\d+)-(\d+)[T ](\d+):(\d+)(?::(\d+))?/.exec(iso); return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)); };
+  const dstr = iso => { const m = /(\d+)-(\d+)-(\d+)/.exec(iso); return (+m[3]) + ' ' + MONTHS[+m[2] - 1]; };
+  const dtstr = iso => { const m = /(\d+)-(\d+)-(\d+)[T ](\d+):(\d+)/.exec(iso); return (+m[3]) + ' ' + MONTHS[+m[2] - 1] + ' ' + m[4] + ':' + m[5]; };
+  const MINUS = '−';
+  const num = (v, d) => (v < 0 ? MINUS : '') + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+  const rs = v => v === null || v === undefined ? '–' : (v < 0 ? MINUS : v > 0 ? '+' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const rsPlain = v => v === null || v === undefined ? '–' : (v < 0 ? MINUS : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const pts = (v, d) => v === null || v === undefined ? '–' : (v < 0 ? MINUS : v > 0 ? '+' : '') + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: d === undefined ? 1 : d, maximumFractionDigits: d === undefined ? 1 : d });
+  const px = v => v === null || v === undefined ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pct = v => v === null || v === undefined ? '–' : Math.round(v * 100) + '%';
+  const hrs = v => v === null || v === undefined ? '–' : v < 48 ? v.toFixed(1) + ' h' : (v / 24).toFixed(1) + ' d';
+  const nice = (lo, hi, n) => {
+    const span = hi - lo || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+    const step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+    const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(Math.round(v / step) * step);
+    return t;
+  };
+  const lin = (d0, d1, r0, r1) => v => r0 + (v - d0) * (r1 - r0) / ((d1 - d0) || 1);
+  const ENGINES = Object.keys(DATA.engines);
+  const NAME = e => DATA.engines[e].name;
+
+  /* ---------- state ---------- */
+  const state = { scale: 'actual', filter: 'all' };
+  const mult = () => state.scale === 'actual' ? null : state.scale;
+  const val = o => state.scale === 'actual' ? o.rs_actual : o.rs_unit * state.scale;
+  const cum = p => state.scale === 'actual' ? p.cum_actual : p.cum_unit * state.scale;
+  const stat = e => { const b = DATA.stats[e][state.scale === 'actual' ? 'actual' : 'unit']; const k = state.scale === 'actual' ? 1 : state.scale;
+    const o = Object.assign({}, b); ['total', 'avg_win', 'avg_loss', 'expectancy', 'best', 'worst', 'max_drawdown'].forEach(f => { if (o[f] !== null && o[f] !== undefined) o[f] = b[f] * k; }); return o; };
+  const unreal = p => p.unreal_actual === null ? null : (state.scale === 'actual' ? p.unreal_actual : p.unreal_unit * state.scale);
+  const booked = p => p.booked_unit === null || p.booked_unit === undefined ? null : (state.scale === 'actual' ? p.booked_unit * p.units : p.booked_unit * state.scale);
+
+  /* ---------- tooltip ---------- */
+  const tip = document.getElementById('tip');
+  function showTip(rows, x, y) {
+    tip.replaceChildren(...rows.map(r => h('div', {}, r.v ? h('div', { class: 'tv', text: r.v }) : null, h('div', { class: 'tl', text: r.l }))));
+    tip.hidden = false;
+    const w = tip.offsetWidth, hh = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x + 14)) + 'px';
+    tip.style.top = Math.max(8, Math.min(window.innerHeight - hh - 8, y + 14)) + 'px';
+  }
+  const hideTip = () => { tip.hidden = true; };
+
+  /* ---------- charts ---------- */
+  function timeTicks(x0, x1, maxTicks) {
+    const day = 86400000, out = [];
+    const d0 = Math.ceil(x0 / day) * day;
+    const total = Math.floor((x1 - d0) / day) + 1;
+    const every = Math.max(1, Math.ceil(total / maxTicks));
+    for (let i = 0, t = d0; t <= x1; t += day, i++) if (i % every === 0) out.push(t);
+    return out;
+  }
+  const tickLabel = t => { const d = new Date(t); return d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()]; };
+
+  /* Cumulative value as a step line over the shared time domain. points: [{t, y, who, label}] in time order. */
+  function lineChart(box, points, domain, height, opts) {
+    box.replaceChildren();
+    const W = Math.max(280, box.clientWidth || 560), H = height, pad = { l: 56, r: 64, t: 12, b: 24 };
+    const ys = points.map(p => p.y).concat([0]);
+    let lo = Math.min(...ys), hi = Math.max(...ys);
+    if (hi === lo) { hi = lo + 1; }
+    const span = hi - lo; lo -= span * 0.08; hi += span * 0.08;
+    const X = lin(domain[0], domain[1], pad.l, W - pad.r), Y = lin(lo, hi, H - pad.b, pad.t);
+    const svg = s('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': opts.aria });
+    nice(lo, hi, H < 180 ? 3 : 4).forEach(v => { svg.append(s('line', { class: v === 0 ? 'axisline' : 'grid', x1: pad.l, x2: W - pad.r, y1: Y(v), y2: Y(v) }), s('text', { x: pad.l - 8, y: Y(v) + 4, 'text-anchor': 'end', text: num(v) })); });
+    timeTicks(domain[0], domain[1], Math.max(2, Math.floor((W - pad.l - pad.r) / 70))).forEach(t => svg.append(s('text', { x: X(t), y: H - 6, 'text-anchor': 'middle', text: tickLabel(t) })));
+    let d = 'M' + X(domain[0]) + ' ' + Y(0), lastY = 0;
+    points.forEach(p => { d += ' H' + X(p.t) + ' V' + Y(p.y); lastY = p.y; });
+    d += ' H' + X(domain[1]);
+    svg.append(s('path', { class: 'ln', d }));
+    const cross = s('line', { class: 'cross', y1: pad.t, y2: H - pad.b, visibility: 'hidden' });
+    svg.append(cross);
+    if (points.length <= 40) points.forEach(p => svg.append(s('circle', { class: 'ring ' + (p.delta >= 0 ? 'pos' : 'neg'), cx: X(p.t), cy: Y(p.y), r: 4 })));
+    if (points.length) {
+      svg.append(s('circle', { class: 'ring', cx: X(domain[1]), cy: Y(lastY), r: 4.5, style: 'fill: var(--ink)' }),
+        s('text', { class: 'lbl', x: X(domain[1]) + 8, y: Y(lastY) + 4, text: rsPlain(lastY) }));
+    }
+    const hit = s('rect', { x: pad.l, y: pad.t, width: W - pad.l - pad.r, height: H - pad.t - pad.b, fill: 'transparent' });
+    hit.addEventListener('pointermove', ev => {
+      if (!points.length) return;
+      const r = svg.getBoundingClientRect(), px_ = (ev.clientX - r.left) * W / r.width;
+      let best = points[0]; points.forEach(p => { if (Math.abs(X(p.t) - px_) < Math.abs(X(best.t) - px_)) best = p; });
+      cross.setAttribute('x1', X(best.t)); cross.setAttribute('x2', X(best.t)); cross.setAttribute('visibility', 'visible');
+      showTip([{ v: rsPlain(best.y), l: 'cumulative, ' + dtstr(best.iso) }, { v: rs(best.delta), l: best.who }], ev.clientX, ev.clientY);
+    });
+    hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); hideTip(); });
+    svg.append(hit);
+    box.append(svg);
+  }
+
+  /* Bars from a single baseline: items [{v, label, detail}]; polarity colours, 4px rounded data end, square at the baseline. */
+  function barChart(box, items, height, opts) {
+    box.replaceChildren();
+    const W = Math.max(280, box.clientWidth || 560), H = height, pad = { l: 56, r: 12, t: 14, b: opts.xlabels ? 24 : 8 };
+    if (!items.length) { box.append(h('div', { class: 'empty', text: 'No closed trades yet.' })); return; }
+    const vs = items.map(i => i.v).concat([0]);
+    let lo = Math.min(...vs), hi = Math.max(...vs); if (hi === lo) hi = lo + 1;
+    const span = hi - lo; if (lo < 0) lo -= span * 0.1; if (hi > 0) hi += span * 0.1;
+    const Y = lin(lo, hi, H - pad.b, pad.t), y0 = Y(0), band = (W - pad.l - pad.r) / items.length, bw = Math.min(24, band * 0.7);
+    const svg = s('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': opts.aria });
+    nice(lo, hi, 3).forEach(v => { svg.append(s('line', { class: v === 0 ? 'axisline' : 'grid', x1: pad.l, x2: W - pad.r, y1: Y(v), y2: Y(v) }), s('text', { x: pad.l - 8, y: Y(v) + 4, 'text-anchor': 'end', text: num(v) })); });
+    items.forEach((it, i) => {
+      const cx = pad.l + band * (i + 0.5), x = cx - bw / 2, y = Y(it.v), up = it.v >= 0, r = Math.min(4, Math.abs(y - y0) / 2, bw / 2);
+      const top = up ? y : y0, bot = up ? y0 : y;
+      const d = up ? 'M' + x + ' ' + bot + ' V' + (top + r) + ' Q' + x + ' ' + top + ' ' + (x + r) + ' ' + top + ' H' + (x + bw - r) + ' Q' + (x + bw) + ' ' + top + ' ' + (x + bw) + ' ' + (top + r) + ' V' + bot + ' Z'
+        : 'M' + x + ' ' + top + ' V' + (bot - r) + ' Q' + x + ' ' + bot + ' ' + (x + r) + ' ' + bot + ' H' + (x + bw - r) + ' Q' + (x + bw) + ' ' + bot + ' ' + (x + bw) + ' ' + (bot - r) + ' V' + top + ' Z';
+      const bar = s('path', { class: 'bar ' + (up ? 'pos' : 'neg'), d, tabindex: 0 });
+      const show = ev => { const r_ = (ev.currentTarget || bar).getBoundingClientRect(); showTip([{ v: rs(it.v), l: it.label + (it.detail ? ' · ' + it.detail : '') }], ev.clientX || r_.left + r_.width / 2, ev.clientY || r_.top); };
+      bar.addEventListener('pointermove', show); bar.addEventListener('focus', show); bar.addEventListener('pointerleave', hideTip); bar.addEventListener('blur', hideTip);
+      svg.append(bar);
+      if (opts.valueLabels) svg.append(s('text', { class: 'lbl', x: cx, y: up ? y - 5 : y + 13, 'text-anchor': 'middle', text: rs(it.v) }));
+      if (opts.xlabels && (items.length <= 12 || i % Math.ceil(items.length / 12) === 0)) svg.append(s('text', { x: cx, y: H - 6, 'text-anchor': 'middle', text: it.x }));
+    });
+    box.append(svg);
+  }
+
+  /* ---------- sections ---------- */
+  const domain = () => {
+    const starts = ENGINES.map(e => DATA.engines[e].live_since).concat(DATA.open.map(o => o.entry_ts));
+    return [Math.min(...starts.map(ms)), ms(DATA.as_of)];
+  };
+  const tile = (k, v, d) => h('div', { class: 'tile' }, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }), d ? h('div', { class: 'd', text: d }) : null);
+
+  function renderControls() {
+    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Units shown' });
+    [['actual', 'Actual units'], [2, '2 units'], [5, '5 units'], [10, '10 units']].forEach(([v, label]) => seg.append(h('button', { type: 'button', 'aria-pressed': String(state.scale === v), text: label, onclick: () => { state.scale = v; render(); } })));
+    return h('div', { class: 'card' }, h('div', { class: 'controls' }, h('span', { class: 'lbl', text: 'Show every rupee figure at' }), seg,
+      h('span', { class: 'hint', text: state.scale === 'actual' ? 'Real money at the units each trade actually ran. All four engines run 1 unit today.' :
+        'Hypothetical: the recorded points re-priced at ' + state.scale + ' units for every trade. It ignores the extra slippage and margin that size would bring, and the 10-unit cap.' })));
+  }
+
+  function renderHero() {
+    const p = stat('portfolio'), openU = DATA.open.map(unreal).filter(v => v !== null), openTotal = openU.reduce((a, b) => a + b, 0);
+    const hero = h('div', { class: 'card hero' },
+      h('div', {}, h('div', { class: 'herolabel', text: 'Realised profit and loss, live trades only' }), h('div', { class: 'herovalue', text: rs(p.total) }),
+        h('div', { class: 'heronote', text: p.trades + ' closed trades across ' + ENGINES.length + ' engines, ' + dstr(DATA.daily.length ? DATA.daily[0].date : DATA.as_of) + ' to ' + dstr(DATA.as_of) + '. Gross of brokerage and charges.' })),
+      h('div', { class: 'tiles' },
+        tile('Win rate', pct(p.win_rate), p.wins + ' wins, ' + p.losses + ' losses'),
+        tile('Profit factor', p.profit_factor === null ? '–' : p.profit_factor.toFixed(2), 'gross gain over gross loss'),
+        tile('Average trade', rs(p.expectancy), 'avg win ' + rs(p.avg_win) + ', avg loss ' + rs(p.avg_loss)),
+        tile('Max drawdown', rsPlain(p.max_drawdown), 'peak to trough, closed trades'),
+        tile('Open now', rs(openTotal), DATA.open.length + ' positions at last price, not in the realised figure')));
+    return hero;
+  }
+
+  function renderPortfolio() {
+    const pts_ = DATA.series.portfolio.map(p => ({ t: ms(p.t), iso: p.t, y: cum(p), delta: val(p), who: NAME(p.engine) + ' #' + p.trade_id }));
+    const line = h('div', { class: 'chart' }), bars = h('div', { class: 'chart' });
+    const dl = DATA.daily.map(d => ({ v: val(d), x: dstr(d.date), label: dstr(d.date), detail: d.trades + ' trades closed' }));
+    const card = h('div', { class: 'two' },
+      h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'All engines, cumulative' }), h('span', { class: 'meta', text: 'step per closed trade' })), line),
+      h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'By day' }), h('span', { class: 'meta', text: 'realised, by date of final exit' })), bars,
+        h('div', { class: 'legend' }, h('span', {}, h('i', { class: 'p' }), 'gain'), h('span', {}, h('i', { class: 'n' }), 'loss'))));
+    queueMicrotask(() => { lineChart(line, pts_, domain(), 230, { aria: 'Cumulative realised profit and loss, all engines' }); barChart(bars, dl, 230, { xlabels: true, valueLabels: dl.length <= 10, aria: 'Realised profit and loss by day' }); });
+    return card;
+  }
+
+  function unitsText(e) {
+    const ref = DATA.trades.find(t => t.engine === e) || DATA.open.find(o => o.engine === e);
+    return (ref ? ref.units : 1) + ' unit \u00D7 ' + DATA.engines[e].lots_per_unit + ' lots';
+  }
+
+  function engineCard(e) {
+    const c = DATA.engines[e], st = stat(e), pos = DATA.open.find(o => o.engine === e);
+    const line = h('div', { class: 'chart' }), bars = h('div', { class: 'chart' });
+    const pts_ = DATA.series[e].map(p => ({ t: ms(p.t), iso: p.t, y: cum(p), delta: val(p), who: NAME(e) + ' #' + p.trade_id }));
+    const trades = DATA.trades.filter(t => t.engine === e).sort((a, b) => a.exit_ts < b.exit_ts ? -1 : 1);
+    const items = trades.map((t, i) => ({ v: val(t), x: '#' + t.trade_id, label: NAME(e) + ' #' + t.trade_id + ' ' + t.direction, detail: dtstr(t.entry_ts) + ' to ' + dtstr(t.exit_ts) + ', ' + t.reasons }));
+    const mini = h('div', { class: 'mini' },
+      ...[['Closed trades', st.trades + ' (' + st.wins + ' won)'], ['Realised', rs(st.total)], ['Max drawdown', rsPlain(st.max_drawdown)],
+        ['Win rate', pct(st.win_rate)], ['Avg hold', hrs(st.avg_hold_h)], ['Avg entry slippage', st.avg_slippage === null ? '–' : pts(st.avg_slippage) + ' pts']]
+        .map(([k, v]) => h('div', {}, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }))));
+    const openLine = pos ? h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px' },
+      'Open: ' + pos.direction + ' since ' + dtstr(pos.entry_ts) + ' at ' + px(pos.entry_price) + ', now ' + rs(unreal(pos)) + (booked(pos) !== null ? ' (plus ' + rs(booked(pos)) + ' booked on lot 1)' : '')) : h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px', text: 'Flat.' });
+    const card = h('div', { class: 'card' },
+      h('div', { class: 'cardhead' }, h('h2', {}, NAME(e) + ' ', h('span', { class: 'chip', text: c.instrument })), h('span', { class: 'meta', text: unitsText(e) + ', live since ' + dtstr(c.live_since) })),
+      mini, line, bars, openLine);
+    if (!items.length) { line.append(h('div', { class: 'empty', text: 'No closed live trades yet.' })); }
+    else queueMicrotask(() => { lineChart(line, pts_, domain(), 150, { aria: NAME(e) + ' cumulative realised profit and loss' }); barChart(bars, items, 100, { xlabels: true, aria: NAME(e) + ' profit and loss per trade' }); });
+    return card;
+  }
+
+  function targetsText(p) { return p.targets.length ? p.targets.map(t => px(t.price) + (t.hit ? ' (hit)' : '')).join(' / ') : 'none'; }
+
+  function renderOpen() {
+    const rows = DATA.open.map(p => h('tr', {},
+      h('td', { text: NAME(p.engine) + ' #' + p.trade_id }), h('td', {}, h('span', { class: 'gl', text: p.direction === 'bullish' ? '▲' : '▼' }), p.direction),
+      h('td', { text: p.units + ' × ' + (p.lots / p.units) + ' lots' }), h('td', { text: dtstr(p.entry_ts) }), h('td', { class: 'n', text: px(p.entry_price) }),
+      h('td', { class: 'n', text: p.last_price === null ? '–' : px(p.last_price) + ' (' + p.last_ts.slice(11, 16) + ')' }),
+      h('td', { class: 'n', text: pts(p.unreal_pts, 1) }), h('td', { class: 'n', text: rs(unreal(p)) }), h('td', { class: 'n', text: booked(p) === null ? '–' : rs(booked(p)) }),
+      h('td', { class: 'n', text: px(p.stop) }), h('td', { text: targetsText(p) })));
+    const head = ['Engine', 'Side', 'Size', 'Entered', 'Entry', 'Last price', 'Unrealised pts', 'Unrealised', 'Booked', 'Stop', 'Targets'];
+    return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Open positions' }), h('span', { class: 'meta', text: 'valued at the last cached one-minute close; on lots still open' })),
+      rows.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, head.map((t, i) => h('th', { class: i >= 4 && i <= 9 ? 'n' : '', text: t })))), h('tbody', {}, rows))) : h('div', { class: 'empty', text: 'Every engine is flat.' }));
+  }
+
+  function renderTrades() {
+    const sel = h('select', { id: 'engfilter', 'aria-label': 'Filter trades by engine', onchange: ev => { state.filter = ev.target.value; render(); } },
+      h('option', { value: 'all', text: 'All engines' }), ...ENGINES.map(e => h('option', { value: e, text: NAME(e) })));
+    sel.value = state.filter;
+    const list = DATA.trades.filter(t => state.filter === 'all' || t.engine === state.filter);
+    const exitPx = t => t.exits.length === 1 ? px(t.exits[0].price) : t.exits.map(x => 'L' + x.lot + ' ' + px(x.price)).join(' · ');
+    const rows = list.map(t => h('tr', {},
+      h('td', { text: NAME(t.engine) + ' #' + t.trade_id }), h('td', {}, h('span', { class: 'gl', text: t.direction === 'bullish' ? '\u25B2' : '\u25BC' }), t.direction),
+      h('td', { text: t.units + ' \u00D7 ' + (t.lots / t.units) }), h('td', { text: dtstr(t.entry_ts) }), h('td', { text: dtstr(t.exit_ts) }), h('td', { class: 'n', text: hrs(t.hold_h) }),
+      h('td', { class: 'n', text: px(t.entry_price) }), h('td', { class: 'n wrap', text: exitPx(t) }), h('td', { class: 'wrap', text: t.reasons.replace('/', ' / ') }),
+      h('td', { class: 'n', text: t.slippage === null ? '\u2013' : pts(t.slippage) }), h('td', { class: 'n', text: pts(t.pts) }), h('td', { class: 'n', text: rs(val(t)) })));
+    const head = ['Trade', 'Side', 'Units \u00D7 lots', 'Entered', 'Exited', 'Held', 'Entry', 'Exit', 'Reason', 'Slippage', 'Points', state.scale === 'actual' ? 'Profit / loss' : 'At ' + state.scale + ' units'];
+    return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Every live trade' }), h('div', { class: 'controls' }, h('span', { class: 'lbl', text: 'Show' }), sel)),
+      h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, head.map((t, i) => h('th', { class: [5, 6, 7, 9, 10, 11].includes(i) ? 'n' : '', text: t })))), h('tbody', {}, rows))),
+      h('div', { class: 'hint', style: 'margin-top: 8px', text: 'Slippage is entry price against the signal bar close, in points; positive means the fill cost that much. Prometheus rows show both lots; points are summed over the lots.' }));
+  }
+
+  function renderNotes() {
+    const lines = ENGINES.map(e => h('div', {}, h('b', { text: NAME(e) + ': ' }), DATA.engines[e].note + (DATA.excluded[e] ? ' (' + DATA.excluded[e] + ' earlier trades left out.)' : '')));
+    return h('div', { class: 'card notes' }, h('h2', { text: 'What is counted' }), ...lines,
+      h('div', {}, h('b', { text: 'Profit and loss ' }), 'is the engine’s own recorded figure, in rupees per unit times the units the trade ran at. It is gross: brokerage, taxes and exchange charges are not subtracted. Drawdown is measured on closed trades only, from a starting value of zero.'),
+      h('div', {}, h('b', { text: 'Sample size. ' }), 'Every engine has days of live history, not months. Treat any rate or ratio here as a first read.'));
+  }
+
+  function render() {
+    const app = document.getElementById('app');
+    while (app.children.length > 1) app.removeChild(app.lastChild);
+    document.getElementById('sub').textContent = 'Live trades of the four engines hosted by Hestia, from the day each went live. Data as of ' + dtstr(DATA.as_of) + ' IST. Updated by the hestia-performance-tracker skill.';
+    app.append(renderControls(), renderHero());
+    if (DATA.warnings.length) app.append(h('div', { class: 'warn' }, h('b', { text: 'Check the data: ' }), DATA.warnings.join('; ')));
+    app.append(renderPortfolio(), h('div', { class: 'engines' }, ENGINES.map(engineCard)), renderOpen(), renderTrades(), renderNotes());
+  }
+  render();
+  let lastW = window.innerWidth;
+  window.addEventListener('resize', () => { if (window.innerWidth !== lastW) { lastW = window.innerWidth; render(); } });
+})();
+</script>

@@ -55,3 +55,7 @@ Done. `helios_engine/replay_check.py` (`python -m helios_engine.replay_check [en
 ## 5. Deployment
 
 `hestia_config.py`: `ENGINES['helios'] = EngineEntry(instrument='GOLDPETAL', factory='helios_engine.engine:build', enabled=False, paper=True, lots_per_unit=20)` (base registry, disabled by default like Prometheus's and Selene's own entries); `TRADING_HOSTS['delos']` enables it paper, `static_units=1`, `unit_cap=10` — matching Prometheus's and Selene's own conservative first-session sizing, not derived from any Helios-specific risk analysis (position sizing and risk of ruin are explicitly deferred, plan §4h). Deployed alongside Selene via the `hestia-restart` skill, 2026-09-29 — see that skill's own record for the restart mechanics.
+
+## 6. Provisional-boundary trading (added 2026-10-08)
+
+The Helios engine was built with provisional-boundary trading off, as Selene's was. It now has it, **off by default**, with a measured `provisional_margin_pct` of 0.71% (the pre-registered rule over GOLDPETAL history), a shadow mode that logs without acting, and the feed-staleness gate: `plans/hestia-provisional-all-engines.md`. GOLDPETAL is the thinnest of the four contracts: on the Angel One data about 4 windows per session (7% of windows) are incomplete at the boundary, almost all of them quiet minutes, which is why shadow data should be collected before the action is enabled.

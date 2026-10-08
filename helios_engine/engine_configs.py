@@ -26,6 +26,14 @@ class EngineConfig:
     # position shape: a single lot-group, no scale-out, no targets; 1 unit = 20 lots (plan §4c)
     sl_pct: float = 1.6
     lots_per_unit: int = 20
+    # provisional-boundary trading (plans/hestia-provisional-all-engines.md): act on a tick-built bar when the candle window is incomplete at
+    # the boundary. OFF by default: Delos pulls on a push and runs what was pushed at the next start, so nothing here is live until a flag is
+    # turned on deliberately. Shadow sends no order: Hestia delivers the provisional bars, the engine logs what it would do and how the real bar
+    # compared. The margin is the pre-registered rule's m* for GOLDPETAL (plan section 5): the tick close must clear the PREVIOUS bar's
+    # supertrend by more than this many percent of price.
+    provisional_enabled: bool = False
+    provisional_shadow: bool = False
+    provisional_margin_pct: float = 0.71
     # timing guards, minutes since the session's actual open
     no_exit_before_buffer_min: float = 1.0
     min_entry_buffer_min: float = 15.0

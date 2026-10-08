@@ -457,3 +457,4 @@ research/fyers_mcx_validation/phase0_results.csv
 
 # Camarilla research: regenerable per-session event tables (the summary text is kept)
 janus_backtest/outputs/*.csv
+research/provisional_margin/outputs/bars_*.csv

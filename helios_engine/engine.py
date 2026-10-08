@@ -10,6 +10,11 @@ for what is and is not ported, and why.
 
 Engine and host split, request lifecycle, ledger-wins reconciliation, the request-pending discipline, retry policy and the
 post-close guard are identical in spirit to Prometheus's — see that file's own docstring for the reasoning, not repeated here.
+
+Provisional-boundary trading (acting on a tick-built bar when a boundary's candle window is incomplete, with the previous-supertrend margin guard, a
+feed-staleness gate, reconciliation against the real bar and a session latch on disagreement) is built in but OFF by default: `provisional_enabled`,
+`provisional_shadow` (log only, no action) and the measured `provisional_margin_pct` are in `engine_configs.py`. See
+`plans/hestia-provisional-all-engines.md` for the rule, the measurement and the safety stance.
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 from hestia_core import roll_policy as rp
 from hestia_core.interface import (
     BarComplete, BarQuality, CloseRequest, CommandEvent, CommandKind, ContractInfo, ContractRef, DataSpec, Direction, DplFrozen,
-    ExitReason, FeedRecovered, FeedStale, FlattenRequest, FlipRequest, OpenRequest, OutcomeStatus, ProvisionalSpec, RequestOutcome,
+    ExitReason, FeedRecovered, FeedStale, FlattenRequest, FlipRequest, OpenRequest, OutcomeStatus, ProvisionalBar, ProvisionalSpec, RequestOutcome,
     SessionStart, Stop, TrackFailed, TrackReady,
 )
 from helios_engine.engine_configs import DEFAULT, EngineConfig
@@ -45,7 +50,7 @@ class HeliosEngine:
 
     def __init__(self, cfg: EngineConfig = DEFAULT, name: str = 'helios'):
         self.cfg, self.name = cfg, name
-        self.spec = DataSpec(cfg.instrument, 15, cfg.st_period, cfg.st_multiplier, provisional=ProvisionalSpec(False))
+        self.spec = DataSpec(cfg.instrument, 15, cfg.st_period, cfg.st_multiplier, provisional=ProvisionalSpec(cfg.provisional_enabled or cfg.provisional_shadow))
         self.state = EngineState()
         self.ctx = None
         self.started = False
@@ -57,6 +62,11 @@ class HeliosEngine:
         self.rollover_at: Optional[datetime] = None
         self.session_close: Optional[datetime] = None
         self.market_closed = False
+        self.provisional_disabled = False                            # latched for the rest of the session after a provisional disagreement
+        self.provisional_pending: Optional[dict] = None              # an ACTED provisional flip waiting for its real bar
+        self.provisional_shadow_pending: Optional[dict] = None       # a shadow-mode verdict waiting for its real bar (no action was taken)
+        self.provisional_seen: Optional[dict] = None                 # the last evaluated provisional bar, for the close check against the real bar
+        self.feed_stale: set = set()                                 # tokens whose feed Hestia reports stale (no tick for feed_stale_after_s)
         self.exit_requested = False
         self.flatten_done = False
         self.next_retry_at: Optional[datetime] = None
@@ -92,6 +102,8 @@ class HeliosEngine:
             return
         elif isinstance(ev, BarComplete):
             self._on_bar(ev)
+        elif isinstance(ev, ProvisionalBar):
+            self._on_provisional(ev)
         elif isinstance(ev, RequestOutcome):
             self._on_outcome(ev)
         elif isinstance(ev, CommandEvent):
@@ -100,7 +112,10 @@ class HeliosEngine:
         elif isinstance(ev, TrackFailed):
             self._say('warning', f'could not track {ev.contract.symbol}: {ev.reason}', key='track-failed')
         elif isinstance(ev, FeedStale):
+            self.feed_stale.add(ev.contract.token)
             self._say('warning', f'price feed for {ev.contract.symbol} stale for {ev.age_sec:.0f}s', key='feed-stale')
+        elif isinstance(ev, FeedRecovered):
+            self.feed_stale.discard(ev.contract.token)
         elif isinstance(ev, DplFrozen):
             self._say('critical' if ev.frozen else 'info',
                       f'{ev.contract.symbol} price {"FROZEN at the circuit limit" if ev.frozen else "unfroze"} at {ev.price:.2f}',
@@ -374,11 +389,19 @@ class HeliosEngine:
             return
         if ev.quality == BarQuality.GAP or ev.bar is None or ev.st is None:
             self._say('critical', f'no data for the 15-minute window ending {ev.boundary_ts:%H:%M}: the series has a gap', key='gap')
+            self._provisional_unreconciled(ev)
             return
         if ev.st.trend is None:
             return
         window_start = ev.bar.ts
         direction_now = _name(ev.st.trend)
+        self._close_check(direction_now, ev)
+        # a boundary already acted on provisionally: this is the reconciliation, never a second action
+        if self.provisional_pending is not None and self.provisional_pending['boundary'] == ev.boundary_ts.isoformat():
+            self._reconcile_provisional(direction_now, ev)
+            self.state.last_processed_boundary = window_start.isoformat()
+            self._save()
+            return
         if ev.st.flip:
             # the raw signal itself, independent of what the engine goes on to decide -- same per-bar Slack line Prometheus's
             # engine sends (ported from prometheus.py's own "ST_15 flip -> *direction*"), so Helios's alerts match Prometheus's.
@@ -409,6 +432,104 @@ class HeliosEngine:
             self._send_entry(direction_now, window_start, close)
             return True
         return False
+
+    # ------------------------------------------------------------------------------------------------------------------------
+    # Provisional-boundary trading (plans/hestia-provisional-all-engines.md). When the candle window of a 15-minute boundary is incomplete,
+    # Hestia sends a bar built from the websocket ticks. With cfg.provisional_enabled the engine may act on it (a flip or an entry, only if
+    # the tick close clears the PREVIOUS bar's supertrend by cfg.provisional_margin_pct and the feed is not stale) and reconciles against the
+    # real bar; with cfg.provisional_shadow it only logs what it would do and how the real bar compared. Both are off by default.
+    # ------------------------------------------------------------------------------------------------------------------------
+
+    def _on_provisional(self, ev: ProvisionalBar) -> None:
+        cfg = self.cfg
+        if self.state.frozen or ev.st.trend is None or ev.st.value is None or self._at_or_after_close(ev.boundary_ts):
+            return
+        if ev.prev_st is None:
+            log.warning('provisional boundary %s: the previous bar has no supertrend (warm-up); skipped', ev.boundary_ts)
+            return
+        close = ev.bar.close
+        clear_pct = abs(close - ev.prev_st) / close * 100 if close else 0.0
+        clears = clear_pct > cfg.provisional_margin_pct
+        direction = _name(ev.st.trend)
+        stale = ev.contract.token in self.feed_stale
+        self.provisional_seen = {'boundary': ev.boundary_ts.isoformat(), 'close': close, 'direction': direction, 'flip': bool(ev.st.flip),
+                                 'clear_pct': clear_pct}
+        log.info('provisional boundary %s: close=%.2f ST=%.2f prev_ST=%.2f direction=%s flip=%s clear_prev_st_pct=%.3f (margin=%s) clears=%s '
+                 'enabled=%s shadow=%s feed_stale=%s', ev.bar.ts, close, ev.st.value, ev.prev_st, direction, ev.st.flip, clear_pct,
+                 cfg.provisional_margin_pct, clears, cfg.provisional_enabled, cfg.provisional_shadow, stale)
+        if self._roll_armed() or self.state.pending_flip is not None:
+            log.info('provisional boundary %s skipped: a roll is pending or a flip is mid-transition', ev.boundary_ts)
+            return
+        if not ev.st.flip or not clears:
+            return
+        if not cfg.provisional_enabled:
+            if cfg.provisional_shadow:                       # shadow: record what it would do, send nothing
+                self.provisional_shadow_pending = {'boundary': ev.boundary_ts.isoformat(), 'direction': direction, 'window_start': ev.bar.ts,
+                                                   'close': close, 'clear_pct': clear_pct, 'stale': stale}
+                self._say('info', f'PROVISIONAL (shadow, no action) flip -> {direction} at {ev.bar.ts:%H:%M} (tick close cleared the previous ST by '
+                                  f'{clear_pct:.3f}%{", feed stale" if stale else ""}). Will compare with the real bar.', channel='tradebot-updates')
+            return
+        if stale:
+            log.warning('provisional action skipped at %s: the price feed for %s is stale, so the tick close cannot be trusted', ev.boundary_ts,
+                        ev.contract.symbol)
+            return
+        if self.provisional_disabled:
+            log.warning('provisional action skipped: disabled for the rest of this session after a disagreement')
+            return
+        pre = (self.state.status, self.state.direction)
+        self._say('warning', f'PROVISIONAL flip -> {direction} at {ev.bar.ts:%H:%M} (candle data incomplete, acting on a tick-built bar; '
+                             f'cleared the previous ST by {clear_pct:.3f}%). Will reconcile against the real bar.',
+                  channel='tradebot-updates')
+        if self._act_on_signal(direction, True, ev.bar.ts, close):
+            self.provisional_pending = {'boundary': ev.boundary_ts.isoformat(), 'direction': direction, 'window_start': ev.bar.ts, 'pre': pre}
+
+    def _close_check(self, real_direction: str, ev: BarComplete) -> None:
+        """Whenever a provisional bar was evaluated for this boundary: log the tick close against the real close (the data that tells whether the margin
+        can ever be relaxed), and settle a shadow-mode verdict. Never touches a position."""
+        seen = self.provisional_seen
+        if seen is None or seen['boundary'] != ev.boundary_ts.isoformat():
+            return
+        self.provisional_seen = None
+        real_close = ev.bar.close
+        diff_pct = (seen['close'] - real_close) / real_close * 100 if real_close else 0.0
+        log.info('provisional close check %s: provisional close=%.2f real close=%.2f diff=%+.4f%% provisional direction=%s real direction=%s '
+                 'real bar quality=%s minutes=%s', ev.bar.ts, seen['close'], real_close, diff_pct, seen['direction'], real_direction, ev.quality.name,
+                 ev.minutes_present)
+        shadow = self.provisional_shadow_pending
+        if shadow is not None and shadow['boundary'] == seen['boundary']:
+            self.provisional_shadow_pending = None
+            agree = real_direction == shadow['direction']
+            self._say('info' if agree else 'warning',
+                      f'PROVISIONAL (shadow) {shadow["direction"]} flip at {shadow["window_start"]:%H:%M}: the real bar '
+                      f'{"CONFIRMS it" if agree else "DISAGREES (nothing was done)"} (provisional close {seen["close"]:.2f}, real close {real_close:.2f}, '
+                      f'real bar {ev.quality.name} {ev.minutes_present} minutes)', channel='tradebot-updates')
+
+    def _reconcile_provisional(self, real_direction: str, ev: BarComplete) -> None:
+        pending = self.provisional_pending
+        self.provisional_pending = None
+        if real_direction == pending['direction']:
+            self._say('info', f'provisional {real_direction} flip at {pending["window_start"]:%H:%M} CONFIRMED by the real bar',
+                      channel='tradebot-updates')
+            return
+        self.provisional_disabled = True
+        self._say('critical', f'provisional {pending["direction"]} flip at {pending["window_start"]:%H:%M} DISAGREES with the real bar '
+                              f'({real_direction}; real bar {ev.quality.name}, {ev.minutes_present} minutes present). The position may be WRONG: review '
+                              f'manually. No automated reversal; provisional trading is off for the rest of this session.')
+        if self.state.pending_flip is not None:
+            self.state.pending_flip = None
+            self._say('critical', 'abandoned an in-progress flip because of the provisional disagreement: check the broker terminal now')
+
+    def _provisional_unreconciled(self, ev: BarComplete) -> None:
+        """The real bar for a boundary never came (a gap): an acted provisional flip can no longer be checked, which must not pass silently."""
+        self.provisional_seen = None
+        self.provisional_shadow_pending = None
+        pending = self.provisional_pending
+        if pending is not None and pending['boundary'] == ev.boundary_ts.isoformat():
+            self.provisional_pending = None
+            self.provisional_disabled = True
+            self._say('critical', f'provisional {pending["direction"]} flip at {pending["window_start"]:%H:%M} could NOT be reconciled: no real bar '
+                                  f'arrived for that window (a data gap). The position may be WRONG: review manually. Provisional trading is off for the '
+                                  f'rest of this session.')
 
     # ------------------------------------------------------------------------------------------------------------------------
     # Entry

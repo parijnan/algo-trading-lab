@@ -267,3 +267,62 @@ The Fyers void of 2026-04-01 to 2026-06-29 was filled on 2026-10-06 (63 of 64 we
 | Risk of ruin, primary scenario: P(ruin), P(DD > 40%) | 5.11%, 18.94% | 5.54%, 18.47% |
 
 **Reading.** The multiplier ranking, the calibration conclusions (the trend-flip exit alone is essentially optimal; a 3% stop leaves P&L at raw level; 2.5 is the most consistent) and the sizing and ruin picture are unchanged within about 3% on P&L and within one point on drawdown and ruin probabilities. The April to August stretch gives almost the same trades and P&L on Fyers as on Angel One's fill (202 trades and 153,938 pts against 203 and 155,580), so the earlier "degraded roll handling" caveat for that stretch cost little. The one visible change is that the worst drawdown moved into the filled stretch: 2026-04-07, 3,231 pts deeper than the previous worst (-45,917 against -42,686), which also moves the sized-simulation drawdown date from 2022-01-18 to 2026-04-07. The Jun-to-Aug roll is now handled with real per-contract tracking (roll events: 18 coincident, 6 non-coincident, 2 fallback GO, 1 forced roll, 5 naive days). The Aug-to-Nov roll still has no Fyers history for the Nov-2026 contract (unexpired), so September stays on Angel One.
+
+## 18. Staged winner versus the final config, and what a switch would take (2026-10-08)
+
+Asked by the user on 2026-10-08 after reading the exit-calibration reasoning (§12). Figures are multiplier 2.5, two lots in the simulator (Rs), 2,487 trades, from the 2026-10-06 re-run on the Fyers-filled data (`exit_calib_winners.csv`, `exit_structures_detail.csv`); "2026" means entries from 2026-01-01 (`WALKFORWARD_SPLIT_DATE`). Read from the saved results, nothing re-run.
+
+| | Raw signal | **Final config (live)** | Best full target grid | Staged winner |
+|---|---|---|---|---|
+| Stop | none | **3.0%** | 3.0% | 3.5% |
+| Target 1 / Target 2 | none | **none** | 3% / 12% | 3% / 8% |
+| Total P&L | 1,133,144 | **1,156,580** | 1,048,221 | 1,059,740 |
+| Max drawdown | -92,994 | **-91,833** | -61,972 | -61,972 |
+| Calmar, points basis | 12.19 | **12.59** | 16.91 | 17.10 |
+| Calmar, % of entry price | 13.25 | **13.31** | 12.83 | 13.16 |
+| Win rate | 38.6% | **38.6%** | 38.8% | 38.8% |
+| Stops hit | 0 | **16** | 16 | 13 |
+| Target 1 / Target 2 hit | none | **none** | 8.2% / 0.3% of trades | 8.2% / 0.9% |
+| Before 2026: P&L / Calmar | 369,076 / 11.51 | **366,549 / 11.43** | 358,759 / 11.19 | 381,985 / 11.91 |
+| 2026: P&L / Calmar | 764,068 / 8.22 | **790,031 / 8.60** | 689,462 / 11.13 | 677,755 / 10.94 |
+
+**Like for like.** Every column is the same total exposure, two lots: the simulator runs every variant on two lots, and with targets off both lots exit together, so the stop-only and raw columns are exactly twice their one-lot results (checked on the saved files: the one-lot raw sweep at 2.5 is 566,572 points over 2,487 trades, the two-lot raw run 1,133,144 Rs; the two-lot stop-only drawdown of -91,833 Rs is twice the one-lot parity drawdown of -45,917 points). A live Selene unit today is one lot, so in live units the final config is about half the figures shown (P&L about 578,000 and a drawdown of about -46,000 per unit, at half the margin); a staged-winner unit would be two lots, so the live comparison is one staged unit against two final-config units.
+
+**Reading.** The staged winner earns about 8% less in total (1.06M against 1.16M) but has a drawdown about a third smaller (62k against 92k), so it wins on the points-based Calmar (17.1 against 12.6) and on Calmar in both halves (before 2026 11.91 against 11.43; 2026 10.94 against 8.60). It gives up about 14% of 2026 P&L and gains about 4% before 2026. On the percent-of-entry-price Calmar the two are level (13.16 against 13.31), so most of the points-Calmar gap is the smaller points drawdown, which §12 says is set by a handful of Jan-Feb 2026 gap trades. The targets rarely fire (target 1 on 8.2% of trades, target 2 under 1%): the drawdown reduction comes from that 8% of trades being cut early at +3%. The staged calibration landed on its own grid edges and the best full-grid row moves target 2 to 12%, so the winner is not a stable point. The decision in §12 (final config, no targets) therefore stands on total P&L, on the percent Calmar and on simplicity, not on the points Calmar, which favours the targets. Neither candidate had the held-out walk-forward check Helios's stop and multiplier got (Helios plan §4g).
+
+**Switching to the staged winner is not a values-only change, unlike Prometheus 2.0 to 2.5.** Verified in the code: `selene_engine/engine.py` is a single lot with no targets (module docstring), while `prometheus_engine/engine.py` already carries two-lot and target handling (about 80 references to lot 1, lot 2 and targets); `typhon_engine/engine.py` has a single-target path (about 37). Prometheus 2.0 to 2.5 changed config values and test pins only. For Selene a switch would need, as an estimate of the work (not yet scoped):
+- engine logic: two lots per unit, a target per lot with separate close requests, a partly closed state (lot 1 booked, lot 2 open), flips that close only the remaining lots, restart reconciliation against the broker's net lots, and roll handling that recalibrates two targets, ported from the Prometheus engine and re-verified against Selene's shared roll policy;
+- config and pins: `lots_per_unit` 1 to 2, the stop from 3.0% to 3.5%, two target percentages, and the pin test against `selene_backtest/selene_configs.py`;
+- the backtest side: `parity_backtest_selene.py` is single-lot and stop-only, so it needs the two-lot target logic (as Prometheus's parity has) before a production-parity result exists for the staged config;
+- sizing: the sized simulation, slippage and risk-of-ruin stages (§14 to §16) assumed one lot per unit, so a unit's margin and exposure double and all three must be redone; the live unit and cap semantics change too;
+- tests and replay: engine tests, plus `selene_engine/replay_check.py` against recorded live days;
+- going live: the engine must be flat for the switch and Hestia restarted, as for the Prometheus 2.5 change.
+
+**Status: no change planned.** Before any switch, the target variants should first get the walk-forward treatment Helios's design got, since the staged winner sits on a grid edge and 2026 drives the drawdown; a cheaper intermediate (one lot with one target, reusing the Typhon path) was never simulated for Selene and is untested. Revisit if drawdown or sizing, not total P&L, becomes the binding constraint.
+
+## 19. Single-lot one-target test (the Typhon shape), 2026-10-08
+
+Asked by the user: the Typhon engine path (one lot, one stop, one target, trend-flip exit) was never simulated for Selene, and could be repurposed if a switch is wanted later (§18). Code: `selene_backtest/exit_single_target_selene.py` (tests: `tests/test_selene_single_target.py`, five, each behaviour broken on purpose and caught); grid constants `SINGLE_TARGET_GRID` and `SINGLE_TARGET_LOTS_IN_SIM` added to `selene_configs.py` (research only, the decided values untouched). Method: the same exit simulator and fill rules as the staged calibration (stop wins a same-minute tie, gap-through fills at the open, first bar of a session exempt, trend-flip fallback); one lot with one target is the two-lot simulator with both targets at the same level, halved, so every figure is per ONE lot, which is also what a live Selene unit is today. Full stop x target grid (12 stops from 0.6% to 8%, 12 targets from 0.5% to 20%, plus no target) at 2.0, 2.5 and 3.0 on the Fyers-filled data to 2026-10-05, 1,961 to 3,424 trades each. The stop-only 3.0% cell at 2.5 was asserted against the saved structures comparison and reproduces the decided config exactly (578,290 Rs per lot, half of the two-lot 1,156,580). Results in `data_sweep/single_target_grid.csv` and `single_target_walkforward.csv` (gitignored).
+
+**Multiplier 2.5, stop 3.0%, by target (per lot; before 2026 / 2026 split at 2026-01-01):**
+
+| Target | P&L Rs | Max DD Rs | Calmar | Calmar % | Target hit | Before 2026 P&L | 2026 P&L |
+|---|---|---|---|---|---|---|---|
+| none (the decided config) | 578,290 | -45,917 | 12.59 | 13.31 | 0% | 183,275 | 395,015 |
+| 3% | 453,725 | -30,986 | 14.64 | 11.83 | 8.2% | 175,484 | 278,241 |
+| 4% | 472,530 | -32,124 | 14.71 | 12.57 | 4.3% | 201,063 | 271,467 |
+| 6% | 514,421 | -45,917 | 11.20 | 13.00 | 1.6% | 211,150 | 303,272 |
+| 8% | 586,823 | -45,917 | 12.78 | 13.79 | 0.9% | 208,729 | 378,094 |
+| 12% | 594,496 | -45,917 | 12.95 | 13.53 | 0.3% | 183,275 | 411,221 |
+
+Best cell over the whole grid by Calmar %: stop 3.5%, target 8%: 602,547 Rs, DD -46,497, Calmar 12.96, Calmar % 14.09, before 2026 207,615, 2026 394,932 (stop-only at 3.5% is within a few percent of the decided 3.0%).
+
+**Reading.**
+- **A tight single target buys drawdown, not return.** A 3% or 4% target cuts the drawdown by about a third (-31,000 to -32,000 against -45,917) and lifts the points Calmar to 14.6 to 14.7, but gives up 18% to 22% of total P&L, 2026 P&L falls 30%, and the percent Calmar is lower than the control (11.83 and 12.57 against 13.31). So the apparent improvement is again the points Calmar reading a smaller drawdown. The drawdown is the same -30,986 as the two-lot staged winner's per-lot drawdown (§18): both are the +3% target cutting the Jan-Feb 2026 gap trades.
+- **A wide single target is a small tweak on very few trades.** At 8% to 12% (hit on 0.3% to 0.9% of trades, about 7 to 22 trades) total P&L is +1.5% to +2.8% against the control, the drawdown is unchanged, the percent Calmar is +2% to +4%, and the whole gain is before 2026 (+14% at 8%) while 2026 is -4% at 8% and +4% at 12%. The best whole-grid cell (3.5% / 8%) is +4.2% P&L and +5.9% percent Calmar. That is inside the noise of a grid this size and not a case for a new exit rule.
+- **It does not reproduce the staged winner.** The two-lot staged winner (§18) per lot: 529,870 Rs at the same -30,986 drawdown, against 453,725 for a one-lot 3% target. Splitting the unit across two targets (half at 3%, half at 8%) keeps 17% more P&L than a single 3% target at the same drawdown, and 22% more in 2026. So the drawdown benefit needs the two-lot structure; the single-target Typhon path does not deliver it.
+- **Other multipliers.** At 2.0 (stop 3.0%): no target 559,280 / -94,751 / Calmar % 8.13; the best target (6%) is 485,824 (-13%) with Calmar % 8.98, and an 8% target equals the control on P&L. At 3.0: no target 637,834 / -67,935 / 11.21; a 12% target is 676,357 (+6%) at the same drawdown and 11.71. Same picture: wide targets are a marginal gain, tight targets trade P&L for drawdown.
+
+**Walk-forward (chosen on entries before 2026 only, read from 2026 on).** The pre-2026 period favours tight stops: the selection picks stops of 0.6% to 1.5% at every multiplier (stop-only: 1.0% at 2.0, 1.5% or 1.0% at 2.5, 0.6% at 3.0). At 2.5 those stop-only picks earn 187,360 and 240,012 Rs out of sample, against 395,015 for the decided 3.0% stop, so the held-out data does not support the pre-2026 stops (the same lesson as Helios's wide stop in reverse: the winner of the earlier half does not carry forward). Adding a target to the chosen stop changes the out-of-sample result by +1.5% (2.5, by points Calmar), +4% (2.0), +6% (3.0) and -58% (2.5, by percent Calmar, where it picked a 1.5% target hit on 19% of trades). So no consistent out-of-sample gain from the target; the stop choice dominates.
+
+**Conclusion.** One lot with one target, the Typhon path, is not a route to anything the final config lacks. Wide targets are about +3% to +4% on P&L from a handful of trades; tight targets cut the drawdown only by giving up a fifth of the P&L and a worse percent Calmar; and neither reproduces the staged winner's result, which needs two lots with two targets. Repurposing the Typhon engine for Selene would therefore buy little. The §18 status stands (no change planned); if a switch were ever wanted for the drawdown, the two-lot Prometheus-style engine is the shape that delivers it. Not run: a production-parity version of the single-target variant (roll-aware, as `parity_backtest_selene.py`), since the overlay result gives no candidate worth the cost of building it.
