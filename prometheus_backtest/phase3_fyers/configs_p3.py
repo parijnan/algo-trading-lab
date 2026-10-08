@@ -61,7 +61,7 @@ NO_EXIT_BEFORE_BUFFER_MIN = 1
 # Signal -- the already-decided production value, not swept here.
 # ---------------------------------------------------------------------------
 ST_PERIOD = 10
-ST_MULTIPLIER_GRID = [2.0]
+ST_MULTIPLIER_GRID = [2.0, 2.5]   # 2.5 added 2026-10-08: Prometheus live multiplier since 2026-10-05, for the combined equity curve
 
 # ---------------------------------------------------------------------------
 # Costs -- same convention as every other phase: deliberately absent.
