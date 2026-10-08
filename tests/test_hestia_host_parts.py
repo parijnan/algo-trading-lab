@@ -2,6 +2,7 @@
 The pieces slice 5 adds around the core: the Slack queue, the session lock, the state store and restart recovery, live sizing
 overrides, flag files, alert routing, trade logs and the session report.
 """
+from types import SimpleNamespace
 import json
 import os
 import subprocess
@@ -584,6 +585,78 @@ def test_the_session_report_open_position_line_survives_a_missing_quote(hestias)
     finally:
         h.data.ltp_quote = orig
     assert '*Open Position*' in text and '  \u21b3 Unrealised : price unavailable' in text and 'LTP' not in text
+    h.close()
+
+
+def _part_booked_engine_state(**over):
+    state = {'status': 'in_trade', 'direction': 'bullish', 'units': 1, 'entry_ts': '2026-09-03T09:15:01', 'entry_price': 100.0,
+             'lot1_status': 'booked', 'lot2_status': 'open',
+             'trade_row': {'lot1_pnl_points': 4.0, 'lot1_pnl_rs': 40.0, 'lot1_exit_ts': '2026-09-03T12:28:14'}}
+    state.update(over)
+    return json.dumps(state)
+
+
+def test_the_session_report_shows_a_part_booked_position_with_its_real_entry_time_unit_count_and_banked_lot(hestias):
+    """2026-10-08: with one of two lots already booked, the ledger-only report showed the booking time as the entry, quoted the
+    unrealised figure per full unit for the half unit still open, and left the banked lot out of Realized."""
+    h = hestias([('a', factory(act=opener(lots=1)), {'lots_per_unit': 2})])
+    go(h)
+    h.set_price('T1', 104.0)
+    h.store = SimpleNamespace(load_engine_state=lambda name: _part_booked_engine_state(), save_ledger=lambda *a, **k: None)
+    try:
+        text = build_session_report(h, h.now, [])
+    finally:
+        h.store = None
+    assert '*Open Position*  \u00b7  Bullish  |  Units: 1 (0.5 still open)' in text
+    assert '  \u21b3 Entry: 09:15 @ 100.00   Still open at session end' in text                    # the entry, not the booking time
+    assert '  \u21b3 Unrealised : +4.0 pts  (+40 Rs/unit)   LTP 104.00' in text                    # one open lot: 4 pts x 10 x 1 lot, on a 1-unit trade
+    assert '  \u21b3 Booked     : +4.0 pts  (+40 Rs/unit) on the lot already closed' in text
+    assert '  \u21b3 Realized   : *+40 Rs/unit*' in text and '  \u21b3 Unrealized : *+40 Rs/unit*' in text
+    h.close()
+
+
+def test_the_report_adds_the_banked_lot_to_the_trades_closed_that_day(hestias):
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.submit(OpenRequest('o1', FRONT, Direction.BULLISH, 1, trade_ref=2))
+            ctx.report_trade({'trade_id': 1, 'direction': 'bearish', 'units': 1, 'entry_ts': '2026-09-02T20:30:00', 'entry_price': 110.0,
+                              'lot1_exit_ts': '2026-09-03T09:15:00', 'lot1_exit_reason': 'trend_flip', 'total_pnl_points': 2.0, 'total_pnl_rs': 20.0})
+    h = hestias([('a', factory(act=act), {'lots_per_unit': 2})])
+    go(h)
+    h.set_price('T1', 104.0)
+    h.store = SimpleNamespace(load_engine_state=lambda name: _part_booked_engine_state(), save_ledger=lambda *a, **k: None)
+    try:
+        text = build_session_report(h, h.now, h.trades)
+    finally:
+        h.store = None
+    assert '  \u21b3 Realized   : *+60 Rs/unit*' in text                                          # +20 closed trade, +40 banked on the open one
+    h.close()
+
+
+def test_without_the_engines_saved_state_the_report_falls_back_to_the_ledger_alone(hestias):
+    h = hestias([('a', factory(act=opener(lots=1)), {'lots_per_unit': 2})])
+    go(h)
+    h.set_price('T1', 104.0)
+    text = build_session_report(h, h.now, [])
+    assert 'Units: 0.5' in text and 'Booked' not in text and 'still open)' not in text
+    h.store = SimpleNamespace(load_engine_state=lambda name: 'not json {', save_ledger=lambda *a, **k: None)
+    try:
+        assert 'Units: 0.5' in build_session_report(h, h.now, [])                                  # a corrupt state is ignored, never raises
+    finally:
+        h.store = None
+    h.close()
+
+
+def test_a_flat_engine_state_adds_nothing_to_the_open_position_block(hestias):
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    h.set_price('T1', 104.0)
+    h.store = SimpleNamespace(load_engine_state=lambda name: json.dumps({'status': 'watching'}), save_ledger=lambda *a, **k: None)
+    try:
+        text = build_session_report(h, h.now, [])
+    finally:
+        h.store = None
+    assert 'Units: 2' in text and 'Booked' not in text
     h.close()
 
 

@@ -137,6 +137,8 @@ class LiveData:
     def _alert(self, level: str, text: str) -> None:
         if self._alert_fn is not None:
             self._alert_fn(level, text)
+            if self.core is not None:                       # posted already; counted too, so the session report's alert tally includes it (2026-10-08)
+                self.core.note_alert(level, None, text)
         elif self.core is not None:
             self.core._alert(level, None, text)
         else:

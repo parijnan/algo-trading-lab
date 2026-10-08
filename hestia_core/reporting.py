@@ -16,6 +16,7 @@ only when present, UNCONFIRMED requests, ledger mismatches and warning-or-worse 
 from __future__ import annotations
 
 import csv
+import json
 import os
 from collections import Counter
 from datetime import datetime
@@ -140,6 +141,29 @@ def _units(n: float) -> str:
     return f'{n:g}'
 
 
+def _open_trade_info(core, name: str) -> dict:
+    """What the ledger cannot say about an engine's open trade, read from the engine's own saved state: the trade's real entry time (the ledger
+    row's time is that of its LAST change, so a part-booked position shows the booking time), the trade's unit count (the ledger only knows the
+    lots still open), and what an already-closed lot banked (points and rupees for the whole trade). Empty when there is no store or the engine
+    has no open trade; the report then falls back to the ledger alone."""
+    store = getattr(core, 'store', None)
+    if store is None:
+        return {}
+    try:
+        state = json.loads(store.load_engine_state(name) or 'null')
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(state, dict) or state.get('status') != 'in_trade':
+        return {}
+    row = state.get('trade_row') or {}
+    booked_pts = booked_rs = 0.0
+    for lot in (1, 2):
+        if state.get(f'lot{lot}_status') == 'booked':
+            booked_pts += row.get(f'lot{lot}_pnl_points') or 0.0
+            booked_rs += row.get(f'lot{lot}_pnl_rs') or 0.0
+    return {'entry_ts': state.get('entry_ts'), 'units': state.get('units'), 'booked_pts': booked_pts, 'booked_rs': booked_rs}
+
+
 def build_session_report(core, now: datetime, session_trades: List[tuple]) -> str:
     """The end-of-session Slack report, in the standalone Prometheus process's own layout (dividers, a block per trade, a
     Realized / Unrealized total in Rs per unit, so it tracks the strategy rather than whatever sizing was live) with one section
@@ -148,8 +172,10 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
     live engines, and was unreadable in Slack.
 
     Rs/unit for a closed trade is the trade's own total divided by its own unit count. For the open position it is the
-    mark-to-market per lot times the lots in a unit. A part-booked position (an engine that books one lot early) shows only its
-    open lots here: the booked part appears in the engine's own trade row when the trade closes."""
+    mark-to-market of the lots still open, divided by the trade's unit count. A part-booked position (an engine that books one lot
+    early) shows its true entry time and unit count (with how many units are still open), the part already banked on its own line, and
+    that part is included in Realized (changed 2026-10-08: the ledger-only version showed the booking time as the entry, quoted the
+    unrealised figure per full unit for a half unit, and left the banked lot out of Realized until the trade closed)."""
     today = now.date()
     owner_instrument = {eng: ins for ins, eng in core._by_instrument.items()}
     by_engine: Dict[str, list] = {}
@@ -188,13 +214,16 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
             lines.append(f"  \u21b3 P&L        : *{pts:+.1f} pts  ({per_unit:+,.0f} Rs/unit)*")
             lines.append('')
 
+        trade_info = _open_trade_info(core, name) if positions else {}
         for tok, net, avg, since in positions:
             ref = core.data.ref_for(tok)
             direction = 'Bullish' if net > 0 else 'Bearish'
-            units = abs(net) / lpu
+            open_units = abs(net) / lpu
+            trade_units = trade_info.get('units') or open_units
             entry = f'{avg:,.2f}' if avg else '?'
-            lines.append(f"*Open Position*  \u00b7  {direction}  |  Units: {_units(units)}")
-            lines.append(f"  \u21b3 Entry: {_ts_str(since, today)} @ {entry}   Still open at session end")
+            units_text = _units(trade_units) if abs(trade_units - open_units) < 1e-9 else f'{_units(trade_units)} ({_units(open_units)} still open)'
+            lines.append(f"*Open Position*  \u00b7  {direction}  |  Units: {units_text}")
+            lines.append(f"  \u21b3 Entry: {_ts_str(trade_info.get('entry_ts') or since, today)} @ {entry}   Still open at session end")
             try:
                 q = core.data.ltp_quote(tok)
                 info = core.data.info(ref) if ref else None
@@ -202,12 +231,16 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
                 q = info = None
             if q is not None and avg and info is not None:
                 pts = (q.price - avg) if net > 0 else (avg - q.price)
-                per_unit = pts * info.lot_size * lpu
+                per_unit = pts * info.lot_size * abs(net) / trade_units
                 unrealized += per_unit
                 lines.append(f"  \u21b3 Unrealised : {pts:+.1f} pts  ({per_unit:+,.0f} Rs/unit)   LTP {q.price:,.2f}")
             else:
                 unrealized_known = False
                 lines.append('  \u21b3 Unrealised : price unavailable')
+            if trade_info.get('booked_rs'):
+                booked_per_unit = trade_info['booked_rs'] / trade_units
+                realized += booked_per_unit
+                lines.append(f"  \u21b3 Booked     : {trade_info['booked_pts']:+.1f} pts  ({booked_per_unit:+,.0f} Rs/unit) on the lot already closed")
             lines.append('')
 
         if recs or positions:

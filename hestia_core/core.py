@@ -932,6 +932,11 @@ class HestiaCore:
             except Exception:                                        # noqa: BLE001 - a failing sink must never stop trading
                 log.exception('alert sink failed')
 
+    def note_alert(self, level: str, engine: Optional[str], text: str) -> None:
+        """Count an alert that was already delivered by another path (the live-data layer posts straight to the Slack router) so the session
+        report's tally and `alerts_for` include it. Does not call the sinks, so nothing is posted twice."""
+        self.alerts.append(Alert(self.now, level, engine, text))
+
     def _monitor(self) -> None:
         for name, task in self._tasks.items():
             if task.state == 'done' or self.engine_state.get(name) != 'running':
