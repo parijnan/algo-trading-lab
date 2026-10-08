@@ -453,7 +453,7 @@ def test_a_partly_filled_position_still_writes_a_well_formed_trade_row():
 
 
 @pytest.mark.parametrize('close, prev_st, st_value, acts', [
-    (100.0, 99.9, 90.0, False),     # clears the CURRENT supertrend by 10% but the PREVIOUS one by only 0.1%: no action
+    (100.0, 99.95, 90.0, False),    # clears the CURRENT supertrend by 10% but the PREVIOUS one by only 0.05%: no action
     (100.0, 90.0, 99.95, True),     # clears the PREVIOUS supertrend by 11%, the current one by 0.05%: acts
 ])
 def test_provisional_margin_is_measured_against_the_previous_supertrend(close, prev_st, st_value, acts):

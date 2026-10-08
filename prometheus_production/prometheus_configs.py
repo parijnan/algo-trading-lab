@@ -439,13 +439,15 @@ DEFERRED_BAR_CUTOFF_MIN = 1
 # it actually behaved under DRY_RUN -- agreement rate, any disagreement
 # escalations, whether the margin needs recalibrating.
 PROVISIONAL_BOUNDARY_ENABLED = True
-PROVISIONAL_MARGIN_PCT = 0.15   # % of price the provisional close must clear the PREVIOUS bar's
-                                 # supertrend (the line it had to cross) by before acting -- PLACEHOLDER,
-                                 # not calibrated. Until 2026-09-28 this was measured against the provisional
-                                 # bar's OWN supertrend, which on a flip bar is the opposite band and passed
-                                 # ~every flip; now a real gate: on 2024-26 data 0.15% holds back about 44%
-                                 # of CRUDEOILM flips (ST 2.0) from provisional action, which then wait for
-                                 # the real bar exactly as if the feature were off.
+PROVISIONAL_MARGIN_PCT = 0.07   # % of price the provisional close must clear the PREVIOUS bar's
+                                 # supertrend (the line it had to cross) by before acting. 2026-10-08 (user): set
+                                 # on the same basis as Selene, Helios and Typhon -- the mean high-low range of the
+                                 # final traded minute of a 15-minute bar over history (0.068% for CRUDEOILM), rounded
+                                 # up to 0.01% -- replacing the 0.15% placeholder chosen when the feature was built
+                                 # (2026-09-04, never calibrated; it sat at the 92.6th percentile of that range and
+                                 # covered 40% of real flips, 0.07% covers 64%). See
+                                 # plans/hestia-provisional-all-engines.md section 7. Until 2026-09-28 the check was
+                                 # measured against the provisional bar's OWN supertrend, which passed ~every flip.
 
 # ── Order execution ──────────────────────────────────────────────────────────
 ORDER_TIMEOUT_SEC = 30     # seconds to wait for order fill (WS fast path + REST fallback)

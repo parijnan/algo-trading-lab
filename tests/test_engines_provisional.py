@@ -13,7 +13,7 @@ from hestia_core.interface import (AckStatus, Bar, BarComplete, BarQuality, Dire
                                    RequestAck, SizingConfig, SupertrendPoint)
 
 NAMES = ['selene', 'helios', 'typhon']
-MARGIN_STAR = {'selene': 0.46, 'helios': 0.71, 'typhon': 1.06}      # the pre-registered rule's m* (plan section 5)
+MARGIN = {'selene': 0.05, 'helios': 0.04, 'typhon': 0.11}           # the mean final-minute range per instrument, rounded up (plan section 7)
 
 
 @pytest.fixture(params=NAMES)
@@ -58,20 +58,21 @@ def order_times(h):
 # Off by default, and the spec follows the flags
 # ---------------------------------------------------------------------------------------------------------------------------------
 
-def test_the_feature_is_off_by_default_and_the_margin_is_the_measured_one(eng):
+def test_the_feature_is_on_by_default_with_the_typical_size_margin(eng):
     d = eng.DEFAULT
-    assert d.provisional_enabled is False and d.provisional_shadow is False
-    assert d.provisional_margin_pct == MARGIN_STAR[eng.name]
+    assert d.provisional_enabled is True and d.provisional_shadow is False
+    assert d.provisional_margin_pct == MARGIN[eng.name]
+    assert eng.cls(d).spec.provisional.enabled is True
 
 
 def test_the_data_spec_asks_hestia_for_provisional_bars_only_when_a_flag_is_on(eng):
-    assert eng.cls(cfg_of(eng)).spec.provisional.enabled is False
+    assert eng.cls(cfg_of(eng, provisional_enabled=False)).spec.provisional.enabled is False
     assert eng.cls(cfg_of(eng, provisional_enabled=True)).spec.provisional.enabled is True
     assert eng.cls(cfg_of(eng, provisional_shadow=True)).spec.provisional.enabled is True
 
 
-def test_with_the_default_config_nothing_acts_before_the_real_bar(eng):
-    h, made = prov_run(eng)
+def test_with_the_feature_switched_off_nothing_acts_before_the_real_bar(eng):
+    h, made = prov_run(eng, provisional_enabled=False)
     assert order_times(h) == [(10, 15, 40)]                                          # the real bar, 40 s late, makes the entry
     assert made[-1].provisional_seen is None and made[-1].provisional_pending is None
 
@@ -206,7 +207,7 @@ def test_every_evaluated_provisional_bar_is_checked_against_the_real_close_in_th
 
 def test_no_close_check_is_logged_with_the_feature_off(eng, caplog):
     with caplog.at_level(logging.INFO):
-        prov_run(eng)
+        prov_run(eng, provisional_enabled=False)
     assert not [r for r in caplog.records if 'provisional' in r.getMessage()]
 
 

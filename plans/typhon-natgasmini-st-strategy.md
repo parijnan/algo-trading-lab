@@ -351,4 +351,4 @@ Only the filled stretch changed: about 22 old trades and 25 new ones differ, all
 
 ## Provisional-boundary trading in the engine, 2026-10-08
 
-The Typhon engine (`typhon_engine/`) was built with provisional-boundary trading off. It now has it, **off by default**, with a measured `provisional_margin_pct` of 1.06% (the pre-registered rule over NATGASMINI history; 0.65% if the post-boundary gap term is dropped), a shadow mode and the feed-staleness gate: `plans/hestia-provisional-all-engines.md`.
+The Typhon engine (`typhon_engine/`) was built with provisional-boundary trading off. It now has it, **on** from 2026-10-08, with `provisional_margin_pct` 0.11% (the mean final-minute range over NATGASMINI history; the worst-case value 1.06% was set aside, `plans/hestia-provisional-all-engines.md` section 7), a shadow mode and the feed-staleness gate: `plans/hestia-provisional-all-engines.md`.

@@ -156,7 +156,7 @@ def prov(e, close, prev_st, st_value, direction, flip=True):
 
 def test_thin_cross_is_held_back_and_a_clear_cross_acts_for_an_entry():
     e = engine(hm(11, 0), watching())
-    prov(e, 100.0, 100.10, 101.0, Direction.BEARISH)                # 0.10% below the previous ST: inside the 0.15% margin
+    prov(e, 100.0, 100.05, 101.0, Direction.BEARISH)                # 0.05% below the previous ST: inside the 0.07% margin
     assert not e.ctx.sent
     prov(e, 100.0, 100.30, 101.0, Direction.BEARISH)                # 0.30%: acts
     assert len(e.ctx.sent) == 1 and e.ctx.sent[0].direction == Direction.BEARISH
@@ -164,7 +164,7 @@ def test_thin_cross_is_held_back_and_a_clear_cross_acts_for_an_entry():
 
 def test_thin_cross_is_held_back_and_a_clear_cross_acts_for_a_flip():
     e = engine(hm(11, 0), in_trade('bullish'))
-    prov(e, 100.0, 100.10, 101.0, Direction.BEARISH)
+    prov(e, 100.0, 100.05, 101.0, Direction.BEARISH)
     assert not e.ctx.sent
     prov(e, 100.0, 100.30, 101.0, Direction.BEARISH)
     assert len(e.ctx.sent) == 1 and isinstance(e.ctx.sent[0], FlipRequest)

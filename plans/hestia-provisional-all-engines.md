@@ -2,7 +2,7 @@
 
 Created 2026-10-08 at the user's instruction ("it's a critical fix for an existing infrastructure issue at the broker, and has proved itself in the past with Prometheus; it should be part of the other 3 engines as well. Let the margins come from the history measurement. The rigor is non negotiable."). Prometheus's engine has it; Selene, Helios and Typhon were built with `ProvisionalSpec(False)` ("not modelled by the parity backtest; nothing calibrated it", `plans/hestia-p7-selene-engine.md`). Prometheus's own value, the 0.15% `provisional_margin_pct`, is a placeholder that was never calibrated (`plans/selene-production.md` §1.9). Nothing here changes Prometheus.
 
-**Status (2026-10-08): written BEFORE any measurement; sections 1 and 2 are the pre-registration. Results are appended below it (section 5) and never edit sections 1 to 4.**
+**Status (2026-10-08): written BEFORE any measurement; sections 1 and 2 are the pre-registration. Results are appended below it (section 5) and never edit sections 1 to 4. Section 7 records the user's decision the same day to set the margins at the typical size instead and to switch the feature on for all four engines; it supersedes sections 2 point 3 and 6.**
 
 ## 0. What it is, verified in the code
 
@@ -71,3 +71,26 @@ The top bars that set each maximum were inspected minute by minute (`top_r_<SYMB
 ## 6. Decision taken on these numbers
 
 The three engines get the feature with **the pre-registered m\* as their `provisional_margin_pct`** (SILVERMIC 0.46, GOLDPETAL 0.71, NATGASMINI 1.06), `provisional_enabled` **False**, and a new `provisional_shadow` mode (default False) that turns Hestia's provisional bars on for the engine WITHOUT acting on them, logging every evaluation and, when the real bar arrives, the provisional close against the real close and what the action would have been. Shadow is the instrument the plan's own section 1.9 asked for: it measures the tick-versus-candle close error on all four instruments in live conditions, with no order ever sent. Enabling real action, and whether m* can be relaxed from measured shadow errors (for example the observed maximum error with a stated safety factor), are the user's calls after a stretch of shadow data; nothing here changes Prometheus's 0.15%, which on this evidence sits below the worst-case bound (flagged for the user, not changed).
+
+## 7. Decision (user, 2026-10-08): typical-size margins, on for all four engines; supersedes sections 2.3 and 6
+
+The pre-registered worst-case margins (section 5) kept the feature almost inert: they let it act on only 2% to 8% of real flips, so a flip that cleared the previous supertrend comfortably would still wait for the real bar, which is the case the feature exists for ("catch flips and prevent big losses on exits or big slips on entries"). The user's direction: the margin is the mean or median size of the noise, not the worst case; it is a practical setting, not a mathematical-accuracy exercise; the feature goes live; and Prometheus follows the same logic as the others. The section 5 rule and its numbers remain as the record and are no longer the setting.
+
+**The setting.** `provisional_margin_pct` = the mean high-low range of the final traded minute of a 15-minute bar over each instrument's history (the bound U of section 1, the typical wobble in the last minute before the boundary), as a percent of price, rounded up to 0.01%:
+
+| | mean U | **margin** | median U | real flips covered, all years / 2026 |
+|---|---|---|---|---|
+| SILVERMIC (Selene) | 0.049% | **0.05%** | 0.038% | 63% / 81% |
+| GOLDPETAL (Helios) | 0.031% | **0.04%** | 0.023% | 54% / 64% |
+| NATGASMINI (Typhon) | 0.109% | **0.11%** | 0.088% | 68% / 63% |
+| CRUDEOILM (Prometheus) | 0.068% | **0.07%** | 0.053% | 64% / 74% |
+
+`provisional_enabled` is True in all four engine configs; `provisional_shadow` stays False (it only has effect when enabled is False). Prometheus's own value moves from 0.15% to 0.07% in `prometheus_engine/engine_configs.py` and in `prometheus_production/prometheus_configs.py` (kept equal by the pin test; the standalone process is rollback only).
+
+**Where Prometheus's 0.15% came from (checked in the history, 2026-10-08).** It was a placeholder from the day the feature was built (commit `d9a98f6`, 2026-09-04: "uncalibrated margin placeholder", the verdict shadow-logged "so the margin can eventually be calibrated on real agreement data rather than a guess"; the config comment and `plans/prometheus-phase3-production.md` section 12a both say "PLACEHOLDER, not calibrated"). It was switched on the same day for a dry-run stress test and was never calibrated afterwards. The only real exercise, 2026-09-08 15:00, cleared the line by 0.91%. The 2026-09-28 change fixed what the margin is measured against (the previous supertrend) and noted that 0.15% held back about 44% of crude flips (a description of its effect). On the data: 0.15% sits at the 92.6th percentile of crude's final-minute range (median 0.053%, mean 0.068%) and covers 40% of real flips; the mean-range value 0.07% covers 64%.
+
+**The nets, in order.** A provisional bar is built in `live_data._after_merge`, which runs only after the whole fetch job for the poll, and that job includes Angel One's retries and then the Fyers rescue (`fetch_one_minute_window` with its fallback). So a provisional bar exists only when the 15-minute window is still incomplete after the rescue has had its turn (or when a quiet minute leaves it legitimately short, where the tick close is simply the last trade). Provisional trading is the net below the Fyers rescue, not a path beside it.
+
+**Safety kept.** The staleness gate (the three newer engines), reconciliation against the real bar with a critical alert and a session latch on disagreement, the critical alert when the real bar never arrives, and the always-on close check logging (provisional close against real close, per evaluation), which is the data for adjusting these numbers later. A disagreement was never meant to happen often: it alerts, latches provisional action off for the session and does not reverse the position.
+
+**Going live is a pull and a Hestia restart** (config is read at start). The measurement and the section 5 results are unchanged.

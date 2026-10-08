@@ -25,7 +25,7 @@ class EngineConfig:
     min_entry_buffer_min: float = 15.0
     # provisional-boundary trading; the margin is measured against the PREVIOUS bar's supertrend (fixed 2026-09-28)
     provisional_enabled: bool = True
-    provisional_margin_pct: float = 0.15
+    provisional_margin_pct: float = 0.07     # mean final-minute range for CRUDEOILM, rounded up (was a 0.15 placeholder; plan section 7)
     # sizing arithmetic (dynamic sizing and the affordability check): LTP x lot size / divisor x multiplier per unit
     margin_contract_value_divisor: float = 3.0
     margin_sizing_multiplier: float = 4.0

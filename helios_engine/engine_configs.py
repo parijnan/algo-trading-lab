@@ -26,14 +26,14 @@ class EngineConfig:
     # position shape: a single lot-group, no scale-out, no targets; 1 unit = 20 lots (plan §4c)
     sl_pct: float = 1.6
     lots_per_unit: int = 20
-    # provisional-boundary trading (plans/hestia-provisional-all-engines.md): act on a tick-built bar when the candle window is incomplete at
-    # the boundary. OFF by default: Delos pulls on a push and runs what was pushed at the next start, so nothing here is live until a flag is
-    # turned on deliberately. Shadow sends no order: Hestia delivers the provisional bars, the engine logs what it would do and how the real bar
-    # compared. The margin is the pre-registered rule's m* for GOLDPETAL (plan section 5): the tick close must clear the PREVIOUS bar's
-    # supertrend by more than this many percent of price.
-    provisional_enabled: bool = False
+    # provisional-boundary trading (plans/hestia-provisional-all-engines.md): act on a tick-built bar when the candle window is STILL incomplete at the
+    # boundary after Angel One's retries and the Fyers rescue (a net below the net). ON from 2026-10-08 (user's decision). The margin is the typical size of
+    # the last minute's wobble for GOLDPETAL: the mean high-low range of the final traded minute of a bar over history, as a percent of price, rounded up to
+    # 0.01% (plan section 7). The tick close must clear the PREVIOUS bar's supertrend by more than this to act. provisional_shadow (evaluate and log, never
+    # act) only has an effect when provisional_enabled is False.
+    provisional_enabled: bool = True
     provisional_shadow: bool = False
-    provisional_margin_pct: float = 0.71
+    provisional_margin_pct: float = 0.04
     # timing guards, minutes since the session's actual open
     no_exit_before_buffer_min: float = 1.0
     min_entry_buffer_min: float = 15.0

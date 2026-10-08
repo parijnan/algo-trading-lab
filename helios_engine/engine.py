@@ -11,10 +11,10 @@ for what is and is not ported, and why.
 Engine and host split, request lifecycle, ledger-wins reconciliation, the request-pending discipline, retry policy and the
 post-close guard are identical in spirit to Prometheus's — see that file's own docstring for the reasoning, not repeated here.
 
-Provisional-boundary trading (acting on a tick-built bar when a boundary's candle window is incomplete, with the previous-supertrend margin guard, a
-feed-staleness gate, reconciliation against the real bar and a session latch on disagreement) is built in but OFF by default: `provisional_enabled`,
-`provisional_shadow` (log only, no action) and the measured `provisional_margin_pct` are in `engine_configs.py`. See
-`plans/hestia-provisional-all-engines.md` for the rule, the measurement and the safety stance.
+Provisional-boundary trading (acting on a tick-built bar when a boundary's candle window is still incomplete after the retries and the Fyers rescue,
+with the previous-supertrend margin guard, a feed-staleness gate, reconciliation against the real bar and a session latch on disagreement) is ON
+from 2026-10-08: `provisional_enabled`, `provisional_shadow` (log only, no action, used when enabled is False) and `provisional_margin_pct` are in
+`engine_configs.py`. See `plans/hestia-provisional-all-engines.md` for the margin choice and the safety stance.
 """
 
 from __future__ import annotations
