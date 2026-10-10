@@ -67,22 +67,22 @@ When any individual strategy backtest is re-run:
 | `exit_reason` | From source trade summary |
 | `routing_outcome` | entered / skipped_no_signal / vix_routed_no_trade / vix_data_missing |
 
-## Current results (2020-01-01 to 2026-06-29 data cutoffs)
+## Current results (refreshed 2026-10-10)
 
 | Strategy | VIX Regime | Trades | Total P&L | Win Rate | Avg/trade |
 |---|---|---|---|---|---|
-| Artemis | < 16 | 166 | ₹1,44,989 | 71.1% | ₹873 |
+| Artemis | < 16 | 180 | ₹1,42,083 | 70.6% | ₹789 |
 | Athena | 16 – 25 | 123 | ₹1,52,155 | 61.0% | ₹1,237 |
 | Iris | > 25 | 58 | ₹25,589 | 60.3% | ₹441 |
-| **Total** | | **347** | **₹3,22,733** | **65.7%** | **₹930** |
+| **Total** | | **361** | **₹3,19,827** | **65.7%** | **₹886** |
 
 | Metric | Value |
 |---|---|
-| Max drawdown | ₹14,537 |
-| Calmar | 22.2 |
-| Expectancy | ₹930 per trade |
+| Max drawdown | ₹17,023 |
+| Calmar | 18.8 |
+| Expectancy | ₹886 per trade |
 
-Data cutoffs: Artemis Sensex → 2026-06-29 · Athena → 2026-06-08 · Iris → 2026-05-15.
+Last routed entry per strategy: Artemis Sensex → 2026-10-05 · Athena → 2026-06-08 · Iris → 2026-04-07. Athena and Iris were not re-run on 2026-10-10: every routing checkpoint from 2026-06-09 on had VIX between 11.1 and 14.6 (Artemis territory), so neither would have been routed a trade. Artemis rows after 2026-08-05 are hypothetical — Artemis has been disabled live since then (CAS).
 
 ## Data sources
 

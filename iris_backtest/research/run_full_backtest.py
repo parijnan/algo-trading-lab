@@ -20,6 +20,7 @@ import numpy as np
 from run_strategy_backtest import (
     build_flip_index, next_opposing_flip, _itm150_strike, _get_price_near,
 )
+from utils import read_option_csv
 from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP, SKIP_ENTRY_WINDOWS
 
 # ── Strategy params ───────────────────────────────────────────────────────────
@@ -209,8 +210,7 @@ def main():
         if cache_key not in option_cache:
             path = OPTIONS_PATH / expiry_str / f'{strike}{right}.csv'
             if path.exists():
-                df_opt = pd.read_csv(path, parse_dates=['datetime'])
-                df_opt = df_opt.set_index('datetime').sort_index()
+                df_opt = read_option_csv(path)
                 df_opt = df_opt[(df_opt['open'] > 0) & (df_opt['close'] > 0)]
                 option_cache[cache_key] = df_opt
             else:

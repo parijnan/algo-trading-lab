@@ -157,3 +157,20 @@ def compute_excursions(df_1min: pd.DataFrame, signals: pd.DataFrame,
         records.append(record)
 
     return pd.DataFrame(records)
+
+
+def read_option_csv(path) -> pd.DataFrame:
+    """
+    Read a Nifty option 1-min CSV, indexed by a tz-naive 'datetime'.
+
+    Two on-disk schemas exist: the older ICICI one (datetime column, tz-naive)
+    and the Fyers one from the 2026-09-22 expiry onward (time_stamp column,
+    +05:30 offset). Both are normalised to the former.
+    """
+    df = pd.read_csv(path)
+    if 'time_stamp' in df.columns:
+        df = df.rename(columns={'time_stamp': 'datetime'})
+    df['datetime'] = pd.to_datetime(df['datetime'], utc=False)
+    if df['datetime'].dt.tz is not None:
+        df['datetime'] = df['datetime'].dt.tz_localize(None)
+    return df.set_index('datetime').sort_index()

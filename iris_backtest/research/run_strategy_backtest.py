@@ -24,7 +24,7 @@ from datetime import timedelta
 from itertools import product
 from configs import (OUTPUT_DIR, OPTIONS_PATH, STRIKE_STEP,
                      LOT_SIZE, ST_FAST_PERIOD, ST_FAST_MULTIPLIER)
-from utils import load_nifty_1min, resample_ohlcv, compute_st
+from utils import load_nifty_1min, resample_ohlcv, compute_st, read_option_csv
 
 EXIT_TIME_STR       = '15:15'   # hard EOD cutoff — all open trades exit at this bar's open
 LAST_ENTRY_TIME_STR = '15:00'   # last valid entry — signals closing at/after 15:00 ignored
@@ -55,8 +55,7 @@ def _load_option_series(expiry_str: str, strike: int,
     path = OPTIONS_PATH / expiry_str / f'{strike}{right}.csv'
     if not path.exists():
         return None
-    df = pd.read_csv(path, parse_dates=['datetime'])
-    df = df.set_index('datetime').sort_index()
+    df = read_option_csv(path)
     df = df[(df['open'] > 0) & (df['close'] > 0)]
     return df[(df.index >= from_ts) & (df.index <= to_ts)] or None
 
@@ -66,8 +65,7 @@ def _load_option_series(expiry_str: str, strike: int,
     path = OPTIONS_PATH / expiry_str / f'{strike}{right}.csv'
     if not path.exists():
         return None
-    df = pd.read_csv(path, parse_dates=['datetime'])
-    df = df.set_index('datetime').sort_index()
+    df = read_option_csv(path)
     df = df[(df['open'] > 0) & (df['close'] > 0)]
     df = df[(df.index >= from_ts) & (df.index <= to_ts)]
     return df if not df.empty else None
@@ -217,8 +215,7 @@ def main():
             # Load the full day; we'll slice per trade
             path = OPTIONS_PATH / expiry_str / f'{strike}{right}.csv'
             if path.exists():
-                df_opt = pd.read_csv(path, parse_dates=['datetime'])
-                df_opt = df_opt.set_index('datetime').sort_index()
+                df_opt = read_option_csv(path)
                 df_opt = df_opt[(df_opt['open'] > 0) & (df_opt['close'] > 0)]
                 option_cache[cache_key] = df_opt
             else:

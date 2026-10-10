@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 from configs import OUTPUT_DIR, OPTIONS_PATH, LOT_SIZE, STRIKE_STEP
+from utils import read_option_csv
 
 SIM_HORIZONS   = [5, 15, 30]
 MIN_DTE        = 2      # minimum calendar days to expiry at signal time
@@ -52,8 +53,7 @@ def _load_option(expiry: date, strike: int, right: str) -> pd.DataFrame | None:
     path = OPTIONS_PATH / expiry.isoformat() / f'{strike}{right}.csv'
     if not path.exists():
         return None
-    df = pd.read_csv(path, parse_dates=['datetime'])
-    df = df.set_index('datetime').sort_index()
+    df = read_option_csv(path)
     return df[(df['open'] > 0) & (df['close'] > 0)]
 
 
