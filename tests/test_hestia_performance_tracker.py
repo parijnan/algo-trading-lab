@@ -253,7 +253,7 @@ def test_the_real_template_renders_with_the_real_config_and_a_synthetic_snapshot
     snap = snapshot()
     snap['engines']['helios'] = {'trades_csv': None, 'state': None, 'last_price': None}
     page = bt.render_html(bt.build_dataset(snap, cfg), tpl)
-    assert '__DATA__' not in page and '<title>Hestia Performance Tracker</title>' in page
+    assert '__DATA__' not in page and '<title>Hestia Dashboard</title>' in page
 
 
 def test_config_pins_the_live_starts_and_lot_values():

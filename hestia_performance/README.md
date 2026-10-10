@@ -1,4 +1,4 @@
-# Hestia performance tracker
+# Hestia Dashboard (the performance tracker)
 
 A running record of every live trade of the four engines Hestia hosts (Prometheus on the 2.5 multiplier, Selene, Helios, Typhon), built to inform scaling decisions. One private artifact, refreshed daily by the `hestia-performance-tracker` skill (`.claude/skills/hestia-performance-tracker/SKILL.md`, local, not tracked).
 

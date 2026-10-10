@@ -1,4 +1,4 @@
-<title>Hestia Performance Tracker</title>
+<title>Hestia Dashboard</title>
 <style>
 /* Layout: one column of cards. Headline number and key stats first, then the portfolio curve and daily bars, one card per engine (small multiples on a shared time axis), open positions, and the full trade table as the table view of every chart. */
 :root {
@@ -32,7 +32,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--font); font-
 .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
 h1 { font-size: 1.6rem; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
 h2 { font-size: 0.95rem; font-weight: 600; margin: 0; }
-.sub { color: var(--ink2); margin: 4px 0 0; max-width: 78ch; }
+.sub { color: var(--ink2); margin: 4px 0 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
 .cardhead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .cardhead .meta { color: var(--ink2); font-size: 0.8rem; }
@@ -91,12 +91,17 @@ select { font: inherit; font-size: 0.82rem; padding: 5px 8px; border-radius: 6px
 .notes b { color: var(--ink); }
 .warn { border: 1px solid var(--neg); border-radius: 8px; padding: 8px 12px; font-size: 0.82rem; }
 .empty { color: var(--ink2); padding: 8px 0; }
+tr.tot td { font-weight: 600; border-top: 1px solid var(--axis); }
+.expand { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.expand button { font: inherit; font-size: 0.82rem; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
+.expand button:hover { background: var(--wash); }
+.expand .meta { color: var(--ink2); font-size: 0.78rem; }
 @media (max-width: 520px) { .herovalue { font-size: 2.4rem; } .mini { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 
 <div class="wrap" id="app">
   <div>
-    <h1>Hestia Performance Tracker</h1>
+    <h1>Hestia Dashboard</h1>
     <p class="sub" id="sub"></p>
   </div>
 </div>
@@ -143,9 +148,12 @@ const DATA = __DATA__;
   const lin = (d0, d1, r0, r1) => v => r0 + (v - d0) * (r1 - r0) / ((d1 - d0) || 1);
   const ENGINES = Object.keys(DATA.engines);
   const NAME = e => DATA.engines[e].name;
+  const COMMODITY = { CRUDEOILM: 'Crude Oil', NATGASMINI: 'Natural Gas', SILVERMIC: 'Silver', GOLDPETAL: 'Gold' };       // what each engine trades, shown instead of the contract name
+  const WHAT = e => COMMODITY[DATA.engines[e].instrument] || DATA.engines[e].instrument;
 
   /* ---------- state ---------- */
-  const state = { scale: 'actual', filter: 'all' };
+  const state = { scale: 'actual', filter: 'all', tradesOpen: false };
+  const TRADES_SHOWN = 10;                                   // rows of the trade list shown until it is expanded
   const mult = () => state.scale === 'actual' ? null : state.scale;
   const val = o => state.scale === 'actual' ? o.rs_actual : o.rs_unit * state.scale;
   const cum = p => state.scale === 'actual' ? p.cum_actual : p.cum_unit * state.scale;
@@ -247,10 +255,10 @@ const DATA = __DATA__;
 
   function renderControls() {
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Units shown' });
-    [['actual', 'Actual units'], [2, '2 units'], [5, '5 units'], [10, '10 units']].forEach(([v, label]) => seg.append(h('button', { type: 'button', 'aria-pressed': String(state.scale === v), text: label, onclick: () => { state.scale = v; render(); } })));
+    [['actual', 'Actual units'], [1, '1 unit']].forEach(([v, label]) => seg.append(h('button', { type: 'button', 'aria-pressed': String(state.scale === v), text: label, onclick: () => { state.scale = v; render(); } })));
     return h('div', { class: 'card' }, h('div', { class: 'controls' }, h('span', { class: 'lbl', text: 'Show every rupee figure at' }), seg,
-      h('span', { class: 'hint', text: state.scale === 'actual' ? 'Real money at the units each trade actually ran. All four engines run 1 unit today.' :
-        'Hypothetical: the recorded points re-priced at ' + state.scale + ' units for every trade. It ignores the extra slippage and margin that size would bring, and the 10-unit cap.' })));
+      h('span', { class: 'hint', text: state.scale === 'actual' ? 'Real money at the units each trade actually ran.' :
+        'Every trade re-priced at 1 unit from its recorded points, so engines and days compare on one footing whatever size each trade actually ran at.' })));
   }
 
   function renderHero() {
@@ -297,11 +305,20 @@ const DATA = __DATA__;
     const openLine = pos ? h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px' },
       'Open: ' + pos.direction + ' since ' + dtstr(pos.entry_ts) + ' at ' + px(pos.entry_price) + ', now ' + rs(unreal(pos)) + (booked(pos) !== null ? ' (plus ' + rs(booked(pos)) + ' booked on lot 1)' : '')) : h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px', text: 'Flat.' });
     const card = h('div', { class: 'card' },
-      h('div', { class: 'cardhead' }, h('h2', {}, NAME(e) + ' ', h('span', { class: 'chip', text: c.instrument })), h('span', { class: 'meta', text: unitsText(e) + ', live since ' + dtstr(c.live_since) })),
+      h('div', { class: 'cardhead' }, h('h2', {}, NAME(e) + ' ', h('span', { class: 'chip', text: WHAT(e) })), h('span', { class: 'meta', text: unitsText(e) + ', live since ' + dtstr(c.live_since) })),
       mini, line, bars, openLine);
     if (!items.length) { line.append(h('div', { class: 'empty', text: 'No closed live trades yet.' })); }
     else queueMicrotask(() => { lineChart(line, pts_, domain(), 150, { aria: NAME(e) + ' cumulative realised profit and loss' }); barChart(bars, items, 100, { xlabels: true, aria: NAME(e) + ' profit and loss per trade' }); });
     return card;
+  }
+
+  function renderRealised() {
+    const row = (name, st, total) => h('tr', { class: total ? 'tot' : '' }, h('td', { text: name }), h('td', { class: 'n', text: String(st.trades) }), h('td', { class: 'n', text: rs(st.total) }),
+      h('td', { class: 'n', text: pct(st.win_rate) }), h('td', { class: 'n', text: rsPlain(st.max_drawdown) }));
+    const rows = ENGINES.map(e => row(NAME(e), stat(e), false)).concat([row('All engines', stat('portfolio'), true)]);
+    const head = ['Engine', 'Live trades', 'Realised', 'Win rate', 'Max drawdown'];
+    return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Realised by engine' }), h('span', { class: 'meta', text: 'closed live trades only, gross of charges; drawdown is peak to trough of the closed-trade curve' })),
+      h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, head.map((t, i) => h('th', { class: i >= 1 ? 'n' : '', text: t })))), h('tbody', {}, rows))));
   }
 
   function targetsText(p) { return p.targets.length ? p.targets.map(t => px(t.price) + (t.hit ? ' (hit)' : '')).join(' / ') : 'none'; }
@@ -322,33 +339,30 @@ const DATA = __DATA__;
     const sel = h('select', { id: 'engfilter', 'aria-label': 'Filter trades by engine', onchange: ev => { state.filter = ev.target.value; render(); } },
       h('option', { value: 'all', text: 'All engines' }), ...ENGINES.map(e => h('option', { value: e, text: NAME(e) })));
     sel.value = state.filter;
-    const list = DATA.trades.filter(t => state.filter === 'all' || t.engine === state.filter);
+    const all = DATA.trades.filter(t => state.filter === 'all' || t.engine === state.filter).sort((a, b) => a.exit_ts < b.exit_ts ? 1 : a.exit_ts > b.exit_ts ? -1 : 0);      // newest first
+    const list = state.tradesOpen ? all : all.slice(0, TRADES_SHOWN);
     const exitPx = t => t.exits.length === 1 ? px(t.exits[0].price) : t.exits.map(x => 'L' + x.lot + ' ' + px(x.price)).join(' · ');
     const rows = list.map(t => h('tr', {},
       h('td', { text: NAME(t.engine) + ' #' + t.trade_id }), h('td', {}, h('span', { class: 'gl', text: t.direction === 'bullish' ? '\u25B2' : '\u25BC' }), t.direction),
       h('td', { text: t.units + ' \u00D7 ' + (t.lots / t.units) }), h('td', { text: dtstr(t.entry_ts) }), h('td', { text: dtstr(t.exit_ts) }), h('td', { class: 'n', text: hrs(t.hold_h) }),
       h('td', { class: 'n', text: px(t.entry_price) }), h('td', { class: 'n wrap', text: exitPx(t) }), h('td', { class: 'wrap', text: t.reasons.replace('/', ' / ') }),
       h('td', { class: 'n', text: t.slippage === null ? '\u2013' : pts(t.slippage) }), h('td', { class: 'n', text: pts(t.pts) }), h('td', { class: 'n', text: rs(val(t)) })));
-    const head = ['Trade', 'Side', 'Units \u00D7 lots', 'Entered', 'Exited', 'Held', 'Entry', 'Exit', 'Reason', 'Slippage', 'Points', state.scale === 'actual' ? 'Profit / loss' : 'At ' + state.scale + ' units'];
+    const head = ['Trade', 'Side', 'Units \u00D7 lots', 'Entered', 'Exited', 'Held', 'Entry', 'Exit', 'Reason', 'Slippage', 'Points', state.scale === 'actual' ? 'Profit / loss' : 'At 1 unit'];
     return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Every live trade' }), h('div', { class: 'controls' }, h('span', { class: 'lbl', text: 'Show' }), sel)),
       h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, head.map((t, i) => h('th', { class: [5, 6, 7, 9, 10, 11].includes(i) ? 'n' : '', text: t })))), h('tbody', {}, rows))),
+      all.length > TRADES_SHOWN ? h('div', { class: 'expand' },
+        h('button', { type: 'button', 'aria-expanded': String(state.tradesOpen), text: state.tradesOpen ? 'Show only the latest ' + TRADES_SHOWN : 'Show all ' + all.length + ' trades', onclick: () => { state.tradesOpen = !state.tradesOpen; render(); } }),
+        h('span', { class: 'meta', text: state.tradesOpen ? 'all ' + all.length + ' trades, newest first' : 'latest ' + TRADES_SHOWN + ' of ' + all.length + ', newest first' })) : null,
       h('div', { class: 'hint', style: 'margin-top: 8px', text: 'Slippage is entry price against the signal bar close, in points; positive means the fill cost that much. Prometheus rows show both lots; points are summed over the lots.' }));
-  }
-
-  function renderNotes() {
-    const lines = ENGINES.map(e => h('div', {}, h('b', { text: NAME(e) + ': ' }), DATA.engines[e].note + (DATA.excluded[e] ? ' (' + DATA.excluded[e] + ' earlier trades left out.)' : '')));
-    return h('div', { class: 'card notes' }, h('h2', { text: 'What is counted' }), ...lines,
-      h('div', {}, h('b', { text: 'Profit and loss ' }), 'is the engine’s own recorded figure, in rupees per unit times the units the trade ran at. It is gross: brokerage, taxes and exchange charges are not subtracted. Drawdown is measured on closed trades only, from a starting value of zero.'),
-      h('div', {}, h('b', { text: 'Sample size. ' }), 'Every engine has days of live history, not months. Treat any rate or ratio here as a first read.'));
   }
 
   function render() {
     const app = document.getElementById('app');
     while (app.children.length > 1) app.removeChild(app.lastChild);
-    document.getElementById('sub').textContent = 'Live trades of the four engines hosted by Hestia, from the day each went live. Data as of ' + dtstr(DATA.as_of) + ' IST. Updated by the hestia-performance-tracker skill.';
+    document.getElementById('sub').textContent = 'Live trades of the four engines hosted by Hestia, from the day each went live. Data as of ' + dtstr(DATA.as_of) + '\u00A0IST.';      // one non-breaking space keeps IST on the same line as the time; the rest wraps naturally
     app.append(renderControls(), renderHero());
     if (DATA.warnings.length) app.append(h('div', { class: 'warn' }, h('b', { text: 'Check the data: ' }), DATA.warnings.join('; ')));
-    app.append(renderPortfolio(), h('div', { class: 'engines' }, ENGINES.map(engineCard)), renderOpen(), renderTrades(), renderNotes());
+    app.append(renderPortfolio(), h('div', { class: 'engines' }, ENGINES.map(engineCard)), renderRealised(), renderOpen(), renderTrades());
   }
   render();
   let lastW = window.innerWidth;

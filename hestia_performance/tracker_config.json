@@ -1,6 +1,6 @@
 {
   "artifact_url": "https://claude.ai/artifact/9PSoW83m9mr6yQZhnt1XpU",
-  "artifact_title": "Hestia Performance Tracker",
+  "artifact_title": "Hestia Dashboard",
   "engines": {
     "prometheus": {
       "name": "Prometheus",
