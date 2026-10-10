@@ -171,7 +171,11 @@ TRADING_HOSTS = {
                   # stays the primary source; Fyers is asked only after the whole Angel One burst has failed for a window, fills only minutes the engine
                   # lacks, and everything is recorded under hestia_data/shadow/. Stop it at once, no restart, with `touch hestia_data/flags/fyers_off.flag`
                   # (Angel One only); set mode back to 'shadow' to stop the fallback at the next start.
-                  CANDLE_SOURCE={'mode': 'rescue'}),
+                  # SMART (Phase 3, Fyers first) from 2026-10-10 on the owner's go-ahead ("we're actually switching to a better source with 2 layers of backup"):
+                  # CRUDEOILM (Prometheus) is asked of Fyers FIRST, a single pull 0.5 s after each minute closes; Angel One's burst, then the Fyers rescue, then the recovery
+                  # queue stand behind it. The other three instruments stay Angel One first with the rescue behind them. Back to the previous behaviour: mode 'rescue' (restart),
+                  # or at once with `touch hestia_data/flags/fyers_off.flag` (Angel One only, next poll, no restart).
+                  CANDLE_SOURCE={'mode': 'smart', 'smart_instruments': ('CRUDEOILM',)}),
 }
 
 
