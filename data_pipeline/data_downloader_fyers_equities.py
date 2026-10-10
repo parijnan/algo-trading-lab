@@ -73,7 +73,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_downloader_fyers_mcx import (  # noqa: E402
-    _get, get_expired_historical_data, FyersAuthExpiredError, FyersRateLimitError,
+    _get, get_expired_historical_data, FyersAuthExpiredError, FyersRateLimitError, FyersNetworkError,
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s',
@@ -116,6 +116,7 @@ OPTIONS_INSTRUMENTS = [
 
 HIST_CHUNK_DAYS = 90        # regular History API, same conservative margin as the expired-data endpoint
 EXPIRY_DATES_CHUNK_DAYS = 365
+MAX_NETWORK_FAILURES_PER_EXPIRY = 5   # contracts that failed on the network (after every retry) before this instrument is stopped for the run
 MIN_HIT_RATE = 0.5           # below this fraction of contracts-with-data, an expiry is left pending, not
                               # marked complete -- see module docstring: the AngelOne incident this
                               # script exists to avoid had a 1.6% hit rate marked "done" and never retried.
@@ -380,6 +381,7 @@ def download_options_for_symbol(display_name: str, underlying: str, master_name:
         logger.info(f'[{display_name}] {expiry_str}: {len(symbols)} contracts found.')
 
         saved = 0
+        network_failed = 0
         for symbol in symbols:
             strike, option_type = _strike_and_type(symbol)
             out_path = get_options_filepath(options_dir, expiry_str, strike, option_type)
@@ -390,13 +392,28 @@ def download_options_for_symbol(display_name: str, underlying: str, master_name:
                 df = get_expired_historical_data(symbol, start_str, expiry_str)
             except (FyersAuthExpiredError, FyersRateLimitError) as e:
                 logger.error(f'{type(e).__name__}: {e} -- stopping this instrument, resume later.')
+                if not dry_run:
+                    contracts_df.to_csv(tracking_file, index=False)       # keep the expiries already completed in this run
                 return
+            except FyersNetworkError as e:
+                network_failed += 1                                       # NOT an empty answer: the contract is retried on the next run, and the expiry is not marked complete
+                logger.error(f'[{display_name}] {expiry_str}: {symbol} failed on the network ({e}); left for the next run.')
+                if network_failed >= MAX_NETWORK_FAILURES_PER_EXPIRY:
+                    logger.error(f'[{display_name}] {network_failed} network failures in {expiry_str}; the connection looks down -- stopping this instrument, resume later.')
+                    if not dry_run:
+                        contracts_df.to_csv(tracking_file, index=False)
+                    return
+                continue
             if df.empty:
                 continue
             if not dry_run:
                 df.to_csv(out_path, index=False)
             saved += 1
 
+        if network_failed:
+            logger.error(f'[{display_name}] {expiry_str}: {network_failed} contract(s) failed on the network, so the expiry is NOT marked complete; '
+                         f'a re-run downloads only those (files already saved are skipped).')
+            continue
         hit_rate = saved / len(symbols)
         if hit_rate < MIN_HIT_RATE:
             logger.error(f'[{display_name}] {expiry_str}: only {saved}/{len(symbols)} contracts '
@@ -451,6 +468,11 @@ def main():
     except FyersAuthExpiredError as e:
         logger.error(f'{e}')
         logger.error('Fyers token expired -- refresh via the manual OAuth flow, then re-run '
+                     '(everything already downloaded is skipped, this resumes cleanly).')
+        raise SystemExit(1)
+    except FyersNetworkError as e:
+        logger.error(f'{e}')
+        logger.error('The network kept failing after every retry -- check the connection and re-run '
                      '(everything already downloaded is skipped, this resumes cleanly).')
         raise SystemExit(1)
 

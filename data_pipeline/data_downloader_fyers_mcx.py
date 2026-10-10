@@ -53,6 +53,7 @@ Usage (run from repo root):
 """
 import argparse
 import csv
+import http.client
 import json
 import logging
 import sys
@@ -144,6 +145,18 @@ class FyersRateLimitError(RuntimeError):
     a per-chunk data error."""
 
 
+class FyersNetworkError(RuntimeError):
+    """A request kept failing for a TRANSIENT network reason (socket read timeout, dropped connection, truncated body, HTTP 5xx) through every retry
+    in `_get`. Added 2026-10-10 after a read timeout in the middle of a Sensex expiry crashed the whole equities download with a bare TimeoutError.
+    Deliberately distinct from 'no data': a caller must never treat it as an empty answer, because that would let a network blip look like an
+    untraded contract and an expiry be marked complete with real contracts missing."""
+
+
+NETWORK_RETRIES = 3            # retries after the first attempt, for transient network failures only (a 429 or an auth refusal is never retried)
+NETWORK_BACKOFF_S = 3.0        # first wait; it doubles on each retry (3 s, 6 s, 12 s)
+_TRANSIENT_ERRORS = (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError)   # HTTPError is a URLError: handled first, below
+
+
 # ---------------------------------------------------------------------------
 # Auth / low-level HTTP
 # ---------------------------------------------------------------------------
@@ -180,21 +193,36 @@ def _check_fatal(body: dict, context: str) -> None:
 
 
 def _get(url: str, params: dict) -> dict:
-    _rate_limiter.wait()
     full_url = f'{url}?{urllib.parse.urlencode(params)}'
-    req = urllib.request.Request(full_url, headers={'Authorization': _auth_header(), 'User-Agent': _UA})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise FyersRateLimitError(f'HTTP 429 (rate limited) for {full_url}')
-        raw = e.read().decode()
+    last = None
+    for attempt in range(NETWORK_RETRIES + 1):
+        if attempt:
+            time.sleep(NETWORK_BACKOFF_S * 2 ** (attempt - 1))
+        _rate_limiter.wait()
+        req = urllib.request.Request(full_url, headers={'Authorization': _auth_header(), 'User-Agent': _UA})
         try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.error(f'HTTP {e.code} for {full_url}: {raw}')
-            raise
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                raise FyersRateLimitError(f'HTTP 429 (rate limited) for {full_url}')
+            raw = e.read().decode()
+            if e.code >= 500:
+                last = f'HTTP {e.code}'
+            else:
+                try:
+                    body = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.error(f'HTTP {e.code} for {full_url}: {raw}')
+                    raise
+                break
+        except _TRANSIENT_ERRORS as e:
+            last = type(e).__name__
+        logger.warning(f'transient network failure ({last}) on attempt {attempt + 1}/{NETWORK_RETRIES + 1}, '
+                       + ('retrying' if attempt < NETWORK_RETRIES else 'giving up'))
+    else:
+        raise FyersNetworkError(f'{last} after {NETWORK_RETRIES + 1} attempts for {url}')
     _check_fatal(body, full_url)
     return body
 
