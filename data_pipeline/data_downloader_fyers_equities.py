@@ -60,6 +60,7 @@ fails with "token has expired".
 """
 import argparse
 import json
+import statistics
 import logging
 import os
 import re
@@ -116,6 +117,8 @@ OPTIONS_INSTRUMENTS = [
 
 HIST_CHUNK_DAYS = 90        # regular History API, same conservative margin as the expired-data endpoint
 EXPIRY_DATES_CHUNK_DAYS = 365
+GUARD_REFERENCE_EXPIRIES = 3     # how many earlier expiries a listing is compared with
+GUARD_MIN_FRACTION = 0.5         # a listing smaller than this fraction of the references' median size is treated as truncated by Fyers
 MAX_NETWORK_FAILURES_PER_EXPIRY = 5   # contracts that failed on the network (after every retry) before this instrument is stopped for the run
 MIN_HIT_RATE = 0.5           # below this fraction of contracts-with-data, an expiry is left pending, not
                               # marked complete -- see module docstring: the AngelOne incident this
@@ -348,6 +351,43 @@ def get_options_filepath(options_dir: Path, expiry_date: str, strike: int, optio
     return expiry_dir / f'{strike}{option_type}.csv'
 
 
+def _strike_step(strikes: list) -> int:
+    gaps = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
+    return statistics.mode(gaps) if gaps else 0
+
+
+def expand_truncated_listing(display_name: str, anchor_symbol: str, expiry_ts, symbols: list, contracts_df: pd.DataFrame) -> list:
+    """Fyers's expired-contract LISTING for an expiry can be a fraction of the real chain while its history endpoint still serves every real contract
+    (2026-09-24, a Sensex monthly expiry that fell on a Thursday: 12 contracts listed, 11 saved, against about 390 for its neighbours; found by the owner,
+    confirmed by requesting unlisted strikes directly, each of which returned thousands of candles). The downloader's hit-rate floor could not see it
+    because 11 of the 12 listed contracts had data. So the listing is compared with the three expiries before it: if it is under GUARD_MIN_FRACTION of their
+    median size, the candidate set becomes the strike grid those expiries show (their lowest to highest strike, their most common step, calls and puts) in the
+    SAME symbol format as the truncated listing, plus whatever the listing itself held. Strikes that never traded return nothing, which is harmless.
+    Returns `symbols` unchanged whenever the listing looks normal or there is nothing to compare with."""
+    earlier = contracts_df[contracts_df['expiry_date'] < expiry_ts].sort_values('expiry_date', ascending=False).head(GUARD_REFERENCE_EXPIRIES)
+    refs = []
+    for ts in earlier['expiry_date']:
+        listing = get_expired_option_contracts(anchor_symbol, ts.strftime('%Y-%m-%d'))
+        if listing:
+            refs.append(listing)
+    if not refs:
+        return symbols
+    median_size = statistics.median(len(r) for r in refs)
+    if len(symbols) >= GUARD_MIN_FRACTION * median_size:
+        return symbols
+    strikes = sorted({_strike_and_type(s)[0] for r in refs for s in r})
+    step = _strike_step(sorted({_strike_and_type(s)[0] for s in max(refs, key=len)}))
+    template = next((s[:-2 - len(str(_strike_and_type(s)[0]))] for s in symbols if s[:-2 - len(str(_strike_and_type(s)[0]))] + str(_strike_and_type(s)[0]) + s[-2:] == s), None)
+    if not strikes or not step or template is None:
+        logger.warning(f'[{display_name}] {expiry_ts:%Y-%m-%d}: the listing looks truncated ({len(symbols)} contracts against a median of {median_size:g}) but a strike grid could not be built; using it as is.')
+        return symbols
+    grid = [f'{template}{k}{t}' for k in range(strikes[0], strikes[-1] + 1, step) for t in ('CE', 'PE')]
+    out = grid + [s for s in symbols if s not in set(grid)]
+    logger.warning(f'[{display_name}] {expiry_ts:%Y-%m-%d}: Fyers listed only {len(symbols)} contracts against a median of {median_size:g} for the previous '
+                   f'{len(refs)} expiries -- treating the listing as truncated and requesting the full strike grid instead ({strikes[0]}-{strikes[-1]} step {step}, {len(out)} candidates).')
+    return out
+
+
 def download_options_for_symbol(display_name: str, underlying: str, master_name: str,
                                 options_dir: Path, tracking_file: Path, dry_run: bool = False) -> None:
     if not tracking_file.exists():
@@ -379,6 +419,7 @@ def download_options_for_symbol(display_name: str, underlying: str, master_name:
                            f'mismatch) -- leaving pending.')
             continue
         logger.info(f'[{display_name}] {expiry_str}: {len(symbols)} contracts found.')
+        symbols = expand_truncated_listing(display_name, anchor_symbol, expiry_ts, symbols, contracts_df)
 
         saved = 0
         network_failed = 0
