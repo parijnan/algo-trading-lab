@@ -910,3 +910,22 @@ def test_the_session_report_mentions_rescues_only_when_there_were_some(hestias):
     h.data.rescue = Rescue(80, 4)
     assert 'filled after Angel One failed, 4 Fyers attempt(s) could not help' in build_session_report(h, h.now, [])
     h.close()
+
+
+def test_the_session_report_mentions_fyers_first_windows_only_when_there_were_some(hestias):
+    class Smart:
+        def __init__(self, served, fell_back):
+            self.c = (served, fell_back)
+
+        def summary(self):
+            return self.c
+    h = hestias([('a', factory(act=opener(lots=2)))])
+    go(h)
+    assert 'served by Fyers' not in build_session_report(h, h.now, [])
+    h.data.smart = Smart(0, 0)
+    assert 'served by Fyers' not in build_session_report(h, h.now, [])
+    h.data.smart = Smart(2217, 0)
+    assert 'Candle windows served by Fyers first: 2217\n' in build_session_report(h, h.now, [])
+    h.data.smart = Smart(2200, 17)
+    assert 'Candle windows served by Fyers first: 2200, 17 fell back to Angel One' in build_session_report(h, h.now, [])
+    h.close()

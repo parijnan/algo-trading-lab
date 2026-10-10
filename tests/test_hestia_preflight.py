@@ -190,7 +190,7 @@ def test_a_fresh_token_is_reported_with_its_fingerprint_and_never_its_text(cfg):
 
 
 def test_an_unknown_candle_source_mode_fails_the_preflight(cfg):
-    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='smart')
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='bogus')
     assert by_name(pf.run_checks(cfg, NOW))['candle source'].status == pf.FAIL
 
 
@@ -209,3 +209,18 @@ def test_a_usable_token_line_says_what_the_engines_see_in_each_mode(cfg):
     cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='rescue')
     d = by_name(pf.run_checks(cfg, NOW))['fyers token'].detail
     assert 'only Angel One' not in d and 'whole Angel One burst has failed' in d
+
+
+def test_smart_mode_is_described_with_its_instruments_settle_time_and_fallbacks(cfg):
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='smart', smart_instruments=('CRUDEOILM',), smart_settle_s=1.5)
+    st = by_name(pf.run_checks(cfg, NOW))
+    d = st['candle source'].detail
+    assert st['candle source'].status == pf.OK and d.startswith('smart: Fyers FIRST for CRUDEOILM') and '1.5s after it closes' in d and "Angel One's burst" in d
+    assert 'the smart instruments fall back to Angel One' in st['fyers token'].detail
+
+
+def test_a_usable_token_line_in_smart_mode_says_fyers_is_first(cfg):
+    _fresh_token(cfg.FYERS_TOKEN_FILE)
+    cfg.CANDLE_SOURCE = dict(cfg.CANDLE_SOURCE, mode='smart')
+    d = by_name(pf.run_checks(cfg, NOW))['fyers token'].detail
+    assert 'Fyers first for the smart instruments' in d and 'only Angel One' not in d

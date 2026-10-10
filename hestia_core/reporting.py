@@ -254,6 +254,11 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
         lines.append(DIVIDER)
         lines.append('')
 
+    smart = getattr(getattr(core, 'data', None), 'smart', None)
+    if smart is not None:
+        served, fell_back = smart.summary()
+        if served or fell_back:
+            lines.append(f'Candle windows served by Fyers first: {served}' + (f', {fell_back} fell back to Angel One' if fell_back else ''))
     rescue = getattr(getattr(core, 'data', None), 'rescue', None)
     if rescue is not None:
         ok, failed = rescue.summary()

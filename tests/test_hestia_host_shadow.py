@@ -21,7 +21,7 @@ def test_the_committed_default_is_angel_only_and_builds_no_fyers_code():
 
 
 def test_an_unknown_mode_is_an_error_not_a_silent_fallback():
-    for mode in ('smart', 'Shadow', 'Rescue', ''):
+    for mode in ('bogus', 'Shadow', 'Rescue', 'Smart', ''):
         with pytest.raises(ValueError, match='not one of'):
             fs.build_shadow(types.SimpleNamespace(CANDLE_SOURCE=dict(mode=mode)))
 
@@ -113,3 +113,46 @@ def test_shadow_mode_hands_live_data_no_rescue(tmp_path):
     (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()
     r = run.join()
     assert r.core.data.rescue is None and r.core.data.shadow is rec
+
+
+class SmartDouble:
+    def __init__(self):
+        self.cfg = type('C', (), {'instruments': ('XX',), 'settle_s': 1.0})()
+        self.calls = []
+
+    def handles(self, instrument):
+        return instrument in self.cfg.instruments
+
+    def fetch_window(self, *a, **k):
+        self.calls.append(a)
+        return None
+
+    def summary(self):
+        return (0, 0)
+
+
+def test_a_session_in_smart_mode_announces_it_and_hands_the_smart_source_and_rescue_to_live_data(tmp_path):
+    rec, rescue, smart = Recorder(), RescueDouble(), SmartDouble()
+    run = HostRun(tmp_path, ENGINES, {'a': lambda: RecEngine('a')}, CANDLE_SOURCE=dict(mode='smart', instruments=('XX', 'YY'), smart_instruments=('XX',)))
+    run.deps.make_shadow = lambda cfg: rec
+    run.deps.make_rescue = lambda cfg, shadow: rescue if shadow is rec else None
+    run.deps.make_smart = lambda cfg, shadow: smart if shadow is rec else None
+    run.start()
+    try:
+        wait_until(lambda: any('SMART ON' in t for t in run.texts()), what='the SMART ON announcement')
+    finally:
+        (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()          # always stop the host, or a failed wait leaves a runaway thread that hangs pytest
+    r = run.join()
+    assert r.core.data.smart is smart and r.core.data.rescue is rescue and r.core.data.shadow is rec
+    assert any('Fyers candle SMART ON for XX' in t and 'Fyers first' in t and '1s after it closes' in t and 'Angel One first with Fyers rescue' in t for t in run.texts())
+    assert not any('RESCUE ON' in t or 'shadow ON' in t for t in run.texts()), 'one announcement, the strongest one'
+
+
+def test_other_modes_hand_live_data_no_smart_source(tmp_path):
+    rec = Recorder()
+    run = HostRun(tmp_path, ENGINES, {'a': lambda: RecEngine('a')}, CANDLE_SOURCE=dict(mode='shadow', instruments=('XX',)))
+    run.deps.make_shadow = lambda cfg: rec
+    run.start()
+    wait_until(lambda: rec.begins, what='the first shadow tick')
+    (run.cfg.FLAG_DIR / 'hestia_active.flag').unlink()
+    assert run.join().core.data.smart is None

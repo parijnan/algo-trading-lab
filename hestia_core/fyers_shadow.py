@@ -20,6 +20,11 @@ Phase 2 ('rescue' mode, `FyersRescue` below) adds ONE thing on top of the record
 that window, and its answer is used ONLY for minutes the engine does not already have (never overwriting an Angel One minute), only if it contains the
 just-closed minute, and only once that minute has settled (Fyers's first-seen value of a minute is provisional: on 2026-10-05 22%-82% of first-seen
 minutes differed from the finalized ones). Every rescue is logged and recorded in `rescues_<date>.csv`. Nothing else in the live path changes.
+Phase 3 ('smart' mode, `FyersSmart` below) makes Fyers the FIRST source for a configured subset of instruments (the pilot is CRUDEOILM): each minute's poll window
+is asked of Fyers, once the just-closed minute has settled (default 0.5 s after it closed, the owner's call: the 2026-10-05 settle probe found 97.5% of snapshots final at +0.5 s and every one from +0.8 s),
+and only when Fyers cannot answer (no token, an error, a timeout, a lagging answer) does the poll fall through to the unchanged Angel One burst, whose own
+rescue fallback and recovery queue stay behind it. The Fyers answer is filtered exactly like a rescue (only minutes the engine lacks, never the forming minute,
+zero-volume placeholders dropped so the series keeps Angel One's "an untraded minute is absent" meaning). Every Fyers-first window is recorded in `smart_<date>.csv`.
 The token is read from hestia_data/fyers_token.json by `TokenGate` (mode 600, file mtime and `issued_at` both today in IST, now before
 `expires_at`, no kill-switch flag, breaker not tripped) and is never logged or written anywhere.
 """
@@ -416,7 +421,7 @@ class ShadowRecorder:
             log.exception(message)
 
 
-MODES = ('angel', 'shadow', 'rescue')            # smart arrives with Phase 3
+MODES = ('angel', 'shadow', 'rescue', 'smart')
 
 
 @dataclass
@@ -518,8 +523,117 @@ class FyersRescue:
             log.exception('fyers rescue record failed')
 
 
+@dataclass
+class SmartConfig:
+    instruments: Sequence[str] = ('CRUDEOILM',)  # the Fyers-first pilot; every other instrument stays Angel One first (with rescue)
+    settle_s: float = 0.5                        # seconds after a minute closes before it is trusted (owner's call): measured 54% final at +0.1 s, 95% at +0.4 s, 97.5% at +0.5 s, 100% from +0.8 s (n=40)
+    retry_s: float = 0.5                         # between pulls while the just-closed minute has not appeared in the answer yet
+    max_wait_s: float = 3.0                      # give up on Fyers this long after the minute closed (Angel One's own median is 2.75 s, so waiting longer buys nothing)
+    timeout_s: float = 3.0
+
+
+SMART_COLS = ['ts', 'token', 'symbol', 'win_from', 'win_to', 'expected_minute', 'kind', 'served', 'attempts', 'after_s', 'latency_ms',
+              'minutes_returned', 'minutes_used', 'note']
+
+
+class FyersSmart:
+    """Phase 3: `fetch_window` is asked BEFORE the Angel One burst for the instruments in `cfg.instruments`. It returns a frame of the window's closed
+    minutes the engine does NOT already have (possibly empty: the answer was complete and nothing was new), or None when Fyers could not give a
+    trustworthy answer, in which case the caller runs the Angel One burst exactly as it always did. It never raises. A Fyers answer is trusted only
+    if it contains the just-closed minute (a lagging Fyers is a failure, not a quiet market) and the minute has settled `settle_s` after it closed;
+    a rate limit is never retried and an authentication refusal trips the shared breaker until the token file changes."""
+
+    def __init__(self, out_dir: os.PathLike, gate: TokenGate, client: FyersClient, config: Optional[SmartConfig] = None,
+                 clock: Callable[[], datetime] = datetime.now, sleep: Callable[[float], None] = time.sleep):
+        self.dir = Path(out_dir)
+        self.gate, self.client, self.cfg = gate, client, config or SmartConfig()
+        self._clock, self._sleep = clock, sleep
+        self._lock = threading.Lock()
+        self.counts = {'served': 0, 'fallback': 0}
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def handles(self, instrument: str) -> bool:
+        return instrument in self.cfg.instruments
+
+    def summary(self) -> Tuple[int, int]:
+        with self._lock:
+            return self.counts['served'], self.counts['fallback']
+
+    def fetch_window(self, ref, win_from: datetime, win_to: datetime, known: Iterable = ()) -> Optional[pd.DataFrame]:
+        try:
+            if not self.handles(ref.instrument):
+                return None
+            return self._fetch(ref, win_from, win_to, set(known))
+        except Exception:                                           # noqa: BLE001
+            log.exception('fyers smart fetch failed')
+            self._count('fallback')
+            return None
+
+    def _fetch(self, ref, win_from: datetime, win_to: datetime, known: set) -> Optional[pd.DataFrame]:
+        symbol = fyers_symbol(ref.instrument, ref.expiry)
+        window_end = pd.Timestamp(win_to).floor('min')              # the just-closed minute is window_end - 1 min, and it closed AT window_end
+        expected = window_end - pd.Timedelta(minutes=1)
+        state = self.gate.check()
+        if not state.ok:
+            self._finish(ref, symbol, win_from, win_to, expected, 'gate', False, 0, None, 0.0, 0, 0, state.reason)
+            return None
+        wait = self.cfg.settle_s - (pd.Timestamp(self._clock()) - window_end).total_seconds()
+        if wait > 0:
+            self._sleep(wait)
+        attempts, res, note = 0, None, ''
+        while True:
+            attempts += 1
+            res = self.client.minutes(symbol, win_from, win_to, state.auth)
+            note = res.detail
+            if res.kind == 'auth':
+                self.gate.trip('fyers refused the token')
+                break
+            if res.kind in ('ok', 'empty') and res.frame is not None:
+                closed = res.frame[res.frame['time_stamp'] < window_end]
+                if (closed['time_stamp'] == expected).any():
+                    new = closed[~closed['time_stamp'].isin(known) & (closed['volume'] > 0)]
+                    out = new[MINUTE_COLS].reset_index(drop=True)
+                    after = (pd.Timestamp(self._clock()) - window_end).total_seconds()
+                    self._finish(ref, symbol, win_from, win_to, expected, 'ok', True, attempts, after, res.latency_ms, len(closed), len(out), '')
+                    return out
+                note = 'the just-closed minute is not in the Fyers answer'
+                if (pd.Timestamp(self._clock()) - window_end).total_seconds() + self.cfg.retry_s <= self.cfg.max_wait_s:
+                    self._sleep(self.cfg.retry_s)
+                    continue
+                res = FetchResult('stale', res.frame, res.latency_ms, note)
+            break                                                   # rate, timeout, http, error, symbol, stale, auth: Angel One takes over now
+        after = (pd.Timestamp(self._clock()) - window_end).total_seconds()
+        self._finish(ref, symbol, win_from, win_to, expected, res.kind, False, attempts, after, res.latency_ms, 0, 0, note)
+        return None
+
+    def _finish(self, ref, symbol, win_from, win_to, expected, kind, served, attempts, after_s, latency_ms, returned, used, note) -> None:
+        self._count('served' if served else 'fallback')
+        if not served and kind != 'gate':
+            log.info('fyers smart: %s window %s->%s not served (%s); Angel One takes over', symbol, f'{win_from:%H:%M}', f'{win_to:%H:%M}', note or kind)
+        self._record(ref, symbol, win_from, win_to, expected, kind, served, attempts, after_s, latency_ms, returned, used, note)
+
+    def _count(self, key: str) -> None:
+        with self._lock:
+            self.counts[key] += 1
+
+    def _record(self, ref, symbol, win_from, win_to, expected, kind, served, attempts, after_s, latency_ms, returned, used, note) -> None:
+        try:
+            with self._lock:
+                path = self.dir / f'smart_{win_to:%Y-%m-%d}.csv'
+                exists = path.exists()
+                with open(path, 'a', newline='') as f:
+                    w = csv.writer(f)
+                    if not exists:
+                        w.writerow(SMART_COLS)
+                    w.writerow([self._clock().isoformat(timespec='milliseconds'), ref.token, symbol, win_from.isoformat(timespec='minutes'),
+                                win_to.isoformat(timespec='minutes'), pd.Timestamp(expected).isoformat(), kind, int(served), attempts,
+                                '' if after_s is None else round(after_s, 3), round(latency_ms, 1), returned, used, note])
+        except Exception:                                           # noqa: BLE001
+            log.exception('fyers smart record failed')
+
+
 def build_shadow(cfg) -> Optional[ShadowRecorder]:
-    """The recorder for the configured `CANDLE_SOURCE` mode ('shadow' and 'rescue' both record), or None when the mode is 'angel' (the default:
+    """The recorder for the configured `CANDLE_SOURCE` mode ('shadow', 'rescue' and 'smart' all record), or None when the mode is 'angel' (the default:
     no Fyers code runs at all). An unknown mode is an error at start-up, never a silent fallback."""
     cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
     mode = cs.get('mode', 'angel')
@@ -533,10 +647,22 @@ def build_shadow(cfg) -> Optional[ShadowRecorder]:
 
 
 def build_rescue(cfg, shadow: Optional[ShadowRecorder]) -> Optional[FyersRescue]:
-    """The rescue fallback, only in 'rescue' mode; it shares the recorder's token gate (so one authentication refusal stops both) and client."""
+    """The rescue fallback, in 'rescue' and 'smart' mode (in smart mode it is the second chance after the Angel One burst has failed behind a Fyers-first
+    miss); it shares the recorder's token gate (so one authentication refusal stops both) and client."""
     cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
-    if cs.get('mode', 'angel') != 'rescue' or shadow is None:
+    if cs.get('mode', 'angel') not in ('rescue', 'smart') or shadow is None:
         return None
     rcfg = RescueConfig(instruments=tuple(cs.get('instruments', RescueConfig.instruments)), after_attempts=int(cs.get('rescue_after_attempts', 5)),
                         settle_s=float(cs.get('settle_s', 0.0)), timeout_s=cs.get('timeout_s', 3.0))
     return FyersRescue(cfg.SHADOW_DIR, shadow.gate, shadow.client, rcfg)
+
+
+def build_smart(cfg, shadow: Optional[ShadowRecorder]) -> Optional[FyersSmart]:
+    """The Fyers-first source, only in 'smart' mode and only for `smart_instruments`; it shares the recorder's token gate and client."""
+    cs = dict(getattr(cfg, 'CANDLE_SOURCE', None) or {})
+    if cs.get('mode', 'angel') != 'smart' or shadow is None:
+        return None
+    scfg = SmartConfig(instruments=tuple(cs.get('smart_instruments', SmartConfig.instruments)), settle_s=float(cs.get('smart_settle_s', SmartConfig.settle_s)),
+                       retry_s=float(cs.get('smart_retry_s', SmartConfig.retry_s)), max_wait_s=float(cs.get('smart_max_wait_s', SmartConfig.max_wait_s)),
+                       timeout_s=cs.get('timeout_s', 3.0))
+    return FyersSmart(cfg.SHADOW_DIR, shadow.gate, shadow.client, scfg)

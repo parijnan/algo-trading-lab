@@ -208,4 +208,4 @@ def test_rescue_mode_also_records_and_an_unknown_mode_is_still_an_error(tmp_path
     finally:
         sh.close()
     with pytest.raises(ValueError, match='not one of'):
-        fs.build_shadow(cfg_for(tmp_path, 'smart'))
+        fs.build_shadow(cfg_for(tmp_path, 'bogus'))

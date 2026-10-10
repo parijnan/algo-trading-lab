@@ -178,6 +178,9 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
             detail = 'angel only: no Fyers code runs'
         elif mode == 'shadow':
             detail = f"shadow: Fyers queried in parallel for {', '.join(cs.get('instruments', []))}, recorded to {cfg.SHADOW_DIR}; no decision uses it"
+        elif mode == 'smart':
+            detail = (f"smart: Fyers FIRST for {', '.join(cs.get('smart_instruments', ['CRUDEOILM']))} (minute trusted {cs.get('smart_settle_s', 0.5)}s after it closes, "
+                      f"Angel One's burst if Fyers cannot answer); the other instruments Angel One first with Fyers rescue behind it; also recording to {cfg.SHADOW_DIR}")
         else:
             detail = (f"rescue: Angel One first; Fyers asked only after {cs.get('rescue_after_attempts', 5)} failed Angel One attempt(s), "
                       f"minute must have settled {cs.get('settle_s', 0.0)}s, fills only missing minutes; also recording to {cfg.SHADOW_DIR}")
@@ -188,12 +191,13 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
                              clock=lambda: now.astimezone(ist) if now.tzinfo else now.replace(tzinfo=ist))
             st = gate.check()
             if st.ok:
-                seen = ('the engines see only Angel One' if mode != 'rescue'
-                        else 'Angel One first; Fyers fills a window only after the whole Angel One burst has failed')
+                seen = ('the engines see only Angel One' if mode not in ('rescue', 'smart')
+                        else 'Angel One first; Fyers fills a window only after the whole Angel One burst has failed' if mode == 'rescue'
+                        else 'Fyers first for the smart instruments, Angel One behind it')
                 add('fyers token', OK, f'usable (fingerprint {st.fingerprint}); {seen}')
             else:
                 add('fyers token', OK if mode == 'angel' else WARN,
-                    f'not usable: {st.reason}' + ('' if mode == 'angel' else f"; {mode} would record nothing and rescue nothing today"))
+                    f'not usable: {st.reason}' + ('' if mode == 'angel' else f"; {mode} would record nothing and rescue nothing today" + ('; the smart instruments fall back to Angel One' if mode == 'smart' else '')))
 
     # ---- who else holds the account ----------------------------------------------------------------------------------------
     for label, pid_file in getattr(cfg, 'LEGACY_PID_FILES', {}).items():

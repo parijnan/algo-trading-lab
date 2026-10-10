@@ -67,7 +67,7 @@ LIVE_DATA = dict(
 # ---- the candle source (plans/hestia-fyers-candle-source.md) ---------------------------------------------------------------
 # 'angel' (the default): Angel One only, no Fyers code runs. 'shadow' (Phase 1): Angel One stays the only source any engine sees; Fyers is
 # queried in parallel and the comparison is RECORDED under hestia_data/shadow/. 'rescue' (Phase 2): the same recording, plus Fyers fills a window
-# Angel One failed to give (smart mode arrives with Phase 3). A host or
+# Angel One failed to give (smart mode, Phase 3, makes Fyers the first source for `smart_instruments`). A host or
 # hestia_local.py overrides keys of this dict through its own CANDLE_SOURCE entry.
 FYERS_TOKEN_FILE = HESTIA_DIR / 'fyers_token.json'      # written daily at 06:35 IST by the laptop job (plans/fyers-auto-token.md)
 FYERS_OFF_FLAG = FLAG_DIR / 'fyers_off.flag'            # touch it to stop every Fyers call at the next poll, no restart needed
@@ -78,6 +78,9 @@ CANDLE_SOURCE = dict(
     timeout_s=3.0,                                      # one Fyers call; a slow Fyers must never hold a bar boundary
     retry_s=1.0,                                        # between attempts while the just-closed minute has not appeared
     max_wait_s=6.0,                                     # stop waiting for it this long after the tick
+    smart_instruments=('CRUDEOILM',),                   # 'smart' mode only: Fyers is asked FIRST for these (the pilot, plans/hestia-fyers-candle-source.md section 7d)
+    smart_settle_s=0.5,                                 # a minute is trusted this long after it closes (owner's call 2026-10-10; measured: final in 97.5% of snapshots at +0.5 s, 100% from +0.8 s)
+    smart_max_wait_s=3.0,                               # give up on Fyers this long after the minute closed and let Angel One's burst run
     # 'rescue' mode only (Phase 2): Fyers is asked for a window after this many failed Angel One attempts (5 = only after the whole burst has failed;
     # lower values rescue sooner and stop the Angel One attempts early), and only once the just-closed minute is this many seconds old, because Fyers's
     # first-seen value of a minute is provisional (measured 2026-10-05 with research/fyers_mcx_validation/settle_probe.py: 54% final at +0.1 s, 90% at +0.3 s,
