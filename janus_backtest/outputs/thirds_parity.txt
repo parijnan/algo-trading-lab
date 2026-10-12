@@ -1,0 +1,11 @@
+Parity (first entry per setup per session, A0, adverse order): 8379 setup-sessions, 8114 with an entry in both, 97.9% same lot-1 outcome among those.
+engine    T1  none  open  stop   All
+feas                                
+T1      2754   184    30    79  3047
+none      30     0     8    32    70
+open       0     5  1421     0  1426
+stop      50     6    10  3770  3836
+All     2834   195  1469  3881  8379
+Both entered, different outcome: 169; of these the entry bars differ in 116, feasibility entry bar is the first tradable minute (bar 1) in 119, feasibility stopped on the entry bar in 51.
+Residual after removing those two causes: 10 different outcomes.
+Entry in only one of the two: 265; of these the feasibility entry is bar 1 in 194, the engine entry is bar 1 in 1; other: 70.

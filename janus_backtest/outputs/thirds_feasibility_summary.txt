@@ -1,0 +1,50 @@
+Thirds / trail / re-entry feasibility (descriptive, no costs; setups measured independently, first entry per setup per session)
+TRAIL_SAME_BAR=test
+
+CRUDEOILM: 1754 entries, 26 skipped (fill already at or past T1)
+SILVERMIC: 2490 entries, 59 skipped (fill already at or past T1)
+GOLDPETAL: 2297 entries, 76 skipped (fill already at or past T1)
+NATGASMINI: 1768 entries, 32 skipped (fill already at or past T1)
+
+Geometry (median; rr = reward in units of the stop distance)
+                     risk_%_of_price  rr_T1  rr_T2  rr_T3  deep_arm_%  entry_bar_stop_%  fill_gap_med  fill_gap_p90  ambiguous_%
+symbol     family                                                                                                               
+CRUDEOILM  breakout             0.60   1.67   3.62   5.90       88.18              1.90           0.0          0.03         0.15
+           fade                 0.69   1.33   1.66   1.99       11.60              0.28           0.0          0.18         0.00
+GOLDPETAL  breakout             0.20   1.65   3.57   5.81       93.02              8.03           0.0          0.19         1.37
+           fade                 0.23   1.33   1.67   2.00       20.80              2.29           0.0          0.35         0.44
+NATGASMINI breakout             1.10   1.69   3.66   5.96       89.32              0.42           0.0          0.06         0.00
+           fade                 1.19   1.33   1.67   2.00       12.70              0.10           0.0          0.14         0.00
+SILVERMIC  breakout             0.42   1.66   3.59   5.85       96.37              2.84           0.0          0.11         0.39
+           fade                 0.47   1.33   1.67   2.00       14.15              0.54           0.0          0.19         0.27
+
+By instrument and family
+       symbol    family  entries   T1%  stop_first%  T2|T1%  retrace|T1%  retraces  reentry_open  reentry_win%  benchmark%  reentry_exp_risk  T3|T2%  coststop|T2%  T1stop|T2%
+0   CRUDEOILM  breakout      685  31.8         48.8    33.5         36.2        79            13          51.5        45.9               0.1    34.2           5.5        19.2
+1   CRUDEOILM      fade     1069  39.8         45.5    84.2         16.5        70            12          56.9        54.5               0.0    83.2          13.7        52.0
+2   GOLDPETAL  breakout      946  32.9         49.8    42.4         36.0       112            20          48.9        50.9              -0.1    44.7          13.6        34.8
+3   GOLDPETAL      fade     1351  39.5         44.4    77.9         26.2       140            25          55.7        60.5              -0.1    78.4          24.3        68.8
+4  NATGASMINI  breakout      721  30.8         45.9    30.2         28.8        64            14          40.0        48.5              -0.2    26.9           9.0        16.4
+5  NATGASMINI      fade     1047  37.3         48.3    84.1         15.6        61            11          54.0        48.6               0.1    82.4          12.8        52.9
+6   SILVERMIC  breakout     1020  39.3         43.0    41.1         38.4       154            34          56.7        47.1               0.2    39.4          15.8        32.7
+7   SILVERMIC      fade     1470  37.1         45.5    78.9         21.1       115            25          46.7        51.1              -0.1    77.4          14.7        57.4
+
+Pooled over instruments, by family
+     family  entries   T1%  stop_first%  T2|T1%  retrace|T1%  retraces  reentry_open  reentry_win%  benchmark%  reentry_exp_risk  T3|T2%  coststop|T2%  T1stop|T2%
+0  breakout     3372  34.2         46.7    37.9         35.5       409            81          50.9        48.1               0.1    38.2          12.4        28.6
+1      fade     4937  38.4         45.8    80.9         20.4       386            73          53.0        54.8              -0.1    80.1          16.6        58.3
+
+Pooled over instruments, by family and year
+      family  year  entries   T1%  stop_first%  T2|T1%  retrace|T1%  retraces  reentry_open  reentry_win%  benchmark%  reentry_exp_risk  T3|T2%  coststop|T2%  T1stop|T2%
+0   breakout  2021      191  35.1         45.0    49.3         28.4        19             5          28.6        37.7              -0.2    48.5          18.2        30.3
+1   breakout  2022      381  37.5         43.8    39.2         41.3        59            11          54.2        48.1               0.1    44.6          21.4        44.6
+2   breakout  2023      677  30.7         50.7    39.4         33.2        69             8          44.3        45.8              -0.0    36.6          17.1        32.9
+3   breakout  2024      778  33.7         46.5    32.8         34.0        89            18          54.9        47.6               0.1    36.0           9.3        20.9
+4   breakout  2025      796  34.7         46.5    38.4         36.6       101            14          50.6        49.7               0.0    28.3          10.4        27.4
+5   breakout  2026      549  35.7         45.0    37.8         36.7        72            25          57.4        52.3               0.1    47.3           4.1        21.6
+6       fade  2021      288  36.8         45.8    76.4         27.4        29             1          60.7        53.6               0.1    72.8          22.2        65.4
+7       fade  2022      548  38.5         44.7    79.1         24.2        51             9          50.0        54.2              -0.1    83.8          17.4        67.1
+8       fade  2023     1030  41.6         43.5    82.2         19.6        84             9          52.0        54.9              -0.1    80.1          17.9        58.0
+9       fade  2024     1160  37.6         46.8    82.1         16.7        73            16          50.9        52.6              -0.1    79.1          15.9        58.4
+10      fade  2025     1175  37.8         46.1    80.4         21.4        95            21          56.8        55.5               0.0    81.5          14.3        53.8
+11      fade  2026      736  36.7         47.7    80.7         20.0        54            17          48.6        58.1              -0.2    79.4          17.0        56.4

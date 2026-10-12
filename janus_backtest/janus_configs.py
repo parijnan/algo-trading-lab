@@ -55,3 +55,67 @@ TOUCH_LEVELS = [3, 4, 5, 6, 7]
 # continuation target of a breakout, the inward one as the fade target.
 FIRST_PASSAGE = {3: [(4, 2), (4, 'C')], 4: [(5, 3), (5, 2)], 5: [(6, 4)], 6: [(7, 5)], 7: []}
 # Open-location zones, from the levels themselves (see janus_events.open_zone).
+
+# --- Thirds / trail / re-entry feasibility (2026-10-11, plans/janus-camarilla-research.md items 3 and 8) ---
+# Setups in the LONG frame (a short is the same logic on negated prices, where S and R swap). The entry is a touch (item 1 grid arm A);
+# the stop is the level named; targets T1..T3 in order. 'fade' is the reclaim of S3 (scenarios 1 and 3), 'breakout' is the break of R4 (scenario 2).
+SETUPS = {'fade': {'entry': 'S3', 'stop': 'S4', 'targets': ('R1', 'R2', 'R3')},
+          'breakout': {'entry': 'R4', 'stop': 'R3', 'targets': ('R5', 'R6', 'R7')}}
+# After a target is hit in a bar, is the moved stop also tested against that same bar's low? 'test' is the pessimistic reading (the order inside
+# the bar is unknown), 'skip' tests it from the next bar. The trailing study used the pessimistic reading.
+TRAIL_SAME_BAR = 'test'
+# Year groups reported separately (the sample is small per cell, so years are shown pooled over instruments as well).
+
+# --- Day simulation: thirds, original stop, re-buy of booked lots, counter trade at T3 (2026-10-11, plan section 9a / items 3 and 8) ---
+# The four setups in absolute prices. side +1 long, -1 short. The entry is a touch of the level approached from the side named by the setup
+# (a long enters as price rises through its level, a short as price falls through it). Lot 1 targets T1, lot 2 T2, lot 3 T3; one stop for all.
+# 'counter' is the sister setup entered on arrival when this setup's T3 is hit (fades only: a mean-reversion trade ends where its sister begins).
+ABS_SETUPS = {
+    'F_L': {'side': 1, 'family': 'fade', 'entry': 'S3', 'stop': 'S4', 'targets': ('R1', 'R2', 'R3'), 'counter': 'F_S'},
+    'F_S': {'side': -1, 'family': 'fade', 'entry': 'R3', 'stop': 'R4', 'targets': ('S1', 'S2', 'S3'), 'counter': 'F_L'},
+    'B_L': {'side': 1, 'family': 'breakout', 'entry': 'R4', 'stop': 'R3', 'targets': ('R5', 'R6', 'R7'), 'counter': None},
+    'B_S': {'side': -1, 'family': 'breakout', 'entry': 'S4', 'stop': 'S3', 'targets': ('S5', 'S6', 'S7'), 'counter': None},
+}
+# One change at a time from A0. 'rebuy': booked lots are bought back at the original entry level when price returns to it, for their own targets.
+# 'counter': a fade's T3 opens the sister setup at that level.
+ARMS = {'A0': {'rebuy': False, 'counter': False}, 'A1': {'rebuy': True, 'counter': False},
+        'A2': {'rebuy': False, 'counter': True}, 'A3': {'rebuy': True, 'counter': True}}
+# Families whose trades are re-bought (user text covered the fade; breakout is an assumption to be confirmed, so results are reported by family).
+REENTRY_FAMILIES = ('fade', 'breakout')
+# Path a 1-minute bar is assumed to take (the order of high and low inside a bar is unknown):
+#   'neutral': open, low, high, close on a bullish bar and open, high, low, close on a bearish one;
+#   'adverse': against the net position open at the start of the bar (low first for a net long), neutral when flat.
+BAR_ORDERS = ('neutral', 'adverse')
+# PROVISIONAL (plan item 9): no new entry, re-buy or counter trade in the last ENTRY_CUTOFF_MIN minutes of the session; everything still open
+# exits at the open of the first bar at or after HARD_EXIT_MIN minutes before the last bar. Measured from the session's last bar (it varies with US DST).
+ENTRY_CUTOFF_MIN = 60
+HARD_EXIT_MIN = 15
+# Safety net on the event loop inside one bar: exceeding it raises instead of silently stopping.
+MAX_EVENTS_PER_BAR = 200
+# Round-trip cost per leg (entry plus exit of one lot), percent of price; every re-buy and every counter trade pays its own.
+COSTS_PCT = (0.0, 0.02, 0.05, 0.10)
+# Limit-type fills (targets, re-buys) need price to trade this many ticks THROUGH the level; 0 is a plain touch. Tick sizes are checked against the data.
+TICK_THROUGH = 0
+TICK_SIZE = {'CRUDEOILM': 1.0, 'SILVERMIC': 1.0, 'GOLDPETAL': 1.0, 'NATGASMINI': 0.1}
+
+# --- Entry modes (user design 2026-10-11): close-armed watcher with a limit order at the level ---
+# 'touch': the entry fires when price rises (falls) through the level (the first design, kept for reference).
+# 'close_limit': per setup a watcher. IDLE until a bar of `minutes` minutes CLOSES on the arming side of the level (long: below it; short: above
+#   it) -> ARMED; the next close on the entry side -> PENDING, a limit order at exactly the level working from the next 1-minute bar. It fills when
+#   price trades back to the level (a touch; TICK_THROUGH applies to limit fills of targets and re-buys only). If price reaches T1 first the order is
+#   cancelled and the watcher goes back to IDLE (the move was missed; CANCEL_AT_T1). A trade ending (stop, T3, hard exit) puts the watcher back to IDLE.
+#   fill 'retest' is the realistic limit; 'at_signal' is the LITERAL reading (bought at the level on the signal close although price is already above
+#   it), an optimistic upper bound kept as a reference only.
+ENTRY_SCENARIOS = {
+    'touch': {'mode': 'touch'},
+    'c1': {'mode': 'close_limit', 'minutes': 1, 'fill': 'retest'},
+    'c5': {'mode': 'close_limit', 'minutes': 5, 'fill': 'retest'},
+    'c15': {'mode': 'close_limit', 'minutes': 15, 'fill': 'retest'},
+    'l1': {'mode': 'close_limit', 'minutes': 1, 'fill': 'at_signal'},
+    'l5': {'mode': 'close_limit', 'minutes': 5, 'fill': 'at_signal'},
+    'l15': {'mode': 'close_limit', 'minutes': 15, 'fill': 'at_signal'},
+}
+CANCEL_AT_T1 = True
+# What the runner simulates: scenario -> arms. 'A0x' is A0 with TICK_THROUGH=1 (limit fills of targets and re-buys need one tick through the level).
+RUN_PLAN = {'touch': ['A0', 'A3'], 'c1': ['A0', 'A1', 'A2', 'A3', 'A0x'], 'c5': ['A0', 'A1', 'A2', 'A3', 'A0x'],
+            'c15': ['A0', 'A1', 'A2', 'A3', 'A0x'], 'l1': ['A0'], 'l5': ['A0'], 'l15': ['A0']}
