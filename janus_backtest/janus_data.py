@@ -13,7 +13,7 @@ import sys
 import pandas as pd
 
 import janus_configs as configs
-from janus_levels import camarilla_levels
+from janus_levels import camarilla_levels, range_states
 
 sys.path.insert(0, configs.PROMETHEUS_DIR)
 import data_loader_p3 as _p3  # noqa: E402
@@ -31,9 +31,27 @@ def _in_void(d) -> bool:
     return pd.Timestamp(configs.FYERS_VOID[0]).date() <= d <= pd.Timestamp(configs.FYERS_VOID[1]).date()
 
 
-def load_sessions(symbol: str) -> list:
-    """Sessions oldest first. Each: dict(date, symbol, expiry, pick, bars, prev, levels). `pick` is 'effective' when the early-roll contract had
-    data that day and 'naive_front' when only the plain nearest-expiry contract did (the handful of old rollover weeks)."""
+def _range_by_day(days: dict) -> dict:
+    """{date: range state after that session} for one contract, built from ALL of the contract's own sessions in its file (back-month sessions included): see
+    janus_levels.range_states. A day needs janus_configs.RANGE_MIN_BARS bars and some traded volume to take part."""
+    daily = []
+    for d in sorted(days):
+        g = days[d]
+        if len(g) < configs.RANGE_MIN_BARS or not (g['volume'] > 0).any():
+            continue
+        daily.append({'date': d, 'high': float(g['high'].max()), 'low': float(g['low'].min()), 'close': float(g['close'].iloc[-1])})
+    return {r['date']: r for r in range_states(daily)}
+
+
+def load_sessions(symbol: str, level_source: str = None) -> list:
+    """Sessions oldest first. Each: dict(date, symbol, expiry, pick, bars, prev, levels, levels_prev, range). `pick` is 'effective' when the early-roll contract had
+    data that day and 'naive_front' when only the plain nearest-expiry contract did (the handful of old rollover weeks). `levels` follow `level_source`
+    (janus_configs.LEVEL_SOURCE by default): 'previous_session' uses the previous session's own High and Low, 'range_setter' the contract's setter range as it stood
+    after the previous session; the Close is the previous session's either way. `levels_prev` is always the previous-session (control) set and `range` the range
+    state (None when the previous session took no part in the range history, in which case the session falls back to the control levels)."""
+    level_source = level_source or configs.LEVEL_SOURCE
+    if level_source not in configs.LEVEL_SOURCES:
+        raise ValueError(f'unknown level source {level_source!r}')
     start = pd.Timestamp(configs.DATA_START[symbol]).date()
     end = pd.Timestamp(configs.DATA_END).date() if configs.DATA_END else None
     calendar = _p3._discover_expiries(symbol)
@@ -46,6 +64,7 @@ def load_sessions(symbol: str) -> list:
             df['_d'] = df['time_stamp'].dt.date
             by_day[e] = {d: g.drop(columns='_d').set_index('time_stamp') for d, g in df.groupby('_d')}
 
+    ranges = {e: _range_by_day(days) for e, days in by_day.items()}
     dates = sorted({d for days in by_day.values() for d in days})
     dates = [d for d in dates if d >= start and (end is None or d <= end) and d.weekday() < 5 and not _in_void(d)]
     out = []
@@ -68,6 +87,9 @@ def load_sessions(symbol: str) -> list:
         if (d - pd_).days > configs.MAX_PREV_SESSION_GAP_DAYS or len(pbars) < configs.MIN_BARS_PER_SESSION:
             continue
         prev = {'date': pd_, 'high': float(pbars['high'].max()), 'low': float(pbars['low'].min()), 'close': float(pbars['close'].iloc[-1])}
-        out.append({'date': d, 'symbol': symbol, 'expiry': expiry, 'pick': pick, 'bars': bars, 'prev': prev,
-                    'levels': camarilla_levels(prev['high'], prev['low'], prev['close'])})
+        levels_prev = camarilla_levels(prev['high'], prev['low'], prev['close'])
+        rng = ranges[expiry].get(pd_)
+        levels = camarilla_levels(rng['high'], rng['low'], prev['close']) if (level_source == 'range_setter' and rng is not None) else levels_prev
+        out.append({'date': d, 'symbol': symbol, 'expiry': expiry, 'pick': pick, 'bars': bars, 'prev': prev, 'levels': levels, 'levels_prev': levels_prev,
+                    'range': rng})
     return out

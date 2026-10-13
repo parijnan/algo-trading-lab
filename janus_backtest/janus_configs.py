@@ -119,3 +119,13 @@ CANCEL_AT_T1 = True
 # What the runner simulates: scenario -> arms. 'A0x' is A0 with TICK_THROUGH=1 (limit fills of targets and re-buys need one tick through the level).
 RUN_PLAN = {'touch': ['A0', 'A3'], 'c1': ['A0', 'A1', 'A2', 'A3', 'A0x'], 'c5': ['A0', 'A1', 'A2', 'A3', 'A0x'],
             'c15': ['A0', 'A1', 'A2', 'A3', 'A0x'], 'l1': ['A0'], 'l5': ['A0'], 'l15': ['A0']}
+
+# --- Range-based levels (2026-10-12, plans/janus-range-levels.md) ---
+# Where the High and Low that feed the Camarilla formulas come from. 'previous_session' (the control, and the default so nothing existing changes): the previous
+# session's own High and Low. 'range_setter': the bounds of a price range tracked on the traded contract's own daily bars with setter-candle logic (a close strictly
+# outside the range starts a new range from that day's bar; otherwise the range widens to include the day's High and Low). The Close is always the previous session's.
+LEVEL_SOURCES = ('previous_session', 'range_setter')
+LEVEL_SOURCE = 'previous_session'
+# A day takes part in a contract's range history only if it has at least this many 1-minute bars and some traded volume (Fyers delivers a bar for every minute,
+# zero-volume placeholders carrying the previous close, so a no-trade day is dropped, never turned into a flat bar).
+RANGE_MIN_BARS = MIN_BARS_PER_SESSION

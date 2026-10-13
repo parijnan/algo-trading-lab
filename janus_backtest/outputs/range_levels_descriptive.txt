@@ -1,0 +1,24 @@
+== CRUDEOILM: 42 contracts, 884 traded sessions (0 fell back to the control levels: previous session not in the range history)
+  levels differ from the control on 560 sessions (63.3%); the previous session was itself a setter on 35.9%
+  R(range)/R(control) on the sessions that differ, q25/50/75/90/max: [1.526, 1.991, 2.832, 3.746, 10.198]
+  range age in sessions (setter = 1), q25/50/75/90/max: [1.0, 2.0, 5.0, 10.0, 34.0]
+  stop distance (0.275 R) as % of the previous close, q25/50/75: control [0.512, 0.695, 0.968], range [0.796, 1.133, 1.564]
+  range rests on back-month history (setter before the contract's first traded session): 168 sessions (19.0%); levels change on 157 sessions if the range is rebuilt from traded sessions only (median R shift 45.78%)
+== SILVERMIC: 27 contracts, 1383 traded sessions (0 fell back to the control levels: previous session not in the range history)
+  levels differ from the control on 926 sessions (67.0%); the previous session was itself a setter on 31.9%
+  R(range)/R(control) on the sessions that differ, q25/50/75/90/max: [1.802, 2.483, 3.752, 6.235, 33.801]
+  range age in sessions (setter = 1), q25/50/75/90/max: [1.0, 3.0, 6.0, 15.0, 99.0]
+  stop distance (0.275 R) as % of the previous close, q25/50/75: control [0.348, 0.473, 0.683], range [0.611, 0.902, 1.287]
+  range rests on back-month history (setter before the contract's first traded session): 193 sessions (14.0%); levels change on 198 sessions if the range is rebuilt from traded sessions only (median R shift 63.21%)
+== GOLDPETAL: 60 contracts, 1274 traded sessions (0 fell back to the control levels: previous session not in the range history)
+  levels differ from the control on 837 sessions (65.7%); the previous session was itself a setter on 33.0%
+  R(range)/R(control) on the sessions that differ, q25/50/75/90/max: [1.745, 2.416, 3.619, 5.286, 19.465]
+  range age in sessions (setter = 1), q25/50/75/90/max: [1.0, 3.0, 5.0, 9.7, 25.0]
+  stop distance (0.275 R) as % of the previous close, q25/50/75: control [0.15, 0.221, 0.345], range [0.286, 0.396, 0.617]
+  range rests on back-month history (setter before the contract's first traded session): 234 sessions (18.4%); levels change on 211 sessions if the range is rebuilt from traded sessions only (median R shift 59.17%)
+== NATGASMINI: 42 contracts, 888 traded sessions (0 fell back to the control levels: previous session not in the range history)
+  levels differ from the control on 556 sessions (62.6%); the previous session was itself a setter on 35.4%
+  R(range)/R(control) on the sessions that differ, q25/50/75/90/max: [1.519, 2.0, 2.686, 3.686, 9.246]
+  range age in sessions (setter = 1), q25/50/75/90/max: [1.0, 2.0, 4.0, 8.0, 20.0]
+  stop distance (0.275 R) as % of the previous close, q25/50/75: control [0.908, 1.159, 1.541], range [1.326, 1.837, 2.607]
+  range rests on back-month history (setter before the contract's first traded session): 114 sessions (12.8%); levels change on 104 sessions if the range is rebuilt from traded sessions only (median R shift 46.98%)
