@@ -42,10 +42,10 @@ def test_pair_uses_each_backtest_trade_once_and_picks_the_closest():
     assert rows[1]['bt_entry_ts'].endswith('09:30:00') and rows[2]['bt_entry_ts'].endswith('09:15:00')
 
 
-def test_live_trade_newer_than_the_backtest_is_not_called_live_only():
+def test_live_trade_after_the_backtest_last_closed_trade_is_not_called_live_only():
     bt = bt_frame([('bullish', '2026-10-05 09:15', '2026-10-05 12:00', 100.0, 2.0, 40.0, 'trend_flip')])
     rows = ca.pair([live_trade(1, 'bullish', '2026-10-09 10:00:00', '2026-10-09 11:00:00')], bt, 20)
-    assert rows[0]['status'] == 'after backtest data'
+    assert rows[0]['status'] == 'not closed in backtest'
 
 
 def test_reasons_are_compared_after_removing_repeats():

@@ -5,7 +5,7 @@ Input: a Delos snapshot (hestia_performance/pull_snapshot.py, read-only) and out
 after each engine's first live trade, hestia_performance/tracker_config.json). A live trade pairs with the backtest trade of the same direction whose entry time is closest and within
 MATCH_TOLERANCE_MIN minutes. Every row is compared on one unit: points and rupees come from the engine's recorded points times rupees per point for one unit, not from the units the
 trade actually ran at. Statuses: matched, live only (the live engine traded and the backtest did not), backtest only (the backtest traded after the engine went live and the live
-engine did not), after backtest data (the live trade is newer than the backtest's last bar).
+engine did not), not closed in backtest (the live trade entered after the backtest's last closed trade, so the backtest either has not taken it or still holds it open at its data end).
 
     python hestia_backtest/compare_actual.py --snapshot snapshot.json
 """
@@ -51,7 +51,7 @@ def pair(live: list, bt: pd.DataFrame, tol_min: float) -> list:
             r.update({'status': 'matched', 'bt_entry_ts': str(b['entry_ts']), 'bt_entry': float(b['entry']), 'bt_exit_ts': str(b['exit_ts']), 'bt_reason': norm_reason(b['reason']),
                       'bt_pts': float(b['pts']), 'bt_rs': float(b['rs'])})
         else:
-            r['status'] = 'after backtest data' if e > bt_end else 'live only'
+            r['status'] = 'not closed in backtest' if e > bt_end else 'live only'
         rows.append(r)
     first_live = min((pd.Timestamp(t['entry_ts']) for t in live), default=None)
     if first_live is not None:
@@ -78,7 +78,7 @@ def compare(snapshot: dict, ledger: pd.DataFrame, tracker, perf_cfg: dict) -> di
                 r['same_exit'] = (abs((pd.Timestamp(r['live_exit_ts']) - pd.Timestamp(r['bt_exit_ts'])).total_seconds()) <= cfg.MATCH_TOLERANCE_MIN * 60 and r['live_reason'] == r['bt_reason'])
         m = [r for r in rows if r['status'] == 'matched']
         out['engines'][name] = {'live_trades': len(live), 'matched': len(m), 'live_only': sum(r['status'] == 'live only' for r in rows),
-                                'backtest_only': sum(r['status'] == 'backtest only' for r in rows), 'after_backtest_data': sum(r['status'] == 'after backtest data' for r in rows),
+                                'backtest_only': sum(r['status'] == 'backtest only' for r in rows), 'not_closed_in_backtest': sum(r['status'] == 'not closed in backtest' for r in rows),
                                 'same_exit': sum(bool(r.get('same_exit')) for r in m), 'live_rs_matched': round(sum(r['live_rs'] for r in m)), 'bt_rs_matched': round(sum(r['bt_rs'] for r in m)),
                                 'avg_entry_diff_pts': round(sum(r['entry_diff_pts'] for r in m) / len(m), 4) if m else None}
         out['rows'] += rows
@@ -95,7 +95,7 @@ def main():
     json.dump(res, open(os.path.join(cfg.OUT_DIR, 'comparison.json'), 'w'), indent=1, default=str)
     pd.DataFrame(res['rows']).to_csv(os.path.join(cfg.OUT_DIR, 'comparison.csv'), index=False)
     for n, s in res['engines'].items():
-        print(f"{n:11s} live {s['live_trades']:3d} | matched {s['matched']:3d} (same exit {s['same_exit']}) live-only {s['live_only']} backtest-only {s['backtest_only']} after-data {s['after_backtest_data']} | "
+        print(f"{n:11s} live {s['live_trades']:3d} | matched {s['matched']:3d} (same exit {s['same_exit']}) live-only {s['live_only']} backtest-only {s['backtest_only']} not-closed {s['not_closed_in_backtest']} | "
               f"Rs matched live {s['live_rs_matched']:,} vs backtest {s['bt_rs_matched']:,} | avg entry diff {s['avg_entry_diff_pts']}")
 
 

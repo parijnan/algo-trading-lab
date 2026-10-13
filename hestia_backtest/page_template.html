@@ -6,7 +6,7 @@
 body{background:var(--bg);color:var(--ink);font-family:var(--font);padding-inline:16px;padding-block:20px}
 .wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 h1{font-size:22px;font-weight:600;margin:0}h2{font-size:14px;font-weight:600;margin:0 0 8px}
-.sub{color:var(--ink2);font-size:13.5px;line-height:1.5;margin:4px 0 0;max-width:85ch}
+.sub{color:var(--ink2);font-size:13.5px;line-height:1.5;margin:4px 0 0}
 .panel{background:var(--panel);border:1px solid var(--grid);border-radius:6px;padding:12px;min-width:0}
 .ctl{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center;font-size:12.5px;color:var(--ink2)}
 .ctl label{display:flex;align-items:center;gap:6px}
@@ -17,12 +17,12 @@ h1{font-size:22px;font-weight:600;margin:0}h2{font-size:14px;font-weight:600;mar
 .k{border-left:2px solid var(--grid);padding-left:10px}.k .v{font:600 20px var(--mono);font-variant-numeric:tabular-nums}.k .l{font-size:11.5px;color:var(--mute);text-transform:uppercase;letter-spacing:.05em}
 .sc{overflow-x:auto}svg{display:block;width:100%;min-width:720px;height:auto;font-family:var(--mono);font-size:11px}
 table{border-collapse:collapse;font:12px var(--mono);width:100%;font-variant-numeric:tabular-nums}
-td,th{padding:5px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}th{color:var(--mute);font-weight:500}td:first-child,th:first-child{text-align:left}
+td,th{padding:5px 8px;text-align:right;border-bottom:1px solid var(--grid);vertical-align:top}th{color:var(--mute);font-weight:500}td:first-child,th:first-child{text-align:left}
 .neg{color:var(--neg)}.pos{color:var(--pos)}
-.note{font-size:12.5px;color:var(--ink2);line-height:1.55;max-width:95ch;margin:0}
+.note{font-size:12.5px;color:var(--ink2);line-height:1.55;margin:0}
 .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;border:1px solid var(--grid);color:var(--ink2)}.pill.ok{color:var(--pos);border-color:var(--pos)}.pill.warn{color:var(--c1);border-color:var(--c1)}.pill.bad{color:var(--neg);border-color:var(--neg)}
 .expand{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:10px}.expand button{font:inherit;font-size:12.5px;padding:6px 12px;border:1px solid var(--grid);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}.expand button:hover{background:var(--bg)}.expand .meta{color:var(--mute);font-size:12px}
-.tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--grid);box-shadow:0 2px 10px rgba(0,0,0,.2);padding:7px 9px;font:12px/1.5 var(--mono);border-radius:4px;display:none;z-index:5;white-space:nowrap}
+.tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--grid);box-shadow:0 2px 10px rgba(0,0,0,.2);padding:7px 9px;font:12px/1.5 var(--mono);border-radius:4px;display:none;z-index:5;max-width:min(320px,90vw)}
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
 <div class="wrap">
@@ -70,7 +70,7 @@ function run(){const tr=trades().sort((a,b)=>a.d-b.d);const s=series(tr);if(!s){
  const on=[0,1,2,3].filter(i=>st.u[i]>0),ys=[s.tot,...on.map(i=>s.per[i])],cols=['var(--tot)',...on.map(i=>COL[i])];
  line($('eq'),s.days,ys,cols,340,{id:'q1',labels:['Combined',...on.map(i=>NAMES[i])],w:[2.2],tip:i=>'<b>'+DAYS[s.days[i]]+'</b><br>combined '+fs(s.tot[i])+on.map(j=>'<br>'+NAMES[j]+' '+fs(s.per[j][i])).join('')});
  let pk=0;const dd=s.tot.map(v=>{pk=Math.max(pk,v);return v-pk});line($('dd'),s.days,[dd],['var(--neg)'],160,{id:'q2',fill:1,zero:1,tip:i=>'<b>'+DAYS[s.days[i]]+'</b><br>drawdown '+fs(dd[i])+' Rs'});
- let h='<tr><th>Engine</th><th>Units</th><th>First trade</th><th>Trades</th><th>Win %</th><th>Total Rs</th><th>Avg / trade</th><th>Max DD Rs</th><th>Calmar / yr</th><th>Worst trade</th></tr>';
+ let h='<tr><th>Engine</th><th>Units</th><th>First exit</th><th>Trades</th><th>Win %</th><th>Total Rs</th><th>Avg / trade</th><th>Max DD Rs</th><th>Calmar / yr</th><th>Worst trade</th></tr>';
  NAMES.forEach((n,i)=>{const t=tr.filter(x=>x.e===i);if(!t.length)return;const q=stats(t);h+='<tr><td><i class="dot" style="background:'+COL[i]+'"></i> '+n+'</td><td>'+st.u[i]+'</td><td>'+t[0].ds+'</td><td>'+q.n+'</td><td>'+q.win.toFixed(1)+'</td><td class="'+cls(q.tot)+'">'+fs(q.tot)+'</td><td>'+fs(q.avg)+'</td><td class="neg">'+fs(q.dd)+'</td><td>'+(isNaN(q.cal)?'-':q.cal.toFixed(2))+'</td><td class="neg">'+fs(q.worst)+'</td></tr>'});
  $('eng').innerHTML=h;
  const M={},byE=[{},{},{},{}];tr.forEach(t=>{const k=t.ds.slice(0,7);M[k]=(M[k]||0)+t.rs;byE[t.e][k]=(byE[t.e][k]||0)+t.rs});
@@ -79,17 +79,17 @@ function run(){const tr=trades().sort((a,b)=>a.d-b.d);const s=series(tr);if(!s){
  const keys=Object.keys(M).sort(),vec=i=>keys.map(k=>byE[i][k]||0),cr=(a,b)=>{const n=a.length,ma=a.reduce((x,y)=>x+y)/n,mb=b.reduce((x,y)=>x+y)/n;let sa=0,sb=0,sc=0;a.forEach((v,j)=>{sa+=(v-ma)**2;sb+=(b[j]-mb)**2;sc+=(v-ma)*(b[j]-mb)});return sc/Math.sqrt(sa*sb)};
  let ch='<tr><th></th>'+on.map(i=>'<th>'+NAMES[i]+'</th>').join('')+'</tr>';on.forEach(i=>{ch+='<tr><td>'+NAMES[i]+'</td>'+on.map(j=>'<td>'+(i===j?'1.00':cr(vec(i),vec(j)).toFixed(2))+'</td>').join('')+'</tr>'});$('cor').innerHTML=ch;
  $('leg').innerHTML='';
- $('notes').textContent='Backtest numbers: Selene, Helios and Typhon use their production-parity backtests (one real contract at a time, the real roll machinery); Prometheus uses its Fyers-history Phase 3 ledger at the live 2.5 config. Data runs to '+META.end+'. Each engine starts on its own first trade: Selene Apr 2021, Helios Oct 2021, Prometheus Mar 2023 (Fyers history), Typhon Apr 2023; use the common window for a like-for-like book. Results are rupees for the units shown, gross of costs unless you set a cost per leg (applied to the entry value on both legs). Equity moves only when a trade closes, so drawdowns inside an open trade are not shown, and engines are summed with no margin or capital limit. Backtests use the decided engine configs with the same entry and exit rules the live engines run.';}
+ $('notes').textContent='Backtest numbers: Selene, Helios and Typhon use their production-parity backtests (one real contract at a time, the real roll machinery); Prometheus uses its Fyers-history Phase 3 ledger at the live 2.5 config, with Angel One data after the last Fyers day. Data runs to '+META.end+'. Each engine starts on its own first trade: Selene Apr 2021, Helios Oct 2021, Prometheus Mar 2023 (Fyers history), Typhon Apr 2023; use the common window for a like-for-like book. Results are rupees for the units shown, gross of costs unless you set a cost per leg (applied to the entry value on both legs). Equity moves only when a trade closes, so drawdowns inside an open trade are not shown, and engines are summed with no margin or capital limit. Backtests use the decided engine configs with the same entry and exit rules the live engines run.';}
 
 const CSHOWN=10;let cOpen=false;
 function cmp(){const f=$('cf').value,rows=CMP.rows.filter(r=>f==='All'||r.engine===f).sort((a,b)=>(b.live_entry_ts||b.bt_entry_ts).localeCompare(a.live_entry_ts||a.bt_entry_ts));
- $('cmeta').textContent='Live trades are the ones the Hestia Dashboard counts. Both sides are shown for one unit, in points times rupees per point, so the live units do not matter. Backtest data runs to '+META.end+'; live snapshot taken '+(CMP.pulled_at||'').replace('T',' ')+' IST. A live trade pairs with the backtest trade of the same direction that entered within '+META.tol+' minutes.';
- let h='<tr><th>Engine</th><th>Live trades</th><th>Matched</th><th>Same exit</th><th>Live only</th><th>Backtest only</th><th>Live Rs (matched)</th><th>Backtest Rs (matched)</th><th>Gap Rs</th><th>Avg entry gap (pts)</th></tr>';
- NAMES.forEach(n=>{const s=CMP.engines[n];if(!s||(f!=='All'&&f!==n))return;const g=s.live_rs_matched-s.bt_rs_matched;h+='<tr><td>'+n+'</td><td>'+s.live_trades+'</td><td>'+s.matched+'</td><td>'+s.same_exit+'</td><td>'+s.live_only+'</td><td>'+s.backtest_only+'</td><td>'+fs(s.live_rs_matched)+'</td><td>'+fs(s.bt_rs_matched)+'</td><td class="'+cls(g)+'">'+fs(g)+'</td><td>'+(s.avg_entry_diff_pts===null?'-':s.avg_entry_diff_pts)+'</td></tr>'});
+ $('cmeta').textContent='Live trades are the ones the Hestia Dashboard counts. Both sides are shown for one unit, in points times rupees per point, so the live units do not matter. Backtest data runs to '+META.end+'; live snapshot taken '+(CMP.pulled_at||'').replace('T',' ')+' IST. A live trade pairs with the backtest trade of the same direction that entered within '+META.tol+' minutes. Entry gap is live minus backtest in price points, positive when live got the worse price.';
+ let h='<tr><th>Engine</th><th>Live trades</th><th>Matched</th><th>Same exit</th><th>Live only</th><th>Backtest only</th><th>Not closed in backtest</th><th>Live Rs (matched)</th><th>Backtest Rs (matched)</th><th>Gap Rs</th><th>Avg entry gap (pts)</th></tr>';
+ NAMES.forEach(n=>{const s=CMP.engines[n];if(!s||(f!=='All'&&f!==n))return;const g=s.live_rs_matched-s.bt_rs_matched;h+='<tr><td>'+n+'</td><td>'+s.live_trades+'</td><td>'+s.matched+'</td><td>'+s.same_exit+'</td><td>'+s.live_only+'</td><td>'+s.backtest_only+'</td><td>'+s.not_closed_in_backtest+'</td><td>'+fs(s.live_rs_matched)+'</td><td>'+fs(s.bt_rs_matched)+'</td><td class="'+cls(g)+'">'+fs(g)+'</td><td>'+(s.avg_entry_diff_pts===null?'-':s.avg_entry_diff_pts)+'</td></tr>'});
  $('csum').innerHTML=h;
  const shown=cOpen?rows:rows.slice(0,CSHOWN);let t='<tr><th>Engine</th><th>Live #</th><th>Side</th><th>Live entry</th><th>Backtest entry</th><th>Entry gap</th><th>Live exit</th><th>Backtest exit</th><th>Live pts</th><th>Backtest pts</th><th>Live Rs</th><th>Backtest Rs</th><th>Gap Rs</th><th>Status</th></tr>';
  const d=x=>x?x.replace('T',' ').slice(5,16):'';
- shown.forEach(r=>{const m=r.status==='matched',pc=m?(r.same_exit?'ok':'warn'):(r.status==='live only'?'bad':(r.status==='backtest only'?'bad':'warn')),lab=m?(r.same_exit?'matched':'matched, exit differs'):r.status;
+ shown.forEach(r=>{const m=r.status==='matched',pc=m?(r.same_exit?'ok':'warn'):(r.status==='live only'||r.status==='backtest only'?'bad':'warn'),lab=m?(r.same_exit?'matched':'matched, exit differs'):r.status;
   t+='<tr><td>'+r.engine+'</td><td>'+(r.live_id||'')+'</td><td>'+(r.direction||'').slice(0,4)+'</td><td>'+d(r.live_entry_ts)+(r.live_entry?' @ '+r.live_entry:'')+'</td><td>'+d(r.bt_entry_ts)+(r.bt_entry?' @ '+r.bt_entry:'')+'</td><td>'+(m?r.entry_diff_pts:'')+'</td><td>'+d(r.live_exit_ts)+(r.live_reason?' '+r.live_reason:'')+'</td><td>'+d(r.bt_exit_ts)+(r.bt_reason?' '+r.bt_reason:'')+'</td><td>'+(r.live_pts!==undefined?r.live_pts:'')+'</td><td>'+(r.bt_pts!==undefined?r.bt_pts:'')+'</td><td>'+(m?fs(r.live_rs):'')+'</td><td>'+(r.bt_rs!==undefined?fs(r.bt_rs):'')+'</td><td class="'+(m?cls(r.rs_diff):'')+'">'+(m?fs(r.rs_diff):'')+'</td><td><span class="pill '+pc+'">'+lab+'</span></td></tr>'});
  $('ctab').innerHTML=t;
  $('cx').innerHTML=rows.length>CSHOWN?'<button type="button" id="cb" aria-expanded="'+cOpen+'">'+(cOpen?'Show only the latest '+CSHOWN:'Show all '+rows.length+' rows')+'</button><span class="meta">newest first</span>':'';
