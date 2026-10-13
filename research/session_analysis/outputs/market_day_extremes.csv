@@ -1,0 +1,5 @@
+instrument,days,high_set_in_evening_pct,low_set_in_evening_pct,either_extreme_in_evening_pct,mean_evening_range_pct,mean_day_range_pct,evening_range_over_day_range
+CRUDEOILM,881,61.1,54.5,92.8,2.372,1.937,1.22
+SILVERMIC,1357,54.3,51.1,88.0,1.628,1.391,1.17
+GOLDPETAL,1234,45.1,39.5,76.4,0.702,0.802,0.88
+NATGASMINI,863,62.7,65.2,97.0,3.931,2.382,1.65

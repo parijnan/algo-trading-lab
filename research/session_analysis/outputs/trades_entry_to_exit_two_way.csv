@@ -1,0 +1,17 @@
+engine,bucket,trades,win_pct,mean_pct,median_pct,total_pct,profit_factor,stop_out_pct,mean_hold_h,thin
+Helios,Day -> Day,243,42.0,0.161,-0.114,39.0,1.78,2.5,37.4,False
+Helios,Day -> Evening,301,38.2,0.198,-0.115,59.6,2.1,0.3,25.6,False
+Helios,Evening -> Day,301,28.6,0.05,-0.205,15.0,1.19,0.7,43.3,False
+Helios,Evening -> Evening,294,49.3,0.368,0.0,108.2,3.11,0.7,43.0,False
+Prometheus,Day -> Day,452,32.1,-0.009,-0.411,-4.0,0.98,19.5,10.9,False
+Prometheus,Day -> Evening,479,42.0,0.155,-0.172,74.1,1.51,12.3,7.5,False
+Prometheus,Evening -> Day,446,54.5,0.279,0.122,124.2,1.85,14.3,29.2,False
+Prometheus,Evening -> Evening,521,32.6,-0.172,-0.665,-89.5,0.69,38.2,10.5,False
+Selene,Day -> Day,465,33.8,0.137,-0.246,63.6,1.39,0.6,16.8,False
+Selene,Day -> Evening,681,36.3,0.081,-0.181,54.8,1.29,0.3,10.3,False
+Selene,Evening -> Day,687,45.9,0.184,-0.069,126.5,1.53,0.7,30.7,False
+Selene,Evening -> Evening,662,37.8,0.153,-0.315,101.6,1.4,0.6,18.5,False
+Typhon,Day -> Day,234,21.4,0.068,-0.799,16.0,1.11,69.7,9.4,False
+Typhon,Day -> Evening,272,29.4,0.309,-0.648,84.2,1.67,46.7,8.8,False
+Typhon,Evening -> Day,215,53.0,0.927,0.203,199.4,2.66,33.5,36.7,False
+Typhon,Evening -> Evening,682,20.5,-0.016,-0.799,-11.1,0.97,74.6,8.7,False

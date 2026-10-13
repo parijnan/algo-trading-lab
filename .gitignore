@@ -464,3 +464,6 @@ hestia_backtest/outputs/logs/
 
 # first-pass integrated ledger (superseded by hestia_backtest/outputs/); regenerable
 research/hestia_integrated/outputs/integrated_trades.csv
+
+# session analysis: 20 MB per-minute attribution pieces (regenerable by session_trades.py)
+research/session_analysis/outputs/attribution_pieces.csv.gz

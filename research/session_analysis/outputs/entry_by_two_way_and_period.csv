@@ -1,0 +1,17 @@
+engine,period,entry_two,trades,win_pct,mean_pct,median_pct,total_pct,profit_factor,stop_out_pct,mean_hold_h,thin
+Helios,2026,Day,88,45.5,0.458,-0.041,40.3,2.67,5.7,31.0,False
+Helios,2026,Evening,90,42.2,0.717,-0.215,64.6,3.31,2.2,42.4,False
+Helios,before 2026,Day,456,38.8,0.128,-0.122,58.3,1.73,0.4,30.8,False
+Helios,before 2026,Evening,505,38.2,0.116,-0.109,58.6,1.58,0.4,43.3,False
+Prometheus,2026,Day,208,48.6,0.231,-0.197,48.1,1.56,36.1,7.6,False
+Prometheus,2026,Evening,172,45.9,0.181,-0.466,31.2,1.34,47.1,16.5,False
+Prometheus,before 2026,Day,723,33.9,0.03,-0.306,22.0,1.09,10.0,9.6,False
+Prometheus,before 2026,Evening,795,42.0,0.004,-0.294,3.6,1.01,22.9,19.7,False
+Selene,2026,Day,159,40.3,0.255,-0.312,40.5,1.45,3.1,14.1,False
+Selene,2026,Evening,180,46.1,0.569,-0.173,102.3,1.9,4.4,25.2,False
+Selene,before 2026,Day,987,34.4,0.079,-0.205,78.0,1.3,0.0,12.8,False
+Selene,before 2026,Evening,1169,41.2,0.108,-0.185,125.8,1.33,0.1,24.7,False
+Typhon,2026,Day,116,26.7,0.073,-0.799,8.5,1.14,56.0,8.6,False
+Typhon,2026,Evening,187,26.7,0.052,-0.799,9.8,1.08,64.2,17.5,False
+Typhon,before 2026,Day,390,25.4,0.235,-0.799,91.6,1.44,57.7,9.2,False
+Typhon,before 2026,Evening,710,28.7,0.251,-0.799,178.5,1.42,64.9,14.8,False

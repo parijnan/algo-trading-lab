@@ -1,0 +1,9 @@
+engine,bucket,trades,win_pct,mean_pct,median_pct,total_pct,profit_factor,stop_out_pct,mean_hold_h,thin
+Helios,Day,544,34.6,0.099,-0.148,54.0,1.42,1.5,40.7,False
+Helios,Evening,595,43.7,0.282,-0.079,167.8,2.59,0.5,34.2,False
+Prometheus,Day,898,43.2,0.134,-0.24,120.3,1.36,16.9,20.0,False
+Prometheus,Evening,1000,37.1,-0.015,-0.368,-15.4,0.96,25.8,9.1,False
+Selene,Day,1152,41.0,0.165,-0.164,190.2,1.48,0.7,25.1,False
+Selene,Evening,1343,37.0,0.116,-0.236,156.4,1.35,0.4,14.4,False
+Typhon,Day,449,36.5,0.48,-0.798,215.4,1.82,52.3,22.4,False
+Typhon,Evening,954,23.1,0.077,-0.799,73.1,1.13,66.7,8.7,False
