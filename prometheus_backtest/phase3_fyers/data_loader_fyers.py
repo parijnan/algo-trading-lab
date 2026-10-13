@@ -48,8 +48,18 @@ this gap-fill window. It is never applied to native Fyers rows -- there is
 no evidence Fyers's own feed shares that defect, and doing so would be an
 uninvited bug of its own.
 
-Every returned row carries a `data_source` column ('fyers' or
-'angelone_gap_fill') so any trade whose hold period touches the spliced
+**Angel-One tail fill (added 2026-10-13, user's decision).** Fyers only
+publishes a contract after it expires, so the newest days (the live front
+and next contracts) have no Fyers file at all and this track used to stop
+at the last expired contract's expiry. Every day AFTER the last day Fyers
+has is now taken from the Angel-One-sourced dataset (the same source the
+live engines' data comes from), tagged 'angelone_tail_fill'. It shrinks
+automatically: once the next contract expires and is downloaded, those days
+become Fyers rows again. The tail is the latest data only, so no earlier
+trade can change (checked on the first run, see hestia_backtest/).
+
+Every returned row carries a `data_source` column ('fyers', 'angelone_gap_fill'
+or 'angelone_tail_fill') so any trade whose hold period touches a spliced
 window is identifiable downstream, not silently blended in.
 """
 import os
@@ -132,6 +142,10 @@ def load_futures_1min(symbol: str) -> pd.DataFrame:
                                (angelone_df['time_stamp'] <= GAP_FILL_END)].copy()
     angelone_gap['data_source'] = 'angelone_gap_fill'
 
-    combined = pd.concat([fyers_df, angelone_gap], ignore_index=True)
+    last_fyers_day = fyers_df['time_stamp'].max().normalize()
+    angelone_tail = angelone_df[angelone_df['time_stamp'] >= last_fyers_day + pd.Timedelta(days=1)].copy()
+    angelone_tail['data_source'] = 'angelone_tail_fill'
+
+    combined = pd.concat([fyers_df, angelone_gap, angelone_tail], ignore_index=True)
     combined = combined.sort_values('time_stamp').reset_index(drop=True)
     return combined.set_index('time_stamp')

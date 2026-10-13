@@ -1,0 +1,29 @@
+"""
+Hestia integrated backtest: the one place for engine registry, paths and tolerances (the hestia-backtest skill and every script here read from this file).
+Rupees per point are for ONE live unit: lots per unit times rupees per point per lot (Prometheus 2 x 10, Selene 1 x 1, Helios 20 x 1, Typhon 2 x 250).
+"""
+
+import os
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT_DIR = os.path.join(REPO, 'hestia_backtest', 'outputs')
+MCX_DIR = os.path.join(REPO, 'data_pipeline', 'data', 'mcx')
+FYERS_DIR = os.path.join(REPO, 'data_pipeline', 'data', 'mcx_fyers')
+PERF_CONFIG = os.path.join(REPO, 'hestia_performance', 'tracker_config.json')   # live start trade ids, lot values
+ARTIFACT_URL_FILE = os.path.join(REPO, 'hestia_backtest', 'artifact_url.txt')
+
+# trades_csv: where each engine's backtest trade list lives; kind says how build_ledger reads it
+ENGINES = {
+    'Prometheus': {'key': 'prometheus', 'instrument': 'CRUDEOILM', 'rs_per_point_unit': 20,
+                   'backtest_csv': os.path.join(REPO, 'prometheus_backtest', 'phase3_fyers', 'data_sweep', 'mult_2.5', 'bespoke_trade_summary.csv'), 'kind': 'prometheus'},
+    'Selene': {'key': 'selene', 'instrument': 'SILVERMIC', 'rs_per_point_unit': 1,
+               'backtest_csv': os.path.join(REPO, 'selene_backtest', 'data_sweep', 'parity_trades.csv'), 'kind': 'parity'},
+    'Helios': {'key': 'helios', 'instrument': 'GOLDPETAL', 'rs_per_point_unit': 20,
+               'backtest_csv': os.path.join(REPO, 'helios_backtest', 'data_sweep', 'parity_trades.csv'), 'kind': 'parity'},
+    'Typhon': {'key': 'typhon', 'instrument': 'NATGASMINI', 'rs_per_point_unit': 500,
+               'backtest_csv': os.path.join(REPO, 'typhon_backtest', 'data_sweep', 'parity_decided_trades.csv'), 'kind': 'parity'},
+}
+
+COMPLETE_SESSION_BARS = 400          # a date counts as a complete session in a contract file with at least this many 1-minute bars
+MATCH_TOLERANCE_MIN = 20             # a live and a backtest trade pair up if same direction and entry times within this many minutes (the signal bar is 15 minutes)
+PRICE_TOLERANCE_PCT = 0.05           # entry prices within this percent of each other count as the same fill

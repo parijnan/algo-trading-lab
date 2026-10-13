@@ -3,14 +3,14 @@
  "engines": {
   "Prometheus": {
    "live_trades": 10,
-   "matched": 0,
+   "matched": 9,
    "live_only": 0,
    "backtest_only": 0,
-   "after_backtest_data": 10,
-   "same_exit": 0,
-   "live_rs_matched": 0,
-   "bt_rs_matched": 0,
-   "avg_entry_diff_pts": null
+   "after_backtest_data": 1,
+   "same_exit": 9,
+   "live_rs_matched": -1780,
+   "bt_rs_matched": 57,
+   "avg_entry_diff_pts": 3.9078
   },
   "Selene": {
    "live_trades": 14,
@@ -55,8 +55,18 @@
    "live_exit_ts": "2026-10-06 21:00:00",
    "live_reason": "target1/trend_flip",
    "live_pts": 201.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-06 11:45:00",
+   "bt_entry": 8615.0,
+   "bt_exit_ts": "2026-10-06 21:00:00",
+   "bt_reason": "target1/trend_flip",
+   "bt_pts": 197.69,
+   "bt_rs": 1976.9,
+   "engine": "Prometheus",
+   "live_rs": 4020.0,
+   "rs_diff": 2043.1,
+   "entry_diff_pts": -0.0,
+   "same_exit": true
   },
   {
    "live_id": 65,
@@ -66,8 +76,18 @@
    "live_exit_ts": "2026-10-07 20:30:00",
    "live_reason": "target1/trend_flip",
    "live_pts": 267.33,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-06 21:00:00",
+   "bt_entry": 8525.0,
+   "bt_exit_ts": "2026-10-07 20:30:00",
+   "bt_reason": "target1/trend_flip",
+   "bt_pts": 267.56,
+   "bt_rs": 2675.6,
+   "engine": "Prometheus",
+   "live_rs": 5346.599999999999,
+   "rs_diff": 2671.0,
+   "entry_diff_pts": 0.0,
+   "same_exit": true
   },
   {
    "live_id": 66,
@@ -77,8 +97,18 @@
    "live_exit_ts": "2026-10-08 09:15:00",
    "live_reason": "target1/trend_flip",
    "live_pts": 104.66,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-07 20:30:00",
+   "bt_entry": 8686.0,
+   "bt_exit_ts": "2026-10-08 09:15:00",
+   "bt_reason": "target1/trend_flip",
+   "bt_pts": 104.58,
+   "bt_rs": 1045.8,
+   "engine": "Prometheus",
+   "live_rs": 2093.2,
+   "rs_diff": 1047.4,
+   "entry_diff_pts": -0.33,
+   "same_exit": true
   },
   {
    "live_id": 67,
@@ -88,8 +118,18 @@
    "live_exit_ts": "2026-10-08 19:00:00",
    "live_reason": "target1/trend_flip",
    "live_pts": 309.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-08 09:15:00",
+   "bt_entry": 8690.0,
+   "bt_exit_ts": "2026-10-08 19:00:00",
+   "bt_reason": "target1/trend_flip",
+   "bt_pts": 308.62,
+   "bt_rs": 3086.2,
+   "engine": "Prometheus",
+   "live_rs": 6180.0,
+   "rs_diff": 3093.8,
+   "entry_diff_pts": 0.0,
+   "same_exit": true
   },
   {
    "live_id": 68,
@@ -99,8 +139,18 @@
    "live_exit_ts": "2026-10-08 20:22:00",
    "live_reason": "stop_loss",
    "live_pts": -180.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-08 19:00:00",
+   "bt_entry": 8890.0,
+   "bt_exit_ts": "2026-10-08 20:22:00",
+   "bt_reason": "stop_loss",
+   "bt_pts": -177.8,
+   "bt_rs": -1778.0,
+   "engine": "Prometheus",
+   "live_rs": -3600.0,
+   "rs_diff": -1822.0,
+   "entry_diff_pts": -0.0,
+   "same_exit": true
   },
   {
    "live_id": 69,
@@ -110,8 +160,18 @@
    "live_exit_ts": "2026-10-08 21:47:00",
    "live_reason": "stop_loss",
    "live_pts": -272.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-08 20:30:00",
+   "bt_entry": 8984.0,
+   "bt_exit_ts": "2026-10-08 21:47:00",
+   "bt_reason": "stop_loss",
+   "bt_pts": -179.68,
+   "bt_rs": -1796.8,
+   "engine": "Prometheus",
+   "live_rs": -5440.0,
+   "rs_diff": -3643.2,
+   "entry_diff_pts": 0.0,
+   "same_exit": true
   },
   {
    "live_id": 70,
@@ -121,8 +181,18 @@
    "live_exit_ts": "2026-10-09 18:15:00",
    "live_reason": "trend_flip",
    "live_pts": -9.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-08 22:00:00",
+   "bt_entry": 8819.0,
+   "bt_exit_ts": "2026-10-09 18:15:00",
+   "bt_reason": "trend_flip",
+   "bt_pts": -10.0,
+   "bt_rs": -100.0,
+   "engine": "Prometheus",
+   "live_rs": -180.0,
+   "rs_diff": -80.0,
+   "entry_diff_pts": -0.5,
+   "same_exit": true
   },
   {
    "live_id": 71,
@@ -132,8 +202,18 @@
    "live_exit_ts": "2026-10-12 09:01:00",
    "live_reason": "stop_loss",
    "live_pts": -332.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-09 18:15:00",
+   "bt_entry": 8824.0,
+   "bt_exit_ts": "2026-10-12 09:01:00",
+   "bt_reason": "stop_loss",
+   "bt_pts": -332.0,
+   "bt_rs": -3320.0,
+   "engine": "Prometheus",
+   "live_rs": -6640.0,
+   "rs_diff": -3320.0,
+   "entry_diff_pts": 0.0,
+   "same_exit": true
   },
   {
    "live_id": 72,
@@ -143,8 +223,18 @@
    "live_exit_ts": "2026-10-12 11:46:00",
    "live_reason": "stop_loss",
    "live_pts": -178.0,
-   "status": "after backtest data",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-12 09:15:00",
+   "bt_entry": 8663.0,
+   "bt_exit_ts": "2026-10-12 11:46:00",
+   "bt_reason": "stop_loss",
+   "bt_pts": -173.26,
+   "bt_rs": -1732.6,
+   "engine": "Prometheus",
+   "live_rs": -3560.0,
+   "rs_diff": -1827.4,
+   "entry_diff_pts": 36.0,
+   "same_exit": true
   },
   {
    "live_id": 73,

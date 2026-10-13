@@ -1,0 +1,99 @@
+<title>Hestia Integrated Backtest</title>
+<style>
+:root{--bg:#f5f6f8;--panel:#fff;--ink:#15202b;--ink2:#4a5866;--mute:#85919e;--grid:#e2e6eb;--c0:#c2453a;--c1:#b8861f;--c2:#2f7fb8;--c3:#1f7a5c;--tot:#15202b;--neg:#c2453a;--pos:#1f7a5c;--font:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f151c;--panel:#161e27;--ink:#e6ebf0;--ink2:#a7b3c0;--mute:#6f7d8c;--grid:#25303c;--c0:#ef7468;--c1:#e0b14d;--c2:#6bb2e8;--c3:#3fbf94;--tot:#e6ebf0;--neg:#ef7468;--pos:#3fbf94;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f151c;--panel:#161e27;--ink:#e6ebf0;--ink2:#a7b3c0;--mute:#6f7d8c;--grid:#25303c;--c0:#ef7468;--c1:#e0b14d;--c2:#6bb2e8;--c3:#3fbf94;--tot:#e6ebf0;--neg:#ef7468;--pos:#3fbf94;color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);padding-inline:16px;padding-block:20px}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-size:22px;font-weight:600;margin:0}h2{font-size:14px;font-weight:600;margin:0 0 8px}
+.sub{color:var(--ink2);font-size:13.5px;line-height:1.5;margin:4px 0 0;max-width:85ch}
+.panel{background:var(--panel);border:1px solid var(--grid);border-radius:6px;padding:12px;min-width:0}
+.ctl{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center;font-size:12.5px;color:var(--ink2)}
+.ctl label{display:flex;align-items:center;gap:6px}
+.ctl input[type=number]{width:54px;font:12px var(--mono);background:var(--bg);color:var(--ink);border:1px solid var(--grid);border-radius:3px;padding:3px 5px}
+.ctl select{font:12px var(--mono);background:var(--bg);color:var(--ink);border:1px solid var(--grid);border-radius:3px;padding:3px}
+.dot{width:10px;height:10px;display:inline-block;border-radius:2px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.k{border-left:2px solid var(--grid);padding-left:10px}.k .v{font:600 20px var(--mono);font-variant-numeric:tabular-nums}.k .l{font-size:11.5px;color:var(--mute);text-transform:uppercase;letter-spacing:.05em}
+.sc{overflow-x:auto}svg{display:block;width:100%;min-width:720px;height:auto;font-family:var(--mono);font-size:11px}
+table{border-collapse:collapse;font:12px var(--mono);width:100%;font-variant-numeric:tabular-nums}
+td,th{padding:5px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}th{color:var(--mute);font-weight:500}td:first-child,th:first-child{text-align:left}
+.neg{color:var(--neg)}.pos{color:var(--pos)}
+.note{font-size:12.5px;color:var(--ink2);line-height:1.55;max-width:95ch;margin:0}
+.pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;border:1px solid var(--grid);color:var(--ink2)}.pill.ok{color:var(--pos);border-color:var(--pos)}.pill.warn{color:var(--c1);border-color:var(--c1)}.pill.bad{color:var(--neg);border-color:var(--neg)}
+.expand{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:10px}.expand button{font:inherit;font-size:12.5px;padding:6px 12px;border:1px solid var(--grid);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}.expand button:hover{background:var(--bg)}.expand .meta{color:var(--mute);font-size:12px}
+.tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--grid);box-shadow:0 2px 10px rgba(0,0,0,.2);padding:7px 9px;font:12px/1.5 var(--mono);border-radius:4px;display:none;z-index:5;white-space:nowrap}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<div class="wrap">
+<div><h1>Hestia integrated backtest</h1>
+<p class="sub">Prometheus, Selene, Helios and Typhon at their live configs, run together. Each trade is the engine's own backtest result for one unit, in rupees, booked on its exit date. Change the units, the cost per leg and the window to see the combined book.</p></div>
+<div class="panel ctl" id="ctl"></div>
+<div class="panel kpis" id="kpi"></div>
+<div class="panel"><h2>Equity, closed trades</h2><div class="sc"><svg id="eq" viewBox="0 0 1100 340"></svg></div><div class="ctl" id="leg" style="margin-top:6px"></div></div>
+<div class="panel"><h2>Drawdown from peak</h2><div class="sc"><svg id="dd" viewBox="0 0 1100 160"></svg></div></div>
+<div class="panel sc"><h2>By engine</h2><table id="eng"></table></div>
+<div class="panel sc"><h2>Monthly result, combined (Rs)</h2><table id="mon"></table></div>
+<div class="panel sc"><h2>Monthly correlation between engines</h2><table id="cor"></table></div>
+<div class="panel sc"><div class="ctl" style="justify-content:space-between"><h2 style="margin:0">Actual versus backtest</h2><label>show <select id="cf"></select></label></div><p class="note" id="cmeta" style="margin:6px 0 10px"></p><table id="csum"></table><div style="height:14px"></div><table id="ctab"></table><div class="expand" id="cx"></div></div>
+<div class="panel"><h2>Read this first</h2><p class="note" id="notes"></p></div>
+</div><div class="tip" id="tip"></div>
+<script>
+const DAYS=__DAYS__,T=__TRADES__,CMP=__CMP__,META=__META__,NAMES=['Prometheus','Selene','Helios','Typhon'],COL=['var(--c0)','var(--c1)','var(--c2)','var(--c3)'],RSPT=[20,1,20,500];
+// T rows: [engine, exit day index, rupees, entry price]
+const st={u:[1,1,1,1],cost:0,from:'all',on:[1,1,1,1]};
+const $=id=>document.getElementById(id),fm=v=>Math.round(v).toLocaleString('en-IN'),fs=v=>(v<0?'-':'')+fm(Math.abs(v));
+const cls=v=>v<0?'neg':'pos';
+function ctl(){let h='';NAMES.forEach((n,i)=>h+='<label><i class="dot" style="background:'+COL[i]+'"></i>'+n+' units <input type="number" min="0" max="20" step="1" value="'+st.u[i]+'" data-i="'+i+'" class="un"></label>');
+ h+='<label>cost per leg % <input type="number" min="0" max="1" step="0.01" value="'+st.cost+'" id="cs"></label>';
+ h+='<label>window <select id="win"><option value="all">all data</option><option value="2023-04-04">common (from Apr 2023)</option><option value="2025-01-01">2025 on</option><option value="2026-01-01">2026 on</option></select></label>';
+ $('ctl').innerHTML=h;document.querySelectorAll('.un').forEach(e=>e.onchange=()=>{st.u[+e.dataset.i]=Math.max(0,+e.value);run()});$('cs').onchange=e=>{st.cost=Math.max(0,+e.target.value);run()};$('win').onchange=e=>{st.from=e.target.value;run()}}
+function trades(){const f=st.from==='all'?'':st.from;return T.filter(t=>DAYS[t[1]]>=f&&st.u[t[0]]>0).map(t=>({e:t[0],d:t[1],ds:DAYS[t[1]],rs:(t[2]-2*st.cost/100*t[3]*RSPT[t[0]])*st.u[t[0]]}))}
+function mdd(a){let pk=0,mx=0;a.forEach(v=>{if(v>pk)pk=v;mx=Math.min(mx,v-pk)});return mx}
+function series(tr){const days=[...new Set(tr.map(t=>t.d))].sort((a,b)=>a-b);if(!days.length)return null;const tot=[],per=[[],[],[],[]];let c=0,cc=[0,0,0,0];let k=0;
+ days.forEach(d=>{while(k<tr.length&&tr[k].d<=d){c+=tr[k].rs;cc[tr[k].e]+=tr[k].rs;k++}tot.push(c);for(let i=0;i<4;i++)per[i].push(cc[i])});return{days,tot,per}}
+function line(svg,x,ys,cols,H,opt){const m={l:70,r:80,t:10,b:24},W=1100,lo=Math.min(0,...ys.flat()),hi=Math.max(0,...ys.flat()),pad=(hi-lo)*.05||1,y0=lo-(opt.zero?0:pad),y1=hi+pad;
+ const X=v=>m.l+(v-x[0])/(x[x.length-1]-x[0]||1)*(W-m.l-m.r),Y=v=>m.t+(y1-v)/(y1-y0)*(H-m.t-m.b);let s='';
+ const step=[1000,5000,10000,25000,50000,100000,250000,500000,1000000,2500000].find(q=>(y1-y0)/q<=6)||5e6;
+ for(let v=Math.ceil(y0/step)*step;v<=y1;v+=step)s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="var(--grid)"/><text x="'+(m.l-6)+'" y="'+(Y(v)+4)+'" text-anchor="end" fill="var(--mute)">'+fs(v)+'</text>';
+ let py='';x.forEach((d,i)=>{const y=DAYS[d].slice(0,4);if(y!==py){py=y;s+='<line x1="'+X(d)+'" x2="'+X(d)+'" y1="'+(H-m.b)+'" y2="'+(H-m.b+4)+'" stroke="var(--mute)"/><text x="'+(X(d)+2)+'" y="'+(H-8)+'" fill="var(--mute)">'+y+'</text>'}});
+ ys.forEach((a,j)=>{let d='';a.forEach((v,i)=>d+=(i?'L':'M')+X(x[i]).toFixed(1)+' '+Y(v).toFixed(1));if(opt.fill){s+='<path d="'+d+'L'+X(x[x.length-1])+' '+Y(0)+'L'+X(x[0])+' '+Y(0)+'Z" fill="'+cols[j]+'" opacity=".18"/>'}
+  s+='<path d="'+d+'" fill="none" stroke="'+cols[j]+'" stroke-width="'+(opt.w&&opt.w[j]||1.4)+'"/>';if(opt.labels){const last=a[a.length-1];s+='<text x="'+(W-m.r+6)+'" y="'+(Y(last)+4)+'" fill="'+cols[j]+'">'+opt.labels[j]+'</text>'}});
+ s+='<line id="'+opt.id+'" y1="'+m.t+'" y2="'+(H-m.b)+'" stroke="var(--ink2)" stroke-width=".7" visibility="hidden"/><rect x="'+m.l+'" y="'+m.t+'" width="'+(W-m.l-m.r)+'" height="'+(H-m.t-m.b)+'" fill="transparent" id="'+opt.id+'h"/>';svg.innerHTML=s;
+ const h=$(opt.id+'h'),cur=$(opt.id),tip=$('tip');h.onmousemove=ev=>{const b=svg.getBoundingClientRect(),px=(ev.clientX-b.left)/b.width*W,v=x[0]+(px-m.l)/(W-m.l-m.r)*(x[x.length-1]-x[0]);let i=0,bd=1e9;x.forEach((d,k)=>{const q=Math.abs(d-v);if(q<bd){bd=q;i=k}});
+  cur.setAttribute('x1',X(x[i]));cur.setAttribute('x2',X(x[i]));cur.setAttribute('visibility','visible');tip.innerHTML=opt.tip(i);tip.style.display='block';tip.style.left=Math.min(ev.clientX+14,innerWidth-230)+'px';tip.style.top=(ev.clientY+12)+'px'};
+ h.onmouseleave=()=>{tip.style.display='none';cur.setAttribute('visibility','hidden')}}
+function stats(tr){const n=tr.length,w=tr.filter(t=>t.rs>0).length,tot=tr.reduce((a,t)=>a+t.rs,0);const s=series(tr);if(!s)return null;const dd=mdd(s.tot),yrs=(new Date(DAYS[s.days[s.days.length-1]])-new Date(DAYS[s.days[0]]))/31557600000||1;
+ return{n,win:w/n*100,tot,dd,cal:dd<0?tot/yrs/-dd:NaN,worst:Math.min(...tr.map(t=>t.rs)),avg:tot/n}}
+function run(){const tr=trades().sort((a,b)=>a.d-b.d);const s=series(tr);if(!s){$('kpi').innerHTML='<div class="k"><div class="l">No trades</div></div>';return}
+ const all=stats(tr);$('kpi').innerHTML=[['Total result',fs(all.tot)+' Rs',cls(all.tot)],['Max drawdown',fs(all.dd)+' Rs','neg'],['Calmar (per year)',isNaN(all.cal)?'-':all.cal.toFixed(2),''],['Trades',fm(all.n),''],['Win rate',all.win.toFixed(1)+'%',''],['Worst trade',fs(all.worst)+' Rs','neg']].map(k=>'<div class="k"><div class="l">'+k[0]+'</div><div class="v '+k[2]+'">'+k[1]+'</div></div>').join('');
+ const on=[0,1,2,3].filter(i=>st.u[i]>0),ys=[s.tot,...on.map(i=>s.per[i])],cols=['var(--tot)',...on.map(i=>COL[i])];
+ line($('eq'),s.days,ys,cols,340,{id:'q1',labels:['Combined',...on.map(i=>NAMES[i])],w:[2.2],tip:i=>'<b>'+DAYS[s.days[i]]+'</b><br>combined '+fs(s.tot[i])+on.map(j=>'<br>'+NAMES[j]+' '+fs(s.per[j][i])).join('')});
+ let pk=0;const dd=s.tot.map(v=>{pk=Math.max(pk,v);return v-pk});line($('dd'),s.days,[dd],['var(--neg)'],160,{id:'q2',fill:1,zero:1,tip:i=>'<b>'+DAYS[s.days[i]]+'</b><br>drawdown '+fs(dd[i])+' Rs'});
+ let h='<tr><th>Engine</th><th>Units</th><th>First trade</th><th>Trades</th><th>Win %</th><th>Total Rs</th><th>Avg / trade</th><th>Max DD Rs</th><th>Calmar / yr</th><th>Worst trade</th></tr>';
+ NAMES.forEach((n,i)=>{const t=tr.filter(x=>x.e===i);if(!t.length)return;const q=stats(t);h+='<tr><td><i class="dot" style="background:'+COL[i]+'"></i> '+n+'</td><td>'+st.u[i]+'</td><td>'+t[0].ds+'</td><td>'+q.n+'</td><td>'+q.win.toFixed(1)+'</td><td class="'+cls(q.tot)+'">'+fs(q.tot)+'</td><td>'+fs(q.avg)+'</td><td class="neg">'+fs(q.dd)+'</td><td>'+(isNaN(q.cal)?'-':q.cal.toFixed(2))+'</td><td class="neg">'+fs(q.worst)+'</td></tr>'});
+ $('eng').innerHTML=h;
+ const M={},byE=[{},{},{},{}];tr.forEach(t=>{const k=t.ds.slice(0,7);M[k]=(M[k]||0)+t.rs;byE[t.e][k]=(byE[t.e][k]||0)+t.rs});
+ const yrs=[...new Set(Object.keys(M).map(k=>k.slice(0,4)))].sort();let mh='<tr><th>Year</th>'+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map(x=>'<th>'+x+'</th>').join('')+'<th>Year</th></tr>';
+ const mx=Math.max(...Object.values(M).map(Math.abs));yrs.forEach(y=>{let ys2=0;mh+='<tr><td>'+y+'</td>';for(let m=1;m<=12;m++){const k=y+'-'+String(m).padStart(2,'0'),v=M[k];if(v===undefined){mh+='<td></td>';continue}ys2+=v;const a=Math.min(.55,Math.abs(v)/mx*.9);mh+='<td style="background:'+(v<0?'rgba(194,69,58,':'rgba(31,122,92,')+a.toFixed(2)+')">'+fm(v/1000)+'k</td>'}mh+='<td class="'+cls(ys2)+'">'+fm(ys2/1000)+'k</td></tr>'});$('mon').innerHTML=mh;
+ const keys=Object.keys(M).sort(),vec=i=>keys.map(k=>byE[i][k]||0),cr=(a,b)=>{const n=a.length,ma=a.reduce((x,y)=>x+y)/n,mb=b.reduce((x,y)=>x+y)/n;let sa=0,sb=0,sc=0;a.forEach((v,j)=>{sa+=(v-ma)**2;sb+=(b[j]-mb)**2;sc+=(v-ma)*(b[j]-mb)});return sc/Math.sqrt(sa*sb)};
+ let ch='<tr><th></th>'+on.map(i=>'<th>'+NAMES[i]+'</th>').join('')+'</tr>';on.forEach(i=>{ch+='<tr><td>'+NAMES[i]+'</td>'+on.map(j=>'<td>'+(i===j?'1.00':cr(vec(i),vec(j)).toFixed(2))+'</td>').join('')+'</tr>'});$('cor').innerHTML=ch;
+ $('leg').innerHTML='';
+ $('notes').textContent='Backtest numbers: Selene, Helios and Typhon use their production-parity backtests (one real contract at a time, the real roll machinery); Prometheus uses its Fyers-history Phase 3 ledger at the live 2.5 config. Data runs to '+META.end+'. Each engine starts on its own first trade: Selene Apr 2021, Helios Oct 2021, Prometheus Mar 2023 (Fyers history), Typhon Apr 2023; use the common window for a like-for-like book. Results are rupees for the units shown, gross of costs unless you set a cost per leg (applied to the entry value on both legs). Equity moves only when a trade closes, so drawdowns inside an open trade are not shown, and engines are summed with no margin or capital limit. Backtests use the decided engine configs with the same entry and exit rules the live engines run.';}
+
+const CSHOWN=10;let cOpen=false;
+function cmp(){const f=$('cf').value,rows=CMP.rows.filter(r=>f==='All'||r.engine===f).sort((a,b)=>(b.live_entry_ts||b.bt_entry_ts).localeCompare(a.live_entry_ts||a.bt_entry_ts));
+ $('cmeta').textContent='Live trades are the ones the Hestia Dashboard counts. Both sides are shown for one unit, in points times rupees per point, so the live units do not matter. Backtest data runs to '+META.end+'; live snapshot taken '+(CMP.pulled_at||'').replace('T',' ')+' IST. A live trade pairs with the backtest trade of the same direction that entered within '+META.tol+' minutes.';
+ let h='<tr><th>Engine</th><th>Live trades</th><th>Matched</th><th>Same exit</th><th>Live only</th><th>Backtest only</th><th>Live Rs (matched)</th><th>Backtest Rs (matched)</th><th>Gap Rs</th><th>Avg entry gap (pts)</th></tr>';
+ NAMES.forEach(n=>{const s=CMP.engines[n];if(!s||(f!=='All'&&f!==n))return;const g=s.live_rs_matched-s.bt_rs_matched;h+='<tr><td>'+n+'</td><td>'+s.live_trades+'</td><td>'+s.matched+'</td><td>'+s.same_exit+'</td><td>'+s.live_only+'</td><td>'+s.backtest_only+'</td><td>'+fs(s.live_rs_matched)+'</td><td>'+fs(s.bt_rs_matched)+'</td><td class="'+cls(g)+'">'+fs(g)+'</td><td>'+(s.avg_entry_diff_pts===null?'-':s.avg_entry_diff_pts)+'</td></tr>'});
+ $('csum').innerHTML=h;
+ const shown=cOpen?rows:rows.slice(0,CSHOWN);let t='<tr><th>Engine</th><th>Live #</th><th>Side</th><th>Live entry</th><th>Backtest entry</th><th>Entry gap</th><th>Live exit</th><th>Backtest exit</th><th>Live pts</th><th>Backtest pts</th><th>Live Rs</th><th>Backtest Rs</th><th>Gap Rs</th><th>Status</th></tr>';
+ const d=x=>x?x.replace('T',' ').slice(5,16):'';
+ shown.forEach(r=>{const m=r.status==='matched',pc=m?(r.same_exit?'ok':'warn'):(r.status==='live only'?'bad':(r.status==='backtest only'?'bad':'warn')),lab=m?(r.same_exit?'matched':'matched, exit differs'):r.status;
+  t+='<tr><td>'+r.engine+'</td><td>'+(r.live_id||'')+'</td><td>'+(r.direction||'').slice(0,4)+'</td><td>'+d(r.live_entry_ts)+(r.live_entry?' @ '+r.live_entry:'')+'</td><td>'+d(r.bt_entry_ts)+(r.bt_entry?' @ '+r.bt_entry:'')+'</td><td>'+(m?r.entry_diff_pts:'')+'</td><td>'+d(r.live_exit_ts)+(r.live_reason?' '+r.live_reason:'')+'</td><td>'+d(r.bt_exit_ts)+(r.bt_reason?' '+r.bt_reason:'')+'</td><td>'+(r.live_pts!==undefined?r.live_pts:'')+'</td><td>'+(r.bt_pts!==undefined?r.bt_pts:'')+'</td><td>'+(m?fs(r.live_rs):'')+'</td><td>'+(r.bt_rs!==undefined?fs(r.bt_rs):'')+'</td><td class="'+(m?cls(r.rs_diff):'')+'">'+(m?fs(r.rs_diff):'')+'</td><td><span class="pill '+pc+'">'+lab+'</span></td></tr>'});
+ $('ctab').innerHTML=t;
+ $('cx').innerHTML=rows.length>CSHOWN?'<button type="button" id="cb" aria-expanded="'+cOpen+'">'+(cOpen?'Show only the latest '+CSHOWN:'Show all '+rows.length+' rows')+'</button><span class="meta">newest first</span>':'';
+ const b=$('cb');if(b)b.onclick=()=>{cOpen=!cOpen;cmp()}}
+function cinit(){$('cf').innerHTML=['All',...NAMES].map(n=>'<option>'+n+'</option>').join('');$('cf').onchange=()=>{cOpen=false;cmp()};cmp()}
+ctl();run();cinit();
+</script>
