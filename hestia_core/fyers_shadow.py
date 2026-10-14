@@ -530,6 +530,7 @@ class SmartConfig:
     retry_s: float = 0.5                         # between pulls while the just-closed minute has not appeared in the answer yet
     max_wait_s: float = 3.0                      # give up on Fyers this long after the minute closed (Angel One's own median is 2.75 s, so waiting longer buys nothing)
     timeout_s: float = 3.0
+    confirm_zero_volume: bool = True             # the just-closed minute arriving as a zero-volume placeholder is not trusted: Angel One is asked (2026-10-14: a real 3-lot print was dropped as an untraded minute)
 
 
 SMART_COLS = ['ts', 'token', 'symbol', 'win_from', 'win_to', 'expected_minute', 'kind', 'served', 'attempts', 'after_s', 'latency_ms',
@@ -591,6 +592,13 @@ class FyersSmart:
             if res.kind in ('ok', 'empty') and res.frame is not None:
                 closed = res.frame[res.frame['time_stamp'] < window_end]
                 if (closed['time_stamp'] == expected).any():
+                    if self.cfg.confirm_zero_volume and not (closed.loc[closed['time_stamp'] == expected, 'volume'] > 0).any():
+                        # Fyers lists a minute nobody traded as a zero-volume row, and may also list one whose trade it has not caught up with: only
+                        # Angel One can say which, so it answers this window (an untraded minute then stays absent, as it always was)
+                        after = (pd.Timestamp(self._clock()) - window_end).total_seconds()
+                        self._finish(ref, symbol, win_from, win_to, expected, 'placeholder', False, attempts, after, res.latency_ms, len(closed), 0,
+                                     'the just-closed minute is a zero-volume row in the Fyers answer')
+                        return None
                     new = closed[~closed['time_stamp'].isin(known) & (closed['volume'] > 0)]
                     out = new[MINUTE_COLS].reset_index(drop=True)
                     after = (pd.Timestamp(self._clock()) - window_end).total_seconds()
@@ -664,5 +672,5 @@ def build_smart(cfg, shadow: Optional[ShadowRecorder]) -> Optional[FyersSmart]:
         return None
     scfg = SmartConfig(instruments=tuple(cs.get('smart_instruments', SmartConfig.instruments)), settle_s=float(cs.get('smart_settle_s', SmartConfig.settle_s)),
                        retry_s=float(cs.get('smart_retry_s', SmartConfig.retry_s)), max_wait_s=float(cs.get('smart_max_wait_s', SmartConfig.max_wait_s)),
-                       timeout_s=cs.get('timeout_s', 3.0))
+                       timeout_s=cs.get('timeout_s', 3.0), confirm_zero_volume=bool(cs.get('smart_confirm_zero_volume', SmartConfig.confirm_zero_volume)))
     return FyersSmart(cfg.SHADOW_DIR, shadow.gate, shadow.client, scfg)

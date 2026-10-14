@@ -92,12 +92,41 @@ def test_nothing_new_is_an_empty_frame_and_still_counts_as_served(tmp_path):
     assert out is not None and out.empty and s.summary() == (1, 0)
 
 
-def test_a_zero_volume_placeholder_minute_is_dropped_but_still_proves_the_answer_is_current(tmp_path):
+def zero_volume_at(minute):
     frame = minute_rows(FULL)
-    frame.loc[frame['time_stamp'] == pd.Timestamp(M(14)), 'volume'] = 0.0
-    s, _, _ = smart(tmp_path, Client(fs.FetchResult('ok', frame, 50.0)))
+    frame.loc[frame['time_stamp'] == pd.Timestamp(minute), 'volume'] = 0.0
+    return fs.FetchResult('ok', frame, 50.0)
+
+
+def test_a_zero_volume_placeholder_earlier_in_the_window_is_dropped_and_the_answer_is_still_served(tmp_path):
+    s, _, _ = smart(tmp_path, Client(zero_volume_at(M(12))))
     out = s.fetch_window(REF, WIN_FROM, WIN_TO, set())
-    assert pd.Timestamp(M(14)) not in set(out['time_stamp']) and len(out) == 4 and s.summary() == (1, 0)
+    assert pd.Timestamp(M(12)) not in set(out['time_stamp']) and len(out) == 4 and s.summary() == (1, 0)
+
+
+def test_the_just_closed_minute_arriving_as_a_zero_volume_row_is_handed_to_angel_one_at_once(tmp_path):
+    client = Client(zero_volume_at(M(14)))                                      # 2026-10-13 14:36: Fyers said empty, Angel One had a 3-lot print
+    s, _, clock = smart(tmp_path, client)
+    assert s.fetch_window(REF, WIN_FROM, WIN_TO, set()) is None and s.summary() == (0, 1)
+    assert len(client.calls) == 1, 'no retry: a placeholder is not a lagging answer, and Angel One decides'
+    r = rows(tmp_path)[0]
+    assert r['kind'] == 'placeholder' and r['served'] == '0' and r['minutes_returned'] == '5' and r['minutes_used'] == '0' and 'zero-volume' in r['note']
+
+
+def test_the_zero_volume_check_can_be_switched_off_in_config(tmp_path):
+    s, _, _ = smart(tmp_path, Client(zero_volume_at(M(14))), confirm_zero_volume=False)
+    out = s.fetch_window(REF, WIN_FROM, WIN_TO, set())
+    assert out is not None and pd.Timestamp(M(14)) not in set(out['time_stamp']) and s.summary() == (1, 0)
+
+
+def test_the_config_key_reaches_the_built_source(tmp_path):
+    cfg = cfg_for(tmp_path, 'smart', smart_confirm_zero_volume=False)
+    sh = fs.build_shadow(cfg)
+    try:
+        assert fs.build_smart(cfg, sh).cfg.confirm_zero_volume is False
+        assert fs.build_smart(cfg_for(tmp_path, 'smart'), sh).cfg.confirm_zero_volume is True
+    finally:
+        sh.close()
 
 
 def test_it_waits_for_the_minute_to_settle_before_the_first_pull(tmp_path):

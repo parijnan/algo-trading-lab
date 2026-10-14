@@ -81,6 +81,7 @@ CANDLE_SOURCE = dict(
     smart_instruments=('CRUDEOILM',),                   # 'smart' mode only: Fyers is asked FIRST for these (the pilot, plans/hestia-fyers-candle-source.md section 7d)
     smart_settle_s=0.5,                                 # a minute is trusted this long after it closes (owner's call 2026-10-10; measured: final in 97.5% of snapshots at +0.5 s, 100% from +0.8 s)
     smart_max_wait_s=3.0,                               # give up on Fyers this long after the minute closed and let Angel One's burst run
+    smart_confirm_zero_volume=True,                     # the just-closed minute arriving from Fyers as a zero-volume row is handed to Angel One (found 2026-10-14: a real 3-lot print was dropped); False trusts it as untraded
     # 'rescue' mode only (Phase 2): Fyers is asked for a window after this many failed Angel One attempts (5 = only after the whole burst has failed;
     # lower values rescue sooner and stop the Angel One attempts early), and only once the just-closed minute is this many seconds old, because Fyers's
     # first-seen value of a minute is provisional (measured 2026-10-05 with research/fyers_mcx_validation/settle_probe.py: 54% final at +0.1 s, 90% at +0.3 s,
