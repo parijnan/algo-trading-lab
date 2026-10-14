@@ -18,6 +18,7 @@ h1{font-size:22px;font-weight:600;margin:0}h2{font-size:14px;font-weight:600;mar
 .sc{overflow-x:auto}svg{display:block;width:100%;min-width:720px;height:auto;font-family:var(--mono);font-size:11px}
 table{border-collapse:collapse;font:12px var(--mono);width:100%;font-variant-numeric:tabular-nums}
 td,th{padding:5px 8px;text-align:right;border-bottom:1px solid var(--grid);vertical-align:top}th{color:var(--mute);font-weight:500}td:first-child,th:first-child{text-align:left}
+@media (max-width:760px){table{display:block;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}td,th{padding:5px 10px}}   /* phones: each table keeps its natural column widths and scrolls sideways on its own */
 .neg{color:var(--neg)}.pos{color:var(--pos)}
 .note{font-size:12.5px;color:var(--ink2);line-height:1.55;margin:0}
 .zb{font:inherit;font-size:12.5px;padding:3px 10px;border:1px solid var(--grid);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}.zb:hover{background:var(--bg)}

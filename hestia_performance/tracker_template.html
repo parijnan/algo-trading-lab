@@ -84,7 +84,7 @@ table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th { color: var(--ink2); font-weight: 600; font-size: 0.74rem; }
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-td.wrap { white-space: normal; min-width: 96px; }
+td.cellwrap { white-space: normal; min-width: 96px; }
 td .gl { font-size: 0.7rem; margin-right: 4px; }
 select { font: inherit; font-size: 0.82rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .notes { color: var(--ink2); font-size: 0.8rem; display: grid; gap: 6px; max-width: 90ch; }
@@ -345,7 +345,7 @@ const DATA = __DATA__;
     const rows = list.map(t => h('tr', {},
       h('td', { text: NAME(t.engine) + ' #' + t.trade_id }), h('td', {}, h('span', { class: 'gl', text: t.direction === 'bullish' ? '\u25B2' : '\u25BC' }), t.direction),
       h('td', { text: t.units + ' \u00D7 ' + (t.lots / t.units) }), h('td', { text: dtstr(t.entry_ts) }), h('td', { text: dtstr(t.exit_ts) }), h('td', { class: 'n', text: hrs(t.hold_h) }),
-      h('td', { class: 'n', text: px(t.entry_price) }), h('td', { class: 'n wrap', text: exitPx(t) }), h('td', { class: 'wrap', text: t.reasons.replace('/', ' / ') }),
+      h('td', { class: 'n', text: px(t.entry_price) }), h('td', { class: 'n cellwrap', text: exitPx(t) }), h('td', { class: 'cellwrap', text: t.reasons.replace('/', ' / ') }),
       h('td', { class: 'n', text: t.slippage === null ? '\u2013' : pts(t.slippage) }), h('td', { class: 'n', text: pts(t.pts) }), h('td', { class: 'n', text: rs(val(t)) })));
     const head = ['Trade', 'Side', 'Units \u00D7 lots', 'Entered', 'Exited', 'Held', 'Entry', 'Exit', 'Reason', 'Slippage', 'Points', state.scale === 'actual' ? 'Profit / loss' : 'At 1 unit'];
     return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Every live trade' }), h('div', { class: 'controls' }, h('span', { class: 'lbl', text: 'Show' }), sel)),
