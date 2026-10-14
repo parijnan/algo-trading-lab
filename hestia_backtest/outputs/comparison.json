@@ -1,16 +1,16 @@
 {
- "pulled_at": "2026-10-13T15:48:08",
+ "pulled_at": "2026-10-14T10:00:05",
  "engines": {
   "Prometheus": {
-   "live_trades": 10,
-   "matched": 9,
+   "live_trades": 11,
+   "matched": 11,
    "live_only": 0,
    "backtest_only": 0,
-   "not_closed_in_backtest": 1,
-   "same_exit": 9,
-   "live_rs_matched": -1780,
-   "bt_rs_matched": 57,
-   "avg_entry_diff_pts": 3.9078
+   "not_closed_in_backtest": 0,
+   "same_exit": 11,
+   "live_rs_matched": 1210,
+   "bt_rs_matched": 2325,
+   "avg_entry_diff_pts": 4.7882
   },
   "Selene": {
    "live_trades": 14,
@@ -35,14 +35,14 @@
    "avg_entry_diff_pts": 0.5833
   },
   "Typhon": {
-   "live_trades": 5,
-   "matched": 5,
+   "live_trades": 6,
+   "matched": 6,
    "live_only": 0,
    "backtest_only": 0,
    "not_closed_in_backtest": 0,
-   "same_exit": 4,
-   "live_rs_matched": 11000,
-   "bt_rs_matched": 11585,
+   "same_exit": 5,
+   "live_rs_matched": 10325,
+   "bt_rs_matched": 10935,
    "avg_entry_diff_pts": 0.1
   }
  },
@@ -63,8 +63,8 @@
    "bt_pts": 197.69,
    "bt_rs": 1976.9,
    "engine": "Prometheus",
-   "live_rs": 4020.0,
-   "rs_diff": 2043.1,
+   "live_rs": 2010.0,
+   "rs_diff": 33.1,
    "entry_diff_pts": -0.0,
    "same_exit": true
   },
@@ -84,8 +84,8 @@
    "bt_pts": 267.56,
    "bt_rs": 2675.6,
    "engine": "Prometheus",
-   "live_rs": 5346.599999999999,
-   "rs_diff": 2671.0,
+   "live_rs": 2673.2999999999997,
+   "rs_diff": -2.3,
    "entry_diff_pts": 0.0,
    "same_exit": true
   },
@@ -105,8 +105,8 @@
    "bt_pts": 104.58,
    "bt_rs": 1045.8,
    "engine": "Prometheus",
-   "live_rs": 2093.2,
-   "rs_diff": 1047.4,
+   "live_rs": 1046.6,
+   "rs_diff": 0.8,
    "entry_diff_pts": -0.33,
    "same_exit": true
   },
@@ -126,8 +126,8 @@
    "bt_pts": 308.62,
    "bt_rs": 3086.2,
    "engine": "Prometheus",
-   "live_rs": 6180.0,
-   "rs_diff": 3093.8,
+   "live_rs": 3090.0,
+   "rs_diff": 3.8,
    "entry_diff_pts": 0.0,
    "same_exit": true
   },
@@ -147,8 +147,8 @@
    "bt_pts": -177.8,
    "bt_rs": -1778.0,
    "engine": "Prometheus",
-   "live_rs": -3600.0,
-   "rs_diff": -1822.0,
+   "live_rs": -1800.0,
+   "rs_diff": -22.0,
    "entry_diff_pts": -0.0,
    "same_exit": true
   },
@@ -168,8 +168,8 @@
    "bt_pts": -179.68,
    "bt_rs": -1796.8,
    "engine": "Prometheus",
-   "live_rs": -5440.0,
-   "rs_diff": -3643.2,
+   "live_rs": -2720.0,
+   "rs_diff": -923.2,
    "entry_diff_pts": 0.0,
    "same_exit": true
   },
@@ -189,8 +189,8 @@
    "bt_pts": -10.0,
    "bt_rs": -100.0,
    "engine": "Prometheus",
-   "live_rs": -180.0,
-   "rs_diff": -80.0,
+   "live_rs": -90.0,
+   "rs_diff": 10.0,
    "entry_diff_pts": -0.5,
    "same_exit": true
   },
@@ -210,8 +210,8 @@
    "bt_pts": -332.0,
    "bt_rs": -3320.0,
    "engine": "Prometheus",
-   "live_rs": -6640.0,
-   "rs_diff": -3320.0,
+   "live_rs": -3320.0,
+   "rs_diff": 0.0,
    "entry_diff_pts": 0.0,
    "same_exit": true
   },
@@ -231,8 +231,8 @@
    "bt_pts": -173.26,
    "bt_rs": -1732.6,
    "engine": "Prometheus",
-   "live_rs": -3560.0,
-   "rs_diff": -1827.4,
+   "live_rs": -1780.0,
+   "rs_diff": -47.4,
    "entry_diff_pts": 36.0,
    "same_exit": true
   },
@@ -244,8 +244,39 @@
    "live_exit_ts": "2026-10-13 09:15:00",
    "live_reason": "target1/trend_flip",
    "live_pts": 166.0,
-   "status": "not closed in backtest",
-   "engine": "Prometheus"
+   "status": "matched",
+   "bt_entry_ts": "2026-10-12 12:00:00",
+   "bt_entry": 8785.0,
+   "bt_exit_ts": "2026-10-13 09:15:00",
+   "bt_reason": "target1/trend_flip",
+   "bt_pts": 176.81,
+   "bt_rs": 1768.1,
+   "engine": "Prometheus",
+   "live_rs": 1660.0,
+   "rs_diff": -108.1,
+   "entry_diff_pts": -34.5,
+   "same_exit": true
+  },
+  {
+   "live_id": 74,
+   "direction": "bearish",
+   "live_entry_ts": "2026-10-13 09:15:00",
+   "live_entry": 8800.0,
+   "live_exit_ts": "2026-10-13 18:30:00",
+   "live_reason": "trend_flip",
+   "live_pts": 44.0,
+   "status": "matched",
+   "bt_entry_ts": "2026-10-13 09:15:00",
+   "bt_entry": 8852.0,
+   "bt_exit_ts": "2026-10-13 18:30:00",
+   "bt_reason": "trend_flip",
+   "bt_pts": 50.0,
+   "bt_rs": 500.0,
+   "engine": "Prometheus",
+   "live_rs": 440.0,
+   "rs_diff": -60.0,
+   "entry_diff_pts": 52.0,
+   "same_exit": true
   },
   {
    "live_id": 7,
@@ -707,6 +738,27 @@
    "live_rs": -1200.0,
    "rs_diff": 15.0,
    "entry_diff_pts": 0.0,
+   "same_exit": true
+  },
+  {
+   "live_id": 8,
+   "direction": "bearish",
+   "live_entry_ts": "2026-10-13 13:45:00",
+   "live_entry": 300.8,
+   "live_exit_ts": "2026-10-13 18:00:00",
+   "live_reason": "trend_flip",
+   "live_pts": -1.35,
+   "status": "matched",
+   "bt_entry_ts": "2026-10-13 13:45:00",
+   "bt_entry": 300.9,
+   "bt_exit_ts": "2026-10-13 18:00:00",
+   "bt_reason": "trend_flip",
+   "bt_pts": -1.3,
+   "bt_rs": -650.0,
+   "engine": "Typhon",
+   "live_rs": -675.0,
+   "rs_diff": -25.0,
+   "entry_diff_pts": 0.1,
    "same_exit": true
   }
  ]
