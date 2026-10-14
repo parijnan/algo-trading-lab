@@ -33,6 +33,11 @@ def norm_reason(r: str) -> str:
     return '/'.join(dict.fromkeys(str(r).split('/')))
 
 
+def live_rs_per_point(e: dict) -> float:
+    """Rupees per recorded live point for one unit; Prometheus's recorded points are summed over its two lots."""
+    return e.get('rs_per_summed_point', e['rs_per_point_unit'])
+
+
 def pair(live: list, bt: pd.DataFrame, tol_min: float) -> list:
     """live: dicts with entry_ts, direction, ...; bt: backtest rows of one engine. Returns comparison rows (one per live trade, then unmatched backtest rows)."""
     bt = bt.sort_values('entry_ts').reset_index(drop=True)
@@ -72,7 +77,7 @@ def compare(snapshot: dict, ledger: pd.DataFrame, tracker, perf_cfg: dict) -> di
         for r in rows:
             r['engine'] = name
             if r['status'] == 'matched':
-                r['live_rs'] = r['live_pts'] * e['rs_per_point_unit']
+                r['live_rs'] = r['live_pts'] * live_rs_per_point(e)
                 r['rs_diff'] = round(r['live_rs'] - r['bt_rs'], 1)
                 r['entry_diff_pts'] = round(r['live_entry'] - r['bt_entry'], 4) * (1 if r['direction'] == 'bullish' else -1)   # positive = live paid worse than the backtest
                 r['same_exit'] = (abs((pd.Timestamp(r['live_exit_ts']) - pd.Timestamp(r['bt_exit_ts'])).total_seconds()) <= cfg.MATCH_TOLERANCE_MIN * 60 and r['live_reason'] == r['bt_reason'])

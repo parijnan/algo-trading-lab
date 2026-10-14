@@ -97,3 +97,11 @@ def test_prometheus_fyers_track_takes_angel_one_only_after_the_last_fyers_day(mo
     out = dl.load_futures_1min('CRUDEOILM')
     assert list(out['data_source']) == ['fyers', 'fyers', 'fyers', 'angelone_tail_fill', 'angelone_tail_fill']      # the Angel One rows on 09-18 and 09-21 are not used
     assert out.index.is_monotonic_increasing
+
+
+def test_live_rupees_per_point_match_the_recorded_trade_rupees():
+    # trade CSV rows: Prometheus #72 -178.0 pts (two-lot sum) = -1,780 Rs; Typhon #8 -1.35 pts = -675 Rs; Selene 1 Rs a point; Helios 20 Rs a point
+    assert ca.live_rs_per_point(cfg.ENGINES['Prometheus']) == 10
+    assert ca.live_rs_per_point(cfg.ENGINES['Typhon']) == 500
+    assert ca.live_rs_per_point(cfg.ENGINES['Selene']) == 1
+    assert ca.live_rs_per_point(cfg.ENGINES['Helios']) == 20
