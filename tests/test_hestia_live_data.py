@@ -127,6 +127,9 @@ def test_an_ab1021_stretch_defers_the_bar_provisional_first_then_the_recovered_r
     assert len(real) == 1 and real[0][1].reconciles_provisional and real[0][1].quality == BarQuality.RECOVERED
     assert real[0][0] > boundary + timedelta(seconds=60), 'the real bar arrived only after the stretch ended'
     assert prov[0][1].prev_st == pytest.approx(real[0][1].prev_st)
+    texts = [a.text for a in w.core.alerts_for('warning')]
+    assert sum('provisional bar built from ticks' in t for t in texts) == 1, 'the provisional build is announced once, at the boundary'
+    assert not any('NOT reconciled' in t or 'minutes after the' in t for t in texts), 'and the bar recovered, so there is no failure message'
 
 
 def test_without_tick_data_a_deferred_bar_is_still_delivered_without_a_provisional(worlds):
@@ -139,6 +142,7 @@ def test_without_tick_data_a_deferred_bar_is_still_delivered_without_a_provision
     assert events_of(log, ProvisionalBar) == []
     (b,) = [e for e in events_of(log, BarComplete) if e.boundary_ts == boundary]
     assert b.quality == BarQuality.RECOVERED and not b.reconciles_provisional
+    assert not any('provisional' in a.text for a in w.core.alerts_for('warning'))
 
 
 def test_a_window_still_incomplete_at_the_cutoff_is_built_from_what_is_on_hand_as_partial(worlds):
@@ -151,7 +155,25 @@ def test_a_window_still_incomplete_at_the_cutoff_is_built_from_what_is_on_hand_a
     w.run_until(datetime(2026, 9, 3, 12, 40))
     (b,) = [e for e in events_of(log, BarComplete) if e.boundary_ts == datetime(2026, 9, 3, 12, 15)]
     assert b.quality == BarQuality.PARTIAL and b.minutes_present == 12
-    assert any('still incomplete' in a.text for a in w.core.alerts_for('warning'))
+    texts = [a.text for a in w.core.alerts_for('warning')]
+    assert any('still 12/15 minutes after the 1 min cutoff; no provisional bar had been built, the real bar was built from the minutes on hand' in t for t in texts)
+    assert not any('built from ticks' in t for t in texts)
+
+
+def test_a_provisional_bar_that_the_real_bar_cannot_complete_gives_two_messages_at_the_boundary_and_at_the_cutoff(worlds):
+    feed = FakeFeed()
+    log = []
+    w = worlds([('a', factory(log=log))], feed=feed, cfg=LiveDataConfig(seed_retry_attempts=1, ltp_refresh_s=0, deferred_bar_cutoff_min=1.0))
+    w.sc.missing.add(('T1', datetime(2026, 9, 3, 11, 50)))
+    w.start()
+    w.run_until(datetime(2026, 9, 3, 11, 59, 30))
+    feed.ohlc['T1'] = {'open': 100.0, 'high': 101.0, 'low': 99.0, 'close': 100.5}
+    w.run_until(datetime(2026, 9, 3, 12, 30))
+    assert len(events_of(log, ProvisionalBar)) == 1
+    msgs = [a.text for a in w.core.alerts_for('warning') if '11:45-12:00' in a.text]
+    assert len(msgs) == 2
+    assert msgs[0].endswith('has 14/15 minutes at the boundary; provisional bar built from ticks and sent to the engines, the real bar is awaited until 12:01')
+    assert msgs[1].endswith('still 14/15 minutes after the 1 min cutoff; the provisional bar was NOT reconciled against a complete real bar, the real bar was built from the minutes on hand')
 
 
 def test_a_missing_minute_that_arrives_late_completes_the_bar_as_recovered(worlds):

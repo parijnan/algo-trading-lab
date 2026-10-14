@@ -525,9 +525,14 @@ class LiveData:
             s.pending_boundary = boundary
             s.deadline = boundary + timedelta(minutes=self.cfg.deferred_bar_cutoff_min)
             s.deferred, s.provisional_sent = False, False
-            if len(self._window(s, boundary)) < self.cfg.bar_min:
+            have = len(self._window(s, boundary))
+            if have < self.cfg.bar_min:
                 s.deferred = True
                 self._send_provisional(s, boundary)
+                if s.provisional_sent:                          # the first of the two messages: the provisional bar exists now, the real one is awaited
+                    start = boundary - timedelta(minutes=self.cfg.bar_min)
+                    self._alert('warning', f'{s.ref.symbol}: 15m bar {start:%H:%M}-{boundary:%H:%M} has {have}/{self.cfg.bar_min} minutes at the boundary; '
+                                           f'provisional bar built from ticks and sent to the engines, the real bar is awaited until {s.deadline:%H:%M}')
         if s.pending_boundary is None:
             return
         pb = s.pending_boundary
@@ -580,9 +585,11 @@ class LiveData:
                   .drop_duplicates('time_stamp', keep='last').sort_values('time_stamp').reset_index(drop=True))
         s.version += 1
         s.finalized_boundary = boundary
-        if not complete:
-            self._alert('warning', f'{s.ref.symbol}: 15m bar {start:%H:%M}-{boundary:%H:%M} still incomplete '
-                                   f'({len(window)}/{self.cfg.bar_min}) after the cutoff; built from what is on hand')
+        if not complete:                                        # the second message: the real bar could not be completed, so a provisional bar was not reconciled against a full one
+            what = ('the provisional bar was NOT reconciled against a complete real bar' if reconciles
+                    else 'no provisional bar had been built')
+            self._alert('warning', f'{s.ref.symbol}: 15m bar {start:%H:%M}-{boundary:%H:%M} still {len(window)}/{self.cfg.bar_min} minutes after the '
+                                   f'{self.cfg.deferred_bar_cutoff_min:g} min cutoff; {what}, the real bar was built from the minutes on hand')
         quality = (BarQuality.COMPLETE if complete and not deferred else BarQuality.RECOVERED if complete
                    else BarQuality.PARTIAL)
         for task in self.core.traders_of(s.token):
