@@ -1,12 +1,12 @@
 {
- "pulled_at": "2026-10-14T10:00:05",
+ "pulled_at": "2026-10-15T07:42:53",
  "engines": {
   "Prometheus": {
-   "live_trades": 11,
+   "live_trades": 13,
    "matched": 11,
-   "live_only": 0,
+   "live_only": 1,
    "backtest_only": 0,
-   "not_closed_in_backtest": 0,
+   "not_closed_in_backtest": 1,
    "same_exit": 11,
    "live_rs_matched": 1210,
    "bt_rs_matched": 2325,
@@ -35,15 +35,15 @@
    "avg_entry_diff_pts": 0.5833
   },
   "Typhon": {
-   "live_trades": 6,
-   "matched": 6,
+   "live_trades": 7,
+   "matched": 7,
    "live_only": 0,
    "backtest_only": 0,
    "not_closed_in_backtest": 0,
-   "same_exit": 5,
-   "live_rs_matched": 10325,
-   "bt_rs_matched": 10935,
-   "avg_entry_diff_pts": 0.1
+   "same_exit": 6,
+   "live_rs_matched": 15200,
+   "bt_rs_matched": 15835,
+   "avg_entry_diff_pts": 0.0786
   }
  },
  "rows": [
@@ -277,6 +277,28 @@
    "rs_diff": -60.0,
    "entry_diff_pts": 52.0,
    "same_exit": true
+  },
+  {
+   "live_id": 75,
+   "direction": "bullish",
+   "live_entry_ts": "2026-10-13 18:30:00",
+   "live_entry": 8778.0,
+   "live_exit_ts": "2026-10-14 20:15:00",
+   "live_reason": "target1/trend_flip",
+   "live_pts": 289.33,
+   "status": "live only",
+   "engine": "Prometheus"
+  },
+  {
+   "live_id": 76,
+   "direction": "bearish",
+   "live_entry_ts": "2026-10-14 20:15:00",
+   "live_entry": 8959.33,
+   "live_exit_ts": "2026-10-14 22:38:00",
+   "live_reason": "stop_loss",
+   "live_pts": -181.34,
+   "status": "not closed in backtest",
+   "engine": "Prometheus"
   },
   {
    "live_id": 7,
@@ -759,6 +781,27 @@
    "live_rs": -675.0,
    "rs_diff": -25.0,
    "entry_diff_pts": 0.1,
+   "same_exit": true
+  },
+  {
+   "live_id": 9,
+   "direction": "bullish",
+   "live_entry_ts": "2026-10-13 18:00:00",
+   "live_entry": 302.15,
+   "live_exit_ts": "2026-10-14 16:30:00",
+   "live_reason": "trend_flip",
+   "live_pts": 9.75,
+   "status": "matched",
+   "bt_entry_ts": "2026-10-13 18:00:00",
+   "bt_entry": 302.2,
+   "bt_exit_ts": "2026-10-14 16:30:00",
+   "bt_reason": "trend_flip",
+   "bt_pts": 9.8,
+   "bt_rs": 4900.0,
+   "engine": "Typhon",
+   "live_rs": 4875.0,
+   "rs_diff": -25.0,
+   "entry_diff_pts": -0.05,
    "same_exit": true
   }
  ]
