@@ -3,7 +3,7 @@ Step 2 of the hestia-backtest skill: re-run each engine's backtest on the data a
 
   Selene, Helios   production-parity backtest, window DATA_START to END (parity_backtest_<engine>.py, its own main)
   Typhon           production-parity backtest at the decided config (mult, SL and target from typhon_configs), written as parity_decided_legs/trades.csv
-  Prometheus       Fyers-history Phase 3 track: sweep_p3.py (raw signal, mult 2.0 and 2.5) then bespoke_2lot_p3.py (live exits)
+  Prometheus       production-parity backtest (2026-10-16): parity_backtest_prometheus.py <END>, per-contract Supertrend, the live roll rule, the live two-lot exits
 
 END defaults to the last complete session in the live contract tree (data_check.last_complete_session). Each engine runs in its own process, one after another, and its output goes to
 <log-dir>/<engine>.log; the numbers printed here are read from the files each one writes. Full re-computation is deterministic and append-like (a causal indicator never changes an earlier
@@ -45,8 +45,7 @@ def jobs(end: str) -> dict:
         'Selene': ([py, '-B', 'parity_backtest_selene.py', end], 'selene_backtest'),
         'Helios': ([py, '-B', 'parity_backtest_helios.py', end], 'helios_backtest'),
         'Typhon': ([py, '-B', '-c', TYPHON_DECIDED, end], 'typhon_backtest'),
-        'Prometheus': ([py, '-B', '-c', 'import subprocess,sys; sys.exit(subprocess.call([sys.executable,"-B","sweep_p3.py"]) or subprocess.call([sys.executable,"-B","bespoke_2lot_p3.py"]))'],
-                       os.path.join('prometheus_backtest', 'phase3_fyers')),
+        'Prometheus': ([py, '-B', 'parity_backtest_prometheus.py', end], os.path.join('prometheus_backtest', 'phase3_fyers')),
     }
 
 

@@ -15,7 +15,7 @@ ARTIFACT_URL_FILE = os.path.join(REPO, 'hestia_backtest', 'artifact_url.txt')
 # trades_csv: where each engine's backtest trade list lives; kind says how build_ledger reads it
 ENGINES = {
     'Prometheus': {'key': 'prometheus', 'instrument': 'CRUDEOILM', 'rs_per_point_unit': 20, 'rs_per_summed_point': 10,   # its recorded points (live and backtest) are summed over the two lots, so Rs = points x 10
-                   'backtest_csv': os.path.join(REPO, 'prometheus_backtest', 'phase3_fyers', 'data_sweep', 'mult_2.5', 'bespoke_trade_summary.csv'), 'kind': 'prometheus'},
+                   'backtest_csv': os.path.join(REPO, 'prometheus_backtest', 'phase3_fyers', 'data_sweep', 'parity', 'parity_trades.csv'), 'kind': 'prometheus'},
     'Selene': {'key': 'selene', 'instrument': 'SILVERMIC', 'rs_per_point_unit': 1,
                'backtest_csv': os.path.join(REPO, 'selene_backtest', 'data_sweep', 'parity_trades.csv'), 'kind': 'parity'},
     'Helios': {'key': 'helios', 'instrument': 'GOLDPETAL', 'rs_per_point_unit': 20,

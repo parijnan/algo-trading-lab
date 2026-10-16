@@ -67,3 +67,23 @@ ST_MULTIPLIER_GRID = [2.0, 2.5]   # 2.5 added 2026-10-08: Prometheus live multip
 # Costs -- same convention as every other phase: deliberately absent.
 # ---------------------------------------------------------------------------
 SLIPPAGE_ENABLED = False
+
+# ---------------------------------------------------------------------------
+# Production-parity backtest (parity_backtest_prometheus.py, 2026-10-16). One real contract at a time, per-contract Supertrend,
+# the real roll machinery (hestia_core/roll_policy.py) and the live two-lot exits. Every value below is the LIVE one in
+# prometheus_engine/engine_configs.py (tests/test_prometheus_parity_backtest.py pins them to it).
+# ---------------------------------------------------------------------------
+PARITY_DATA_START = '2023-03-01'    # the first Fyers CRUDEOILM history (the older splice track starts 2023-03-03)
+PARITY_ST_MULTIPLIER = 2.5
+PARITY_SL_PCT = 1.0
+PARITY_T1_PCT = 1.25
+PARITY_T2_PCT = 4.0
+LOTS_PER_LEG = 1                    # lots in each of the two legs of one unit (lot 1 books at T1, lot 2 at T2)
+ST_SEED_DAYS = 18                   # calendar days of 1-minute history behind each session's Supertrend seed (hestia_config seed_days)
+# Production rolls at the session close minus 15 minutes (23:15 on a 23:30 close, 23:40 on 23:55). The simulator measures from the LAST
+# one-minute bar of the session (23:29 / 23:54), hence 14.
+ROLLOVER_BUFFER_MIN = 14
+BASIS_MAX_GAP_MIN = 5               # the recalibration basis must come from a minute this close to the old entry
+ANGELONE_OWN_FROM = '2026-09-02'    # live-tree files hold a contract's OWN prices only from this date (earlier rows are a relabelled front month)
+HOLIDAYS_FILE = os.path.join(REPO_ROOT, 'data', 'mcx_holidays_2022_2026.csv')
+PARITY_OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_sweep', 'parity')
