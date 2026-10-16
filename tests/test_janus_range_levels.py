@@ -98,3 +98,13 @@ def test_range_history_uses_daily_high_low_and_the_last_close(monkeypatch):
 def test_unknown_level_source_is_refused():
     with pytest.raises(ValueError):
         janus_data.load_sessions('CRUDEOILM', level_source='nonsense')
+
+
+def test_first_touches_report_the_first_bar_that_reaches_each_level_in_time_order():
+    from range_levels_export import first_touches
+    idx = pd.to_datetime(['2026-01-05 09:00', '2026-01-05 09:01', '2026-01-05 09:02', '2026-01-05 09:03'])
+    bars = pd.DataFrame({'high': [101, 103, 106, 102], 'low': [99, 100, 101, 94]}, index=idx)
+    lv = {k: 1000.0 for k in ['S7', 'S6', 'S5', 'S4', 'S3', 'S2', 'S1', 'C', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']}
+    lv.update({'R1': 103, 'R2': 106, 'R3': 107, 'S1': 99, 'S2': 94, 'S3': 90})
+    got = first_touches(bars, lv)
+    assert [(k, t.strftime('%H:%M')) for k, t in got if k in ('R1', 'R2', 'R3', 'S1', 'S2', 'S3')] == [('S1', '09:00'), ('R1', '09:01'), ('R2', '09:02'), ('S2', '09:03')]

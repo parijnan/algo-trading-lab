@@ -43,12 +43,13 @@ def _range_by_day(days: dict) -> dict:
     return {r['date']: r for r in range_states(daily)}
 
 
-def load_sessions(symbol: str, level_source: str = None) -> list:
+def load_sessions(symbol: str, level_source: str = None, live_tail: bool = False) -> list:
     """Sessions oldest first. Each: dict(date, symbol, expiry, pick, bars, prev, levels, levels_prev, range). `pick` is 'effective' when the early-roll contract had
     data that day and 'naive_front' when only the plain nearest-expiry contract did (the handful of old rollover weeks). `levels` follow `level_source`
     (janus_configs.LEVEL_SOURCE by default): 'previous_session' uses the previous session's own High and Low, 'range_setter' the contract's setter range as it stood
     after the previous session; the Close is the previous session's either way. `levels_prev` is always the previous-session (control) set and `range` the range
-    state (None when the previous session took no part in the range history, in which case the session falls back to the control levels)."""
+    state (None when the previous session took no part in the range history, in which case the session falls back to the control levels). With `live_tail` a contract that
+    has no Fyers file yet is read from the live (Angel One) tree from janus_configs.LIVE_OWN_CONTRACT_FROM; those sessions carry data_source 'angelone_tail', the rest 'fyers'."""
     level_source = level_source or configs.LEVEL_SOURCE
     if level_source not in configs.LEVEL_SOURCES:
         raise ValueError(f'unknown level source {level_source!r}')
@@ -56,7 +57,13 @@ def load_sessions(symbol: str, level_source: str = None) -> list:
     end = pd.Timestamp(configs.DATA_END).date() if configs.DATA_END else None
     calendar = _p3._discover_expiries(symbol)
     closed = _closed_dates()
-    frames = {e: _p3._read_contract_file(configs.FYERS_DATA_DIR, symbol, e) for e in calendar}
+    frames, tail = {}, set()
+    for e in calendar:
+        frames[e] = _p3._read_contract_file(configs.FYERS_DATA_DIR, symbol, e)
+        if live_tail and not len(frames[e]):
+            df = _p3._read_contract_file(configs.LIVE_DATA_DIR, symbol, e)
+            frames[e] = df[df['time_stamp'] >= pd.Timestamp(configs.LIVE_OWN_CONTRACT_FROM)]
+            tail.add(e)
     by_day = {}
     for e, df in frames.items():
         if len(df):
@@ -91,5 +98,5 @@ def load_sessions(symbol: str, level_source: str = None) -> list:
         rng = ranges[expiry].get(pd_)
         levels = camarilla_levels(rng['high'], rng['low'], prev['close']) if (level_source == 'range_setter' and rng is not None) else levels_prev
         out.append({'date': d, 'symbol': symbol, 'expiry': expiry, 'pick': pick, 'bars': bars, 'prev': prev, 'levels': levels, 'levels_prev': levels_prev,
-                    'range': rng})
+                    'range': rng, 'data_source': 'angelone_tail' if expiry in tail else 'fyers'})
     return out

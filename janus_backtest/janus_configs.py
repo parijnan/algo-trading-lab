@@ -25,6 +25,10 @@ FYERS_VOID = None
 # Angel One per-contract files hold their OWN contract only from this date (earlier rows are a relabelled front month); Phase 0 uses
 # Fyers only, so the study ends where Fyers history ends and the Angel One tail is a later extension.
 DATA_END = None            # None: whatever the Fyers files hold
+# Angel One tail (2026-10-15, opt-in per call: load_sessions(..., live_tail=True)): a contract with no Fyers file yet (it has not expired) is read from the live tree,
+# keeping only rows from LIVE_OWN_CONTRACT_FROM, the date the live files hold that contract's own prices (earlier rows are a relabelled front month).
+LIVE_DATA_DIR = os.path.join(REPO_ROOT, 'data_pipeline', 'data', 'mcx')
+LIVE_OWN_CONTRACT_FROM = '2026-09-02'
 
 # Camarilla levels: previous session high H, low L, close C, range R = H - L.
 #   R1..R4 = C + R * FACTOR * (1/12, 1/6, 1/4, 1/2);  S1..S4 mirror them below C.
