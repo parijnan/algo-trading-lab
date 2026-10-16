@@ -9,7 +9,8 @@ RUNNING_ROW_COLUMNS) -- one file per trade, one row roughly every 60s while it i
 own `append_trade_log_row`/`_append_running_row` after the user found it missing from the original build.
 
 `build_session_report` is one message for all engines, in the standalone Prometheus report's layout: a section per engine with a
-block per closed trade, an open-position block and a Realized / Unrealized total in Rs per unit; then the account's free cash and,
+block per closed trade, an open-position block and a Realized / Unrealized total in Rs per unit; then a day total in rupees at the units traded
+(live engines, and paper engines on a line of their own, never added together); then the account's free cash and,
 only when present, UNCONFIRMED requests, ledger mismatches and warning-or-worse alert counts.
 """
 
@@ -185,6 +186,7 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
     def mode_of(name: str) -> str:
         return 'paper' if core.broker.pool_of(name) != 'live' else 'live'
 
+    totals: Dict[str, dict] = {}
     lines = [f"\U0001f4ca *Hestia \u2014 Session Report*  |  {now:%a %d %b %Y}", '', DIVIDER, '']
     for name in sorted(core._factories, key=lambda n: (mode_of(n) != 'live', n)):
         mode = mode_of(name)
@@ -195,6 +197,7 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
         recs = sorted(by_engine.get(name, []), key=lambda r: r.get('trade_id') or 0)
         positions = [(tok, v[0], v[1], v[2]) for (e, tok), v in sorted(core._ledger.items()) if e == name and v[0]]
         realized, unrealized, unrealized_known = 0.0, 0.0, True
+        realized_rs, unrealized_rs = 0.0, 0.0                       # the same two figures in rupees at the units actually traded, for the day total
 
         if not recs and not positions:
             lines.append('  \u21b3 No trade today')
@@ -208,6 +211,7 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
             pts = r.get('total_pnl_points') or 0
             per_unit = (r.get('total_pnl_rs') or 0) / units
             realized += per_unit
+            realized_rs += r.get('total_pnl_rs') or 0
             lines.append(f"*Trade #{r.get('trade_id')}*  \u00b7  {direction}  |  Units: {_units(units)}")
             lines.append(f"  \u21b3 Entry: {_ts_str(r.get('entry_ts'), today)} @ {entry_str}   "
                          f"Exit: {_ts_str(exit_ts, today)}  \u00b7  {reason}")
@@ -233,6 +237,7 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
                 pts = (q.price - avg) if net > 0 else (avg - q.price)
                 per_unit = pts * info.lot_size * abs(net) / trade_units
                 unrealized += per_unit
+                unrealized_rs += pts * info.lot_size * abs(net)
                 lines.append(f"  \u21b3 Unrealised : {pts:+.1f} pts  ({per_unit:+,.0f} Rs/unit)   LTP {q.price:,.2f}")
             else:
                 unrealized_known = False
@@ -240,10 +245,15 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
             if trade_info.get('booked_rs'):
                 booked_per_unit = trade_info['booked_rs'] / trade_units
                 realized += booked_per_unit
+                realized_rs += trade_info['booked_rs']
                 lines.append(f"  \u21b3 Booked     : {trade_info['booked_pts']:+.1f} pts  ({booked_per_unit:+,.0f} Rs/unit) on the lot already closed")
             lines.append('')
 
         if recs or positions:
+            day = totals.setdefault(mode, {'realized': 0.0, 'unrealized': 0.0, 'known': True})
+            day['realized'] += realized_rs
+            day['unrealized'] += unrealized_rs
+            day['known'] = day['known'] and unrealized_known
             if not positions:
                 unrealized_text = '*+0 Rs/unit*'
             else:
@@ -254,6 +264,18 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
         lines.append(DIVIDER)
         lines.append('')
 
+    for mode, title in (('live', 'Day total \u2014 live engines'), ('paper', 'Paper engines (not traded)')):
+        day = totals.get(mode)
+        if day is None:
+            continue
+        lines.append(f'*{title}*  (Rs, at the units traded)')
+        lines.append(f"  \u21b3 Realized   : *{day['realized']:+,.0f} Rs*")
+        if day['known']:
+            lines.append(f"  \u21b3 Unrealized : *{day['unrealized']:+,.0f} Rs*")
+            lines.append(f"  \u21b3 Combined   : *{day['realized'] + day['unrealized']:+,.0f} Rs*")
+        else:
+            lines.append('  \u21b3 Unrealized : n/a (a price was unavailable)')
+        lines.append('')
     smart = getattr(getattr(core, 'data', None), 'smart', None)
     if smart is not None:
         served, fell_back = smart.summary()

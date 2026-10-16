@@ -550,6 +550,8 @@ def test_the_session_report_is_one_message_covering_every_engine(hestias):
     assert '*Trade #1*' in text and '  \u21b3 Realized   : *+700 Rs/unit*' in text
     assert '*Open Position*  \u00b7  Bullish  |  Units: 2' in text
     assert '  \u21b3 No trade today' in text                               # the paper engine did nothing
+    assert '*Day total \u2014 live engines*  (Rs, at the units traded)' in text and '  \u21b3 Realized   : *+700 Rs*' in text
+    assert 'Paper engines (not traded)' not in text                           # nothing happened on the paper engine
     assert 'Account free cash: Rs' in text
 
 
@@ -585,6 +587,7 @@ def test_the_session_report_open_position_line_survives_a_missing_quote(hestias)
     finally:
         h.data.ltp_quote = orig
     assert '*Open Position*' in text and '  \u21b3 Unrealised : price unavailable' in text and 'LTP' not in text
+    assert '  \u21b3 Unrealized : n/a (a price was unavailable)' in text and 'Combined' not in text
     h.close()
 
 
@@ -630,6 +633,7 @@ def test_the_report_adds_the_banked_lot_to_the_trades_closed_that_day(hestias):
     finally:
         h.store = None
     assert '  \u21b3 Realized   : *+60 Rs/unit*' in text                                          # +20 closed trade, +40 banked on the open one
+    assert '  \u21b3 Realized   : *+60 Rs*' in text and '  \u21b3 Unrealized : *+40 Rs*' in text and '  \u21b3 Combined   : *+100 Rs*' in text
     h.close()
 
 
@@ -928,4 +932,29 @@ def test_the_session_report_mentions_fyers_first_windows_only_when_there_were_so
     assert 'Candle windows served by Fyers first: 2217\n' in build_session_report(h, h.now, [])
     h.data.smart = Smart(2200, 17)
     assert 'Candle windows served by Fyers first: 2200, 17 fell back to Angel One' in build_session_report(h, h.now, [])
+    h.close()
+
+
+def test_the_day_total_is_in_rupees_at_the_units_traded_and_keeps_paper_apart_from_live(hestias):
+    """2026-10-16: the report gave realized and unrealized per engine only. The day total is in rupees at the units traded (a 2-unit trade counts twice what its
+    Rs/unit line shows), live engines on one line and paper engines on their own, never added together."""
+    from hestia_fake_helpers import SPEC_YY, OTHER_FRONT, minutes_frame
+    from hestia_core.fake import ContractSpec
+    extra = [ContractSpec(OTHER_FRONT, lot_size=10, minutes=minutes_frame(50.0, 3))]
+
+    def act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.report_trade({'trade_id': 1, 'direction': 'bullish', 'units': 2, 'entry_ts': '2026-09-03T09:30:00', 'entry_price': 100.0,
+                              'lot1_exit_ts': '2026-09-03T09:45:00', 'lot1_exit_reason': 'target1', 'total_pnl_points': 5.0, 'total_pnl_rs': 100.0})
+    def paper_act(eng, ctx, ev):
+        if isinstance(ev, SessionStart):
+            ctx.report_trade({'trade_id': 9, 'direction': 'bearish', 'units': 1, 'entry_ts': '2026-09-03T10:00:00', 'entry_price': 50.0,
+                              'lot1_exit_ts': '2026-09-03T10:30:00', 'lot1_exit_reason': 'stop_loss', 'total_pnl_points': -3.0, 'total_pnl_rs': -30.0})
+    h = hestias([('a', factory(act=act)), ('p', lambda: RecEngine('p', spec=SPEC_YY, trade=OTHER_FRONT, act=paper_act), {'paper': True})], extra=extra)
+    go(h)
+    text = build_session_report(h, h.now, h.trades)
+    assert '  \u21b3 Realized   : *+50 Rs/unit*' in text and '  \u21b3 Realized   : *-30 Rs/unit*' in text     # per unit, as before
+    live = text.split('*Day total \u2014 live engines*')[1].split('*Paper engines')[0]
+    assert '*+100 Rs*' in live and '*-30 Rs*' not in live                    # the 2-unit live trade counts twice its Rs/unit; paper is not added in
+    assert '*Paper engines (not traded)*' in text and '  \u21b3 Realized   : *-30 Rs*' in text
     h.close()
