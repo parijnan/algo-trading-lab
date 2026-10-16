@@ -162,13 +162,14 @@ TRADING_HOSTS = {
     # hestia_core/cutover_reset.py --engine typhon (a one-shot Delos cron at 00:35 on 2026-10-02), as Selene's and Helios's were.
     # (Before that Typhon ran paper alongside the others from 2026-09-30, after replay_check.py reproduced 61/61 oracle decisions,
     # plan Step 6.)
-    # ALL FOUR ENGINES TO 2 UNITS from the first session after 2026-10-16 (user's decision, scaling up; cap stays 10): Prometheus 4 lots (2 per unit),
+    # UNIT CAP raised 10 -> 100 on 2026-10-16 (user: sizing is managed by hand from here and no real cap is wanted; 100 is a typo guard, not a risk limit).
+    # ALL FOUR ENGINES TO 2 UNITS from the first session after 2026-10-16 (user's decision, scaling up): Prometheus 4 lots (2 per unit),
     # Selene 2, Helios 40 (20 per unit), Typhon 4 (2 per unit). A position already open keeps the units it was entered with until it closes; new entries and
     # flip legs use 2; a rollover reopen reuses the stored lots. A Slack sizing override (hestia_data/state/<engine>_sizing.json) would still win over this.
-    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=2, unit_cap=10),
-                           'selene': dict(enabled=True, paper=False, static_units=2, unit_cap=10),
-                           'helios': dict(enabled=True, paper=False, static_units=2, unit_cap=10),
-                           'typhon': dict(enabled=True, paper=False, static_units=2, unit_cap=10)},
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
+                           'selene': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
+                           'helios': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
+                           'typhon': dict(enabled=True, paper=False, static_units=2, unit_cap=100)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True,
                   # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md), upgraded to RESCUE the same
                   # day (Phase 2, user's go-ahead after the Zerodha cross-check: finalized Fyers matched Zerodha on 12 of 13 differing fields): Angel One
