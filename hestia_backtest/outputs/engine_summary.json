@@ -1,64 +1,64 @@
 {
  "engines": {
   "Prometheus": {
-   "trades": 1900,
+   "trades": 1902,
    "win_pct": 40.1,
-   "total_rs": 170968,
+   "total_rs": 171433,
    "max_dd_rs": -33196,
    "calmar_per_year": 1.43,
    "worst_trade_rs": -6880,
    "first_entry": "2023-03-03 13:30:00",
-   "last_exit": "2026-10-13 18:30:00",
+   "last_exit": "2026-10-15 14:24:00",
    "source": "prometheus_backtest/phase3_fyers/data_sweep/mult_2.5/bespoke_trade_summary.csv"
   },
   "Selene": {
-   "trades": 2495,
-   "win_pct": 38.8,
-   "total_rs": 616973,
+   "trades": 2496,
+   "win_pct": 38.9,
+   "total_rs": 630543,
    "max_dd_rs": -45917,
-   "calmar_per_year": 2.44,
+   "calmar_per_year": 2.49,
    "worst_trade_rs": -18917,
    "first_entry": "2021-04-05 11:30:00",
-   "last_exit": "2026-10-12 10:45:00",
+   "last_exit": "2026-10-15 13:30:00",
    "source": "selene_backtest/data_sweep/parity_trades.csv"
   },
   "Helios": {
-   "trades": 1139,
-   "win_pct": 39.3,
-   "total_rs": 504461,
+   "trades": 1140,
+   "win_pct": 39.4,
+   "total_rs": 510641,
    "max_dd_rs": -26300,
-   "calmar_per_year": 3.82,
+   "calmar_per_year": 3.86,
    "worst_trade_rs": -6360,
    "first_entry": "2021-10-04 14:15:00",
-   "last_exit": "2026-10-12 09:45:00",
+   "last_exit": "2026-10-15 09:15:00",
    "source": "helios_backtest/data_sweep/parity_trades.csv"
   },
   "Typhon": {
-   "trades": 1405,
+   "trades": 1408,
    "win_pct": 27.4,
-   "total_rs": 351680,
+   "total_rs": 349855,
    "max_dd_rs": -35240,
-   "calmar_per_year": 2.83,
+   "calmar_per_year": 2.81,
    "worst_trade_rs": -8600,
    "first_entry": "2023-04-03 09:15:00",
-   "last_exit": "2026-10-14 16:30:00",
+   "last_exit": "2026-10-15 18:32:00",
    "source": "typhon_backtest/data_sweep/parity_decided_trades.csv"
   }
  },
  "combined": {
-  "trades": 6939,
-  "win_pct": 36.9,
-  "total_rs": 1644081,
+  "trades": 6946,
+  "win_pct": 37.0,
+  "total_rs": 1662471,
   "max_dd_rs": -58615,
-  "calmar_per_year": 5.08,
+  "calmar_per_year": 5.13,
   "worst_trade_rs": -18917
  },
  "combined_common_window": {
-  "trades": 5686,
+  "trades": 5693,
   "win_pct": 36.3,
-  "total_rs": 1525187,
+  "total_rs": 1543577,
   "max_dd_rs": -58615,
-  "calmar_per_year": 7.37,
+  "calmar_per_year": 7.45,
   "worst_trade_rs": -18917
  }
 }
