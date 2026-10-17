@@ -1,36 +1,36 @@
 {
  "engines": {
   "Prometheus": {
-   "trades": 1915,
+   "trades": 1919,
    "win_pct": 39.3,
-   "total_rs": 150502,
+   "total_rs": 148771,
    "max_dd_rs": -31990,
-   "calmar_per_year": 1.3,
+   "calmar_per_year": 1.28,
    "worst_trade_rs": -6880,
    "first_entry": "2023-03-03 13:30:00",
-   "last_exit": "2026-10-14 22:38:00",
+   "last_exit": "2026-10-16 21:27:00",
    "source": "prometheus_backtest/phase3_fyers/data_sweep/parity/parity_trades.csv"
   },
   "Selene": {
-   "trades": 2496,
+   "trades": 2499,
    "win_pct": 38.9,
-   "total_rs": 630543,
+   "total_rs": 630177,
    "max_dd_rs": -45917,
-   "calmar_per_year": 2.49,
+   "calmar_per_year": 2.48,
    "worst_trade_rs": -18917,
    "first_entry": "2021-04-05 11:30:00",
-   "last_exit": "2026-10-15 13:30:00",
+   "last_exit": "2026-10-16 22:45:00",
    "source": "selene_backtest/data_sweep/parity_trades.csv"
   },
   "Helios": {
-   "trades": 1140,
+   "trades": 1142,
    "win_pct": 39.4,
-   "total_rs": 510641,
+   "total_rs": 509801,
    "max_dd_rs": -26300,
-   "calmar_per_year": 3.86,
+   "calmar_per_year": 3.85,
    "worst_trade_rs": -6360,
    "first_entry": "2021-10-04 14:15:00",
-   "last_exit": "2026-10-15 09:15:00",
+   "last_exit": "2026-10-16 20:00:00",
    "source": "helios_backtest/data_sweep/parity_trades.csv"
   },
   "Typhon": {
@@ -46,19 +46,19 @@
   }
  },
  "combined": {
-  "trades": 6959,
+  "trades": 6968,
   "win_pct": 36.8,
-  "total_rs": 1641541,
-  "max_dd_rs": -57729,
-  "calmar_per_year": 5.14,
+  "total_rs": 1638603,
+  "max_dd_rs": -58566,
+  "calmar_per_year": 5.06,
   "worst_trade_rs": -18917
  },
  "combined_common_window": {
-  "trades": 5706,
+  "trades": 5715,
   "win_pct": 36.0,
-  "total_rs": 1522647,
-  "max_dd_rs": -57729,
-  "calmar_per_year": 7.46,
+  "total_rs": 1519710,
+  "max_dd_rs": -58566,
+  "calmar_per_year": 7.34,
   "worst_trade_rs": -18917
  }
 }
