@@ -48,7 +48,7 @@ def test_engine_config_matches_the_decided_backtest_config():
     # MARGIN_SIZING_MULTIPLIER is written as a division expression (1380 / 14893) in helios_configs.py, not a bare
     # literal, so ast.literal_eval can't recover it from the AST (it only handles Constant nodes) -- computed directly
     # here instead, matching that file's own source exactly (plan §2/§4g's single-point margin derivation).
-    assert c.margin_sizing_multiplier == pytest.approx(1380 / 14893)
+    assert c.margin_sizing_multiplier == pytest.approx(4 * 1380 / 14893)       # the x4 safety factor on the observed ratio
     assert c.instrument == p['SYMBOL']
 
 

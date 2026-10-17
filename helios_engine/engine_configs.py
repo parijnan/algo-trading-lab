@@ -41,7 +41,7 @@ class EngineConfig:
     # multiplier PER LOT, then x lots_per_unit for the per-unit figure margin_per_unit() actually returns -- see this file's
     # own docstring for why the lot-count factor lives here rather than being baked into the divisor/multiplier themselves.
     margin_contract_value_divisor: float = 1.0
-    margin_sizing_multiplier: float = 1380 / 14893   # ~0.0927, derived 2026-09-29 from one observed margin quote (plan §2)
+    margin_sizing_multiplier: float = 4 * 1380 / 14893   # ~0.3708: the x4 safety factor (as Prometheus's /3 x4 and Selene's /8 x4) on the ~0.0927 ratio observed 2026-09-29 (plan §2); x4 added 2026-10-17
     fallback_margin_per_unit: float = 100000.0
     # the loop
     tick_s_flat: float = 1.0

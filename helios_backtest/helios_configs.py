@@ -79,7 +79,7 @@ TENDER_ROLL_TRADING_DAYS = 5
 # margin figure before trusting it for real sizing work (same caveat as Selene's own §1.5).
 # ---------------------------------------------------------------------------
 MARGIN_CONTRACT_VALUE_DIVISOR = 1
-MARGIN_SIZING_MULTIPLIER      = 1380 / 14893   # ~0.0927, i.e. ~9.27% of notional (entry_price * LOT_SIZE)
+MARGIN_SIZING_MULTIPLIER      = 4 * 1380 / 14893   # ~0.3708 = the x4 safety factor (as Prometheus's /3*4 and Selene's /8*4) on the observed ~9.27% of notional; x4 added 2026-10-17
 
 # ---------------------------------------------------------------------------
 # Session / entry guards -- same as Prometheus's/Selene's Phase 3 / production values.

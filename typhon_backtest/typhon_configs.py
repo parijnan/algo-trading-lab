@@ -92,7 +92,7 @@ TENDER_ROLL_TRADING_DAYS = 5
 # Helios's own single-point derivations).
 # ---------------------------------------------------------------------------
 MARGIN_CONTRACT_VALUE_DIVISOR = 1
-MARGIN_SIZING_MULTIPLIER      = 14000 / (299.7 * 250)   # ~0.1869, i.e. ~18.7% of notional
+MARGIN_SIZING_MULTIPLIER      = 4 * 14000 / (299.7 * 250)   # ~0.7476 = the x4 safety factor (as Prometheus's /3*4 and Selene's /8*4) on the observed ~18.7% of notional; x4 added 2026-10-17
 
 # ---------------------------------------------------------------------------
 # Session / entry guards -- same as Prometheus's/Selene's/Helios's Phase 3 / production values.

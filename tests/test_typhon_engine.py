@@ -69,6 +69,8 @@ def test_pnl_and_margin_arithmetic():
     assert margin_per_unit(6000.0, 1, DEFAULT) == pytest.approx(
         6000 * 1 / DEFAULT.margin_contract_value_divisor * DEFAULT.margin_sizing_multiplier * DEFAULT.lots_per_unit)
     assert margin_per_unit(None, 1, DEFAULT) == DEFAULT.fallback_margin_per_unit
+    # the x4 safety factor (added 2026-10-17, as Prometheus's /3 x4 and Selene's /8 x4) on the observed 14,000 / (299.7 * 250)
+    assert DEFAULT.margin_sizing_multiplier == pytest.approx(4 * 14000 / (299.7 * 250))
 
 
 # ---------------------------------------------------------------------------------------------------------------------

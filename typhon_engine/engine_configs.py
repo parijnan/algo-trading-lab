@@ -42,7 +42,7 @@ class EngineConfig:
     # multiplier per unit -- derived 2026-09-30 from one observed margin quote (plan Step 1: margin ~Rs 14,000/lot when
     # NATGASMINI19OCT26FUT last closed 299.7), same single-point-derivation caveat as Selene's/Helios's own
     margin_contract_value_divisor: float = 1.0
-    margin_sizing_multiplier: float = 14000 / (299.7 * 250)   # ~0.1869, ~18.7% of notional
+    margin_sizing_multiplier: float = 4 * 14000 / (299.7 * 250)   # ~0.7476: the x4 safety factor (as Prometheus's /3 x4 and Selene's /8 x4) on the ~0.1869 observed ratio; x4 added 2026-10-17
     fallback_margin_per_unit: float = 100000.0
     # the loop
     tick_s_flat: float = 1.0
