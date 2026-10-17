@@ -45,6 +45,14 @@ class AngelConfig:
     cash_refresh_s: float = 30.0
 
 
+def _num(v) -> float:
+    """A margin field as a number: absent, None, '' or unparseable counts as 0 (the broker leaves fields None outside market hours)."""
+    try:
+        return float(v) if v not in (None, '') else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _row_status(o: dict) -> str:
     return str(o.get('status') or o.get('orderstatus') or '').strip().lower()
 
@@ -77,6 +85,8 @@ class AngelBrokerPort:
         self._listener = None
         self._cash: Optional[float] = None
         self._cash_ts: Optional[float] = None
+        self._total: Optional[float] = None                 # total margin from the same rmsLimit() answer as _cash
+        self._logged_total: Optional[float] = None
         self._lock = threading.Lock()
         self.session_failed = False
         if feed is not None:
@@ -103,19 +113,43 @@ class AngelBrokerPort:
             return 0.0                                      # fail closed: an entry cannot be sized against a stale balance
         return cash
 
+    def total_margin(self, engine: str = '') -> float:
+        """The account before any margin is in use: availablecash + availableintradaypayin + utiliseddebits (owner's definition,
+        2026-10-17; plans/hestia-dynamic-sizing.md section 4). Same freshness rule as free_cash: a missing or stale reading is 0.0."""
+        with self._lock:
+            total, ts = self._total, self._cash_ts
+        if total is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
+            return 0.0
+        return total
+
     def refresh_cash_blocking(self) -> None:
         try:
             try:
-                value = float(self.gateway.rms()['data']['availablecash'])
+                data = self.gateway.rms()['data']
+                value = float(data['availablecash'])
             except Exception as exc:                        # one retry: an isolated AB1007 blip is not a session failure
                 log.warning('rmsLimit failed (%s); retrying once', exc)
                 self._sleep(1.0)
-                value = float(self.gateway.rms()['data']['availablecash'])
+                data = self.gateway.rms()['data']
+                value = float(data['availablecash'])
         except Exception as exc:
             self._alert('warning', f'could not refresh available cash: {exc}')
             return
+        try:                                                # the total is separate: a problem here never costs the cash value
+            payin, used = _num(data.get('availableintradaypayin')), _num(data.get('utiliseddebits'))
+            total: Optional[float] = value + payin + used
+        except Exception as exc:                            # noqa: BLE001
+            log.warning('could not compute the total margin: %r', exc)
+            payin = used = 0.0
+            total = None
         with self._lock:
-            self._cash, self._cash_ts = value, self._clock()
+            self._cash, self._cash_ts, self._total = value, self._clock(), total
+            changed = total is not None and total != self._logged_total
+            if changed:
+                self._logged_total = total
+        if changed:
+            log.info('margin: availablecash %.2f + availableintradaypayin %.2f + utiliseddebits %.2f = total %.2f',
+                     value, payin, used, total)
 
     def start_cash_refresh(self) -> None:
         """Refresh now and every `cash_refresh_s`, on the executor."""

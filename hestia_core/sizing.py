@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -55,3 +55,31 @@ class SizingStore:
             cfg = base
         self._cache[name] = (mtime, cfg)
         return cfg
+
+
+@dataclass(frozen=True)
+class DynamicUnits:
+    units: int            # 0 means the entry must be skipped
+    share: float          # the engine's slice of the total margin, after any allocation limit
+    reason: str           # why units is 0; empty otherwise
+
+
+def dynamic_units(total_margin: float, sharing_engines: int, allocation_rs: Optional[float], margin_per_unit: float,
+                  unit_cap: int) -> DynamicUnits:
+    """Dynamic sizing (owner's rule, 2026-10-17): the engine's share is the account's TOTAL margin divided by the number of live
+    engines sharing it; units are that share over the engine's own margin per unit, rounded DOWN, then limited by the unit cap.
+    `allocation_rs`, when set, is an extra limit on the share. Below one unit is zero, never a forced minimum: the caller skips
+    the entry. A missing or stale total margin (0) is zero units too, so the rule fails closed."""
+    if margin_per_unit <= 0:
+        raise ValueError(f'margin per unit must be positive, got {margin_per_unit!r}')
+    if total_margin <= 0:
+        return DynamicUnits(0, 0.0, 'no fresh total margin reading')
+    n = max(1, int(sharing_engines))
+    share = total_margin / n
+    if allocation_rs is not None:
+        share = min(share, allocation_rs)
+    units = min(int(share // margin_per_unit), unit_cap)
+    if units < 1:
+        return DynamicUnits(0, share, f'share Rs {share:,.0f} (total Rs {total_margin:,.0f} over {n} engine(s)) is below one unit '
+                                      f'(Rs {margin_per_unit:,.0f})')
+    return DynamicUnits(units, share, '')

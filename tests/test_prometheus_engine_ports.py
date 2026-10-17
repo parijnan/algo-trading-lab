@@ -19,6 +19,7 @@ class Ctx:
         self._now, self.series, self._ltp, self.cash = now, list(series), ltp, cash
         self._sizing = sizing or SizingConfig(dynamic=False, static_units=1, unit_cap=50)
         self.margin_raises = margin_raises
+        self.total_margin, self.sharing = cash, 1                 # the account's total margin and the live engines sharing it
         self.sent, self.alerts = [], []
 
     def now(self):
@@ -40,7 +41,7 @@ class Ctx:
     def margin(self):
         if self.margin_raises:
             raise RuntimeError('rms down')
-        return MarginSnapshot(self.cash, self._now)
+        return MarginSnapshot(self.cash, self._now, self.total_margin, self.sharing)
 
     def sizing(self):
         return self._sizing
@@ -189,13 +190,22 @@ def test_static_sizing_ignores_the_live_margin_entirely():
     assert e._current_units() == 1
 
 
-def test_dynamic_sizing_uses_the_live_margin_and_never_returns_less_than_one_unit():
+def test_dynamic_sizing_is_the_total_margin_over_the_sharing_engines_rounded_down_and_zero_below_one_unit():
     sz = SizingConfig(dynamic=True, static_units=2, unit_cap=50, allocation_rs=None)
     e = engine(hm(11, 0), watching(), ltp=6000.0, cash=1_000_000.0, sizing=sz)
     e.infos = {FRONT.token: type('I', (), {'lot_size': 10})()}
     assert e._current_units() == int(1_000_000 // (6000 * 10 / 3 * 4))                       # 12
-    e.ctx.cash = 10.0
-    assert e._current_units() == 1
+    first = e._current_units()
+    e.ctx.sharing = 4
+    assert e._current_units() == min(int((1_000_000 / 4) // (6000 * 10 / 3 * 4)), sz.unit_cap)    # four live engines share the account's total margin
+    e.ctx.sharing = 1
+    e.ctx.total_margin = 10.0
+    assert e._current_units() == 0                                                # below one unit: no forced minimum, the entry is skipped
+    assert any('below one unit' in text for _, text in e.ctx.alerts)
+    e.ctx.total_margin = 0.0
+    assert e._current_units() == 0                                                # no fresh total margin reading fails closed
+    e.ctx.total_margin, e.ctx.cash = 1_000_000.0, 10.0
+    assert e._current_units() == first                                            # available cash plays no part in the sizing
 
 
 def test_dynamic_sizing_falls_back_to_the_static_units_when_the_margin_read_fails():

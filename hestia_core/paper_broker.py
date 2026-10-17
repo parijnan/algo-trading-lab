@@ -41,6 +41,9 @@ class PaperBroker:
         book = self._books.get(engine, {})
         return self.cash - sum(self.margin_fn(t, net, avg) for t, (net, avg) in book.items() if net and avg is not None)
 
+    def total_margin(self, engine: str) -> float:
+        return self.cash                                         # the paper pool before any margin is held against it
+
     def book(self, engine: str) -> Dict[str, list]:
         return self._books.setdefault(engine, {})
 

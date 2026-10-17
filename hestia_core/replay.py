@@ -110,6 +110,9 @@ class SimBroker:
         used = sum(self.margin_fn(tok, net, avg) for tok, (net, avg) in self.book.items() if net and avg is not None)
         return self.cash - used
 
+    def total_margin(self, engine: str = '') -> float:
+        return self.cash
+
     def _px(self, spec: OrderSpec) -> Optional[float]:
         price = self.price_fn(spec.contract.token)
         if price is None:

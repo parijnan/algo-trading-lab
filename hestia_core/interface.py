@@ -156,6 +156,8 @@ class LedgerPosition:
 class MarginSnapshot:
     available_cash: float            # the account-wide pool at read time
     ts: datetime
+    total_margin: float = 0.0        # available cash + intraday pay-in + margin in use: the pool with no margin in use; 0 when unknown
+    sharing_engines: int = 1         # live engines currently sharing that pool (paper and killed engines excluded); 1 for a paper engine
 
 
 @dataclass(frozen=True)

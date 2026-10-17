@@ -31,6 +31,9 @@ class BrokerRouter:
     def free_cash(self, engine: str) -> float:
         return self._port(engine).free_cash(engine)
 
+    def total_margin(self, engine: str) -> float:
+        return self._port(engine).total_margin(engine)
+
     def set_order_listener(self, fn) -> None:
         self.live.set_order_listener(fn)
         self.paper.set_order_listener(fn)

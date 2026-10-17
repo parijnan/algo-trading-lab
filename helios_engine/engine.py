@@ -29,6 +29,7 @@ from hestia_core.interface import (
     ExitReason, FeedRecovered, FeedStale, FlattenRequest, FlipRequest, OpenRequest, OutcomeStatus, ProvisionalBar, ProvisionalSpec, RequestOutcome,
     SessionStart, Stop, TrackFailed, TrackReady,
 )
+from hestia_core.sizing import dynamic_units
 from helios_engine.engine_configs import DEFAULT, EngineConfig
 from helios_engine.levels import build_levels, lot_pnl_points, margin_per_unit
 from helios_engine.state import EngineState
@@ -195,16 +196,19 @@ class HeliosEngine:
         if not sz.dynamic:
             return sz.static_units
         try:
-            cash = self.ctx.margin().available_cash
-            if sz.allocation_rs is not None:
-                cash = min(cash, sz.allocation_rs)
+            m = self.ctx.margin()
             mpu = margin_per_unit(self._ltp_value(), self._lot_size(), self.cfg)
-            return max(1, min(int(cash // mpu), sz.unit_cap))
+            d = dynamic_units(m.total_margin, m.sharing_engines, sz.allocation_rs, mpu, sz.unit_cap)
         except Exception as exc:                                       # noqa: BLE001
             self._say('warning', f'dynamic sizing failed ({exc!r}); using the static units')
             return sz.static_units
+        if d.units < 1:
+            self._say('warning', f'dynamic sizing: {d.reason}; entry skipped')
+        return d.units
 
     def _margin_sufficient(self, units: int) -> bool:
+        if units < 1:
+            return False                                               # dynamic sizing found no whole unit (already reported)
         mpu = margin_per_unit(self._ltp_value(), self._lot_size(), self.cfg)
         cash = self.ctx.margin().available_cash
         if cash < units * mpu:

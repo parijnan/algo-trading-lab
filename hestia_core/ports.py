@@ -92,6 +92,7 @@ class BrokerPort(Protocol):
     def read_order(self, order_id: str, on_result: Callable[[OrderRead], None]) -> None: ...
     def read_positions(self, on_result: Callable[[Optional[Dict[str, PositionRow]]], None]) -> None: ...   # live pool; None on failure
     def free_cash(self, engine: str) -> float: ...                       # cash of the engine's pool, net of margin already in use
+    def total_margin(self, engine: str) -> float: ...                    # the pool before any margin is in use (cash + pay-in + margin used); 0.0 when unknown or stale
     def set_order_listener(self, fn: Callable[[str, OrderRead], None]) -> None: ...   # the order-update feed
 
 

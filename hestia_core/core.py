@@ -550,6 +550,19 @@ class HestiaCore:
         reserved = sum(r.reserved for r in self._registry.values() if self.broker.pool_of(r.engine) == pool)
         return self.broker.free_cash(engine or '') - reserved            # no engine named: the live account, never a paper pool
 
+    def total_margin(self, engine: Optional[str] = None) -> float:
+        """The engine's pool before any margin is in use (0.0 when unknown or stale); the live account when no engine is named."""
+        return self.broker.total_margin(engine or '')
+
+    def sharing_engines(self, engine: str) -> int:
+        """How many live engines share the account the asking engine sizes against: registered, on the live pool, not killed (a
+        KILL or a host kill takes an engine out at once; a failed engine still counts, the cautious side). A paper engine owns
+        its own pool, so it is 1. Always at least 1."""
+        if self.broker.pool_of(engine) != 'live':
+            return 1
+        n = sum(1 for e in self._factories if self.broker.pool_of(e) == 'live' and self.engine_state.get(e) != 'killed')
+        return max(1, n)
+
     # ---- admission -------------------------------------------------------------------------------------------------
 
     def _admit(self, rec: _Rec) -> Optional[Tuple[OutcomeStatus, str]]:
@@ -1068,7 +1081,8 @@ class CoreContext:
         return LedgerPosition(contract, net, avg, ts)
 
     def margin(self):
-        return MarginSnapshot(self._h.available_cash(self._t.name), self._h.now)
+        h, name = self._h, self._t.name
+        return MarginSnapshot(h.available_cash(name), h.now, h.total_margin(name), h.sharing_engines(name))
 
     def sizing(self):
         return self._h._sizing_for(self._t.name)

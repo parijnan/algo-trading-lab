@@ -59,6 +59,10 @@ With x4 on Helios and Typhon (Rs 1,09,376 and Rs 1,11,588 per unit), a share of 
 4. Keep the existing refusals: unit cap, roll window, available-cash admission, and each engine's `_margin_sufficient`.
 5. Update `hestia_core/README.md` in the same commit; tests for the share, rounding down, the stale reading, and the zero-unit case.
 
+## 6b. Built 2026-10-17 (uncommitted at the time of writing)
+
+`AngelBrokerPort.total_margin` (availablecash + availableintradaypayin + utiliseddebits, one `rmsLimit()` answer, same freshness rule, logged when it changes); `total_margin` on the paper, replay and router ports; `MarginSnapshot` gained `total_margin` and `sharing_engines`; `HestiaCore.sharing_engines` (live, registered, not killed; paper engine = 1; failed engines still count); `hestia_core.sizing.dynamic_units`; all four engines' `_current_units` use it and `_margin_sufficient` refuses 0 units. Decisions taken: divisor = engines currently sharing the account (owner: paper excluded, killed excluded); below one unit = skip the entry (owner's rule rounds down; no forced minimum); `allocation_rs` kept as an extra limit on the share; an unexpected exception falls back to the static units. Dynamic stays off by default; the Slack panel's dynamic toggle takes effect at the next entry, so do the weekday checks in section 4 before using it. Tests: `tests/test_hestia_dynamic_sizing.py` and the four `*_engine_ports` dynamic tests. Replay suites were not run.
+
 ## 7. Open decisions
 
 - Zero units: if the share is below one unit's margin, skip the entry or take 1 unit (today's code forces a minimum of 1).
