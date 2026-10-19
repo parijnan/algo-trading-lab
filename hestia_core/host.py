@@ -296,6 +296,10 @@ class HestiaHost:
 
         def before_flush() -> None:
             try:
+                angel.refresh_cash_blocking()                           # the balance is only read before each boundary: read it for the report's free-cash line
+            except Exception:                                           # noqa: BLE001 - a stale or missing balance must never stop the report
+                log.exception('refreshing the balance for the session report failed')
+            try:
                 today_closed = read_closed_on(cfg.TRADES_DIR, list(core._factories), reactor.now.date())
             except Exception:                                           # noqa: BLE001 - the report must go out whatever the files hold
                 log.exception('reading the day\'s closed trades for the session report failed; reporting this process\'s trades only')

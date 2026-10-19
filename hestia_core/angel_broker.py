@@ -17,7 +17,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from hestia_core.gateway import BrokerGateway, TRANSPORT_ERRORS, is_rate_limit, is_session_failure
@@ -42,7 +42,9 @@ class AngelConfig:
     ghost_lookback_s: float = 60.0
     max_transport_retries: int = 6         # placement retries after a lost response (each preceded by a ghost search)
     cash_max_age_s: float = 120.0          # older than this, free_cash reports 0 so entries fail closed
-    cash_refresh_s: float = 30.0
+    cash_boundary_s: float = 900.0         # the margin is read once before each 15-minute boundary, entries only happen on one
+    cash_lead_s: float = 30.0              # ... this long before it, so the reading is about half a minute old when the entry lands
+    cash_stale_refresh_min_s: float = 10.0 # a stale reading met at an entry kicks one background refresh, at most this often
 
 
 def _num(v) -> float:
@@ -87,6 +89,7 @@ class AngelBrokerPort:
         self._cash_ts: Optional[float] = None
         self._total: Optional[float] = None                 # total margin from the same rmsLimit() answer as _cash
         self._logged_total: Optional[float] = None
+        self._last_kick: Optional[float] = None
         self._lock = threading.Lock()
         self.session_failed = False
         if feed is not None:
@@ -110,6 +113,7 @@ class AngelBrokerPort:
         with self._lock:
             cash, ts = self._cash, self._cash_ts
         if cash is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
+            self._kick_refresh()
             return 0.0                                      # fail closed: an entry cannot be sized against a stale balance
         return cash
 
@@ -119,10 +123,22 @@ class AngelBrokerPort:
         with self._lock:
             total, ts = self._total, self._cash_ts
         if total is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
+            self._kick_refresh()
             return 0.0
         return total
 
-    def refresh_cash_blocking(self) -> None:
+    def _kick_refresh(self) -> None:
+        """A stale or missing reading was just met (an entry is being sized): ask the executor for a fresh one, without waiting for it.
+        This call still answers 0, so the entry is refused; the next one finds the new reading. Spaced so a run of reads makes one call."""
+        now = self._clock()
+        with self._lock:
+            if self._last_kick is not None and now - self._last_kick < self.cfg.cash_stale_refresh_min_s:
+                return
+            self._last_kick = now
+        self.executor.submit(self.refresh_cash_blocking)
+
+    def refresh_cash_blocking(self) -> bool:
+        """One rmsLimit() read. Returns whether it produced a reading."""
         try:
             try:
                 data = self.gateway.rms()['data']
@@ -134,7 +150,7 @@ class AngelBrokerPort:
                 value = float(data['availablecash'])
         except Exception as exc:
             self._alert('warning', f'could not refresh available cash: {exc}')
-            return
+            return False
         try:                                                # the total is separate: a problem here never costs the cash value
             payin, used = _num(data.get('availableintradaypayin')), _num(data.get('utiliseddebits'))
             total: Optional[float] = value + payin + used
@@ -144,19 +160,38 @@ class AngelBrokerPort:
             total = None
         with self._lock:
             self._cash, self._cash_ts, self._total = value, self._clock(), total
-            changed = total is not None and total != self._logged_total
+            changed = total is not None and (self._logged_total is None or round(total, 2) != round(self._logged_total, 2))
             if changed:
                 self._logged_total = total
         if changed:
             log.info('margin: availablecash %.2f + availableintradaypayin %.2f + utiliseddebits %.2f = total %.2f',
                      value, payin, used, total)
+        return True
 
     def start_cash_refresh(self) -> None:
-        """Refresh now and every `cash_refresh_s`, on the executor."""
+        """Refresh now, then once `cash_lead_s` before every `cash_boundary_s` of the wall clock (the 15-minute boundaries, which is
+        when every entry and roll happens), each on the executor. A failed read is tried once more shortly after."""
+        def read():
+            if not self.refresh_cash_blocking():
+                self.scheduler.after(self.cfg.cash_stale_refresh_min_s, lambda: self.executor.submit(self.refresh_cash_blocking))
+
+        def schedule_next():
+            now = self.scheduler.now
+            step = self.cfg.cash_boundary_s
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            k = int((now - midnight).total_seconds() // step) + 1
+            while True:
+                fire = midnight + timedelta(seconds=k * step - self.cfg.cash_lead_s)
+                if fire > now:
+                    break
+                k += 1
+            self.scheduler.at(fire, tick)
+
         def tick():
-            self.executor.submit(self.refresh_cash_blocking)
-            self.scheduler.after(self.cfg.cash_refresh_s, tick)
-        tick()
+            self.executor.submit(read)
+            schedule_next()
+        self.executor.submit(read)
+        schedule_next()
 
     # ---- placement -------------------------------------------------------------------------------------------------------
 

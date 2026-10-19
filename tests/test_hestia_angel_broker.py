@@ -273,11 +273,59 @@ def test_a_cash_read_is_retried_once_and_a_second_failure_alerts_and_keeps_the_o
     assert r2.port.free_cash('a') == 0.0 and any(level == 'warning' for level, _ in r2.alerts)
 
 
-def test_cash_refresh_runs_now_and_on_a_timer():
-    r = Rig()
+def _rms_calls(r):
+    return len([c for c in r.sc.calls if c[0] == 'rms'])
+
+
+def test_cash_refresh_runs_now_then_once_30_seconds_before_each_15_minute_boundary():
+    r = Rig()                                                                       # the kernel starts at 12:00
     r.port.start_cash_refresh()
-    r.kernel.run_until(r.kernel.now + timedelta(seconds=95))
-    assert len([c for c in r.sc.calls if c[0] == 'rms']) == 4                     # now, 30, 60, 90
+    assert _rms_calls(r) == 1                                                       # now
+    r.kernel.run_until(datetime(2026, 9, 3, 12, 14, 29))
+    assert _rms_calls(r) == 1                                                       # nothing in between
+    r.kernel.run_until(datetime(2026, 9, 3, 12, 14, 31))
+    assert _rms_calls(r) == 2                                                       # 12:14:30, for the 12:15 boundary
+    r.kernel.run_until(datetime(2026, 9, 3, 12, 45))
+    assert _rms_calls(r) == 4                                                       # 12:29:30 and 12:44:30
+
+
+def test_the_schedule_follows_the_wall_clock_not_the_start_time():
+    r = Rig()
+    r.kernel.run_until(datetime(2026, 9, 3, 12, 7))
+    r.port.start_cash_refresh()                                                     # started at 12:07
+    assert _rms_calls(r) == 1
+    r.kernel.run_until(datetime(2026, 9, 3, 12, 14, 31))
+    assert _rms_calls(r) == 2                                                       # 12:14:30 again, not 12:37
+
+
+def test_a_failed_scheduled_read_is_tried_again_shortly_after():
+    r = Rig()
+    r.sc.rms_failures = 2                                                           # the first read and its own retry both fail
+    r.port.start_cash_refresh()
+    assert r.port.free_cash('a') == 0.0
+    r.kernel.run_for(11)
+    assert r.port.free_cash('a') == 1_000_000.0
+
+
+def test_a_stale_reading_met_at_an_entry_kicks_one_refresh_and_this_call_still_answers_zero():
+    r = Rig()
+    assert r.port.free_cash('a') == 0.0 and _rms_calls(r) == 1                      # nothing read yet: refused, refresh started
+    assert r.port.free_cash('a') == 1_000_000.0                                     # the next call finds it
+    r.clock.sleep(AngelConfig().cash_max_age_s + 1)
+    assert r.port.total_margin('a') == 0.0 and _rms_calls(r) == 2                   # stale again: refused, refresh started
+    assert r.port.total_margin('a') == 1_000_000.0
+
+
+def test_repeated_stale_reads_make_one_refresh_per_spacing():
+    r = Rig()
+    r.sc.rms_failures = 1000                                                        # the broker keeps failing: the reading stays missing
+    r.port.free_cash('a')
+    r.port.free_cash('a')
+    r.port.total_margin('a')
+    assert _rms_calls(r) == 2                                                       # one refresh = a read and its one retry
+    r.clock.sleep(AngelConfig().cash_stale_refresh_min_s + 1)
+    r.port.free_cash('a')
+    assert _rms_calls(r) == 4
 
 
 def test_paper_engines_are_refused_and_pool_is_live():

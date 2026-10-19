@@ -74,6 +74,18 @@ def test_a_stale_total_reads_zero_and_the_total_is_logged_when_it_changes(caplog
     assert r.port.total_margin('a') == 0.0
 
 
+def test_a_split_that_moves_at_a_constant_total_is_not_logged_again(caplog):
+    r = Rig()
+    with caplog.at_level('INFO', logger='hestia_angel'):
+        _rms(r, availablecash='5206091.16', availableintradaypayin='0', utiliseddebits='114140.15')      # 09:00:12 on 2026-10-19
+        r.port.refresh_cash_blocking()
+        _rms(r, availablecash='5206155.96', availableintradaypayin='0', utiliseddebits='114075.35')      # 09:00:42: same total
+        r.port.refresh_cash_blocking()
+        _rms(r, availablecash='5231821.55', availableintradaypayin='0', utiliseddebits='88409.76')
+        r.port.refresh_cash_blocking()
+    assert len([m for m in caplog.messages if m.startswith('margin:')]) == 1
+
+
 # ---- who shares the account -----------------------------------------------------------------------------------------------------
 
 def _core(pools, states):
