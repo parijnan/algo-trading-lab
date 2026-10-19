@@ -296,7 +296,7 @@ class HestiaHost:
 
         def before_flush() -> None:
             try:
-                angel.refresh_cash_blocking()                           # the balance is only read before each boundary: read it for the report's free-cash line
+                angel.refresh_cash_blocking('before the session report')  # the balance is only read before each boundary: read it for the report's free-cash line
             except Exception:                                           # noqa: BLE001 - a stale or missing balance must never stop the report
                 log.exception('refreshing the balance for the session report failed')
             try:
@@ -315,7 +315,7 @@ class HestiaHost:
             lifecycle.install_signals()
         try:
             reactor.start()
-            angel.refresh_cash_blocking()
+            angel.refresh_cash_blocking('startup')
             with reactor.lock:
                 angel.start_cash_refresh()
                 core.bootstrap_ledger(authoritative=restored)

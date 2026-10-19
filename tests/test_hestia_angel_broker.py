@@ -289,6 +289,19 @@ def test_cash_refresh_runs_now_then_once_30_seconds_before_each_15_minute_bounda
     assert _rms_calls(r) == 4                                                       # 12:29:30 and 12:44:30
 
 
+def test_every_read_logs_why_it_ran(caplog):
+    r = Rig()
+    with caplog.at_level('INFO', logger='hestia_angel'):
+        r.port.start_cash_refresh()
+        r.kernel.run_until(datetime(2026, 9, 3, 12, 14, 31))
+        r.port.free_cash('a')                                                       # fresh: no kick
+        r.clock.sleep(AngelConfig().cash_max_age_s + 1)
+        r.port.free_cash('a')                                                       # stale: kicks a read
+    reads = [m for m in caplog.messages if m.startswith('margin read')]
+    assert reads == ['margin read (start of the refresh schedule)', 'margin read (scheduled, before the next boundary)',
+                     'margin read (stale reading met at an entry)']
+
+
 def test_the_schedule_follows_the_wall_clock_not_the_start_time():
     r = Rig()
     r.kernel.run_until(datetime(2026, 9, 3, 12, 7))

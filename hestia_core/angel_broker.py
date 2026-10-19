@@ -135,10 +135,11 @@ class AngelBrokerPort:
             if self._last_kick is not None and now - self._last_kick < self.cfg.cash_stale_refresh_min_s:
                 return
             self._last_kick = now
-        self.executor.submit(self.refresh_cash_blocking)
+        self.executor.submit(self.refresh_cash_blocking, 'stale reading met at an entry')
 
-    def refresh_cash_blocking(self) -> bool:
-        """One rmsLimit() read. Returns whether it produced a reading."""
+    def refresh_cash_blocking(self, why: str = 'direct call') -> bool:
+        """One rmsLimit() read. Returns whether it produced a reading. `why` is logged so the read timing is visible."""
+        log.info('margin read (%s)', why)
         try:
             try:
                 data = self.gateway.rms()['data']
@@ -171,9 +172,10 @@ class AngelBrokerPort:
     def start_cash_refresh(self) -> None:
         """Refresh now, then once `cash_lead_s` before every `cash_boundary_s` of the wall clock (the 15-minute boundaries, which is
         when every entry and roll happens), each on the executor. A failed read is tried once more shortly after."""
-        def read():
-            if not self.refresh_cash_blocking():
-                self.scheduler.after(self.cfg.cash_stale_refresh_min_s, lambda: self.executor.submit(self.refresh_cash_blocking))
+        def read(why):
+            if not self.refresh_cash_blocking(why):
+                self.scheduler.after(self.cfg.cash_stale_refresh_min_s,
+                                     lambda: self.executor.submit(self.refresh_cash_blocking, 'retry after a failed read'))
 
         def schedule_next():
             now = self.scheduler.now
@@ -188,9 +190,9 @@ class AngelBrokerPort:
             self.scheduler.at(fire, tick)
 
         def tick():
-            self.executor.submit(read)
+            self.executor.submit(read, 'scheduled, before the next boundary')
             schedule_next()
-        self.executor.submit(read)
+        self.executor.submit(read, 'start of the refresh schedule')
         schedule_next()
 
     # ---- placement -------------------------------------------------------------------------------------------------------
