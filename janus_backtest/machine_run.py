@@ -35,7 +35,11 @@ pd.set_option('display.max_columns', 40)
 
 
 def run_name(symbol, source, opts) -> str:
-    return f"{symbol}_{source}_rebuy-{'on' if opts['rebuy'] else 'off'}_counter-{'on' if opts['counter'] else 'off'}_tsl-{'on' if opts['tsl'] else 'off'}"
+    tsl = ('on' if opts.get('tsl_reentry', True) else 'on-noreentry') if opts['tsl'] else 'off'
+    rules = opts.get('tsl_rules') or configs.TSL_RULES
+    if opts['tsl'] and rules != configs.TSL_RULES:   # the default rules keep the plain name, any other rule set is spelled out so folders never collide
+        tsl += f"_t1-{rules.get(1) or 'stay'}_t2-{rules.get(2) or 'stay'}"
+    return f"{symbol}_{source}_rebuy-{'on' if opts['rebuy'] else 'off'}_counter-{'on' if opts['counter'] else 'off'}_tsl-{tsl}"
 
 
 def _other_order(order):
@@ -90,7 +94,7 @@ def write_run(res, symbol, source, opts, out_root=None) -> str:
         pd.DataFrame(rows).to_csv(os.path.join(out, 'minute', f'{key}.csv'), index=False)
     with open(os.path.join(out, 'run_info.txt'), 'w') as f:
         f.write(f"symbol {symbol}\nlevel_source {source}\nlast_session {res['sessions']['date'].max()} (data sources: {dict(res['sessions']['data_source'].value_counts())})\nopts {opts}\nlogged_bar_order {res['order']} (other order marks order_sensitive: {res['other']})\n"
-                f"sessions {res['n_sessions']}\nTSL_RULES {configs.TSL_RULES}\nENTRY_CUTOFF_MIN {configs.ENTRY_CUTOFF_MIN} HARD_EXIT_MIN {configs.HARD_EXIT_MIN} "
+                f"sessions {res['n_sessions']}\nTSL_RULES {opts.get('tsl_rules') or configs.TSL_RULES}\nENTRY_CUTOFF_MIN {configs.ENTRY_CUTOFF_MIN} HARD_EXIT_MIN {configs.HARD_EXIT_MIN} "
                 f"AT_OPEN_MINUTES {configs.AT_OPEN_MINUTES}\n")
     return out
 
@@ -140,6 +144,8 @@ def main(argv):
     ap.add_argument('--rebuy', action='store_true', default=configs.MACHINE_REBUY)
     ap.add_argument('--counter', action='store_true', default=configs.MACHINE_COUNTER)
     ap.add_argument('--tsl', action='store_true', default=configs.MACHINE_TSL)
+    ap.add_argument('--no-tsl-reentry', action='store_true', help='with --tsl: no new entry on a setup after a trailed stop closed its trade, for the rest of the session')
+    ap.add_argument('--tsl-rules', help="with --tsl: where the stop goes after T1 and after T2, e.g. entry,stay or stay,T1 (places: entry, T1, T2, stay)")
     ap.add_argument('--from', dest='date_from')
     ap.add_argument('--to', dest='date_to')
     ap.add_argument('--no-tail', action='store_true', help='Fyers history only (no Angel One tail for unexpired contracts)')
@@ -151,7 +157,10 @@ def main(argv):
     if a.parity:
         print(parity(a.symbol, a.source, a.last, d0, live_tail=False if a.no_tail else None))
         return
-    opts = {'rebuy': a.rebuy, 'counter': a.counter, 'tsl': a.tsl}
+    opts = {'rebuy': a.rebuy, 'counter': a.counter, 'tsl': a.tsl, 'tsl_reentry': configs.TSL_REENTRY and not a.no_tsl_reentry}
+    if a.tsl_rules:
+        p1, p2 = [None if x.lower() == 'stay' else x for x in a.tsl_rules.split(',')]
+        opts['tsl_rules'] = {1: p1, 2: p2}
     res = run_symbol(a.symbol, a.source, opts, d0, d1, live_tail=False if a.no_tail else None)
     out = write_run(res, a.symbol, a.source, opts)
     print(summary(res))

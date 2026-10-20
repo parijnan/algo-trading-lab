@@ -146,6 +146,10 @@ MACHINE_TSL = False                            # trailing stop on the trade (the
 # open the sister setup (the stop is no longer the sister's entry level). With re-buy on, a stop at the entry level is hit first (stops before re-buys at the
 # same price), so the booked lots are not bought back.
 TSL_RULES = {1: 'entry', 2: 'T1'}
+# With the trailing stop on: may a setup enter again in the same session after a TRAILED stop closed its trade? True is the plain event loop (price crosses the entry
+# level again and the setup fires again; 65 such trades appeared in the first full run, -17.9 R); False blocks that setup for the rest of the session. A normal stop
+# at the original level, a target, the hard exit and the session end never block anything. Has no effect with the trailing stop off.
+TSL_REENTRY = True
 MACHINE_LIVE_TAIL = True                       # sessions of a contract with no Fyers file yet (not expired) come from the live Angel One tree; they carry data_source 'angelone_tail'
 MACHINE_BAR_ORDER = 'neutral'                  # the order written to the logs; the other order is run alongside as the sensitivity
 MACHINE_OUTPUT_DIR = os.path.join(OUTPUT_DIR, 'machine')

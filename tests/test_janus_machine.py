@@ -17,6 +17,7 @@ from janus_levels import camarilla_levels  # noqa: E402
 LV = camarilla_levels(110.0, 100.0, 105.0)
 OFF = {'rebuy': False, 'counter': False, 'tsl': False}
 TSL = {'rebuy': False, 'counter': False, 'tsl': True}
+TSL_NO_RE = {'rebuy': False, 'counter': False, 'tsl': True, 'tsl_reentry': False}
 REBUY = {'rebuy': True, 'counter': False, 'tsl': False}
 
 
@@ -255,7 +256,7 @@ def test_event_log_has_first_touches_once_in_path_order():
 # ---------------------------------------------------------------- the runner's output folder
 
 def test_write_run_empties_the_folder_first(tmp_path):
-    res = {'trades': pd.DataFrame([{'a': 1}]), 'legs': pd.DataFrame([{'a': 1}]), 'events': pd.DataFrame([{'a': 1}]), 'sessions': pd.DataFrame([{'a': 1}]),
+    res = {'trades': pd.DataFrame([{'a': 1}]), 'legs': pd.DataFrame([{'a': 1}]), 'events': pd.DataFrame([{'a': 1}]), 'sessions': pd.DataFrame([{'date': '2026-01-05', 'data_source': 'fyers'}]),
            'minute': {'k1': [{'x': 1}]}, 'n_sessions': 1, 'order': 'neutral', 'other': 'adverse'}
     out = machine_run.write_run(res, 'CRUDEOILM', 'range_setter', OFF, out_root=str(tmp_path))
     stale = Path(out) / 'minute' / 'old_trade.csv'
@@ -263,3 +264,53 @@ def test_write_run_empties_the_folder_first(tmp_path):
     out2 = machine_run.write_run(res, 'CRUDEOILM', 'range_setter', OFF, out_root=str(tmp_path))
     assert out == out2 and not stale.exists() and (Path(out) / 'minute' / 'k1.csv').exists()
     assert machine_run.run_name('CRUDEOILM', 'range_setter', TSL).endswith('rebuy-off_counter-off_tsl-on')
+
+
+# ---------------------------------------------------------------- no re-entry after a trailed stop
+
+TRAILED_THEN_BACK_UP = TO_T1_THEN_BACK + [(102.1, 102.6, 102.1, 102.5)]            # the trailed stop at S3 closes the trade, then price rises through S3 again
+NORMAL_STOP_THEN_BACK_UP = ENTER_FADE_LONG + [(102.3, 102.4, 99.4, 99.6), (99.6, 102.5, 99.6, 102.4)]
+
+
+def test_a_trailed_stop_lets_the_setup_enter_again_by_default():
+    r = run(TRAILED_THEN_BACK_UP, TSL)
+    assert len([t for t in r['trades'] if t['setup'] == 'F_L']) == 2
+
+
+def test_no_reentry_after_a_trailed_stop_blocks_that_setup_for_the_session():
+    r = run(TRAILED_THEN_BACK_UP, TSL_NO_RE)
+    assert len([t for t in r['trades'] if t['setup'] == 'F_L']) == 1
+    assert trade_of(r, 'F_L')['reasons'] == 'T1,stop_trailed,stop_trailed' and trade_of(r, 'F_L')['tsl_reentry'] is False
+
+
+def test_a_normal_stop_never_blocks_a_reentry():
+    r = run(NORMAL_STOP_THEN_BACK_UP, TSL_NO_RE)
+    assert len([t for t in r['trades'] if t['setup'] == 'F_L']) == 2
+
+
+def test_the_block_changes_nothing_with_the_trailing_stop_off():
+    r = run(TRAILED_THEN_BACK_UP, {'rebuy': False, 'counter': False, 'tsl': False, 'tsl_reentry': False})
+    assert 'stop_trailed' not in ' '.join(t['reasons'] for t in r['trades'])
+
+
+def test_run_name_marks_the_blocked_variant():
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', TSL_NO_RE).endswith('tsl-on-noreentry')
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', TSL).endswith('tsl-on')
+
+
+# ---------------------------------------------------------------- per-run trailing rules
+
+def test_tsl_rules_in_opts_override_the_config():
+    bars = ENTER_FADE_LONG + [(102.3, 107, 102.3, 106.9), (106.9, 106.95, 105.5, 105.6)]       # T1 and T2 hit, then back below T1
+    only_t2 = trade_of(run(bars, {**TSL, 'tsl_rules': {1: None, 2: 'T1'}}), 'F_L')
+    assert only_t2['stop_moves'] == 1 and only_t2['stop_final'] == pytest.approx(LV['R1'])      # nothing moved after T1, one move after T2
+    only_t1 = trade_of(run(bars, {**TSL, 'tsl_rules': {1: 'entry', 2: None}}), 'F_L')
+    assert only_t1['stop_moves'] == 1 and only_t1['stop_final'] == pytest.approx(LV['S3'])
+    assert only_t1['reasons'] != only_t2['reasons']
+
+
+def test_run_name_spells_out_non_default_trail_rules():
+    a = machine_run.run_name('CRUDEOILM', 'range_setter', {**TSL, 'tsl_rules': {1: 'entry', 2: None}})
+    b = machine_run.run_name('CRUDEOILM', 'range_setter', {**TSL, 'tsl_rules': {1: None, 2: 'T1'}})
+    assert a.endswith('tsl-on_t1-entry_t2-stay') and b.endswith('tsl-on_t1-stay_t2-T1') and a != b
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', {**TSL, 'tsl_rules': configs.TSL_RULES}).endswith('tsl-on')
