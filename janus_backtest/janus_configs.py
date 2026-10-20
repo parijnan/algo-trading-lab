@@ -133,3 +133,21 @@ LEVEL_SOURCE = 'previous_session'
 # A day takes part in a contract's range history only if it has at least this many 1-minute bars and some traded volume (Fyers delivers a bar for every minute,
 # zero-volume placeholders carrying the previous close, so a no-trade day is dropped, never turned into a flat bar).
 RANGE_MIN_BARS = MIN_BARS_PER_SESSION
+
+# --- State machine (2026-10-20, plans/janus-state-machine.md): janus_machine.py + machine_run.py ---
+# Touch entries only (close triggers come later). Plain equal thirds with the original stop is the base case; every extra is a toggle, OFF by default.
+MACHINE_SYMBOL = 'CRUDEOILM'
+MACHINE_LEVEL_SOURCE = 'range_setter'          # one of LEVEL_SOURCES
+MACHINE_REBUY = False                          # booked lots are bought back at the original entry level when price returns to it
+MACHINE_COUNTER = False                        # a fade's T3 opens its sister setup at that level
+MACHINE_TSL = False                            # trailing stop on the trade (the stop is then a property of the trade, not of the setup)
+# When the TSL toggle is on: after target k is hit the trade's stop moves to the place named (never backwards). 'entry' = the trade's first fill,
+# 'T1' / 'T2' = that target's level, None = leave the stop where it is. A moved stop is a plain stop: hitting it closes the trade and does NOT
+# open the sister setup (the stop is no longer the sister's entry level). With re-buy on, a stop at the entry level is hit first (stops before re-buys at the
+# same price), so the booked lots are not bought back.
+TSL_RULES = {1: 'entry', 2: 'T1'}
+MACHINE_LIVE_TAIL = True                       # sessions of a contract with no Fyers file yet (not expired) come from the live Angel One tree; they carry data_source 'angelone_tail'
+MACHINE_BAR_ORDER = 'neutral'                  # the order written to the logs; the other order is run alongside as the sensitivity
+MACHINE_OUTPUT_DIR = os.path.join(OUTPUT_DIR, 'machine')
+# Levels whose first touch of the session is logged as an event (the level state of the day).
+MACHINE_LEVELS = ['S7', 'S6', 'S5', 'S4', 'S3', 'S2', 'S1', 'C', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']
