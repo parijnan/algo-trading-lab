@@ -53,13 +53,14 @@ def parse_trades(csv_text, engine, ecfg):
         units = int(row['units'])
         entry_ts = _ts(row['entry_ts'])
         final = max(x['ts'] for x in exits)
-        rs_unit = _num(row['total_pnl_rs'])
+        rs_actual = _num(row['total_pnl_rs'])      # the engines record rupees for ALL the units the trade ran at (lots = units x lots_per_unit)
+        rs_unit = rs_actual / units
         out.append({
             'engine': engine, 'trade_id': int(row['trade_id']), 'instrument': ecfg['instrument'], 'expiry': row['contract_expiry'],
             'direction': row['direction'], 'units': units, 'lots': units * ecfg['lots_per_unit'],
             'entry_ts': entry_ts, 'entry_price': _num(row['entry_price']), 'signal_close': _num(row['signal_close']), 'slippage': _num(row['entry_slippage_points']),
             'exits': exits, 'exit_ts': final, 'reasons': '/'.join(dict.fromkeys(x['reason'] for x in exits)),
-            'pts': _num(row['total_pnl_points']), 'rs_unit': rs_unit, 'rs_actual': rs_unit * units,
+            'pts': _num(row['total_pnl_points']), 'rs_unit': rs_unit, 'rs_actual': rs_actual,
             'hold_h': (final - entry_ts).total_seconds() / 3600.0,
         })
     return out

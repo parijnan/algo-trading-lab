@@ -72,8 +72,8 @@ def test_a_two_lot_trade_keeps_both_exits_and_ends_at_the_later_one():
     assert t['lots'] == 2
 
 
-def test_actual_rupees_are_per_unit_rupees_times_units_and_lots_follow_units():
-    txt = csv_text([single(8, 'bearish', '2026-10-02T10:00:00', 100.0, '2026-10-02T12:00:00', 90.0, 10.0, 10.0, units=3)])
+def test_recorded_rupees_are_the_total_for_all_units_and_per_unit_is_that_divided_by_units():
+    txt = csv_text([single(8, 'bearish', '2026-10-02T10:00:00', 100.0, '2026-10-02T12:00:00', 90.0, 10.0, 30.0, units=3)])
     t = bt.parse_trades(txt, 'selene', SELENE)[0]
     assert t['rs_unit'] == 10.0 and t['rs_actual'] == 30.0 and t['lots'] == 3
 
