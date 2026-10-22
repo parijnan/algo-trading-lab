@@ -110,7 +110,7 @@ def _summarise(sim, tr):
            'level_source': sim['level_source'], 'data_source': sess.get('data_source', 'fyers'), 'prev_close': lv['C'], 'range_high': rng.get('high'), 'range_low': rng.get('low'),
            'range_setter_date': rng.get('setter_date'), 'range_age': rng.get('age'), 'range_extensions': rng.get('extensions'),
            'R_levels': lv['R'], 'R_control': control['R'], 'R_ratio': lv['R'] / control['R'] if control['R'] else None,
-           'bar_order': sim['order'], 'rebuy_on': sim['opts']['rebuy'], 'counter_on': sim['opts']['counter'], 'tsl_on': sim['opts']['tsl'], 'tsl_reentry': sim['opts']['tsl_reentry']}
+           'bar_order': sim['order'], 'rebuy_on': sim['opts']['rebuy'], 'counter_on': sim['opts']['counter'], 'tsl_on': sim['opts']['tsl'], 'tsl_reentry': sim['opts']['tsl_reentry'], 'stop_scale': sim['opts']['stop_scale'], 'max_entries': sim['opts']['max_entries']}
     sim['trade_rows'].append(row)
 
 
@@ -128,13 +128,18 @@ def _open_trade(sim, key, price, i, kind) -> bool:
     s = sim['setups'][key]
     if (price - s['targets'][0]) * s['side'] >= 0:          # filled at or past T1: nothing left to trade
         return False
-    tr = {'id': sim['n_trades'], 'setup': key, 'kind': kind, 'cycles': 0, 'entry': price, 'entry_bar': i, 'stop': s['stop'], 'stop_initial': s['stop'],
+    scale = sim['opts']['stop_scale']
+    stop = s['stop'] if scale == 1.0 else s['entry'] - s['side'] * scale * s['risk']     # a tighter stop sits that share of the original distance from the setup's entry level
+    tr = {'id': sim['n_trades'], 'setup': key, 'kind': kind, 'cycles': 0, 'entry': price, 'entry_bar': i, 'stop': stop, 'stop_initial': stop,
           'stop_moves': [], 'realized': 0.0, 'legs': [], 'closed': False, 'rows': [], 'key': _unique_key(sim, key, i),
           'lots': [{'state': 'open', 'entry': price, 'bar': i, 'rebuy': False, 'cycle': 0} for _ in range(3)]}
     _fresh_extremes(tr, price, i)
     for x in tr['lots']:
         _fresh_extremes(x, price, i)
     sim['state'][key] = tr
+    sim['entry_count'][key] = sim['entry_count'].get(key, 0) + 1
+    if sim['opts']['max_entries'] and sim['entry_count'][key] >= sim['opts']['max_entries']:
+        sim['blocked'].add(key)                                # the setup's entries for the session are used up (the open trade itself carries on)
     sim['trades'].append(tr)
     sim['touched'][tr['id']] = tr
     sim['n_trades'] += 1
@@ -288,7 +293,9 @@ def _write_rows(sim, i, o, h, l, c, v):
 def simulate_session(session: dict, opts: dict = None, order: str = None) -> dict:
     """Run one session. `opts` = {'rebuy', 'counter', 'tsl'} booleans (defaults: the MACHINE_* settings in janus_configs); `order` a bar order from
     configs.BAR_ORDERS. Returns {'legs': [...], 'trades': [summary rows], 'minute_logs': {trade_key: [rows]}, 'events': [...]}."""
-    opts = {'rebuy': configs.MACHINE_REBUY, 'counter': configs.MACHINE_COUNTER, 'tsl': configs.MACHINE_TSL, 'tsl_reentry': configs.TSL_REENTRY, 'tsl_rules': configs.TSL_RULES, **(opts or {})}
+    opts = {'rebuy': configs.MACHINE_REBUY, 'counter': configs.MACHINE_COUNTER, 'tsl': configs.MACHINE_TSL, 'tsl_reentry': configs.TSL_REENTRY, 'tsl_rules': configs.TSL_RULES, 'stop_scale': configs.STOP_SCALE, 'max_entries': configs.MAX_ENTRIES_PER_SETUP, **(opts or {})}
+    if opts['max_entries'] < 0:
+        raise ValueError('max_entries must be 0 (no limit) or a positive count')
     order = order or configs.MACHINE_BAR_ORDER
     b = session['bars']
     o, h, l, c = (b[k].tolist() for k in ('open', 'high', 'low', 'close'))
@@ -298,7 +305,7 @@ def simulate_session(session: dict, opts: dict = None, order: str = None) -> dic
     lv = session['levels']
     sim = {'setups': setups, 'state': {k: None for k in setups}, 'legs': [], 'trade_rows': [], 'trades': [], 'events': [], 'n_trades': 0, 'keys': set(),
            'opts': opts, 'order': order, 'symbol': session['symbol'], 'date': session['date'], 'session': session, 'ts': ts, 'i': 0,
-           'entries_open': False, 'blocked': set(), 'tick': configs.TICK_SIZE[session['symbol']], 'touched': {}, 'bar_events': {}, 'touched_levels': set(),
+           'entries_open': False, 'blocked': set(), 'entry_count': {}, 'tick': configs.TICK_SIZE[session['symbol']], 'touched': {}, 'bar_events': {}, 'touched_levels': set(),
            'level_values': [(n, lv[n]) for n in configs.MACHINE_LEVELS], 'level_source': session.get('level_source', configs.LEVEL_SOURCE)}
     cut_ts = ts[-1] - np.timedelta64(configs.ENTRY_CUTOFF_MIN, 'm')
     hard_ts = ts[-1] - np.timedelta64(configs.HARD_EXIT_MIN, 'm')

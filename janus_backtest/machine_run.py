@@ -36,9 +36,16 @@ pd.set_option('display.max_columns', 40)
 
 def run_name(symbol, source, opts) -> str:
     tsl = ('on' if opts.get('tsl_reentry', True) else 'on-noreentry') if opts['tsl'] else 'off'
+    if opts.get('stop_scale', configs.STOP_SCALE) != 1.0:
+        tsl_tail = f"_stop-{round(opts['stop_scale'] * 100)}"
+    else:
+        tsl_tail = ''
     rules = opts.get('tsl_rules') or configs.TSL_RULES
     if opts['tsl'] and rules != configs.TSL_RULES:   # the default rules keep the plain name, any other rule set is spelled out so folders never collide
         tsl += f"_t1-{rules.get(1) or 'stay'}_t2-{rules.get(2) or 'stay'}"
+    tsl += tsl_tail
+    if opts.get('max_entries', configs.MAX_ENTRIES_PER_SETUP):
+        tsl += f"_max-{opts['max_entries']}"
     return f"{symbol}_{source}_rebuy-{'on' if opts['rebuy'] else 'off'}_counter-{'on' if opts['counter'] else 'off'}_tsl-{tsl}"
 
 
@@ -146,6 +153,8 @@ def main(argv):
     ap.add_argument('--tsl', action='store_true', default=configs.MACHINE_TSL)
     ap.add_argument('--no-tsl-reentry', action='store_true', help='with --tsl: no new entry on a setup after a trailed stop closed its trade, for the rest of the session')
     ap.add_argument('--tsl-rules', help="with --tsl: where the stop goes after T1 and after T2, e.g. entry,stay or stay,T1 (places: entry, T1, T2, stay)")
+    ap.add_argument('--stop-scale', type=float, default=configs.STOP_SCALE, help='tighter stop: share of the original stop distance (1.0 = the Camarilla stop level, 0.9 = 90 percent of the way)')
+    ap.add_argument('--max-entries', type=int, default=configs.MAX_ENTRIES_PER_SETUP, help='entries one setup may take per session; 0 = no limit')
     ap.add_argument('--from', dest='date_from')
     ap.add_argument('--to', dest='date_to')
     ap.add_argument('--no-tail', action='store_true', help='Fyers history only (no Angel One tail for unexpired contracts)')
@@ -158,6 +167,8 @@ def main(argv):
         print(parity(a.symbol, a.source, a.last, d0, live_tail=False if a.no_tail else None))
         return
     opts = {'rebuy': a.rebuy, 'counter': a.counter, 'tsl': a.tsl, 'tsl_reentry': configs.TSL_REENTRY and not a.no_tsl_reentry}
+    opts['stop_scale'] = a.stop_scale
+    opts['max_entries'] = a.max_entries
     if a.tsl_rules:
         p1, p2 = [None if x.lower() == 'stay' else x for x in a.tsl_rules.split(',')]
         opts['tsl_rules'] = {1: p1, 2: p2}

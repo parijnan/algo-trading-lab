@@ -314,3 +314,59 @@ def test_run_name_spells_out_non_default_trail_rules():
     b = machine_run.run_name('CRUDEOILM', 'range_setter', {**TSL, 'tsl_rules': {1: None, 2: 'T1'}})
     assert a.endswith('tsl-on_t1-entry_t2-stay') and b.endswith('tsl-on_t1-stay_t2-T1') and a != b
     assert machine_run.run_name('CRUDEOILM', 'range_setter', {**TSL, 'tsl_rules': configs.TSL_RULES}).endswith('tsl-on')
+
+
+# ---------------------------------------------------------------- tighter stops
+
+def test_stop_scale_places_the_stop_part_of_the_way_to_the_level():
+    scale = {**OFF, 'stop_scale': 0.5}
+    dip = ENTER_FADE_LONG + [(102.3, 102.3, 100.95, 101.5)]         # dips to 100.95: above the half-way stop (100.875), far above S4 (99.5)
+    t = trade_of(run(dip, scale), 'F_L')
+    assert t['stop_initial'] == pytest.approx(LV['S3'] - 0.5 * (LV['S3'] - LV['S4'])) and 'stop' not in t['reasons']
+    deep = ENTER_FADE_LONG + [(102.3, 102.3, 100.8, 100.9)]         # touches 100.8: through the half-way stop, S4 never reached
+    r = run(deep, scale)
+    t = trade_of(r, 'F_L')
+    assert t['reasons'] == 'stop,stop,stop' and [x['exit'] for x in r['legs'] if x['setup'] == 'F_L'] == pytest.approx([100.875] * 3)
+    assert trade_of(run(deep, OFF), 'F_L')['stop_initial'] == pytest.approx(LV['S4']) and 'stop' not in trade_of(run(deep, OFF), 'F_L')['reasons']
+
+
+def test_stop_scale_works_for_shorts_and_keeps_r_in_original_stop_units():
+    s = session([(106, 107.0, 105.9, 106.9), (106.9, 108.2, 106.8, 107.5)] + [(107.5, 107.9, 107.4, 107.6)])   # above R3 then back below: F_S
+    r = mach.simulate_session(s, {**OFF, 'stop_scale': 0.8}, 'neutral')
+    t = trade_of(r, 'F_S')
+    assert t['stop_initial'] == pytest.approx(LV['R3'] + 0.8 * (LV['R4'] - LV['R3']))
+    assert t['risk_pts'] == pytest.approx(LV['R4'] - LV['R3'])
+
+
+def test_run_name_marks_a_tighter_stop():
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', {**OFF, 'stop_scale': 0.9}).endswith('tsl-off_stop-90')
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', {**OFF, 'stop_scale': 1.0}).endswith('tsl-off')
+
+
+# ---------------------------------------------------------------- entry limit per setup per session
+
+TWO_FADES = ENTER_FADE_LONG + [(102.3, 102.3, 99.4, 99.6), (99.6, 102.6, 99.6, 102.5)]      # F_L enters, is stopped at S4, price rises back through S3 and it enters again
+
+
+def _fl(r):
+    return [t for t in r['trades'] if t['setup'] == 'F_L']
+
+
+def test_max_entries_zero_means_no_limit_and_one_blocks_the_second_entry():
+    assert len(_fl(run(TWO_FADES, OFF))) == 2
+    assert len(_fl(run(TWO_FADES, {**OFF, 'max_entries': 0}))) == 2
+    assert len(_fl(run(TWO_FADES, {**OFF, 'max_entries': 1}))) == 1
+    assert len(_fl(run(TWO_FADES, {**OFF, 'max_entries': 2}))) == 2
+
+
+def test_max_entries_limits_each_setup_on_its_own_and_never_cuts_an_open_trade():
+    r = run(TWO_FADES, {**OFF, 'max_entries': 1})
+    assert 'stop' in _fl(r)[0]['reasons'] and _fl(r)[0]['exit_ts'] is not None            # the first trade still ran to its stop
+    assert any(t['setup'] == 'B_S' for t in r['trades'])                                  # the sister setup has its own count
+
+
+def test_max_entries_rejects_a_negative_count_and_is_in_the_run_name():
+    with pytest.raises(ValueError):
+        run(TWO_FADES, {**OFF, 'max_entries': -1})
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', {**OFF, 'max_entries': 2}).endswith('tsl-off_max-2')
+    assert machine_run.run_name('CRUDEOILM', 'range_setter', {**OFF, 'max_entries': 0}).endswith('tsl-off')

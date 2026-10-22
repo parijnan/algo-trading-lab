@@ -145,6 +145,8 @@ MACHINE_TSL = False                            # trailing stop on the trade (the
 # 'T1' / 'T2' = that target's level, None = leave the stop where it is. A moved stop is a plain stop: hitting it closes the trade and does NOT
 # open the sister setup (the stop is no longer the sister's entry level). With re-buy on, a stop at the entry level is hit first (stops before re-buys at the
 # same price), so the booked lots are not bought back.
+MAX_ENTRIES_PER_SETUP = 0   # entries one setup may take per session (trade entries and counter entries; re-buys do not count); 0 = no limit
+STOP_SCALE = 1.0   # share of the original stop distance (entry level to stop level) the trade's stop sits at; 1.0 = the Camarilla stop level itself
 TSL_RULES = {1: 'entry', 2: 'T1'}
 # With the trailing stop on: may a setup enter again in the same session after a TRAILED stop closed its trade? True is the plain event loop (price crosses the entry
 # level again and the setup fires again; 65 such trades appeared in the first full run, -17.9 R); False blocks that setup for the rest of the session. A normal stop
