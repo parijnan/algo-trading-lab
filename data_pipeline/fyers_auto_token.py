@@ -94,6 +94,7 @@ IST = ZoneInfo('Asia/Kolkata')
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CREDS_FILE = REPO_ROOT / 'data' / 'user_credentials.csv'
 PROFILE_DIR = Path(__file__).resolve().parent / 'data' / 'fyers_browser_profile'
+FAIL_DIR = Path(__file__).resolve().parent / 'data' / 'fyers_auto_token_failure'
 REDIRECT_URI = 'https://quant-grow.com'
 CHROMEDRIVER_PATH = '/home/parijnan/anaconda3/bin/chromedriver'
 SLACK_DATA_CHANNEL = '#data-alerts'
@@ -201,6 +202,34 @@ def wait_visible(d, elem_id, timeout=45, redirect_check=None):
     raise TimeoutException(f'{elem_id} never appeared')
 
 
+def wait_present(d, elem_id, timeout=15):
+    """Wait for an element to exist and be displayed (the login page renders
+    after the document loads, so a bare find_element can run too early)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            e = d.find_element(By.ID, elem_id)
+            if e.is_displayed():
+                return e
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.5)
+    raise TimeoutException(f'{elem_id} not present after {timeout}s')
+
+
+def capture_failure(d):
+    """Save a screenshot and the page source of a failed run (latest only,
+    overwritten each time) so a login-page change can be diagnosed."""
+    try:
+        FAIL_DIR.mkdir(parents=True, exist_ok=True)
+        d.save_screenshot(str(FAIL_DIR / 'last_failure.png'))
+        (FAIL_DIR / 'last_failure.html').write_text(d.page_source)
+        log(f'failure capture saved: {FAIL_DIR}/last_failure.png and .html (url host='
+            f'{urllib.parse.urlparse(d.current_url).netloc})')
+    except Exception as e:  # noqa: BLE001
+        log(f'failure capture not saved: {str(e).splitlines()[0][:120]}')
+
+
 def wait_clickable(d, elem_id, timeout=90):
     end = time.time() + timeout
     while time.time() < end:
@@ -294,7 +323,7 @@ def do_login(d, creds):
             time.sleep(1)
     except Exception:  # noqa: BLE001
         pass
-    d.find_element(By.ID, 'fy_client_id').send_keys(fy_id)
+    wait_present(d, 'fy_client_id').send_keys(fy_id)
     wait_clickable(d, 'clientIdSubmit').click()
     log('client ID submitted')
 
@@ -379,6 +408,9 @@ def main():
                        f'{record["issued_at"]}, expires {record["expires_at"]}, '
                        f'fingerprint {fingerprint(access)}. Local creds + '
                        f'hestia_data/fyers_token.json updated; Delos push follows.')
+        except Exception:
+            capture_failure(d)
+            raise
         finally:
             try:
                 d.quit()
