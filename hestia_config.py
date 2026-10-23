@@ -78,7 +78,7 @@ CANDLE_SOURCE = dict(
     timeout_s=3.0,                                      # one Fyers call; a slow Fyers must never hold a bar boundary
     retry_s=1.0,                                        # between attempts while the just-closed minute has not appeared
     max_wait_s=6.0,                                     # stop waiting for it this long after the tick
-    smart_instruments=('CRUDEOILM',),                   # 'smart' mode only: Fyers is asked FIRST for these (the pilot, plans/hestia-fyers-candle-source.md section 7d)
+    smart_instruments=('CRUDEOILM',),                   # 'smart' mode only: Fyers is asked FIRST for these (the CRUDEOILM pilot, section 7d; the delos host adds the other three from 2026-10-26)
     smart_settle_s=0.5,                                 # a minute is trusted this long after it closes (owner's call 2026-10-10; measured: final in 97.5% of snapshots at +0.5 s, 100% from +0.8 s)
     smart_max_wait_s=3.0,                               # give up on Fyers this long after the minute closed and let Angel One's burst run
     smart_confirm_zero_volume=True,                     # the just-closed minute arriving from Fyers as a zero-volume row is handed to Angel One (found 2026-10-14: a real 3-lot print was dropped); False trusts it as untraded
@@ -166,10 +166,13 @@ TRADING_HOSTS = {
     # ALL FOUR ENGINES TO 2 UNITS from the first session after 2026-10-16 (user's decision, scaling up): Prometheus 4 lots (2 per unit),
     # Selene 2, Helios 40 (20 per unit), Typhon 4 (2 per unit). A position already open keeps the units it was entered with until it closes; new entries and
     # flip legs use 2; a rollover reopen reuses the stored lots. A Slack sizing override (hestia_data/state/<engine>_sizing.json) would still win over this.
-    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
-                           'selene': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
-                           'helios': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
-                           'typhon': dict(enabled=True, paper=False, static_units=2, unit_cap=100)},
+    # ALL FOUR ENGINES TO 5 UNITS from the first session after 2026-10-23, i.e. Monday 2026-10-26 (user's decision 2026-10-23, scaling up from 2): Prometheus 10 lots (2 per unit),
+    # Selene 5, Helios 100 (20 per unit), Typhon 10 (2 per unit). Same rules as the 2-unit step: a position already open keeps the units it was entered with until it closes;
+    # new entries and flip legs use 5; a rollover reopen reuses the stored lots; a Slack sizing override would still win.
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
+                           'selene': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
+                           'helios': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
+                           'typhon': dict(enabled=True, paper=False, static_units=5, unit_cap=100)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True,
                   # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md), upgraded to RESCUE the same
                   # day (Phase 2, user's go-ahead after the Zerodha cross-check: finalized Fyers matched Zerodha on 12 of 13 differing fields): Angel One
@@ -180,7 +183,10 @@ TRADING_HOSTS = {
                   # CRUDEOILM (Prometheus) is asked of Fyers FIRST, a single pull 0.5 s after each minute closes; Angel One's burst, then the Fyers rescue, then the recovery
                   # queue stand behind it. The other three instruments stay Angel One first with the rescue behind them. Back to the previous behaviour: mode 'rescue' (restart),
                   # or at once with `touch hestia_data/flags/fyers_off.flag` (Angel One only, next poll, no restart).
-                  CANDLE_SOURCE={'mode': 'smart', 'smart_instruments': ('CRUDEOILM',)}),
+                  # ALL FOUR INSTRUMENTS FIRST on Fyers from the first Hestia start after 2026-10-23 (user's decision 2026-10-23: the other three had been on the rescue stage
+                  # since 2026-10-05 with every rescued window filled, so no extra trial week): SILVERMIC, GOLDPETAL and NATGASMINI now follow CRUDEOILM, Fyers asked first,
+                  # then Angel One's burst, then the Fyers rescue, then the recovery queue. Back to crude-only: set the tuple to ('CRUDEOILM',) and restart; at once with the flag above.
+                  CANDLE_SOURCE={'mode': 'smart', 'smart_instruments': ('CRUDEOILM', 'SILVERMIC', 'GOLDPETAL', 'NATGASMINI')}),
 }
 
 
