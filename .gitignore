@@ -463,6 +463,9 @@ research/provisional_margin/outputs/bars_*.csv
 # hestia-backtest skill: per-run engine logs (the result files in hestia_backtest/outputs/ are tracked)
 hestia_backtest/outputs/logs/
 
+# hestia-simulation skill: the three scenario tables the page embeds (regenerable)
+hestia_simulation/outputs/
+
 # first-pass integrated ledger (superseded by hestia_backtest/outputs/); regenerable
 research/hestia_integrated/outputs/integrated_trades.csv
 

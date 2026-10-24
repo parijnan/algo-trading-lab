@@ -1,0 +1,178 @@
+
+<div class="wrap" id="app">
+  <div>
+    <h1>Hestia Compounding Simulation</h1>
+    <p class="sub" id="lede"></p>
+    <p class="sub">Assumes <span id="engnames">Prometheus, Selene, Helios and Typhon</span> all went live on 3 April 2023 with Rs 4,00,000. Each trade is the engine's production-parity backtest trade, re-sized at entry. After costs: brokerage, GST, commodity transaction tax, exchange and SEBI fees and stamp duty on every order, plus slippage measured from the live trades.</p>
+  </div>
+
+  <div class="card">
+    <div class="controls">
+      <span class="lbl">Engine for crude oil</span>
+      <div class="seg" role="group" aria-label="Engine for crude oil"><button type="button" id="s-p" aria-pressed="true">Prometheus</button><button type="button" id="s-j" aria-pressed="false">Janus, 3 lots</button></div>
+      <span id="basis-wrap" hidden><span class="lbl">Margin per Janus unit</span>
+      <div class="seg" role="group" aria-label="Margin per Janus unit"><button type="button" id="b-6" aria-pressed="true">price × 10 ÷ 3 × 6</button><button type="button" id="b-4" aria-pressed="false">price × 10 ÷ 3 × 4</button></div></span>
+      <span class="hint" id="swap-hint">Prometheus runs the crude oil trades with two lots a unit. Switch to Janus to replace it with Janus at three lots a unit; the other three engines are unchanged.</span>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Account value, {{END_LONG}}</div><div class="v" data-m="end_equity" data-f="inr"></div><div class="d">closed trades only</div></div>
+    <div class="tile"><div class="k">Multiple of capital</div><div class="v" data-m="multiple" data-f="x"></div><div class="d">from Rs 4,00,000</div></div>
+    <div class="tile"><div class="k">Growth per year</div><div class="v" data-m="cagr_pct" data-f="pct"></div><div class="d">compound annual rate</div></div>
+    <div class="tile"><div class="k">Deepest drop</div><div class="v" data-m="max_dd_pct" data-f="pct"></div><div class="d">peak to trough, closed trades</div></div>
+    <div class="tile"><div class="k">Return over drop</div><div class="v" data-m="calmar" data-f="num1"></div><div class="d">yearly growth ÷ deepest drop</div></div>
+    <div class="tile"><div class="k">Profit factor</div><div class="v" data-m="profit_factor" data-f="num2"></div><div class="d">gross wins ÷ gross losses</div></div>
+    <div class="tile"><div class="k">Costs paid</div><div class="v" data-m="costs_total" data-f="inr"></div><div class="d">charges and slippage</div></div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead">
+      <h2>Account value after each closed trade</h2>
+      <div class="seg" role="group" aria-label="Scale"><button type="button" id="b-lin" aria-pressed="false">Linear</button><button type="button" id="b-log" aria-pressed="true">Log</button></div>
+      <span class="meta" style="flex-basis:100%">Starts at Rs 4,00,000 on 3 Apr 2023. Hover for the value and the drop from the peak at that point.</span>
+    </div>
+    <div class="chart" id="c-eq"></div>
+    <div class="cardhead" style="margin-top:14px"><h2>Drop from the previous peak</h2></div>
+    <div class="chart" id="c-dd"></div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h2>All the metrics</h2><span class="meta">3 Apr 2023 to {{END_LONG}}, closed-trade basis</span></div>
+    <div class="mgrid">
+      <div>
+        <p class="mh">Growth and risk</p>
+        <div class="mrow"><span>Total return</span><span data-m="total_return_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Growth per year</span><span data-m="cagr_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Years covered</span><span data-m="years" data-f="num1"></span></div>
+        <div class="mrow"><span>Deepest drop</span><span data-m="max_dd_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Deepest drop in rupees</span><span data-m="max_dd_rs" data-f="inr"></span></div>
+        <div class="mrow"><span>Trough reached</span><span data-m="max_dd_date" data-f="text"></span></div>
+        <div class="mrow"><span>Longest time below a peak</span><span data-m="longest_underwater_days" data-f="days"></span></div>
+        <div class="mrow"><span>Return over drop</span><span data-m="calmar" data-f="num1"></span></div>
+        <div class="mrow"><span>Monthly Sharpe, yearly</span><span data-m="sharpe_monthly" data-f="num1"></span></div>
+      </div>
+      <div>
+        <p class="mh">Months</p>
+        <div class="mrow"><span>Months covered</span><span data-m="months" data-f="int"></span></div>
+        <div class="mrow"><span>Months in profit</span><span data-m="positive_months_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Best month</span><span data-m="best_month_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Worst month</span><span data-m="worst_month_pct" data-f="pct"></span></div>
+        <p class="mh" style="margin-top:14px">Sizing</p>
+        <div class="mrow"><span>Average units per trade</span><span data-m="avg_units" data-f="num1"></span></div>
+        <div class="mrow"><span>Most units in one trade</span><span data-m="peak_units" data-f="int"></span></div>
+        <div class="mrow"><span>Entries skipped, share below one unit</span><span data-m="trades_skipped" data-f="int"></span></div>
+        <p class="mh" style="margin-top:14px">Costs</p>
+        <div class="mrow"><span>Orders placed</span><span data-m="orders_placed" data-f="int"></span></div>
+        <div class="mrow"><span>Brokerage, Rs 20 an order</span><span data-m="brokerage_total" data-f="inr"></span></div>
+        <div class="mrow"><span>GST on brokerage and fees</span><span data-m="gst_total" data-f="inr"></span></div>
+        <div class="mrow"><span>Commodity transaction tax, sell side</span><span data-m="ctt_total" data-f="inr"></span></div>
+        <div class="mrow"><span>Exchange fee, SEBI fee and stamp duty</span><span data-m="other_charges_total" data-f="inr"></span></div>
+        <div class="mrow"><span>Slippage</span><span data-m="slippage_total" data-f="inr"></span></div>
+        <div class="mrow"><span>Total costs</span><span data-m="costs_total" data-f="inr"></span></div>
+        <div class="mrow"><span>Costs as a share of gross profit</span><span data-m="costs_pct_of_gross_profit" data-f="pct"></span></div>
+        <div class="mrow"><span>Average cost per trade</span><span data-m="avg_cost_per_trade" data-f="inr"></span></div>
+        <div class="mrow"><span>Account value with charges only</span><span data-m="end_equity_charges_only" data-f="inr"></span></div>
+        <div class="mrow"><span>Account value with no costs</span><span data-m="end_equity_no_costs" data-f="inr"></span></div>
+      </div>
+      <div>
+        <p class="mh">Trades</p>
+        <div class="mrow"><span>Trades taken</span><span data-m="trades_taken" data-f="int"></span></div>
+        <div class="mrow"><span>Win rate</span><span data-m="win_rate_pct" data-f="pct"></span></div>
+        <div class="mrow"><span>Profit factor</span><span data-m="profit_factor" data-f="num2"></span></div>
+        <div class="mrow"><span>Average win</span><span data-m="avg_win" data-f="inr"></span></div>
+        <div class="mrow"><span>Average loss</span><span data-m="avg_loss" data-f="inr"></span></div>
+        <div class="mrow"><span>Average per trade</span><span data-m="expectancy" data-f="inr"></span></div>
+        <div class="mrow"><span>Best trade</span><span data-m="best_trade" data-f="inr"></span></div>
+        <div class="mrow"><span>Worst trade</span><span data-m="worst_trade" data-f="inr"></span></div>
+        <div class="mrow"><span>Longest run of losing trades</span><span data-m="longest_losing_streak" data-f="int"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="cardhead"><h2>By year</h2></div>
+      <div class="tablewrap"><table id="t-year"><thead><tr><th>Year</th><th class="n">Start</th><th class="n">End</th><th class="n">Profit</th><th class="n">Return</th><th class="n">Deepest drop</th><th class="n">Trades</th><th class="n">Costs</th><th class="n">Share of profit</th></tr></thead><tbody></tbody></table></div>
+      <p class="notes" id="yearnote" style="margin-top:8px"></p>
+    </div>
+    <div class="card">
+      <div class="cardhead"><h2>By engine</h2></div>
+      <div class="tablewrap"><table id="t-eng"><thead><tr><th>Engine</th><th class="n">Trades</th><th class="n">Skipped</th><th class="n">Win rate</th><th class="n">Profit</th><th class="n">Share</th><th class="n">Profit factor</th><th class="n">Avg units</th><th class="n">Peak units</th><th class="n">Costs</th></tr></thead><tbody></tbody></table></div>
+      <p class="notes" style="margin-top:8px">Profit is the engine's own closed-trade profit after costs, at the units the rule gave it, so engines that run at more units for a given margin show up larger.</p>
+    </div>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <div class="cardhead"><h2>Return by month</h2><span class="meta">Change in account value over each calendar month</span></div>
+      <div class="chart" id="c-mon"></div>
+    </div>
+    <div class="card">
+      <div class="cardhead"><h2>Units per trade, by engine</h2><span class="meta">The rule re-sizes every entry as the account grows</span></div>
+      <div class="chart" id="c-units"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h2>How each trade was sized</h2></div>
+    <p class="notes" style="margin-bottom:10px">At every entry: units = round down of (account value ÷ 4 ÷ the engine's margin per unit at the entry price), capped at 100. The account value is Rs 4,00,000 plus the profit of every trade that had already closed. If that is below one unit, the entry is skipped. A trade keeps its units until it closes. The divisor is 4 because all four engines are live.</p>
+    <p class="notes" style="margin-bottom:10px">Charges on every order, for non-agricultural commodity futures: brokerage Rs 20; exchange transaction fee 0.0021% of the order value; SEBI fee Rs 10 per crore; GST 18% on those three; stamp duty 0.002% on buy orders; commodity transaction tax (CTT) 0.01% on sell orders. Order value is price × contract size × lots × units, using the entry price for both orders of a trade. Each trade has an entry order and an exit order; a Prometheus trade that books lot 1 at its first target and lot 2 later has a second exit order, and a Janus trade has one exit order for each different exit among its three lots. A reversal that the live engine sends as one netted request is counted as two orders. The rates are the ones brokers publish for MCX futures; check them against a contract note.</p>
+    <p class="notes" id="jnote" hidden style="margin-bottom:10px">Janus has no live trades yet, so its slippage is assumed to match Prometheus per lot: Prometheus's measured shortfall divided by its two lots, times Janus's three lots.</p>
+    <p class="notes" style="margin-bottom:10px">Slippage is the average shortfall of the live trades against their backtest twins (entry and exit together), per unit per trade, then multiplied by the units taken. It comes from the live trades that matched a backtest trade with the same exit. It is applied only where it is a cost: Helios measures slightly better than its backtest, so it is set to nil. Costs and slippage come off a trade's profit when it closes, so the account value that sizes later entries is already net of them.</p>
+    <div class="tablewrap" style="margin-bottom:10px"><table class="formulas"><thead><tr><th>Engine</th><th class="n">Live trades</th><th class="n">Slippage used, per unit per trade</th><th class="n">Uncertainty</th><th class="n">Measured</th></tr></thead><tbody id="slip-body"></tbody></table></div>
+    <div class="tablewrap"><table class="formulas">
+      <thead><tr><th>Engine</th><th>Margin per unit (Rs)</th></tr></thead>
+      <tbody id="formulas"></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h2>Every trade taken</h2><span class="meta">Profit before costs is the one-unit result times the units taken. Click a heading to sort. Margin per unit and account value are as at entry.</span></div>
+    <div class="controls" style="margin-bottom:10px">
+      <input type="search" id="q" placeholder="Search engine, reason, date" aria-label="Search trades">
+      <select id="eng" aria-label="Engine"><option>All</option><option>Prometheus</option><option>Selene</option><option>Helios</option><option>Typhon</option></select>
+      <span class="lbl" id="count"></span>
+    </div>
+    <div class="tablewrap scroll"><table id="t-trades">
+      <thead><tr>
+        <th class="n"><button type="button" data-k="trade_no">#</button></th>
+        <th><button type="button" data-k="engine">Engine</button></th>
+        <th><button type="button" data-k="direction">Side</button></th>
+        <th><button type="button" data-k="entry_ts">Entry</button></th>
+        <th><button type="button" data-k="exit_ts">Exit</button></th>
+        <th class="n"><button type="button" data-k="entry">Entry price</button></th>
+        <th class="n"><button type="button" data-k="units">Units</button></th>
+        <th class="n"><button type="button" data-k="mpu">Margin per unit</button></th>
+        <th class="n"><button type="button" data-k="equity_before">Account value</button></th>
+        <th class="n"><button type="button" data-k="rs_unit">One-unit result</button></th>
+        <th class="n"><button type="button" data-k="gross">Profit before costs</button></th>
+        <th class="n"><button type="button" data-k="orders">Orders</button></th>
+        <th class="n"><button type="button" data-k="charges">Charges</button></th>
+        <th class="n"><button type="button" data-k="slippage">Slippage</button></th>
+        <th class="n"><button type="button" data-k="pnl">Profit after costs</button></th>
+        <th><button type="button" data-k="reason">Exit reason</button></th>
+      </tr></thead><tbody></tbody></table></div>
+    <div class="expand"><button type="button" id="more">Show 200 more</button></div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Entries skipped because the share was below one unit</summary>
+      <p class="notes" style="margin:8px 0">Once costs are in, the account spends long stretches between about Rs 3.4 and Rs 4.5 lakh, where one quarter of it is short of one unit of Prometheus, Janus or Typhon, so those engines skip entries until the account has grown.</p>
+      <div class="tablewrap scroll"><table id="t-skip"><thead><tr><th class="n">Signal #</th><th>Engine</th><th>Side</th><th>Entry</th><th class="n">Entry price</th><th class="n">Account value</th><th class="n">One quarter</th><th class="n">Margin per unit</th></tr></thead><tbody></tbody></table></div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h2>What to keep in mind</h2></div>
+    <div class="notes">
+      <div>These are backtest trades, not live fills. The live book has weeks of history; the Hestia Integrated Backtest page shows how closely they agree.</div>
+      <div>Costs depend heavily on the starting capital. At Rs 4,00,000 every engine trades one to three units for years, where a fixed Rs 20 brokerage and the percentage charges take a large share of each trade's profit. The slippage figures come from a few weeks of live trades, 12 to 28 per engine, so they are rough: Prometheus's average is driven by one stop that filled much worse than its backtest.</div>
+      <div>Most of the gain comes late: see the share of profit by year. Compounding on a larger account turns the same edge into much bigger rupee wins in the last year.</div>
+      <div>The account value moves only when a trade closes. Open-trade losses, and the daily mark-to-market cash movement on futures, are not in it, so the drops shown are closed-trade drops.</div>
+      <div>Today's margin formulas are applied to 2023 prices. Helios and Typhon use a single observed margin quote scaled by 4; the exchange margin has changed over time.</div>
+      <div>Rolls are separate trades: when a position is rolled, the reopened trade is sized afresh from the account value at that moment.</div>
+    </div>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
