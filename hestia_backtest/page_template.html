@@ -42,16 +42,16 @@ td,th{padding:6px 8px;text-align:right;border-bottom:1px solid var(--grid);verti
 <div class="panel"><h2>Read this first</h2><p class="note" id="notes"></p></div>
 </div><div class="tip" id="tip"></div>
 <script>
-const DAYS=__DAYS__,T=__TRADES__,CMP=__CMP__,META=__META__,NAMES=['Prometheus','Selene','Helios','Typhon'],COL=['var(--c0)','var(--c1)','var(--c2)','var(--c3)'],RSPT=[20,1,20,500];
-// T rows: [engine, exit day index, rupees, entry price]
-const st={u:[1,1,1,1],cost:0,from:'all',on:[1,1,1,1]};
+const DAYS=__DAYS__,T=__TRADES__,TJ=__TJ__,CMP=__CMP__,META=__META__,BASE=['Prometheus','Selene','Helios','Typhon'],NAMES=BASE.slice(),COL=['var(--c0)','var(--c1)','var(--c2)','var(--c3)'],RSPT=[20,1,20,500];
+// T rows: [engine, exit day index, rupees, entry price]; TJ rows are Janus's, engine slot 0, one unit = 3 lots
+const st={u:[1,1,1,1],cost:0,from:'all',on:[1,1,1,1],j:0};
 const $=id=>document.getElementById(id),fm=v=>Math.round(v).toLocaleString('en-IN'),fs=v=>(v<0?'-':'')+fm(Math.abs(v));
 const cls=v=>v<0?'neg':'pos';
-function ctl(){let h='';NAMES.forEach((n,i)=>h+='<label><i class="dot" style="background:'+COL[i]+'"></i>'+n+' units <input type="number" min="0" max="20" step="1" value="'+st.u[i]+'" data-i="'+i+'" class="un"></label>');
+function ctl(){let h='';if(TJ.length)h+='<label>crude oil engine <select id="e0"><option value="0"'+(st.j?'':' selected')+'>Prometheus (2 lots a unit)</option><option value="1"'+(st.j?' selected':'')+'>Janus (3 lots a unit)</option></select></label>';NAMES.forEach((n,i)=>h+='<label><i class="dot" style="background:'+COL[i]+'"></i>'+n+' units <input type="number" min="0" max="20" step="1" value="'+st.u[i]+'" data-i="'+i+'" class="un"></label>');
  h+='<label>cost per leg % <input type="number" min="0" max="1" step="0.01" value="'+st.cost+'" id="cs"></label>';
  h+='<label>window <select id="win"><option value="all">all data</option><option value="2023-04-04">common (from Apr 2023)</option><option value="2025-01-01">2025 on</option><option value="2026-01-01">2026 on</option></select></label>';
- $('ctl').innerHTML=h;document.querySelectorAll('.un').forEach(e=>e.onchange=()=>{st.u[+e.dataset.i]=Math.max(0,+e.value);run()});$('cs').onchange=e=>{st.cost=Math.max(0,+e.target.value);run()};$('win').onchange=e=>{st.from=e.target.value;run()}}
-function trades(){const f=st.from==='all'?'':st.from;return T.filter(t=>DAYS[t[1]]>=f&&st.u[t[0]]>0).map(t=>({e:t[0],d:t[1],ds:DAYS[t[1]],rs:(t[2]-2*st.cost/100*t[3]*RSPT[t[0]])*st.u[t[0]]}))}
+ $('ctl').innerHTML=h;document.querySelectorAll('.un').forEach(e=>e.onchange=()=>{st.u[+e.dataset.i]=Math.max(0,+e.value);run()});$('cs').onchange=e=>{st.cost=Math.max(0,+e.target.value);run()};$('win').onchange=e=>{st.from=e.target.value;run()};$('win').value=st.from;if($('e0'))$('e0').onchange=e=>{st.j=+e.target.value;NAMES[0]=st.j?'Janus':'Prometheus';RSPT[0]=st.j?30:20;ctl();run()}}
+function trades(){const f=st.from==='all'?'':st.from;return(st.j?T.filter(t=>t[0]!==0).concat(TJ):T).filter(t=>DAYS[t[1]]>=f&&st.u[t[0]]>0).map(t=>({e:t[0],d:t[1],ds:DAYS[t[1]],rs:(t[2]-2*st.cost/100*t[3]*RSPT[t[0]])*st.u[t[0]]}))}
 function mdd(a){let pk=0,mx=0;a.forEach(v=>{if(v>pk)pk=v;mx=Math.min(mx,v-pk)});return mx}
 function series(tr){const days=[...new Set(tr.map(t=>t.d))].sort((a,b)=>a-b);if(!days.length)return null;const tot=[],per=[[],[],[],[]];let c=0,cc=[0,0,0,0];let k=0;
  days.forEach(d=>{while(k<tr.length&&tr[k].d<=d){c+=tr[k].rs;cc[tr[k].e]+=tr[k].rs;k++}tot.push(c);for(let i=0;i<4;i++)per[i].push(cc[i])});return{days,tot,per}}
@@ -99,13 +99,13 @@ function run(){const tr=trades().sort((a,b)=>a.d-b.d);const s=series(tr);if(!s){
  const keys=Object.keys(M).sort(),vec=i=>keys.map(k=>byE[i][k]||0),cr=(a,b)=>{const n=a.length,ma=a.reduce((x,y)=>x+y)/n,mb=b.reduce((x,y)=>x+y)/n;let sa=0,sb=0,sc=0;a.forEach((v,j)=>{sa+=(v-ma)**2;sb+=(b[j]-mb)**2;sc+=(v-ma)*(b[j]-mb)});return sc/Math.sqrt(sa*sb)};
  let ch='<tr><th></th>'+on.map(i=>'<th>'+NAMES[i]+'</th>').join('')+'</tr>';on.forEach(i=>{ch+='<tr><td>'+NAMES[i]+'</td>'+on.map(j=>'<td>'+(i===j?'1.00':cr(vec(i),vec(j)).toFixed(2))+'</td>').join('')+'</tr>'});$('cor').innerHTML=ch;
  $('leg').innerHTML='';
- $('notes').textContent='Backtest numbers: Selene, Helios and Typhon use their production-parity backtests (one real contract at a time, the real roll machinery); Prometheus uses a production-parity backtest too (Fyers history with Angel One where Fyers has no data, the live 2.5 config and two-lot exits). Data runs to '+META.end+'. Each engine starts on its own first trade: Selene Apr 2021, Helios Oct 2021, Prometheus Mar 2023, Typhon Apr 2023; use the common window for a like-for-like book. Results are rupees for the units shown, gross of costs unless you set a cost per leg (applied to the entry value on both legs). Equity moves only when a trade closes, so drawdowns inside an open trade are not shown, and engines are summed with no margin or capital limit. Backtests use the decided engine configs with the same entry and exit rules the live engines run.';}
+ $('notes').textContent='Backtest numbers: Selene, Helios and Typhon use their production-parity backtests (one real contract at a time, the real roll machinery); Prometheus uses a production-parity backtest too (Fyers history with Angel One where Fyers has no data, the live 2.5 config and two-lot exits). Data runs to '+META.end+'. Each engine starts on its own first trade: Selene Apr 2021, Helios Oct 2021, Prometheus Mar 2023, Typhon Apr 2023; use the common window for a like-for-like book. Results are rupees for the units shown, gross of costs unless you set a cost per leg (applied to the entry value on both legs). Equity moves only when a trade closes, so drawdowns inside an open trade are not shown, and engines are summed with no margin or capital limit. Backtests use the decided engine configs with the same entry and exit rules the live engines run.'+(st.j?' Janus stands in for Prometheus on crude oil: one unit is three lots, results run from April 2023, and it has no live trades, so the actual-versus-backtest table below still shows the live engines, Prometheus included.':'');}
 
 const CSHOWN=10;let cOpen=false;
 function cmp(){const f=$('cf').value,rows=CMP.rows.filter(r=>f==='All'||r.engine===f).sort((a,b)=>(b.live_entry_ts||b.bt_entry_ts).localeCompare(a.live_entry_ts||a.bt_entry_ts));
  $('cmeta').textContent='Live trades are the ones the Hestia Dashboard counts. Both sides are shown for one unit, in points times rupees per point, so the live units do not matter. Backtest data runs to '+META.end+'; live snapshot taken '+(CMP.pulled_at||'').replace('T',' ')+' IST. A live trade pairs with the backtest trade of the same direction that entered within '+META.tol+' minutes. Entry gap is live minus backtest in price points, positive when live got the worse price.';
  let h='<tr><th>Engine</th><th>Live trades</th><th>Matched</th><th>Same exit</th><th>Live only</th><th>Backtest only</th><th>Not closed in backtest</th><th>Live Rs (matched)</th><th>Backtest Rs (matched)</th><th>Gap Rs</th><th>Avg entry gap (pts)</th></tr>';
- NAMES.forEach(n=>{const s=CMP.engines[n];if(!s||(f!=='All'&&f!==n))return;const g=s.live_rs_matched-s.bt_rs_matched;h+='<tr><td>'+n+'</td><td>'+s.live_trades+'</td><td>'+s.matched+'</td><td>'+s.same_exit+'</td><td>'+s.live_only+'</td><td>'+s.backtest_only+'</td><td>'+s.not_closed_in_backtest+'</td><td>'+fs(s.live_rs_matched)+'</td><td>'+fs(s.bt_rs_matched)+'</td><td class="'+cls(g)+'">'+fs(g)+'</td><td>'+(s.avg_entry_diff_pts===null?'-':s.avg_entry_diff_pts)+'</td></tr>'});
+ BASE.forEach(n=>{const s=CMP.engines[n];if(!s||(f!=='All'&&f!==n))return;const g=s.live_rs_matched-s.bt_rs_matched;h+='<tr><td>'+n+'</td><td>'+s.live_trades+'</td><td>'+s.matched+'</td><td>'+s.same_exit+'</td><td>'+s.live_only+'</td><td>'+s.backtest_only+'</td><td>'+s.not_closed_in_backtest+'</td><td>'+fs(s.live_rs_matched)+'</td><td>'+fs(s.bt_rs_matched)+'</td><td class="'+cls(g)+'">'+fs(g)+'</td><td>'+(s.avg_entry_diff_pts===null?'-':s.avg_entry_diff_pts)+'</td></tr>'});
  $('csum').innerHTML=h;
  const shown=cOpen?rows:rows.slice(0,CSHOWN);let t='<tr><th>Engine</th><th>Live #</th><th>Side</th><th>Live entry</th><th>Backtest entry</th><th>Entry gap</th><th>Live exit</th><th>Backtest exit</th><th>Live pts</th><th>Backtest pts</th><th>Live Rs</th><th>Backtest Rs</th><th>Gap Rs</th><th>Status</th></tr>';
  const d=x=>x?x.replace('T',' ').slice(5,16):'';
@@ -114,6 +114,6 @@ function cmp(){const f=$('cf').value,rows=CMP.rows.filter(r=>f==='All'||r.engine
  $('ctab').innerHTML=t;
  $('cx').innerHTML=rows.length>CSHOWN?'<button type="button" id="cb" aria-expanded="'+cOpen+'">'+(cOpen?'Show only the latest '+CSHOWN:'Show all '+rows.length+' rows')+'</button><span class="meta">newest first</span>':'';
  const b=$('cb');if(b)b.onclick=()=>{cOpen=!cOpen;cmp()}}
-function cinit(){$('cf').innerHTML=['All',...NAMES].map(n=>'<option>'+n+'</option>').join('');$('cf').onchange=()=>{cOpen=false;cmp()};cmp()}
+function cinit(){$('cf').innerHTML=['All',...BASE].map(n=>'<option>'+n+'</option>').join('');$('cf').onchange=()=>{cOpen=false;cmp()};cmp()}
 ctl();run();cinit();bind($('eq'),'q1');bind($('dd'),'q2');$('zin').onclick=()=>zoomBy(.6);$('zout').onclick=()=>zoomBy(1.6);$('zreset').onclick=()=>{VIEW=null;drawCharts()};
 </script>

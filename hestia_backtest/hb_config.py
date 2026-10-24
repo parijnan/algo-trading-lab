@@ -24,6 +24,10 @@ ENGINES = {
                'backtest_csv': os.path.join(REPO, 'typhon_backtest', 'data_sweep', 'parity_decided_trades.csv'), 'kind': 'parity'},
 }
 
+# Janus swap for Prometheus's crude oil slot on the integrated page: its state-machine run (janus_backtest/machine_run.py, source previous_session, defaults), one unit = 3 lots, Rs 10 a point a lot
+JANUS = {'name': 'Janus', 'lots_per_unit': 3, 'rs_per_point_lot': 10,
+         'trades_csv': os.path.join(REPO, 'janus_backtest', 'outputs', 'machine', 'CRUDEOILM_previous_session_rebuy-off_counter-off_tsl-off', 'trades.csv')}
+
 COMPLETE_SESSION_BARS = 400          # a date counts as a complete session in a contract file with at least this many 1-minute bars
 MATCH_TOLERANCE_MIN = 20             # a live and a backtest trade pair up if same direction and entry times within this many minutes (the signal bar is 15 minutes)
 PRICE_TOLERANCE_PCT = 0.05           # entry prices within this percent of each other count as the same fill
