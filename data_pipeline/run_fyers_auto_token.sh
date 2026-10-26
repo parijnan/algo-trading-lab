@@ -38,18 +38,37 @@ fi
 
 echo "$(date '+%F %T') === fyers auto-token run starting ===" >> "$LOG"
 
+# 0 -- retries (the timer also fires at 07:05 and 07:35, 2026-10-26). A run does nothing when today's token is already fresh here AND on Delos,
+# re-pushes without a new login when only Delos's copy is stale, and logs in only when the local token is not fresh. The failure alert names the next retry.
+HHMM=$((10#$(date +%H%M)))
+if [ "$HHMM" -lt 700 ]; then export FYERS_NEXT_RETRY="07:05"; elif [ "$HHMM" -lt 730 ]; then export FYERS_NEXT_RETRY="07:35"; else export FYERS_NEXT_RETRY="none"; fi
+LOCAL_FRESH=0
+if "$PYTHON" "$REPO_DIR/data_pipeline/fyers_token_refresh.py" verify > /dev/null 2>&1; then
+    LOCAL_FRESH=1
+    for HOST in delos-ipv6 delos-ipv4; do
+        if ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" \
+            'cd ~/scripts/algo-trading-lab && /home/parijnan/anaconda3/bin/python data_pipeline/fyers_token_refresh.py verify' > /dev/null 2>&1; then
+            echo "$(date '+%F %T') today's token is already fresh locally and on Delos ($HOST); nothing to do. === run complete ===" >> "$LOG"
+            exit 0
+        fi
+    done
+    echo "$(date '+%F %T') local token is fresh but Delos's is not: pushing without a new login." >> "$LOG"
+fi
+
 # 1 -- stale profile locks (a previous killed run leaves these, and Chrome
 # then refuses to start: "profile in use")
 rm -f "$PROFILE_DIR"/Singleton* 2>>"$LOG"
 
-# 2 -- the token run itself (Python sends success/failure Slack itself)
-"$PYTHON" "$SCRIPT" >> "$LOG" 2>&1
-PY_EXIT=$?
+# 2 -- the token run itself (Python sends success/failure Slack itself); skipped when the local token is already fresh
+if [ $LOCAL_FRESH -eq 0 ]; then
+    "$PYTHON" "$SCRIPT" >> "$LOG" 2>&1
+    PY_EXIT=$?
 
-if [ $PY_EXIT -ne 0 ]; then
-    echo "$(date '+%F %T') token run failed (exit $PY_EXIT) -- NOT pushing to Delos." >> "$LOG"
-    echo "$(date '+%F %T') === run complete (failure) ===" >> "$LOG"
-    exit $PY_EXIT
+    if [ $PY_EXIT -ne 0 ]; then
+        echo "$(date '+%F %T') token run failed (exit $PY_EXIT) -- NOT pushing to Delos." >> "$LOG"
+        echo "$(date '+%F %T') === run complete (failure) ===" >> "$LOG"
+        exit $PY_EXIT
+    fi
 fi
 
 # 3 -- push to Delos (stdin, never a command line; atomic; mode 600)

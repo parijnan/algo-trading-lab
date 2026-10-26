@@ -1,8 +1,11 @@
 [Unit]
-Description=Fyers daily token at 06:35 IST, run as soon as the laptop is next awake if that slot was missed
+Description=Fyers daily token at 06:35 IST (retries 07:05 and 07:35), run as soon as the laptop is next awake if a slot was missed
 
 [Timer]
 OnCalendar=*-*-* 06:35:00
+# Retries (2026-10-26, after Fyers's Turnstile check stopped the 06:35 run): the wrapper does nothing when today's token is already fresh here and on Delos.
+OnCalendar=*-*-* 07:05:00
+OnCalendar=*-*-* 07:35:00
 Persistent=true
 Unit=fyers-token.service
 

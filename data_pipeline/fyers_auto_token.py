@@ -58,6 +58,7 @@ Usage:
 
 import csv
 import json
+import os
 import secrets
 import socket
 import sys
@@ -355,6 +356,16 @@ def do_login(d, creds):
 # Main
 # ---------------------------------------------------------------------------
 
+def retry_note(next_retry):
+    """The sentence the failure alert adds about the timer's retries. `next_retry` is the wrapper's FYERS_NEXT_RETRY: an HH:MM time, 'none' once the
+    last retry has run, or '' when the script is run by hand (no sentence)."""
+    if not next_retry:
+        return ''
+    if next_retry == 'none':
+        return ' No more automatic retries today.'
+    return f' Next automatic retry at {next_retry}.'
+
+
 def main():
     exit_code = 0
     stage = 'startup'
@@ -422,7 +433,7 @@ def main():
         stage_detail = f'at stage [{stage}]: {str(e).splitlines()[0][:220]}'
         log(f'FAILED {stage_detail}')
         details = (f':rotating_light: *Fyers auto-token* FAILED {stage_detail} '
-                   f'-- today\'s Fyers token is NOT refreshed. Fallback: run the '
+                   f'-- today\'s Fyers token is NOT refreshed.{retry_note(os.environ.get("FYERS_NEXT_RETRY", ""))} Fallback: run the '
                    f'`fyers-token` skill (needs a manual Fyers login in Chrome). '
                    f'Log: data_pipeline/fyers_auto_token.log')
     slack_send(details, SLACK_DATA_CHANNEL if exit_code == 0 else SLACK_ERROR_CHANNEL, creds)

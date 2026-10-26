@@ -125,6 +125,8 @@ morning slot works equally well).
 
 ## 7. Operational notes
 
+- **Retries at 07:05 and 07:35 (since 2026-10-26).** On 26 Oct 2026 Fyers's login page showed Cloudflare's interactive Turnstile box instead of auto-solving, the Continue button stayed disabled and the 06:35 run failed after about 90 s (the failure capture and the Slack alert worked as built); the owner ran the `fyers-token` skill by hand at 06:55. The job never tries to tick the box. The timer now also fires at 07:05 and 07:35, and the wrapper makes a retry harmless: it exits quietly when today's token is fresh locally and on Delos (a manual run counts), re-pushes without logging in when only Delos is stale, and logs in only when the local token is not fresh. The failure alert says when the next retry is, or that none is left and the skill is the fallback.
+
 - **A missed 06:35 slot is caught up, not lost (since 2026-10-04).** The timer is
   `Persistent=true`: on the laptop's next wake or login after a missed slot it
   runs once, immediately (proven on this machine with a throwaway timer whose

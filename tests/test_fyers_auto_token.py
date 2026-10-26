@@ -112,3 +112,11 @@ def test_no_secret_literals_in_source():
     src = Path(fat.__file__).read_text()
     for needle in ('xoxb-', 'Bearer eyJ', 'Bearer ey'):
         assert needle not in src
+
+
+# ---- retry note in the failure alert (2026-10-26) ------------------------------------------------------------------------------
+
+def test_retry_note():
+    assert fat.retry_note('') == ''                                                    # run by hand: no sentence
+    assert fat.retry_note('07:05') == ' Next automatic retry at 07:05.'
+    assert fat.retry_note('none') == ' No more automatic retries today.'
