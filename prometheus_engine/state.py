@@ -37,6 +37,7 @@ class EngineState:
     trade_counter: int = 0
     trade_row: Dict[str, object] = field(default_factory=dict)          # the closed-trade record being built
     last_processed_boundary: Optional[str] = None
+    last_live_bar: Optional[Dict] = None                       # {ts, token, trend, st, close} of the last bar the engine processed (hestia_core/trend_guard.py)
     pending: Dict[str, dict] = field(default_factory=dict)              # request_id -> what it was for
     pending_flip: Optional[dict] = None                                 # a Rule 7 flip still to be resolved
     pending_missed_flip: Optional[dict] = None

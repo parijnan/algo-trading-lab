@@ -31,6 +31,7 @@ class EngineState:
     trade_counter: int = 0
     trade_row: Optional[Dict] = None                           # the in-progress closed-trade row, filled in as it exits
     last_processed_boundary: Optional[str] = None              # ISO ts of the last 15m boundary the engine acted on (or skipped)
+    last_live_bar: Optional[Dict] = None                       # {ts, token, trend, st, close} of the last bar the engine processed (hestia_core/trend_guard.py)
 
     pending: Dict[str, Dict] = field(default_factory=dict)     # request_id -> {purpose, ...context}, persisted BEFORE send
     pending_flip: Optional[Dict] = None

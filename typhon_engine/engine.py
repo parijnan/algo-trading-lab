@@ -24,6 +24,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from hestia_core import roll_policy as rp
+from hestia_core.trend_guard import TrendGuard
 from hestia_core.interface import (
     BarComplete, BarQuality, CloseRequest, CommandEvent, CommandKind, ContractInfo, ContractRef, DataSpec, Direction, DplFrozen,
     ExitReason, FeedRecovered, FeedStale, FlattenRequest, FlipRequest, OpenRequest, OutcomeStatus, ProvisionalBar, ProvisionalSpec, RequestOutcome,
@@ -47,7 +48,7 @@ def _name(d: Optional[Direction]) -> Optional[str]:
     return None if d is None else (BULL if d == Direction.BULLISH else BEAR)
 
 
-class TyphonEngine:
+class TyphonEngine(TrendGuard):
 
     def __init__(self, cfg: EngineConfig = DEFAULT, name: str = 'typhon'):
         self.cfg, self.name = cfg, name
@@ -277,6 +278,7 @@ class TyphonEngine:
             self._execute_roll(self._now(), old_ref=position_ref, new_ref=target, missed=True)
         self._arm_roll(eff_today)
         self._reconcile_missed_flip()
+        self._check_trend_guards_at_start()
         self._save()
 
     def _announce_session_start(self) -> None:
@@ -399,6 +401,7 @@ class TyphonEngine:
         # a boundary already acted on provisionally: this is the reconciliation, never a second action
         if self.provisional_pending is not None and self.provisional_pending['boundary'] == ev.boundary_ts.isoformat():
             self._reconcile_provisional(direction_now, ev)
+            self._record_live_bar(ev)
             self.state.last_processed_boundary = window_start.isoformat()
             self._save()
             return
@@ -407,9 +410,11 @@ class TyphonEngine:
             # engine sends (ported from prometheus.py's own "ST_15 flip -> *direction*"), so Typhon's alerts match Prometheus's.
             self._say('info', f'ST_15 flip -> {direction_now} at {window_start:%H:%M} (close={ev.bar.close:.2f}, '
                               f'ST={ev.st.value:.2f})', channel='tradebot-updates')
+        self._record_live_bar(ev)
         self.state.last_processed_boundary = window_start.isoformat()
         self._save()
         self._act_on_signal(direction_now, ev.st.flip, window_start, ev.bar.close)
+        self._check_position_against_trend(direction_now, window_start, ev.bar.close, ev.st.value)
 
     def _act_on_signal(self, direction_now: str, flip: bool, window_start: datetime, close: float) -> bool:
         s = self.state

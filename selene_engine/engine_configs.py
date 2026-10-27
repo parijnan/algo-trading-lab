@@ -37,6 +37,7 @@ class EngineConfig:
     tick_s_in_trade: float = 0.5
     retry_cooldown_s: float = 2.0            # before re-sending a failed exit or flip (Hestia has already retried inside the request)
     realert_debounce_s: float = 300.0        # a stuck exit or flip alerts at most this often
+    seed_st_tolerance_pct: float = 0.10      # the start-up seed's Supertrend at the last live bar may differ from the live value by this much (percent) before it alerts
     ltp_max_age_s: float = 60.0              # an older price never triggers a stop
     trade_update_sec: float = 20.0           # periodic in-trade P&L update to #trade-updates, matching Prometheus's own cadence
     running_row_sec: float = 60.0            # per-trade running-log row cadence, matching Prometheus's own

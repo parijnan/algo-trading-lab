@@ -105,6 +105,8 @@ def test_a_one_lot_position_opened_before_the_change_survives_and_the_next_entry
     h._saved_state['typhon'] = st.to_json()
     h.seed_position('typhon', FRONT, -1, 99.5)
     run(h, hm(13, 1))
-    assert not [a for a in h.alerts if a.level == 'critical'], [a.text for a in h.alerts if a.level == 'critical']
+    # the seeded bearish position sits against the bullish synthetic trend until the flip: the trend guard says so, and nothing else is critical
+    criticals = [a.text for a in h.alerts if a.level == 'critical']
+    assert criticals and all(t.startswith('POSITION AGAINST THE TREND') for t in criticals), criticals
     assert [(o.side, o.lots) for o in h.orders[:1]] == [('BUY', 3)]                  # Rule 7: close the 1 lot held + open 2
     assert made[-1].state.status == 'in_trade' and made[-1].state.direction == 'bullish' and made[-1].state.lots == 2
