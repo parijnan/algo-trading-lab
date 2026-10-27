@@ -109,14 +109,20 @@ def read_past(filepath: os.PathLike, now: datetime, n_days: int, skip_dates: Ite
 
 class TodayCache:
     """Per-token private intraday cache: `<dir>/<token>_today_1m.csv`. Nothing else reads or writes these files. Read is
-    date-filtered and self-pruning (a same-day restart reuses the rows; a new day drops the old ones)."""
+    date-filtered (a same-day restart reuses the rows). A new day moves the old rows to the token's live archive,
+    `<dir>/<token>_live_1m.csv` (2026-10-27): they are the minutes the engines' Supertrend was actually built from, and the next seed
+    can read them back instead of a pipeline file that came from a different source."""
 
-    def __init__(self, directory: os.PathLike):
+    def __init__(self, directory: os.PathLike, archive_days: int = 30):
         self.dir = Path(directory)
+        self.archive_days = archive_days
         self._seen: dict = {}                           # token -> set of timestamps already on disk (this process is the only writer)
 
     def path(self, token: str) -> Path:
         return self.dir / f'{token}_today_1m.csv'
+
+    def archive_path(self, token: str) -> Path:
+        return self.dir / f'{token}_live_1m.csv'
 
     def _seen_for(self, token: str) -> set:
         if token not in self._seen:
@@ -128,7 +134,63 @@ class TodayCache:
                 self._seen[token] = set()
         return self._seen[token]
 
+    def roll_over(self, now: datetime, token: str) -> int:
+        """Move every row older than today from the intraday file into the token's live archive, then drop them from the intraday
+        file; returns the number of rows archived. The archive is written first: if that fails the intraday file is left whole and
+        the rows are tried again at the next call, so a minute is never lost to the prune. Idempotent (the archive keeps the first copy
+        of a minute). Called by the seed before it reads the past, and by `read` as a backstop."""
+        p = self.path(token)
+        if not p.exists():
+            return 0
+        df = pd.read_csv(p, parse_dates=['time_stamp'], float_precision='round_trip')
+        if df.empty:
+            return 0
+        df['time_stamp'] = _naive(df['time_stamp'])
+        older = df[df['time_stamp'].dt.date < now.date()]
+        if older.empty:
+            return 0
+        try:
+            self._archive(token, older, now)
+        except Exception:                                # noqa: BLE001 - keep the rows where they are and try again next time
+            log.exception('could not archive the older rows of %s; the intraday file is left unpruned', token)
+            return 0
+        self._rewrite(token, df[df['time_stamp'].dt.date == now.date()])
+        return len(older)
+
+    def _archive(self, token: str, older: pd.DataFrame, now: datetime) -> None:
+        ap = self.archive_path(token)
+        have = self._read_archive_file(token)
+        new = older[OHLCV].copy()
+        merged = _safe_concat([have, new], ignore_index=True).drop_duplicates('time_stamp', keep='first')
+        merged = merged[merged['time_stamp'] >= pd.Timestamp(now).normalize() - timedelta(days=self.archive_days)]
+        save = merged.sort_values('time_stamp').reset_index(drop=True)
+        save['time_stamp'] = _format_series(save['time_stamp'])
+        ap.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ap.with_suffix('.csv.tmp')
+        save.to_csv(tmp, index=False)
+        os.replace(tmp, ap)
+
+    def _read_archive_file(self, token: str) -> pd.DataFrame:
+        ap = self.archive_path(token)
+        if not ap.exists():
+            return empty_frame()
+        df = pd.read_csv(ap, parse_dates=['time_stamp'], float_precision='round_trip')
+        if df.empty:
+            return empty_frame()
+        df['time_stamp'] = _naive(df['time_stamp'])
+        return df[OHLCV]
+
+    def read_archive(self, now: datetime, token: str, n_days: int) -> pd.DataFrame:
+        """The archived minutes of the `n_days` before today, never today."""
+        df = self._read_archive_file(token)
+        if df.empty:
+            return df
+        cutoff = pd.Timestamp(now).normalize() - timedelta(days=n_days)
+        df = df[(df['time_stamp'] >= cutoff) & (df['time_stamp'].dt.date < now.date())]
+        return df.sort_values('time_stamp').reset_index(drop=True)
+
     def read(self, now: datetime, token: str) -> pd.DataFrame:
+        self.roll_over(now, token)
         p = self.path(token)
         if not p.exists():
             return empty_frame()

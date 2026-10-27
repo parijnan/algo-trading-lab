@@ -400,6 +400,50 @@ def test_history_the_pipeline_lacks_is_backfilled_into_a_private_file_and_the_pi
     w.close()
 
 
+def _world_with_a_spiked_pipeline_day(tmp_path, live_until=None):
+    """T1's pipeline file carries a one-minute spike on 2 Sept (20:10, like the NATGASMINI file of 26 Oct 2026); the minutes the live feed
+    saw that day (no spike) are still in the intraday cache file when the next day's seed starts, optionally only up to `live_until`."""
+    import os
+    from hestia_core.history import merge_and_save
+    w = LiveWorld(tmp_path, [], seed_first=False)
+    df = w.frames['T1']
+    day1, day2 = (df[df['time_stamp'].dt.date == pd.Timestamp(d).date()].reset_index(drop=True) for d in ('2026-09-01', '2026-09-02'))
+    spike_ts = pd.Timestamp('2026-09-02 20:10')
+    spiked = day2.copy()
+    spiked.loc[spiked['time_stamp'] == spike_ts, ['high', 'close']] = float(day2['close'].max()) * 1.1
+    path = w.catalog.row('T1').filepath
+    os.remove(path)
+    merge_and_save(path, pd.concat([day1, spiked]))
+    w.data.cache.merge('T1', day2 if live_until is None else day2[day2['time_stamp'] < pd.Timestamp(f'2026-09-02 {live_until}')])
+    return w, day1, day2, spiked, spike_ts
+
+
+def test_the_seed_takes_a_full_live_day_from_the_archive_not_the_pipeline_file(tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger='hestia_live_data')
+    w, day1, day2, spiked, spike_ts = _world_with_a_spiked_pipeline_day(tmp_path)
+    assert w.data.prepare(['XX'])[FRONT.symbol] is True
+    past = w.data.streams['T1'].raw_past.set_index('time_stamp')
+    assert past.loc[spike_ts, 'close'] == pytest.approx(float(day2.set_index('time_stamp').loc[spike_ts, 'close']), rel=1e-9), \
+        'the live minute, not the pipeline spike'
+    assert len(past[past.index.date == pd.Timestamp('2026-09-02').date()]) == len(day2)
+    assert past.loc[pd.Timestamp('2026-09-01 12:00'), 'close'] == pytest.approx(float(day1.set_index('time_stamp').loc[pd.Timestamp('2026-09-01 12:00'), 'close']))
+    assert 'from the live archive' in caplog.text and w.data.cache.archive_path('T1').exists()
+    other = w.data.streams['T2'].raw_past
+    assert not other.empty, 'a token with no archive seeds from the pipeline exactly as before'
+    w.close()
+
+
+def test_an_archive_day_that_stops_early_is_replaced_by_the_pipeline_day(tmp_path):
+    w, day1, day2, spiked, spike_ts = _world_with_a_spiked_pipeline_day(tmp_path, live_until='20:00')
+    assert w.data.prepare(['XX'])[FRONT.symbol] is True
+    past = w.data.streams['T1'].raw_past.set_index('time_stamp')
+    assert past.loc[spike_ts, 'close'] == pytest.approx(float(spiked.set_index('time_stamp').loc[spike_ts, 'close']), rel=1e-9), \
+        'a day cut short is not used: the pipeline day stands, whole'
+    assert len(past[past.index.date == pd.Timestamp('2026-09-02').date()]) == len(day2), 'and no bar is missing'
+    w.close()
+
+
 def test_an_evening_only_session_opens_at_1700_and_the_window_before_it_is_not_a_gap(worlds, tmp_path):
     from hestia_core.mcx_market import MarketCalendar
     holidays = tmp_path / 'holidays.csv'

@@ -121,6 +121,29 @@ def test_today_cache_is_per_token_self_pruning_and_idempotent(tmp_path):
     assert cache.read(datetime(2026, 9, 4, 9, 30), 'T1').empty and not cache.path('T1').exists()
 
 
+def test_the_rows_a_new_day_prunes_go_to_the_live_archive_and_nothing_is_lost_if_the_archive_fails(tmp_path, monkeypatch):
+    cache = TodayCache(tmp_path, archive_days=3)
+    yesterday = frame([DAYS[1]], '09:20')
+    today = frame([DAYS[2]], '09:20')
+    cache.merge('T1', pd.concat([yesterday, today]))
+    now = datetime(2026, 9, 3, 9, 30)
+    assert cache.roll_over(now, 'T1') == len(yesterday)
+    arch = cache.read_archive(now, 'T1', 5)
+    assert len(arch) == len(yesterday) and arch['time_stamp'].dt.date.unique().tolist() == [DAYS[1]]
+    assert list(arch['close']) == list(yesterday['close']), 'the archived minutes are the cached ones, value for value'
+    assert cache.roll_over(now, 'T1') == 0 and len(cache.read_archive(now, 'T1', 5)) == len(yesterday), 'idempotent'
+    assert cache.read_archive(datetime(2026, 9, 2, 9, 30), 'T1', 5).empty, 'never the day being read'
+    # the archive keeps archive_days: a roll-over four days later drops the first day
+    cache.merge('T1', frame([date(2026, 9, 7)], '09:20'))
+    cache.roll_over(datetime(2026, 9, 8, 9, 0), 'T1')
+    assert cache.read_archive(datetime(2026, 9, 8, 9, 30), 'T1', 30)['time_stamp'].dt.date.unique().tolist() == [date(2026, 9, 7)]
+    # an archive that cannot be written leaves the intraday file whole, so the minutes are tried again next time
+    cache.merge('T2', pd.concat([yesterday, today]))
+    monkeypatch.setattr(TodayCache, '_archive', lambda self, token, older, when: (_ for _ in ()).throw(OSError('disk full')))
+    assert cache.roll_over(now, 'T2') == 0
+    assert len(pd.read_csv(cache.path('T2'))) == len(yesterday) + len(today)
+
+
 def test_read_past_of_a_file_shorter_than_the_tail_keeps_numeric_columns(tmp_path):
     """head + tail repeats the header line when the file is shorter than the tail; that row must not poison the dtypes."""
     p = tmp_path / 'short.csv'

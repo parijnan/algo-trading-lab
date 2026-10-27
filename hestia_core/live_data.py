@@ -48,6 +48,7 @@ log = logging.getLogger('hestia_live_data')
 class LiveDataConfig:
     seed_days: int = 18
     seed_skip_dates: tuple = ()
+    archive_keep_days: int = 30                 # how long the live archive (the minutes the engines actually used, per token) is kept
     bar_min: int = 15
     session_start: str = '09:00'
     min_start_buffer_min: float = 1.0           # the first minute-tick/LTP-tick never fires before session_open + this
@@ -117,7 +118,7 @@ class LiveData:
         self.smart = smart              # a hestia_core.fyers_shadow.FyersSmart ('smart' mode), or None; asked FIRST for its instruments, Angel One's burst behind it
         self.catalog, self.calendar, self.feed = catalog, calendar, feed
         self.cfg = config or LiveDataConfig()
-        self.cache = TodayCache(cache_dir)
+        self.cache = TodayCache(cache_dir, self.cfg.archive_keep_days)
         self.cache_dir = Path(cache_dir)
         self._sleep = sleep
         self._alert_fn = alert
@@ -267,7 +268,41 @@ class LiveData:
             cutoff = pd.Timestamp(now).normalize() - timedelta(days=self.cfg.seed_days)
             extra = extra[(extra['time_stamp'] >= cutoff) & (extra['time_stamp'].dt.date < now.date())]
             past = _safe_concat([past, extra], ignore_index=True).drop_duplicates('time_stamp', keep='first')
-        return past.sort_values('time_stamp').reset_index(drop=True) if not past.empty else past
+        past = past.sort_values('time_stamp').reset_index(drop=True) if not past.empty else past
+        return self._prefer_live_archive(row, past, now)
+
+    def _prefer_live_archive(self, row: ContractRow, past: pd.DataFrame, now: datetime) -> pd.DataFrame:
+        """A past day for which the live archive holds the full session is taken from the archive: those are the minutes the engines' own
+        Supertrend was built from the previous session (2026-10-27: the pipeline's NATGASMINI file, from a different source, carried
+        spikes the live feed never saw, and the next seed started in the opposite trend). Any other day comes from the pipeline, as before."""
+        archived = self.cache.read_archive(now, row.ref.token, self.cfg.seed_days)
+        skip = {pd.Timestamp(d).date() for d in self.cfg.seed_skip_dates}
+        used = []
+        if not archived.empty:
+            for day, rows in archived.groupby(archived['time_stamp'].dt.date):
+                if day not in skip and self._archive_day_complete(rows, day):
+                    used.append(day)
+        pipeline_days = sorted(set(past['time_stamp'].dt.date)) if not past.empty else []
+        log.info('seed %s history: %d day(s) from the live archive %s, %d from the pipeline %s', row.ref.symbol, len(used),
+                 [f'{d:%m-%d}' for d in used], len([d for d in pipeline_days if d not in used]),
+                 [f'{d:%m-%d}' for d in pipeline_days if d not in used])
+        if not used:
+            return past
+        keep = past[~past['time_stamp'].dt.date.isin(used)] if not past.empty else past
+        live = archived[archived['time_stamp'].dt.date.isin(used)]
+        return _safe_concat([keep, live], ignore_index=True).sort_values('time_stamp').reset_index(drop=True)
+
+    def _archive_day_complete(self, rows: pd.DataFrame, day: date) -> bool:
+        """Its 15-minute buckets run unbroken from the day's session open to the last bucket before the close. A day cut short (a crash, an
+        early stop) or with an empty bucket in the middle is not used: the pipeline's day replaces it, so no bar is silently lost."""
+        end_of_day = datetime.combine(day, datetime.min.time()) + timedelta(days=1)
+        bars = resample_1m(rows, self.cfg.bar_min, end_of_day, self.cfg.session_start, closing_time_str)
+        if bars.empty or find_gaps(bars, self.cfg.bar_min):
+            return False
+        opens, closes = self.calendar.session_open(day), self.calendar.session_close(day)
+        step = timedelta(minutes=self.cfg.bar_min)
+        last_bucket = closes - step if (closes - opens) % step == timedelta(0) else opens + ((closes - opens) // step) * step
+        return pd.Timestamp(bars['time_stamp'].iloc[0]) == pd.Timestamp(opens) and pd.Timestamp(bars['time_stamp'].iloc[-1]) == pd.Timestamp(last_bucket)
 
     def _first_history_ts(self, row: ContractRow) -> Optional[pd.Timestamp]:
         firsts = []
@@ -293,6 +328,7 @@ class LiveData:
 
     def _seed_blocking(self, row: ContractRow, now: datetime) -> Optional[_Stream]:
         token = row.ref.token
+        self.cache.roll_over(now, token)          # yesterday's live minutes go to the archive BEFORE the past is read, so this seed can use them
         self._backfill_if_needed(row, now)
         past = self._read_past(row, now)
         cached = self.cache.read(now, token)
