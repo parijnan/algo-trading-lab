@@ -326,6 +326,20 @@ class LiveData:
         df = fetch_history(self.gateway, row.ref.token, needed_from, fetch_to, self.cfg.fetch, self._sleep)
         merge_and_save(self._backfill_path(row.ref.token), df)
 
+    def _seed_gap(self, row: ContractRow, token: str, frm: datetime, to: datetime, known: set) -> Optional[pd.DataFrame]:
+        """The minutes between the cache's last row and now, for a seed or a restart. Fyers first for the instruments the live poll asks Fyers
+        first (2026-10-27, so the minutes added at a restart come from the same source as the ones around them), the Angel One burst behind it
+        exactly as before. An empty frame is a complete Fyers answer with nothing new; None is both sources failing."""
+        if self.smart is not None and self.smart.handles(row.ref.instrument):
+            try:
+                df = self.smart.fetch_window(row.ref, frm, to, known=known)
+            except Exception:                           # noqa: BLE001 - the smart source never raises; this is belt and braces
+                log.exception('fyers smart seed-gap fetch raised')
+                df = None
+            if df is not None:
+                return df
+        return fetch_one_minute_window(self.gateway, token, frm, to, self.cfg.fetch, self._sleep)
+
     def _seed_blocking(self, row: ContractRow, now: datetime) -> Optional[_Stream]:
         token = row.ref.token
         self.cache.roll_over(now, token)          # yesterday's live minutes go to the archive BEFORE the past is read, so this seed can use them
@@ -335,7 +349,7 @@ class LiveData:
         session_start = pd.Timestamp(f'{now.date()} {self.cfg.session_start}')
         gap_from = cached['time_stamp'].max() + timedelta(minutes=1) if not cached.empty else session_start
         if gap_from < now:
-            gap = fetch_one_minute_window(self.gateway, token, gap_from.to_pydatetime(), now, self.cfg.fetch, self._sleep)
+            gap = self._seed_gap(row, token, gap_from.to_pydatetime(), now, set(cached['time_stamp']))
             if gap is not None:
                 gap = self._closed_minutes(gap, now)
             if gap is not None and not gap.empty:

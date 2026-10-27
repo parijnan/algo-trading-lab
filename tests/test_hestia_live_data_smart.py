@@ -197,3 +197,59 @@ def test_the_smart_source_is_handed_only_closed_minutes_the_engine_already_holds
     w.run_until(datetime(2026, 9, 3, 9, 30))
     token, f, t, known = smart.calls[-1]
     assert pd.Timestamp('2026-09-03 09:00') in known and all(k < pd.Timestamp(t).floor('min') for k in known)
+
+
+# ---- the seed's gap fill (2026-10-27): the minutes between the cache's last row and now at a restart -------------------------------------
+
+RESTART = datetime(2026, 9, 3, 9, 40)
+
+
+def seeded_world(tmp_path, smart_factory=None, name='s'):
+    w = LiveWorld(tmp_path / name, [], start=RESTART, cfg=cfg(), seed_first=False)
+    ref = [w]
+    smart = smart_factory(ref) if smart_factory else None
+    w.data.smart = smart
+    assert w.data.prepare(['XX']) and w.data.streams['T1'].seeded
+    return w, smart
+
+
+def today_rows(w):
+    return w.data.streams['T1'].raw_today[COLS].reset_index(drop=True)
+
+
+def test_a_restart_fills_its_gap_from_fyers_first_and_never_asks_angel_one(tmp_path):
+    control, _ = seeded_world(tmp_path, name='control')
+    assert [c for c in control.sc.calls if c[0] == 'T1'], 'with no Fyers the gap comes from Angel One'
+    w, smart = seeded_world(tmp_path, FramesSmart)
+    assert smart.calls and smart.calls[0][0] == 'T1' and smart.calls[0][1] == pd.Timestamp('2026-09-03 09:00'), 'Fyers was asked for the whole gap'
+    assert [c for c in w.sc.calls if c[0] == 'T1'] == [], 'and Angel One was not asked at all'
+    pd.testing.assert_frame_equal(today_rows(w), today_rows(control))
+    control.close()
+    w.close()
+
+
+def test_a_restart_whose_fyers_cannot_answer_fills_the_gap_from_angel_one_as_before(tmp_path):
+    control, _ = seeded_world(tmp_path, name='control')
+    w, smart = seeded_world(tmp_path, lambda ref: FramesSmart(ref, answer=False))
+    assert smart.calls and [c for c in w.sc.calls if c[0] == 'T1'], 'Fyers was tried, then Angel One filled the gap'
+    pd.testing.assert_frame_equal(today_rows(w), today_rows(control))
+    control.close()
+    w.close()
+
+
+def test_a_smart_source_that_raises_during_a_restart_falls_back_to_angel_one(tmp_path):
+    class Boom(FramesSmart):
+        def fetch_window(self, *a, **k):
+            raise RuntimeError('boom')
+    control, _ = seeded_world(tmp_path, name='control')
+    w, _ = seeded_world(tmp_path, Boom)
+    assert [c for c in w.sc.calls if c[0] == 'T1']
+    pd.testing.assert_frame_equal(today_rows(w), today_rows(control))
+    control.close()
+    w.close()
+
+
+def test_a_restart_for_an_instrument_outside_the_smart_set_uses_angel_one_only(tmp_path):
+    w, smart = seeded_world(tmp_path, lambda ref: FramesSmart(ref, instruments=('YY',)))
+    assert smart.calls == [] and [c for c in w.sc.calls if c[0] == 'T1']
+    w.close()
