@@ -95,6 +95,8 @@ def load_contracts(seg_start: str, seg_end: str) -> Dict[str, ContractSpec]:
         exp = expiry if hasattr(expiry, 'year') and not hasattr(expiry, 'hour') else expiry.date()
         df = pd.DataFrame({'time_stamp': contract.idx, 'open': contract.o, 'high': contract.h, 'low': contract.l,
                            'close': contract.c, 'volume': contract.v})
+        if exp < REPLAY_START:
+            continue            # expired before the window: it can never be traded in it, and a fake exchange listing it would make it the front
         symbol = f'GOLDPETAL{exp.strftime("%d%b%y").upper()}FUT'
         token = None
         for exp_str, row in by_expiry_row.items():
@@ -102,7 +104,10 @@ def load_contracts(seg_start: str, seg_end: str) -> Dict[str, ContractSpec]:
                 token = row['token']
                 break
         if token is None:
-            continue
+            # mcx_instrument_master.csv lists only the contracts live today, so a contract that has expired has no row although
+            # its price file is on disk (GOLDPETAL30SEP26 after 30 Sep 2026 broke this replay). The token is only a ledger key here:
+            # nothing in hestia_core/fake.py or roll_policy.py looks it up in the master, so a synthetic one keeps the contract's data.
+            token = f'SYN{exp.isoformat()}'
         ref = ContractRef('GOLDPETAL', str(token), symbol, exp)
         out[ref.expiry.isoformat()] = ContractSpec(ref, lot_size=LOT_SIZE, tick_size=TICK_SIZE, freeze_qty_lots=FREEZE_QTY_LOTS,
                                                     minutes=df)

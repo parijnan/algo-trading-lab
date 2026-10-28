@@ -94,6 +94,8 @@ def load_contracts(seg_start: str, seg_end: str) -> Dict[str, ContractSpec]:
         exp = expiry if hasattr(expiry, 'year') and not hasattr(expiry, 'hour') else expiry.date()
         df = pd.DataFrame({'time_stamp': contract.idx, 'open': contract.o, 'high': contract.h, 'low': contract.l,
                            'close': contract.c, 'volume': contract.v})
+        if exp < REPLAY_START:
+            continue            # expired before the window: it can never be traded in it, and a fake exchange listing it would make it the front
         symbol = f'SILVERMIC{exp.strftime("%d%b%y").upper()}FUT'
         token = None
         for exp_str, row in by_expiry_row.items():
@@ -101,7 +103,7 @@ def load_contracts(seg_start: str, seg_end: str) -> Dict[str, ContractSpec]:
                 token = row['token']
                 break
         if token is None:
-            continue
+            token = f'SYN{exp.isoformat()}'      # expired: see helios_engine/replay_check.py for why
         ref = ContractRef('SILVERMIC', str(token), symbol, exp)
         out[ref.expiry.isoformat()] = ContractSpec(ref, lot_size=LOT_SIZE, tick_size=TICK_SIZE, freeze_qty_lots=FREEZE_QTY_LOTS,
                                                     minutes=df)
