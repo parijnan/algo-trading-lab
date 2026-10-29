@@ -101,8 +101,9 @@ def _safe_concat(dfs: list, **kwargs) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Supertrend (copied verbatim from apollo_production/technical_indicators.py,
-# same precedent as iris_functions.py — production never imports the backtest)
+# Supertrend (was copied from apollo_production/technical_indicators.py; since
+# 2026-10-28 the standard Zerodha formula, identical to hestia_core/indicators.py
+# and prometheus_backtest/data_loader.py — production never imports the backtest)
 # ---------------------------------------------------------------------------
 
 class SupertrendIndicator:
@@ -122,25 +123,22 @@ class SupertrendIndicator:
         df['UpperBand']  = hl2 + self.multiplier * df['ATR']
         df['LowerBand']  = hl2 - self.multiplier * df['ATR']
 
-        trend      = True
-        supertrend = []
-        for i in range(len(df)):
-            if i < self.period:
-                supertrend.append(None)
-                continue
-            curr_close  = df['Close'].iloc[i]
-            prev_upper  = df['UpperBand'].iloc[i - 1]
-            prev_lower  = df['LowerBand'].iloc[i - 1]
-            if curr_close > prev_upper:
-                trend = True
-            elif curr_close < prev_lower:
-                trend = False
-            if trend and df['LowerBand'].iloc[i] < prev_lower:
-                df.loc[df.index[i], 'LowerBand'] = prev_lower
-            if not trend and df['UpperBand'].iloc[i] > prev_upper:
-                df.loc[df.index[i], 'UpperBand'] = prev_upper
-            supertrend.append(df['LowerBand'].iloc[i] if trend
-                              else df['UpperBand'].iloc[i])
+        # Standard (Zerodha / TradingView) final bands: a band moves to the raw
+        # value when that tightens it or when the PREVIOUS close broke through it.
+        ub, lb  = df['UpperBand'].tolist(), df['LowerBand'].tolist()
+        closes  = df['Close'].tolist()
+        n       = len(df)
+        fub, flb, line = list(ub), list(lb), [float('nan')] * n
+        for i in range(1, n):
+            fub[i] = ub[i] if (ub[i] < fub[i - 1] or closes[i - 1] > fub[i - 1]) else fub[i - 1]
+            flb[i] = lb[i] if (lb[i] > flb[i - 1] or closes[i - 1] < flb[i - 1]) else flb[i - 1]
+            if i == 1:
+                line[i] = fub[i]
+            elif line[i - 1] == fub[i - 1]:
+                line[i] = fub[i] if closes[i] <= fub[i] else flb[i]
+            else:
+                line[i] = flb[i] if closes[i] >= flb[i] else fub[i]
+        supertrend = [None if i < self.period else line[i] for i in range(n)]
 
         df['Supertrend'] = supertrend
         return df.drop(columns=['H-L', 'H-PC', 'L-PC', 'TR', 'ATR',

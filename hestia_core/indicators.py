@@ -1,10 +1,14 @@
 """
 Hestia's single Supertrend implementation (plan section 2: the data service holds ONE).
 
-Numerically identical to prometheus_functions.compute_st (the same loop, same in-place band ratchet, same trend derivation),
-pinned by tests/test_supertrend_production_backtest_parity.py (12 seeded random-walk cases against production and, in the same
-file, the backtest copy against production) and re-checked on 41,840 real SILVERMIC 15-minute bars for four parameter sets
-(2026-09-28). Always computed from
+The standard (Zerodha / TradingView) Supertrend: the final bands keep their ratchet until the PREVIOUS close breaks through the
+band, and the line follows the final band of the side it sits on. Reproduces Zerodha's 15-minute Supertrend(10, 2.5) column on
+CRUDEOILM exactly (tests/test_supertrend_zerodha_fixture.py). Until 2026-10-28 this module used a different ratchet (it reset the
+band on every bar of the opposite phase), which on 28 Oct 2026 delayed a Prometheus entry by 45 minutes (Zerodha flipped at the
+19:45 bar, Hestia at 20:30).
+
+Numerically identical to prometheus_functions.compute_st and the backtest copy (prometheus_backtest/data_loader.compute_st),
+pinned by tests/test_supertrend_production_backtest_parity.py. Always computed from
 scratch over the whole series passed in (the ratchet is history-dependent, so it is never resumed).
 
 `df` needs lowercase open/high/low/close columns and a `time_stamp` column (kept as is). Adds `supertrend` (NaN during
@@ -20,26 +24,23 @@ def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     atr = tr.ewm(alpha=1 / period, adjust=False).mean()
     hl2 = (high + low) / 2
-    upper = (hl2 + multiplier * atr).tolist()
-    lower = (hl2 - multiplier * atr).tolist()
+    ub = (hl2 + multiplier * atr).tolist()
+    lb = (hl2 - multiplier * atr).tolist()
     closes = close.tolist()
 
-    trend = True
-    st = []
-    for i in range(len(d)):
-        if i < period:
-            st.append(float('nan'))
-            continue
-        prev_upper, prev_lower = upper[i - 1], lower[i - 1]
-        if closes[i] > prev_upper:
-            trend = True
-        elif closes[i] < prev_lower:
-            trend = False
-        if trend and lower[i] < prev_lower:
-            lower[i] = prev_lower
-        if not trend and upper[i] > prev_upper:
-            upper[i] = prev_upper
-        st.append(lower[i] if trend else upper[i])
+    # final bands: a band moves to the raw value when that tightens it or when the previous close broke through it
+    n = len(d)
+    fub, flb, line = list(ub), list(lb), [float('nan')] * n
+    for i in range(1, n):
+        fub[i] = ub[i] if (ub[i] < fub[i - 1] or closes[i - 1] > fub[i - 1]) else fub[i - 1]
+        flb[i] = lb[i] if (lb[i] > flb[i - 1] or closes[i - 1] < flb[i - 1]) else flb[i - 1]
+        if i == 1:
+            line[i] = fub[i]
+        elif line[i - 1] == fub[i - 1]:
+            line[i] = fub[i] if closes[i] <= fub[i] else flb[i]
+        else:
+            line[i] = flb[i] if closes[i] >= flb[i] else fub[i]
+    st = [float('nan') if i < period else line[i] for i in range(n)]
 
     d['supertrend'] = pd.to_numeric(pd.Series(st), errors='coerce')
     d['trend'] = (d['close'] > d['supertrend']).astype(object)

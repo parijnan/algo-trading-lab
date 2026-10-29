@@ -1,6 +1,6 @@
 """
-The Supertrend that Prometheus computes live (a copy inside prometheus_functions.py, "production never imports the
-backtest") and the one every backtest uses (apollo_production/technical_indicators.py, through
+The Supertrend that Prometheus computes live (rollback-only; a copy inside prometheus_functions.py, "production never imports the
+backtest") and the one every backtest uses (its own loop since 2026-10-28, through
 prometheus_backtest/data_loader.compute_st) are two separate copies of the same algorithm. If they ever drift, the
 backtests stop describing what production trades, and nothing else would notice. This test pins them together on
 seeded random-walk bars with real-looking volatility clustering.

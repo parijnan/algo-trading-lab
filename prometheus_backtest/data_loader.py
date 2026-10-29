@@ -7,7 +7,6 @@ import pandas as pd
 
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT / 'apollo_production'))
-from technical_indicators import SupertrendIndicator  # noqa: E402
 
 import configs  # noqa: E402
 
@@ -137,16 +136,32 @@ def compute_st(df: pd.DataFrame, period: int, multiplier: float) -> pd.DataFrame
     """
     Add supertrend, trend (bool), trend_flip (bool) to df.
     df must have lowercase ohlc columns and a DatetimeIndex.
-    Computed continuously across the whole series (not reset per day),
-    matching iris_production's live behaviour — the Supertrend ratchet is
-    history-dependent.
+    Computed continuously across the whole series (not reset per day) — the
+    Supertrend ratchet is history-dependent. The standard Zerodha formula
+    (since 2026-10-28), identical to hestia_core/indicators.py.
     """
-    df_up = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'})
-    result = SupertrendIndicator(period=period, multiplier=multiplier).calculate(df_up)
-    result = result.rename(columns={
-        'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close',
-        'Supertrend': 'supertrend',
-    })
+    result = df.copy()
+    high, low, close = result['high'].astype(float), result['low'].astype(float), result['close'].astype(float)
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    hl2 = (high + low) / 2
+    ub = (hl2 + multiplier * atr).tolist()
+    lb = (hl2 - multiplier * atr).tolist()
+    closes = close.tolist()
+    # Standard (Zerodha / TradingView) final bands: a band moves to the raw value
+    # when that tightens it or when the PREVIOUS close broke through it.
+    n = len(result)
+    fub, flb, line = list(ub), list(lb), [float('nan')] * n
+    for i in range(1, n):
+        fub[i] = ub[i] if (ub[i] < fub[i - 1] or closes[i - 1] > fub[i - 1]) else fub[i - 1]
+        flb[i] = lb[i] if (lb[i] > flb[i - 1] or closes[i - 1] < flb[i - 1]) else flb[i - 1]
+        if i == 1:
+            line[i] = fub[i]
+        elif line[i - 1] == fub[i - 1]:
+            line[i] = fub[i] if closes[i] <= fub[i] else flb[i]
+        else:
+            line[i] = flb[i] if closes[i] >= flb[i] else fub[i]
+    result['supertrend'] = pd.Series([float('nan') if i < period else line[i] for i in range(n)], index=result.index)
     result['trend'] = (result['close'] > result['supertrend']).astype(object)
     result.loc[result['supertrend'].isna(), 'trend'] = pd.NA
     result['trend_flip'] = result['trend'] != result['trend'].shift(1)
