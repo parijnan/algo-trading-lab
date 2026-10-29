@@ -16,16 +16,16 @@ needs_data = pytest.mark.skipif(
 @needs_data
 def test_the_engine_reproduces_every_live_decision_over_the_angelone_only_window():
     """From 2026-09-02 (selene_configs.ANGELONE_OWN_FROM, where the backtest's Fyers-preferred blend and Hestia's own
-    AngelOne-only live data agree) to 2026-09-28. Two known, explained boundary cases are excluded, not silently dropped:
-    a stale-direction entry carried from before the window by the backtest's own unported `forced_roll` artifact (plan
-    section 1, "not ported"), and the position still open when the backtest's own simulation window ends (its CSVs record
-    only closed legs, per `open_at_end` in `parity_backtest_selene.simulate`'s own output)."""
+    AngelOne-only live data agree) to 2026-09-28. One known, explained boundary case is excluded, not silently dropped: the
+    backtest's own unported `forced_roll` artifact (plan section 1, "not ported") re-enters trade 2452 bearish on the new
+    contract at 2026-09-02 09:00 at 242,400, a stale direction carried over from 31 Aug with no flip behind it, and exits it at
+    18:00 on the flip; the replay engine starts the window flat, so it has no position to exit. (Before the 2026-10-28 standard
+    Supertrend formula the same artifact showed up as a replay entry at 2026-09-03 15:30 and a second case, a position still
+    open when the backtest's window ends, as an entry at 2026-09-28 20:15; neither appears now.)"""
     from selene_engine.replay_check import replay
     from datetime import date
     rep = replay(date(2026, 9, 28), verbose=False)
-    known_boundary = {'replay entry at 2026-09-03 15:30:00.250000 bearish has no live counterpart',
-                      'replay entry at 2026-09-28 20:15:00.250000 bearish has no live counterpart'}
-    unexplained = [d for d in rep.differences if d not in known_boundary]
-    assert not unexplained, unexplained
-    assert rep.matched == len(rep.live) >= 55
+    known_boundary = ['live exit at 2026-09-02 18:00:00 trend_flip has no replay counterpart']
+    assert rep.differences == known_boundary, rep.differences
+    assert rep.matched == len(rep.live) - 1 >= 55
     assert not rep.price_gaps or max(rep.price_gaps) < 0.01     # both simulations use the same 1-minute data: fills should be exact
