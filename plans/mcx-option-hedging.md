@@ -1,0 +1,124 @@
+# MCX option hedging for the four Hestia engines — study plan (2026-10-29)
+
+**Status: planning only. Nothing built, nothing committed.** Question (user, 2026-10-29): can buying options on the MCX contracts protect the engines' open positions across the gaps they cannot manage (overnight, weekends, holidays), at a cost that improves the account's drawdown and Calmar rather than just spending premium? The user's four considerations are the spine of the plan: (1) strikes and liquidity, (2) when to hedge, (3) how and when to close the hedge in active hours, (4) the effect on P&L and drawdowns. The plan was reviewed with the advisor model on 2026-10-29 and reordered so that the cheapest, most decisive question comes first.
+
+## 1. What is already known (checked 2026-10-29, read-only)
+
+- **Prior from our own work.** `plans/weekend-flatten-study.md` (2026-10-12): flattening every position before the weekend lowers total and Calmar on all four engines; the weekend gap is NOT a net cost on average (mean gap in the trade's direction is positive or about zero, about half the gaps are positive); the tail does improve for Typhon and Prometheus (worst trade Typhon -4.92% to -2.79%, Prometheus -5.64% to -2.42%); worst weekend gap against the position: Selene -2.11%, Helios -0.88%, Typhon -3.64%, Prometheus -2.16%, with 13 to 38 trades per engine worse than -0.5%. So an option hedge is insurance: its expected cost is premium plus spread plus decay, and it is justified only by the drawdown it removes per rupee spent. Hedging keeps the runners that flattening cuts, which is the reason to study it at all.
+- **The parity simulators already contain the gap losses.** A stop that gaps fills at the bar open (the repo convention, `hestia_backtest` and the `parity_backtest_*` sims), so the backtests' drawdowns already include gap-through-stop slippage. The hedge's job is to buy that slippage down; normal stop-outs (whipsaws, the 3% Selene stop being hit in the open session) cost the same with or without it. A drawdown made of ordinary stop-outs cannot be fixed by a gap hedge.
+- **Options exist on the underlyings, and Fyers lists them.** `data_pipeline/data/mcx_com_sym_master.json` (Fyers MCX master) has options on CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, SILVER, SILVERM, GOLD, GOLDM (and others) but NOT on SILVERMIC (Selene) or GOLDPETAL (Helios). Angel One's `mcx_instrument_master.csv` in the pipeline lists futures only (FUTCOM, 167 rows); whether Angel One's full scrip master carries MCX options (needed to place the orders) is unchecked and is a Phase 1 item.
+- **Listing structure (Fyers master, 29 Oct 2026).** CRUDEOIL/CRUDEOILM: monthly expiries 17 Nov, 16 Dec, 15 Jan (two days before the future's 19 Nov, 18 Dec, 19 Jan), strikes every 50 from 3,850 to 13,550. NATURALGAS/NATGASMINI: 20 Nov, 23 Dec, 21 Jan (futures 24 Nov, 28 Dec, 25 Jan), step 5. SILVERM/SILVER: monthly out to 10 expiries, step 1,000; GOLDM: 29 Oct, 27 Nov, 29 Dec, step 500. No weekly options were listed.
+- **Whole option lots at the live 5 units** (units x `lots_per_unit` x lot size; verify every line against the MCX contract specifications before relying on it): Prometheus 10 CRUDEOILM lots of 10 bbl = 100 bbl = 10 CRUDEOILM option lots (qtyMult 10) or exactly 1 CRUDEOIL option lot (qtyMult 100); Typhon 5 x 2 x 250 = 2,500 mmBtu = 10 NATGASMINI option lots (250) or 2 NATURALGAS lots (1,250); Selene 5 kg = 1 SILVERM lot (5 kg), a cross-hedge (SILVERMIC futures, SILVERM options); Helios 5 x 20 x 1 g = 100 g = 1 GOLDM lot (100 g), a cross-hedge (GOLDPETAL futures, GOLDM options, priced per 10 g). At other unit counts the hedge ratio is quantised: Selene and Helios can only be hedged in multiples of 5 units or not at all.
+- **Historical option prices EXIST on Fyers, with a liquidity caveat.** The same expired-contract API the MCX downloader uses (`/data/history/fno/expired/expiry-dates`, `.../underlying-symbols`, `.../historical-data`) returns options as well as futures. Expiry lists go back to 2022 for CRUDEOIL (58), NATURALGAS (57), SILVER/SILVERM (39), GOLD (46), GOLDM (53); to 2024 for CRUDEOILM (29, from 2024-06-14) and NATGASMINI (30, from 2024-05-24). A full chain is returned per expiry (CRUDEOIL Oct 2026: 414 symbols). Candles are 1-minute OHLCV only (no bid, ask, depth or open interest). Density of a near-ATM call in its last month: CRUDEOIL Oct 2026 about 840 rows a day, 15,000 of 16,800 rows with volume; CRUDEOILM about 715 rows a day but only 3,700 to 7,500 with volume (the rest are carried-forward placeholders, median volume 0 to 4); NATGASMINI 2,200 to 16,800 traded rows a month growing to 2026; SILVERM ATM call 34 traded minutes in a month in Feb 2022, 10 in Aug 2025, about 9,000 in Oct 2026; GOLDM 19 traded minutes in a month in Jul 2024, about 5,200 in Aug 2026. Meaning: crude and gas options have real price history; silver and gold options are essentially untraded before 2026, so any silver or gold hedge result before 2026 is model-priced. Zero-volume rows are placeholders: prices there must not be used as fills (see `feedback_trade_derived_option_bars`).
+- **Data we do NOT have and cannot get historically:** bid/ask spread and depth. Fyers history has none. The spread and depth at the hedge times must come from a live survey (Phase 2).
+
+## 2. Design principles
+
+- **The hedge is an overlay, not an engine change.** The engines decide exactly as they do today; the hedge is bought and sold around the positions they hold. That lets the whole study run on the existing trade ledgers (`hestia_backtest/outputs/integrated_trades.csv`, the per-engine parity files) plus 1-minute futures and option data, with no change to any engine and no re-run of the parity backtests. Hedge-aware engine rules (a wider stop on a hedged position, for example) are a later phase, tested only if the overlay shows promise.
+- **Long options only.** Buy a put against a long and a call against a short. Defined risk, premium is the whole outlay, no margin events, nothing to be assigned. Vertical spreads (buy near, sell far to lower cost) are a variant in the grid, not the base case. A short-option collar is out of scope.
+- **Hedge only across the closes the engines cannot watch** (the session end to the next open, weekends, holidays), never intraday. No intraday re-hedging.
+- **One variable per experiment**, the repo convention; every feature a trigger uses must be computable before the hedge decision time (about 15 minutes before the close, 23:10 on a 23:30 close, 23:40 on a 23:55 close) with no look-ahead.
+- **Costs are first-class.** Per-order brokerage, GST, CTT on option premium (sell side), exchange and SEBI fees, stamp duty, plus a spread and slippage model, all charged on both legs of the hedge (buy at the close, sell at the next open). The cost model of `hestia_simulation` is the starting point and must be extended for options.
+- **Mandatory comparators**, because the hedge has to beat cheaper ways of doing the same job: (a) do nothing (the baseline), (b) partial overnight flattening of the futures (the weekend-flatten study's rule at 25%, 50%, 100% of the position), (c) simply running fewer units (a drawdown cut bought by sizing costs nothing but upside). An option hedge that does not beat (b) or (c) at equal risk is not worth its operational complexity.
+
+## 3. Phases
+
+### Phase 0 — the benefit ceiling from futures data only (no option prices; days, not weeks)
+
+Question: how much could a free, perfect hedge at best save? If that ceiling is small next to the cheapest plausible premium, the study ends here (the kill criterion below).
+
+For every position held across a session close or weekend/holiday gap, per engine, using the parity trade ledgers and the 1-minute futures:
+
+- Close-to-next-open adverse move in the direction of the trade, in % and in rupees at 5 units; the distribution (mean, quantiles 1/5/10/50, worst 20 events) split into ordinary nights, weekend/holiday nights, and nights before and after a roll.
+- The excess loss where the open gapped through the stop: (stop fill at the open) minus (stop price), the amount a hedge can buy down. Sum and distribution per engine.
+- The adverse move that happened AFTER the open but before the engine could act, inside the guard windows (`no_exit_before_buffer_min` after the open): the engine does not check stops in that window, and the hedge protects exactly that window. Quantify the loss between the open and the first bar the engine is allowed to exit on.
+- The share of each engine's top 10 drawdowns (trade-by-trade AND daily-close basis, the two definitions in `hestia_backtest`) that came from overnight/weekend holds versus intraday moves and whipsaws.
+- The conditional picture for the triggers of section 4 before any option exists: of the large adverse gaps, how many were preceded by a position that was already in red, close to the stop, or near the Supertrend. This tells whether a conditional trigger can be selective or whether the gap risk is unforecastable.
+- Gap risk drivers worth a look: the US session continues after the MCX close, so US event days (EIA crude inventory, FOMC, US data) and weekend news (OPEC, geopolitics) are natural gap sources; `data_pipeline/data/wti` can help explain individual gaps. A US-calendar feature is a candidate trigger.
+
+**Kill criterion (proposal, user to confirm):** if the engine's total gap-through-stop excess plus guard-window loss, summed over the whole history for the engine, is below about 2x a conservative whole-history premium estimate (Phase 2's cheapest sensible hedge, ATM-away strike at the model price), the engine is dropped from the study. If the same holds for all four, the study stops and the finding is written up as "the gaps are not worth insuring".
+
+Output: `research/option_hedge/gap_ceiling.py`, a per-engine table and a short results section appended to this plan.
+
+### Phase 1 — contract and instrument facts (read-only, in parallel with Phase 0)
+
+- Confirm against the MCX contract specifications and the Fyers master: lot size (qtyMult), tick size, option expiry rule (two days before the future), exercise style, settlement mechanism (exercise of an in-the-money option devolves into a futures position, as I understand it; if so a hedge must never be held into expiry), trading hours of options versus futures (the master shows 0900-2330 for the index options), strike ladders and their ATM-centred width, and the freeze quantity.
+- Check whether Angel One's scrip master carries MCX options (OPTFUT on MCX) and the order parameters needed; the local pipeline file is futures only. The check is the public scrip master file or a quote request, not a login while Hestia is live (`feedback_no_angelone_during_live`). If Angel One cannot trade MCX options, the production path has a different broker problem that must be solved before anything else.
+- Map each engine to its hedge instrument and lot count at 1, 2, 5, 10 units; state the cross-hedge basis for Selene (SILVERMIC vs SILVERM future) and Helios (GOLDPETAL vs GOLDM future), and the contract-month mapping: engines roll to the next future early (tender-period rule) while the option on the old month keeps trading until its own expiry; the hedge needs its own roll calendar and a minimum days-to-expiry (grid below), and on the roll eve the hedge belongs to the contract the engine will hold after the roll.
+- Margin: confirm that a long option needs only the premium, and whether SPAN margin offset on the futures from a long option frees margin (a possible scaling benefit, to be measured from the broker's margin calculator and not assumed).
+
+### Phase 2 — option price model, liquidity survey and costs
+
+Backtest prices come in three tiers, used in this order and compared where they overlap:
+
+- **Tier A, observed prices** from the Fyers expired history (OHLCV, 1-minute) for CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, and for SILVERM and GOLDM from 2026. A fill is allowed only at a minute with volume > 0 and within a bounded age of the decision time (the placeholder-rows lesson); the number of nights where no tradable price exists is itself a result (liquidity). Build a loader `research/option_hedge/option_data.py` that downloads and caches per expiry the chain slice the study needs (strikes within a band of the futures price; not the whole 400-symbol chain) into `data_pipeline/data/mcx_fyers_options/<underlying>/<expiry>/<strike><CE|PE>.csv`, mirroring the futures staging tree and never touching the live tree. Rate limits and the 100-day chunk cap as in `data_downloader_fyers_mcx.py`.
+- **Tier B, model prices** where Tier A has no trades (silver and gold before 2026, thin strikes): Black-76 on the underlying future with implied volatility = trailing realised volatility x a markup m, with m swept over a range (for example 0.9 to 1.6). Calibrate m and the skew from Tier A where it exists (back out implied volatility from observed traded prices by strike and days-to-expiry; check whether implied volatility sits above realised volatility and by how much, by underlying). The headline result of Tier B is the **break-even markup**: the largest implied-volatility premium over realised at which the hedge still improves Calmar or pays for itself. That is robust to our ignorance of true implied volatility.
+- **Tier C, forward data, start now.** Calendar time is the bottleneck for liquidity data, so begin collecting immediately: a read-only recorder (the pattern of `fyers_shadow.ShadowRecorder` and `mcx_snapquote_log.csv`) that, at the candidate hedge windows (22:45 to the close and 09:00 to 09:45), snapshots Fyers quotes and depth (bid, ask, sizes, volume, open interest) for a fixed set of strikes around the money of the instruments in the table above, plus the live implied volatility. Target at least one full month so it contains a weekend, a roll and a month-end. Runs from Delos or the laptop with the existing Fyers token (data only, never orders); isolated from Hestia the same way the shadow recorder is (own process or daemon thread pool, catches everything, no effect on engines). **This is the only data that answers considerations 1 and 3** (spread and depth at the close and at the open), so it is the first build item.
+
+Liquidity metrics to report per underlying, strike (moneyness bucket), expiry bucket (days to expiry) and time bucket (23:00 to 23:30, 09:00 to 09:15, 09:15 to 09:45, 09:45 to 11:00): quoted spread in rupees and as % of mid, size at best bid and ask in lots against our order size, open interest, volume, the fraction of minutes with a two-sided quote, and the slippage a market-with-protection order would have paid. Our order sizes are small (1 to 10 lots at 5 units), so depth matters less than spread; the question is whether a single 1-lot order on a far-OTM strike gets filled at a fair price at 09:01.
+
+Cost model: brokerage per order (flat, from the live broker contract), GST, option CTT (sell side), exchange transaction charges, SEBI fee, stamp duty (buy side); slippage as a fraction of the half-spread (swept 0.5x to 1.5x) once Tier C exists, a flat tick count before.
+
+### Phase 3 — the overlay backtest and the grid
+
+Engine: `research/option_hedge/overlay.py` (function-based, the repo convention; parameters only in `research/option_hedge/hedge_configs.py`). For every night/weekend that a position survives, evaluate the hedge rule at the decision time; if it fires, buy the chosen option at the modelled fill, hold to the close rule, sell at the modelled fill, charge costs, and record the hedge P&L per event next to the futures trade it protects. Output per event: engine, trade id, direction, decision time, features, strike, expiry, days to expiry, entry premium, exit premium, hedge P&L, costs, futures P&L over the same interval, net.
+
+The grid, one variable at a time from a base case (base = every night, strike a fixed % out of the money, nearest expiry with at least 10 days left, sold at the first liquid minute after the open):
+
+**Consideration 1 — strikes and expiry.**
+- Strike by moneyness: ATM, 0.5%, 1%, 2% out of the money; by delta (0.5, 0.35, 0.2, 0.1); and "struck at the engine's stop": the strike at the stop price, the cheapest hedge, which pays only when the market gaps through the stop (this is the natural hedge for a stop-based system). A stop-strike hedge is most sensitive to liquidity far from the money.
+- Vertical spread variants (buy the near strike, sell a strike a further x% out) to see how much the cost falls and the protection shrinks.
+- Expiry: front month versus next month, minimum days to expiry 5, 10, 15, 20 (theta and gamma against premium), never within a few days of expiry (settlement and the exercise-into-futures rule); for the contract-month mismatch, hedge with the option on the month the engine is trading (or will be after a roll).
+- Hedge ratio: 100% and 50% of the position's lots, subject to the lot quantisation of section 1.
+
+**Consideration 2 — when to hedge.** Triggers, each tested alone and then combined only if one shows value:
+- every overnight; weekend and holiday gaps only (Friday, or the last session before a holiday); the weekend subset of days with a Monday US/geopolitical risk is not separable ex-ante and is not attempted;
+- overnight only when the trade is in red (unrealised P&L below 0, below -x% of entry);
+- overnight only when the price is close to the stop (distance to stop under x% of price or under k x ATR) — the gap-relevant trigger;
+- overnight only when the price is close to the Supertrend (distance to the ST line under x%) — relevant only for the flip exit, which the engine takes at the next bar close;
+- overnight only for profitable trades with a large open gain ("protect the profit"), the mirror image of the red trigger;
+- position age and size of the open profit; volatility regime (recent realised volatility percentile, implied volatility percentile when Tier C exists: buy protection only when it is cheap, or only when risk is high); known event calendar (US inventory and macro days, month-end, roll eve).
+Each trigger is scored by hedges bought, hedges that paid, the share of the Phase 0 large adverse gaps it caught, and the cost per rupee saved.
+
+**Consideration 3 — closing the hedge.** The hedge is sold in active hours; the grid for the sale:
+- at a fixed delay after the open: 0 (first minute with volume), 5, 15, 30, 60 minutes, with each engine's own guard windows as reference points (`min_entry_buffer_min`, `no_exit_before_buffer_min`);
+- at the first minute the option has a two-sided quote with a spread under x% of mid (Phase 2 Tier C), the backtest proxy being the first minute with volume;
+- conditionally on the open: sell at once if the market gapped in our favour (the option is nearly worthless, its remaining value small, spread the main cost) versus hold until the futures position is exited if the gap is against us; sell on the same event as the futures position's exit (a stop, a flip, a target) so the hedge does not outlive the position it protects; if the engine flips direction at the open, the old hedge is now directionally aligned with the new position and is either sold or kept as the new position's hedge (decided by the grid, not by default);
+- keep the hedge across a second night (rolling the strike or holding as is) when the trade remains in red versus sell and rebuy, which pays the spread twice;
+- the hedge is also sold at once if the position is closed at the 23:15 roll or by a command (EXIT/KILL) and is never allowed to run into its own expiry unmonitored.
+Report the realised hedge P&L as a function of the sale delay: the gap into the open is paid for with the option's time value, and a later sale also exposes the option to the post-open trend.
+
+### Phase 4 — evaluation and decision
+
+Per engine and combined (the four engines' summed daily series, 5 units as live), against the baseline and against the comparators of section 2:
+- total P&L before and after hedge costs, the premium paid as a % of gross profit, the number of hedges and hit rate, the payoff distribution;
+- maximum drawdown on both definitions (trade-by-trade and daily-close), the top 10 drawdowns for each, the worst night, 1% and 5% tails of the overnight P&L; Calmar; the loss-per-rupee-of-premium ratio (drawdown reduced per rupee spent), and the same for each comparator;
+- stability: before and after 2026-01-01 (the regimes differ sharply, the 2026 gains dominate), by year, and walk-forward on the trigger parameters (choose on the first part, report on the second), plus the break-even implied-volatility markup of Tier B;
+- sensitivity to units (1, 2, 5, 10) because lot quantisation makes the hedge coarse at low units, and to the cost model;
+- the rule the study will be judged on, proposed here for the user to set or change: adopt only if the hedge lowers the combined top-1 and top-3 drawdowns by a meaningful amount (proposal: at least 15% on the daily-close basis) while giving up no more than a small share of total P&L (proposal: at most 5%), in BOTH the pre-2026 and 2026 periods, and beats the partial-flatten and fewer-units comparators at equal drawdown. Per engine the answer may differ (the flatten study suggests Typhon and Prometheus have the tail worth insuring).
+Output: results section in this plan, a table per engine, and optionally an artifact in the Hestia Dashboard style (do not publish without asking).
+
+### Phase 5 — production design (only after Phase 4 says yes; out of scope for now)
+
+Listed so the study is built with it in mind: a hedge service in `hestia_core` with its own ledger leg and request journal entries (the same UNCONFIRMED/restart rules as engine orders), paper mode first (PAPER order ids), Slack alerts, hedge state persisted and reconciled against the broker position book at start, hedge exit tied to the engine's position lifecycle, the roll calendar for option expiries, no interplay with the trend guard, and a kill flag. Order placement through Angel One only if Phase 1 confirms MCX options there; quotes and depth from Fyers (data only, token rules unchanged).
+
+## 4. Deliverables and order of work
+
+1. Phase 1 facts and the Tier C recorder (start collecting first: it is the long pole). 2. Phase 0 ceiling (decides whether to continue; can run while the recorder collects). 3. Phase 2 loader and model pricing, Tier A/B overlap calibration. 4. Phase 3 overlay and grid. 5. Phase 4 evaluation, then the decision with the user. Tests accompany each module (`tests/test_option_hedge_*.py`), each behaviour broken on purpose and caught, as the weekend-flatten and trailing-profit studies did. Code under `research/option_hedge/`, nothing in the live engines, nothing on Delos except the read-only quote recorder if the user approves it.
+
+## 5. Risks and caveats to keep visible
+
+- Silver and gold option history is mostly untraded before 2026 and is model-priced; the result for Selene and Helios rests on the model and the break-even markup, with only 2026 on real prices.
+- The 1-minute OHLCV has no spread or depth, so the cost of the open (09:00 to 09:15, when engine guards are also active) is unmeasured until Tier C has a month of data.
+- Cross-hedges (silver, gold) carry basis risk and contract-month mismatch; the hedge may not pay when the futures gap does.
+- A hedge also pays when the gap is NOT an engine problem (the stop would have been hit anyway at the open fill); the benefit is the slippage beyond the stop, which Phase 0 measures. A hedge rule that triggers often will mostly pay premium.
+- The parity simulators are the only source of the "positions held overnight" set; a live position that differs from the backtest's (restart, paper-to-live, early rolls) will hedge differently. The study measures the idea, not a replay of live nights.
+- The 2026 regime (large trends in silver and crude) flatters the unhedged engines; a hedge that looks costly there may look cheap in a drawdown regime, and the reverse. Judge by both periods.
+- Exercise and settlement mechanics, exchange-imposed limits and the real broker support for MCX options must be confirmed before any live step.
+
+## 6. Open questions for the user
+
+1. Hedge scope: all four engines or only those the Phase 0 ceiling supports; is a cross-hedge (Selene, Helios) acceptable or should the study cover the directly hedgeable pair (Prometheus, Typhon) first.
+2. The adoption rule in Phase 4 (15% drawdown cut, at most 5% of total given up, both periods): keep, tighten or loosen.
+3. Permission to run the read-only Tier C quote recorder on Delos (new process, Fyers data only, no orders, no Angel One), or run it from the laptop.
+4. Whether the study should include the hedge-aware engine variants (a wider stop on a hedged position) after the overlay, or stay with the overlay only.
