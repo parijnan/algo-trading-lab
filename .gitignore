@@ -471,3 +471,9 @@ research/hestia_integrated/outputs/integrated_trades.csv
 
 # session analysis: 20 MB per-minute attribution pieces (regenerable by session_trades.py)
 research/session_analysis/outputs/attribution_pieces.csv.gz
+
+# cold-spell research (Oct 2026): regenerable series; the small result tables and the live-vs-backtest tables are kept
+research/cold_spell_oct2026/outputs/crude_range_features.csv
+research/cold_spell_oct2026/outputs/efficiency_ratio_5d.csv
+# duplicate of research/cold_spell_oct2026/outputs/live_vs_backtest_1unit.csv
+hestia_backtest/outputs/live_vs_backtest_1unit.csv
