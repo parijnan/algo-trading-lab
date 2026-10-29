@@ -34,6 +34,7 @@ from oleus_engine.machine import BOOKED, CLOSED, OPEN, Event, Machine
 from oleus_engine.state import EngineState
 
 log = logging.getLogger('oleus_engine')
+trace = logging.getLogger('oleus_ticks')
 
 REASONS = ('T1', 'T2', 'T3')
 
@@ -69,6 +70,7 @@ class OleusEngine:
         self._levels_failed_since: Optional[datetime] = None
         self._last_trade_update: Optional[datetime] = None
         self._last_running_row: Optional[datetime] = None
+        self._last_traced: Optional[float] = None
 
     # ------------------------------------------------------------------------------------------------------------------------
     # The loop
@@ -400,12 +402,26 @@ class OleusEngine:
                  {k: self.machine.trades[k]['lots'] for k in self.state.trades if self.machine and self.machine.trades.get(k)},
                  self.state.late_catches, self.state.missed_entries, near)
 
+    def _trace(self, q) -> None:
+        """Log every CHANGED price (with its age) while a trade is open or the price is near a level that matters, logger `oleus_ticks`: the real
+        order of highs and lows inside a minute, for comparing the engine with the backtest's assumed path."""
+        if q.price == self._last_traced:
+            return
+        near = bool(self.state.trades)
+        if not near and self.machine is not None:
+            levels = [v for s in self.machine.setups.values() for v in (s['entry'], s['stop'], *s['targets'])]
+            near = any(abs(q.price - v) <= q.price * self.cfg.trace_near_pct / 100 for v in levels)
+        if near:
+            self._last_traced = q.price
+            trace.info('TICK %s %.2f age=%.1f', self._now().strftime('%H:%M:%S.%f')[:-3], q.price, q.age_sec)
+
     def _scan(self, now: datetime) -> None:
         s = self.state
         q = self._price()
         if q is None or q.age_sec > self.cfg.ltp_max_age_s or self.contract.token in self.feed_stale:
             return
         b = q.price
+        self._trace(q)
         if s.prev_price is None:
             s.prev_price = b
             return

@@ -45,6 +45,9 @@ class EngineConfig:
     # prices: an older tick never triggers anything (entries are stricter: a touch is the whole signal)
     ltp_max_age_s: float = 30.0
     ltp_max_age_entry_s: float = 10.0
+    # a price trace in the log (logger oleus_ticks) while a trade is open or the price is within this share of any entry, stop or target level: the
+    # evidence for what the price really did inside a volatile minute (which came first, the low or the high), which the minute bars cannot say
+    trace_near_pct: float = 0.10
     # the loop
     tick_s_flat: float = 1.0
     tick_s_in_trade: float = 0.5

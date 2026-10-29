@@ -210,3 +210,15 @@ def test_a_partly_squared_off_position_exits_only_the_lots_the_broker_still_hold
     run(h, datetime(2026, 9, 3, 23, 20))
     assert [(o.side, o.lots) for o in h.orders] == [('BUY', 3), ('SELL', 1)]
     assert h.held('oleus', FRONT) == 0 and any('INTRADAY row shows +1' in a.text for a in h.alerts_for('critical'))
+
+
+def test_the_price_is_traced_only_near_a_level_or_while_a_trade_is_open(caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger='oleus_ticks')
+    h = build([(0, 101.0), (10, 101.0), (30, 103.0), (870, 103.0)])
+    run(h, datetime(2026, 9, 3, 10, 5))
+    ticks = [r.getMessage() for r in caplog.records if r.name == 'oleus_ticks']
+    assert ticks and all(t.startswith('TICK 09:') or t.startswith('TICK 10:') for t in ticks)
+    first = float(ticks[0].split()[2])
+    assert abs(first - 101.0) > 0.5, 'nothing is traced while the price sits far from every level'
+    assert any(float(t.split()[2]) > 102.0 for t in ticks) and len(ticks) < 400
