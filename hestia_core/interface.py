@@ -1,6 +1,8 @@
 """
-Hestia <-> engine interface, version 1.1 (v1 confirmed by the user 2026-09-28; v1.1, adopted by the user the same day, adds the six P3
-clarifications made while building the fake Hestia, listed in plans/hestia-interface-spec.md, which is the prose spec).
+Hestia <-> engine interface, version 1.2 (v1 confirmed by the user 2026-09-28; v1.1, adopted by the user the same day, adds the six P3
+clarifications made while building the fake Hestia, listed in plans/hestia-interface-spec.md, which is the prose spec; v1.2, 2026-10-29,
+adds the read-only EngineContext.minute_bars for the Oleus engine, which trades price crossings and needs the completed one-minute
+high and low, and the broker product type that lets two live engines share an instrument).
 
 The split (user, 2026-09-28): each strategy engine evaluates and decides (entries, exits, stops, the roll) on
 processed data delivered by Hestia; Hestia performs the actual work (orders, fills, retries, reconciliation, data,
@@ -22,7 +24,7 @@ from datetime import date, datetime
 from enum import Enum, IntEnum
 from typing import Optional, Protocol, Tuple, Union, runtime_checkable
 
-INTERFACE_VERSION = '1.1'
+INTERFACE_VERSION = '1.2'
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +494,8 @@ class EngineContext(Protocol):
     def ltp(self, contract: ContractRef) -> Optional[LtpQuote]: ...
     def latest_bar(self, contract: ContractRef) -> Optional[Tuple[Bar, SupertrendPoint]]: ...
     def price_near(self, contract: ContractRef, ts: datetime, tolerance_min: int) -> Optional[float]: ...
+    def minute_bars(self, contract: ContractRef, start: datetime, end: datetime) -> Tuple[Bar, ...]: ...   # v1.2: the COMPLETED one-minute bars
+                                                                           # Hestia holds with start <= bar.ts <= end, oldest first (read-only)
     def st_series(self, contract: ContractRef, last_n: int) -> Tuple[Tuple[Bar, SupertrendPoint], ...]: ...
     def session_open(self) -> datetime: ...
 

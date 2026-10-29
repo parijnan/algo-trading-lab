@@ -22,7 +22,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from hestia_core.gateway import BrokerGateway, TRANSPORT_ERRORS, is_rate_limit, is_session_failure
 from hestia_core.interface import ContractInfo, ContractRef
-from hestia_core.ports import OrderRead, OrderSpec, PlaceResult, PositionRow
+from hestia_core.ports import DEFAULT_PRODUCT, PRODUCTS, OrderRead, OrderSpec, PlaceResult, PositionRow, book_key
 
 log = logging.getLogger('hestia_angel')
 
@@ -33,7 +33,7 @@ LIVE_HIGH_PRIORITY = 2                                      # PriorityClass.CLOS
 @dataclass
 class AngelConfig:
     exchange: str = 'MCX'
-    product: str = 'CARRYFORWARD'
+    product: str = DEFAULT_PRODUCT       # the product of an engine that was not registered with one of its own
     order_timeout_s: float = 30.0          # how long one attempt waits for a fill before reporting it unconfirmed
     poll_interval_s: float = 1.0
     ws_first_s: float = 5.0                # give the order-update socket this long before also polling REST
@@ -84,6 +84,7 @@ class AngelBrokerPort:
         self._placed_ids: set = set()                       # ghost-recovery collision guard, shared by every engine
         self._watched: Dict[str, str] = {}                  # order id -> composite id of an unconfirmed attempt
         self._lot_by_order: Dict[str, int] = {}             # order id -> the contract's lot size, for shares -> lots
+        self._product_by_engine: Dict[str, str] = {}        # engine -> the product type its orders carry
         self._listener = None
         self._cash: Optional[float] = None
         self._cash_ts: Optional[float] = None
@@ -97,9 +98,15 @@ class AngelBrokerPort:
 
     # ---- BrokerPort bookkeeping ----------------------------------------------------------------------------------------
 
-    def register_engine(self, name: str, paper: bool) -> None:
+    def register_engine(self, name: str, paper: bool, product: str = DEFAULT_PRODUCT) -> None:
         if paper:
             raise ValueError('AngelBrokerPort serves live engines only; route paper engines with a BrokerRouter')
+        if product not in PRODUCTS:
+            raise ValueError(f'engine {name!r}: product {product!r} is not one of {PRODUCTS}')
+        self._product_by_engine[name] = product
+
+    def _product_of(self, engine: str) -> str:
+        return self._product_by_engine.get(engine, self.cfg.product)
 
     def pool_of(self, engine: str) -> str:
         return 'live'
@@ -253,8 +260,9 @@ class AngelBrokerPort:
     def _place_chunk(self, spec: OrderSpec, info: ContractInfo, lots: int, high: bool) -> Tuple[str, Optional[str]]:
         side, symbol, token = spec.side, spec.contract.symbol, spec.contract.token
         qty = int(lots * info.lot_size)
+        product = self._product_of(spec.engine)
         params = {'variety': 'NORMAL', 'tradingsymbol': symbol, 'symboltoken': token, 'transactiontype': side,
-                  'exchange': self.cfg.exchange, 'ordertype': 'MARKET', 'producttype': self.cfg.product,
+                  'exchange': self.cfg.exchange, 'ordertype': 'MARKET', 'producttype': product,
                   'duration': 'DAY', 'quantity': str(qty), 'price': '0', 'triggerprice': '0'}
         transport_failures, rate_limited = 0, 0
         while True:
@@ -269,7 +277,7 @@ class AngelBrokerPort:
                     continue
                 transport_failures += 1
                 self._sleep(self.cfg.ghost_cooldown_s)
-                found = self._find_ghost(symbol, side, qty)
+                found = self._find_ghost(symbol, side, qty, product)
                 if found:
                     log.info('ghost order recovered for %s: %s', symbol, found)
                     self._lot_by_order[found] = info.lot_size
@@ -290,7 +298,7 @@ class AngelBrokerPort:
                 return 'ok', oid
             return 'rejected', (resp or {}).get('message', 'unknown broker error')
 
-    def _find_ghost(self, symbol: str, side: str, qty: int) -> Optional[str]:
+    def _find_ghost(self, symbol: str, side: str, qty: int, product: str = DEFAULT_PRODUCT) -> Optional[str]:
         try:
             book = (self.gateway.order_book(high=True) or {}).get('data') or []
         except Exception as exc:                            # noqa: BLE001
@@ -300,6 +308,7 @@ class AngelBrokerPort:
         for o in book:
             if not (o.get('tradingsymbol') == symbol and o.get('transactiontype') == side
                     and int(float(o.get('quantity', 0))) == qty
+                    and str(o.get('producttype') or product).upper() == product
                     and _row_status(o) in ('complete', 'open', 'validation pending')):
                 continue
             oid = o.get('orderid')
@@ -431,5 +440,6 @@ class AngelBrokerPort:
             lot = self._lot_size_by_token(token) or 1
             net = int(float(p.get('netqty', 0) or 0)) // lot
             avg = float(p.get('netprice') or 0.0) or None
-            out[token] = PositionRow(net, avg)
+            product = str(p.get('producttype') or DEFAULT_PRODUCT).upper()
+            out[book_key(token, product)] = PositionRow(net, avg)
         return out

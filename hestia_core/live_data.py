@@ -229,6 +229,20 @@ class LiveData:
             return None
         return float(window.loc[(window['time_stamp'] - pd.Timestamp(ts)).abs().idxmin(), 'close'])
 
+    def minute_bars(self, token: str, start: datetime, end: datetime) -> Tuple[Bar, ...]:
+        """The completed one-minute bars held for `token` with start <= bar start <= end. A minute counts as completed once it has
+        ended on the kernel's clock, so the answer never includes the minute still being traded."""
+        s = self.streams.get(token)
+        if s is None:
+            return ()
+        m = s.raw_all
+        if m.empty:
+            return ()
+        last = pd.Timestamp(self.kernel.now).floor('min') - timedelta(minutes=1)
+        window = m[(m['time_stamp'] >= pd.Timestamp(start)) & (m['time_stamp'] <= min(pd.Timestamp(end), last))]
+        window = window.drop_duplicates('time_stamp', keep='last').sort_values('time_stamp')
+        return tuple(self._bar(r) for _, r in window.iterrows())
+
     # ---- DataPort: prices ------------------------------------------------------------------------------------------------
 
     def price(self, token: str) -> Optional[float]:

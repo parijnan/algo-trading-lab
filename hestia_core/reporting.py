@@ -41,10 +41,11 @@ class TradeLogWriter:
         p = self.path(engine)
         new = not p.exists()
         with open(p, 'a', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=list(TRADE_RECORD_COLUMNS))
+            columns = list(TRADE_RECORD_COLUMNS) + [k for k in record if k not in TRADE_RECORD_COLUMNS]   # an engine's own extra columns follow the shared ones
+            w = csv.DictWriter(f, fieldnames=columns)
             if new:
                 w.writeheader()
-            w.writerow({c: ('' if record.get(c) is None else record.get(c)) for c in TRADE_RECORD_COLUMNS})
+            w.writerow({c: ('' if record.get(c) is None else record.get(c)) for c in columns})
 
 
 class RunningRowWriter:
@@ -103,7 +104,10 @@ def read_closed_on(directory, engines, day) -> List[tuple]:
             with open(path, newline='') as f:
                 for row in csv.DictReader(f):
                     rec = {c: _from_csv_value(c, row.get(c)) for c in TRADE_RECORD_COLUMNS}
-                    exits = [t for t in (rec.get('lot1_exit_ts'), rec.get('lot2_exit_ts')) if t]
+                    for c in ('lot3_exit_ts', 'lot3_exit_reason'):         # an engine's third lot (Oleus), when the file has it
+                        if row.get(c):
+                            rec[c] = row[c]
+                    exits = [t for t in (rec.get('lot1_exit_ts'), rec.get('lot2_exit_ts'), rec.get('lot3_exit_ts')) if t]
                     if not exits or rec.get('trade_id') is None:
                         continue
                     try:
@@ -154,6 +158,9 @@ def _open_trade_info(core, name: str) -> dict:
         state = json.loads(store.load_engine_state(name) or 'null')
     except (ValueError, TypeError):
         return {}
+    if isinstance(state, dict) and isinstance(state.get('trades'), dict) and state['trades']:
+        t = next(iter(state['trades'].values()))                   # an engine that keeps its open trades in `trades` (Oleus): one at a time
+        return {'entry_ts': t.get('entry_ts'), 'units': t.get('units'), 'booked_pts': t.get('booked_pts', 0.0), 'booked_rs': t.get('booked_rs', 0.0)}
     if not isinstance(state, dict) or state.get('status') != 'in_trade':
         return {}
     row = state.get('trade_row') or {}
@@ -178,7 +185,7 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
     that part is included in Realized (changed 2026-10-08: the ledger-only version showed the booking time as the entry, quoted the
     unrealised figure per full unit for a half unit, and left the banked lot out of Realized until the trade closed)."""
     today = now.date()
-    owner_instrument = {eng: ins for ins, eng in core._by_instrument.items()}
+    owner_instrument = {eng: spec.instrument for eng, spec in core._specs.items()}
     by_engine: Dict[str, list] = {}
     for eng, rec in session_trades:
         by_engine.setdefault(eng, []).append(rec)
@@ -206,8 +213,8 @@ def build_session_report(core, now: datetime, session_trades: List[tuple]) -> st
             units = r.get('units') or 1
             entry_price = r.get('entry_price')
             entry_str = f'{entry_price:,.2f}' if isinstance(entry_price, (int, float)) else '?'
-            exit_ts = max((t for t in (r.get('lot1_exit_ts'), r.get('lot2_exit_ts')) if t), default=None)
-            reason = str(r.get('lot2_exit_reason') or r.get('lot1_exit_reason') or '?').replace('_', ' ').title()
+            exit_ts = max((t for t in (r.get('lot1_exit_ts'), r.get('lot2_exit_ts'), r.get('lot3_exit_ts')) if t), default=None)
+            reason = str(r.get('lot3_exit_reason') or r.get('lot2_exit_reason') or r.get('lot1_exit_reason') or '?').replace('_', ' ').title()
             pts = r.get('total_pnl_points') or 0
             per_unit = (r.get('total_pnl_rs') or 0) / units
             realized += per_unit

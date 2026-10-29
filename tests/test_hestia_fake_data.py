@@ -35,7 +35,7 @@ def _run_day(h, until=END):
 
 def test_one_engine_per_instrument(hestias):
     h = hestias([('a', factory(name='a'))])
-    with pytest.raises(ValueError, match='one engine per instrument'):
+    with pytest.raises(ValueError, match='one live engine per instrument and product'):
         h.register('b', factory(name='b'))
 
 
@@ -222,3 +222,22 @@ def test_context_satisfies_the_interface_protocol(hestias):
     h = hestias([('a', factory(act=act))])
     _run_day(h, datetime(2026, 9, 3, 9, 5))
     assert seen and all(seen)
+
+
+def test_minute_bars_returns_only_completed_minutes_in_order(hestias):
+    seen = {}
+
+    def act(eng, ctx, ev):
+        if isinstance(ev, BarComplete) and ev.boundary_ts == datetime(2026, 9, 3, 9, 30):
+            seen['bars'] = ctx.minute_bars(FRONT, datetime(2026, 9, 3, 9, 20), datetime(2026, 9, 3, 23, 0))
+            seen['now'] = ctx.now()
+            seen['none'] = ctx.minute_bars(NEXT, datetime(2026, 9, 3, 23, 0), datetime(2026, 9, 3, 23, 30))
+    h = hestias([('a', factory(act=act))])
+    h.start_session(SESSION_DATE)
+    h.run_until(datetime(2026, 9, 3, 9, 35))
+    bars = seen['bars']
+    stamps = [b.ts for b in bars]
+    assert stamps == sorted(stamps) and stamps[0] == datetime(2026, 9, 3, 9, 20)
+    assert stamps[-1] < seen['now'].replace(second=0, microsecond=0), 'the minute in progress is never shown'
+    assert all(b.high >= max(b.open, b.close) and b.low <= min(b.open, b.close) for b in bars)
+    assert seen['none'] == ()

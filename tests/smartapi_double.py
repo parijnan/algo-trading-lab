@@ -48,6 +48,7 @@ class ScriptedSmartConnect:
         oid = f'{self._seq:012d}'
         row = {'orderid': oid, 'tradingsymbol': params['tradingsymbol'], 'symboltoken': params['symboltoken'],
                'transactiontype': params['transactiontype'], 'quantity': params['quantity'], 'status': status,
+               'producttype': params.get('producttype'),
                'filledshares': str(filled), 'averageprice': self.price if filled else 0.0,
                'updatetime': (ts or self.clock.wall_now()).strftime('%d-%b-%Y %H:%M:%S')}
         self.orders.append(row)

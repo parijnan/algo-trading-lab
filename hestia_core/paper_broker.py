@@ -25,8 +25,8 @@ class PaperBroker:
         self._seq = itertools.count(1)
         self._done: Dict[str, OrderRead] = {}
 
-    def register_engine(self, name: str, paper: bool) -> None:
-        self._books.setdefault(name, {})
+    def register_engine(self, name: str, paper: bool, product: str = 'CARRYFORWARD') -> None:
+        self._books.setdefault(name, {})      # a paper engine has a book of its own, so the product type has nothing to separate
 
     def pool_of(self, engine: str) -> str:
         return f'paper:{engine}'

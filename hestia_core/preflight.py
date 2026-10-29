@@ -108,9 +108,13 @@ def run_checks(cfg, now: Optional[datetime] = None, alive: Callable[[int], bool]
         catalog = None
 
     # ---- per-instrument contracts and history --------------------------------------------------------------------------------
+    checked = set()
     for name, e in engines.items():
         if catalog is None:
             break
+        if e.instrument in checked:                       # several engines may share an instrument: check its contracts once
+            continue
+        checked.add(e.instrument)
         rows = catalog.live_rows(e.instrument, today)
         if not rows:
             add(f'{e.instrument} contracts', FAIL, 'no live contract in the instrument master')

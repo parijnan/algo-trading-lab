@@ -21,7 +21,8 @@ from datetime import datetime, time, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from hestia_core.ledger import apply_fill
-from hestia_core.ports import BrokerPort, DataPort, OrderRead, OrderSpec, PlaceResult, PositionRow, Scheduler
+from hestia_core.ports import (DEFAULT_PRODUCT, PRODUCTS, BrokerPort, DataPort, OrderRead, OrderSpec, PlaceResult, PositionRow, Scheduler,
+                               book_key, split_book_key)
 from hestia_core.interface import (
     AckStatus, CommandEvent, CommandKind, ContractInfo, ContractRef, Direction, Engine, Fill, FillSummary,
     LedgerPosition, MarginSnapshot, OutcomeStatus, PriorityClass, RequestAck, RequestKind, RequestOutcome, SessionStart,
@@ -159,7 +160,9 @@ class HestiaCore:
         self._specs: Dict[str, object] = {}
         self._lots_per_unit: Dict[str, int] = {}
         self._sizing: Dict[str, SizingConfig] = {}
-        self._by_instrument: Dict[str, str] = {}
+        self._owner_of: Dict[Tuple[str, str], str] = {}               # (instrument, product) -> the LIVE engine that owns that broker row
+        self._product: Dict[str, str] = {}                           # engine -> the product type its orders carry
+        self._trade_extra: Dict[str, tuple] = {}                     # engine -> columns it writes beyond TRADE_RECORD_COLUMNS (its `trade_extra_columns`)
         # tasks
         self._tasks: Dict[str, object] = {}
         self._gen = itertools.count(1)
@@ -197,21 +200,29 @@ class HestiaCore:
     # ---- registration ----------------------------------------------------------------------------------------------
 
     def register(self, name: str, factory: Callable[[], Engine], *, lots_per_unit: int = 1,
-                 sizing: Optional[SizingConfig] = None, paper: bool = False) -> None:
+                 sizing: Optional[SizingConfig] = None, paper: bool = False, product: str = DEFAULT_PRODUCT) -> None:
+        """Several engines may trade one instrument as long as the broker can tell their positions apart: a paper engine has a book of
+        its own, and live engines must differ in product type (the broker keeps one position row per token and product). Two live
+        engines on one instrument and one product would share a row, which the ledger could not attribute: refused."""
         probe = factory()
         instrument = probe.spec.instrument
-        if instrument in self._by_instrument:
-            raise ValueError(f'instrument {instrument} is already owned by engine {self._by_instrument[instrument]!r}; '
-                             f'one engine per instrument')
+        if product not in PRODUCTS:
+            raise ValueError(f'engine {name!r}: product {product!r} is not one of {PRODUCTS}')
+        if not paper and (instrument, product) in self._owner_of:
+            raise ValueError(f'instrument {instrument} is already owned by engine {self._owner_of[(instrument, product)]!r} under '
+                             f'product {product}; one live engine per instrument and product')
         if name in self._factories:
             raise ValueError(f'engine {name!r} already registered')
         self._factories[name] = factory
         self._specs[name] = probe.spec
-        self._by_instrument[instrument] = name
+        self._product[name] = product
+        self._trade_extra[name] = tuple(getattr(probe, 'trade_extra_columns', ()))
+        if not paper:
+            self._owner_of[(instrument, product)] = name
         self._lots_per_unit[name] = lots_per_unit
         self._sizing[name] = sizing or SizingConfig(dynamic=False, static_units=1, unit_cap=50)
         self.engine_state[name] = 'ended'
-        self.broker.register_engine(name, paper)
+        self.broker.register_engine(name, paper, product)
 
     def set_sizing(self, name: str, sizing: SizingConfig) -> None:
         self._sizing[name] = sizing
@@ -850,7 +861,7 @@ class HestiaCore:
         out: Dict[str, int] = defaultdict(int)
         for (eng, token), (net, _, _) in self._ledger.items():
             if eng in live and net:
-                out[token] += net
+                out[book_key(token, self._product.get(eng, DEFAULT_PRODUCT))] += net
         return dict(out)
 
     def _unsettled_tokens(self) -> set:
@@ -875,16 +886,17 @@ class HestiaCore:
             return
         expected, busy = self._expected_live_net(), self._unsettled_tokens()
         mismatches = {}
-        for token in set(expected) | {t for t, row in book.items() if row.net_lots}:
-            if token in busy:
+        for key in set(expected) | {k for k, row in book.items() if row.net_lots}:
+            if split_book_key(key)[0] in busy:
                 continue
-            want, have = expected.get(token, 0), (book[token].net_lots if token in book else 0)
+            want, have = expected.get(key, 0), (book[key].net_lots if key in book else 0)
             if want != have:
-                mismatches[token] = (want, have)
+                mismatches[key] = (want, have)
         self.ledger_mismatches = mismatches
-        for token, (want, have) in sorted(mismatches.items()):
+        for key, (want, have) in sorted(mismatches.items()):
+            token, product = split_book_key(key)
             ref = self.data.ref_for(token)
-            name = ref.symbol if ref else token
+            name = (ref.symbol if ref else token) + ('' if product == DEFAULT_PRODUCT else f' [{product}]')
             self._alert('critical', None, f'ledger mismatch on {name}: engines hold {want:+d} lots, broker book shows '
                                           f'{have:+d}; verify before trading continues')
         if not mismatches:
@@ -912,20 +924,22 @@ class HestiaCore:
             for (eng, token), row in list(self._ledger.items()):
                 if eng not in live or not row[0]:
                     continue
-                have = book[token].net_lots if token in book else 0
+                key = book_key(token, self._product.get(eng, DEFAULT_PRODUCT))
+                have = book[key].net_lots if key in book else 0
                 if have != row[0]:
                     self._alert('critical', eng, f'restart: persisted ledger held {row[0]:+d} lots of token {token}, the broker '
                                                  f'book shows {have:+d}; the broker book is taken as the truth')
-                    row[0], row[1] = have, (book[token].avg_price if token in book else None)
+                    row[0], row[1] = have, (book[key].avg_price if key in book else None)
                     self._ledger_rev += 1
             self._persist_ledger()
-        for token, row in sorted(book.items()):
+        for key, row in sorted(book.items()):
             if not row.net_lots:
                 continue
+            token, product = split_book_key(key)
             ref = self.data.ref_for(token)
-            owner = self._by_instrument.get(ref.instrument) if ref else None
+            owner = self._owner_of.get((ref.instrument, product)) if ref else None
             if owner is None or self.broker.pool_of(owner) != 'live':
-                self._alert('critical', None, f'broker holds {row.net_lots:+d} lots of token {token} that no live engine owns')
+                self._alert('critical', None, f'broker holds {row.net_lots:+d} lots of token {token} ({product}) that no live engine owns')
                 continue
             if self._held(owner, token) == 0:
                 self._ledger[(owner, token)] = [row.net_lots, row.avg_price, self.now]
@@ -1072,6 +1086,9 @@ class CoreContext:
     def price_near(self, contract, ts, tolerance_min):
         return self._h.data.price_near(contract.token, ts, tolerance_min)
 
+    def minute_bars(self, contract, start, end):
+        return self._h.data.minute_bars(contract.token, start, end)
+
     def session_open(self):
         return self._h.data.session_open
 
@@ -1110,10 +1127,11 @@ class CoreContext:
         self._h._alert(level, self._t.name, text, channel, emoji, log_locally)
 
     def report_trade(self, record):
-        extra = sorted(set(record) - set(TRADE_RECORD_COLUMNS))
+        columns = TRADE_RECORD_COLUMNS + self._h._trade_extra.get(self._t.name, ())
+        extra = sorted(set(record) - set(columns))
         if extra:
             self._h.warnings.append(f'{self._t.name}: trade record keys dropped: {extra}')
-        row = {c: record.get(c) for c in TRADE_RECORD_COLUMNS}
+        row = {c: record.get(c) for c in columns}
         self._h.trades.append((self._t.name, row))
         for sink in self._h.trade_sinks:
             try:

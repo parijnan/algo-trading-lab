@@ -20,6 +20,23 @@ from typing import Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
 from hestia_core.interface import Bar, ContractInfo, ContractRef, LtpQuote, SupertrendPoint
 
 
+# The broker keeps one position row per (token, product type). Every engine trades under one product: CARRYFORWARD (the default,
+# held overnight) or INTRADAY (Angel One's MIS, squared off by the broker if left open). The position book Hestia compares its ledger
+# with is keyed by `book_key`: the bare token for the default product, so everything written before products existed is unchanged,
+# and 'token:PRODUCT' for any other.
+DEFAULT_PRODUCT = 'CARRYFORWARD'
+PRODUCTS = ('CARRYFORWARD', 'INTRADAY')
+
+
+def book_key(token: str, product: str = DEFAULT_PRODUCT) -> str:
+    return token if product == DEFAULT_PRODUCT else f'{token}:{product}'
+
+
+def split_book_key(key: str) -> Tuple[str, str]:
+    token, _, product = key.partition(':')
+    return token, (product or DEFAULT_PRODUCT)
+
+
 @runtime_checkable
 class Scheduler(Protocol):
     now: datetime
@@ -82,15 +99,15 @@ class PositionRow:
 
 @runtime_checkable
 class BrokerPort(Protocol):
-    """Paper versus live is decided per engine, not per process: `register_engine(name, paper)` says which side an engine's
+    """Paper versus live is decided per engine, not per process: `register_engine(name, paper, product)` says which side an engine's
     orders go to, `pool_of` names the money and position pool it draws on ('live' is the one real account; a paper engine
     has a pool of its own), and the account-book reconciliation covers only the live pool."""
-    def register_engine(self, name: str, paper: bool) -> None: ...
+    def register_engine(self, name: str, paper: bool, product: str = DEFAULT_PRODUCT) -> None: ...
     def pool_of(self, engine: str) -> str: ...
     def place(self, spec: OrderSpec, on_result: Callable[[PlaceResult], None],
               on_placed: Optional[Callable[[str], None]] = None) -> None: ...   # on_placed(order_id): the order exists, before its fill is known
     def read_order(self, order_id: str, on_result: Callable[[OrderRead], None]) -> None: ...
-    def read_positions(self, on_result: Callable[[Optional[Dict[str, PositionRow]]], None]) -> None: ...   # live pool; None on failure
+    def read_positions(self, on_result: Callable[[Optional[Dict[str, PositionRow]]], None]) -> None: ...   # live pool, keyed by book_key(token, product); None on failure
     def free_cash(self, engine: str) -> float: ...                       # cash of the engine's pool, net of margin already in use
     def total_margin(self, engine: str) -> float: ...                    # the pool before any margin is in use (cash + pay-in + margin used); 0.0 when unknown or stale
     def set_order_listener(self, fn: Callable[[str, OrderRead], None]) -> None: ...   # the order-update feed
@@ -112,6 +129,7 @@ class DataPort(Protocol):
     def latest_bar(self, token: str, spec) -> Optional[Tuple[Bar, SupertrendPoint]]: ...
     def st_series(self, token: str, spec, last_n: int) -> Tuple[Tuple[Bar, SupertrendPoint], ...]: ...
     def price_near(self, token: str, ts: datetime, tolerance_min: int) -> Optional[float]: ...
+    def minute_bars(self, token: str, start: datetime, end: datetime) -> Tuple[Bar, ...]: ...      # completed 1-minute bars, start <= ts <= end
     def seeded(self, instrument: str) -> Tuple[ContractRef, ...]: ...
     def track(self, task, contract: ContractRef) -> None: ...
     def untrack(self, task, contract: ContractRef) -> None: ...

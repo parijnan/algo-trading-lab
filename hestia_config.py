@@ -115,6 +115,8 @@ class EngineEntry:
     dynamic: bool = False                       # sizing: static units unless the engine's own dynamic rule is switched on
     static_units: int = 1
     unit_cap: int = 50                          # HARD LIMIT enforced at admission; an override file can never raise it
+    product: str = 'CARRYFORWARD'               # broker product type of this engine's orders (live only): CARRYFORWARD, or INTRADAY (MIS).
+                                                # Two live engines may share an instrument only under different products.
 
 
 # The registry. Engines are ported or written in later phases (plans/selene-production.md section 10: P5 Prometheus, P7 Selene,

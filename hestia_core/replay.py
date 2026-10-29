@@ -29,7 +29,7 @@ from hestia_core.interface import (
     ProvisionalBar, SupertrendPoint, TrackFailed, TrackReady,
 )
 from hestia_core.ledger import apply_fill
-from hestia_core.ports import OrderRead, OrderSpec, PlaceResult, PositionRow
+from hestia_core.ports import DEFAULT_PRODUCT, OrderRead, OrderSpec, PlaceResult, PositionRow, book_key, split_book_key
 
 BAR_MIN = 15
 
@@ -84,7 +84,8 @@ class SimBroker:
             unconfirmed_after_s, ghost_recovery_s, reconcile_latency_s)
         self.orders: List[PlacedOrder] = []
         self.rejections: List[Tuple[datetime, str, str]] = []
-        self.book: Dict[str, list] = {}                 # token -> [net_lots, avg_price]
+        self.book: Dict[str, list] = {}                 # book_key(token, product) -> [net_lots, avg_price]
+        self._product_by_engine: Dict[str, str] = {}
         self._order_seq = itertools.count(1)
         self._hidden: Dict[str, tuple] = {}             # order_id -> (truth_lots, spec, placed_ts, pending_for)
         self._listener = None
@@ -92,9 +93,10 @@ class SimBroker:
     def set_order_listener(self, fn) -> None:
         self._listener = fn
 
-    def register_engine(self, name: str, paper: bool) -> None:
+    def register_engine(self, name: str, paper: bool, product: str = DEFAULT_PRODUCT) -> None:
         if paper:
             raise ValueError('SimBroker is the live-side simulator; wrap it in a BrokerRouter for paper engines')
+        self._product_by_engine[name] = product
 
     def pool_of(self, engine: str) -> str:
         return 'live'
@@ -103,11 +105,11 @@ class SimBroker:
         rows = {tok: PositionRow(net, avg) for tok, (net, avg) in self.book.items() if net}
         self.kernel.after(self.reconcile_latency_s, lambda: on_result(rows))
 
-    def seed(self, token: str, net: int, avg: float) -> None:
-        self.book[token] = [net, avg]
+    def seed(self, token: str, net: int, avg: float, product: str = DEFAULT_PRODUCT) -> None:
+        self.book[book_key(token, product)] = [net, avg]
 
     def free_cash(self, engine: str = '') -> float:
-        used = sum(self.margin_fn(tok, net, avg) for tok, (net, avg) in self.book.items() if net and avg is not None)
+        used = sum(self.margin_fn(split_book_key(key)[0], net, avg) for key, (net, avg) in self.book.items() if net and avg is not None)
         return self.cash - used
 
     def total_margin(self, engine: str = '') -> float:
@@ -122,8 +124,9 @@ class SimBroker:
     def _move_book(self, spec: OrderSpec, lots: int, price: Optional[float]) -> None:
         if not lots or price is None:
             return
-        net, avg = self.book.get(spec.contract.token, [0, None])
-        self.book[spec.contract.token] = list(apply_fill(net, avg, (1 if spec.side == 'BUY' else -1) * lots, price))
+        key = book_key(spec.contract.token, self._product_by_engine.get(spec.engine, DEFAULT_PRODUCT))
+        net, avg = self.book.get(key, [0, None])
+        self.book[key] = list(apply_fill(net, avg, (1 if spec.side == 'BUY' else -1) * lots, price))
 
     def place(self, spec: OrderSpec, on_result, on_placed=None) -> None:
         reply = self.behavior(BrokerCall(spec.engine, spec.request, spec.attempt, spec.lots, spec.close_lots, spec.open_lots))
@@ -330,6 +333,16 @@ class ReplayData:
             return None
         nearest = (window['time_stamp'] - pd.Timestamp(ts)).abs().idxmin()
         return float(window.loc[nearest, 'close'])
+
+    def minute_bars(self, token: str, start: datetime, end: datetime) -> Tuple[Bar, ...]:
+        """Completed one-minute bars with start <= bar start <= end; nothing at or after the kernel's current minute is shown."""
+        frame = self._minute_frame(token)
+        if frame is None:
+            return ()
+        last = pd.Timestamp(self.kernel.now).floor('min') - timedelta(minutes=1)
+        window = frame.loc[pd.Timestamp(start):min(pd.Timestamp(end), last)]
+        return tuple(Bar(ts=ts.to_pydatetime(), open=float(r['open']), high=float(r['high']), low=float(r['low']),
+                         close=float(r['close']), volume=float(r['volume'])) for ts, r in window.iterrows())
 
     def track(self, task, contract: ContractRef) -> None:
         core = self.core

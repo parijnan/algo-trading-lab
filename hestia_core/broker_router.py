@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from hestia_core.ports import BrokerPort, OrderRead, OrderSpec, PlaceResult
+from hestia_core.ports import DEFAULT_PRODUCT, BrokerPort, OrderRead, OrderSpec, PlaceResult
 
 
 class BrokerRouter:
@@ -20,10 +20,10 @@ class BrokerRouter:
     def _port(self, engine: str) -> BrokerPort:
         return self.paper if engine in self._paper_engines else self.live
 
-    def register_engine(self, name: str, paper: bool) -> None:
+    def register_engine(self, name: str, paper: bool, product: str = DEFAULT_PRODUCT) -> None:
         if paper:
             self._paper_engines.add(name)
-        self._port(name).register_engine(name, paper)
+        self._port(name).register_engine(name, paper, product)
 
     def pool_of(self, engine: str) -> str:
         return self._port(engine).pool_of(engine)

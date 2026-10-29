@@ -280,7 +280,8 @@ class HestiaHost:
 
         for name, entry in engines.items():
             factory = deps.engine_factories.get(name) or load_factory(entry.factory)
-            core.register(name, factory, lots_per_unit=entry.lots_per_unit, sizing=defaults[name], paper=entry.paper)
+            core.register(name, factory, lots_per_unit=entry.lots_per_unit, sizing=defaults[name], paper=entry.paper,
+                          product=entry.product)
         for name, flag in gated.items():
             core.engine_state[name] = 'killed'
             host_alert('warning', f'{display_name(name)} is gated at startup by its {flag} flag and will not run')
