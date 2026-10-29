@@ -130,6 +130,10 @@ ENGINES = {
     # lots_per_unit, which a test pins). Real-price/real-roll-execution parity calibration, plan Step 4
     # (plans/typhon-natgasmini-st-strategy.md). Registered disabled here; enabled paper on Delos via TRADING_HOSTS below.
     'typhon': EngineEntry(instrument='NATGASMINI', factory='typhon_engine.engine:build', enabled=False, paper=True, lots_per_unit=2),
+    # Oleus: Janus "plain thirds" (Camarilla levels from the previous session, touch entries, three equal lots to three targets, one stop,
+    # flat before the close) on CRUDEOILM, the same instrument as Prometheus (plans/oleus-janus-engine.md). 1 unit = 3 lots. It trades the
+    # INTRADAY product (Angel One's MIS) so its broker position row is separate from Prometheus's CARRYFORWARD row; paper first.
+    'oleus': EngineEntry(instrument='CRUDEOILM', factory='oleus_engine.engine:build', enabled=False, paper=True, lots_per_unit=3, product='INTRADAY'),
 }
 
 
@@ -174,7 +178,10 @@ TRADING_HOSTS = {
     'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'selene': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'helios': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
-                           'typhon': dict(enabled=True, paper=False, static_units=5, unit_cap=100)},
+                           'typhon': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
+                           # Oleus PAPER at 1 unit (3 lots) from the first start after this commit is pulled (owner's decision 2026-10-29): the paper
+                           # broker never reaches Angel One; it shares CRUDEOILM's price feed with Prometheus (one stream per token).
+                           'oleus': dict(enabled=True, paper=True, static_units=1, unit_cap=100)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True,
                   # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md), upgraded to RESCUE the same
                   # day (Phase 2, user's go-ahead after the Zerodha cross-check: finalized Fyers matched Zerodha on 12 of 13 differing fields): Angel One

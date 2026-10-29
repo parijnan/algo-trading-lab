@@ -247,7 +247,8 @@ def test_the_hestia_handlers_stop_clear_and_refuse_a_gated_start(monkeypatch, tm
 def test_the_sizing_modals_list_every_engine_and_label_the_units_from_the_registry(monkeypatch, tmp_path):
     mod = load_listener(monkeypatch, tmp_path, True)
     values = [o['value'] for o in mod._strategy_options()]
-    assert values == ['Artemis', 'Athena', 'Iris', 'Prometheus', 'Selene', 'Helios', 'Typhon']
+    assert values == ['Artemis', 'Athena', 'Iris', 'Prometheus', 'Selene', 'Helios', 'Typhon', 'Oleus']
+    assert mod._lots_label('Oleus') == f'Units (1 unit = {hestia_config.ENGINES["oleus"].lots_per_unit} lots)'
     assert mod._lots_label('Helios') == f'Units (1 unit = {hestia_config.ENGINES["helios"].lots_per_unit} lots)'
     assert mod._lots_label('Athena') == 'Lot Count'
     assert mod.SIZING_OVERRIDE_PATHS['Typhon'] == str(tmp_path / 'state' / 'typhon_sizing.json')

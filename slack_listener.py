@@ -813,7 +813,7 @@ def handle_athena_adjust_submission(ack, body, view, say):
 # ---------------------------------------------------------------------------
 
 _ENGINE_OPTION_LABELS = {'prometheus': 'Prometheus (Crude Oil)', 'selene': 'Selene (Silver Mic)', 'helios': 'Helios (Gold Petal)',
-                         'typhon': 'Typhon (Natural Gas Mini)'}
+                         'typhon': 'Typhon (Natural Gas Mini)', 'oleus': 'Oleus (Crude Oil, Janus)'}
 
 
 def _strategy_options():
