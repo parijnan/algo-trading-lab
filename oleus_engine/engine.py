@@ -309,6 +309,24 @@ class OleusEngine:
             self._send_flatten('ledger_mismatch')
         self._save()
 
+    def _adopt_broker_flat(self, why: str) -> None:
+        """Hestia read the broker's own INTRADAY row before an exit and found the position already gone (the broker squared it off). No order was
+        sent. Close the engine's trades in its books at the last price, reason broker_squareoff: an ESTIMATE, the real fills are in the broker's
+        tradebook."""
+        s = self.state
+        q = self._price()
+        px = q.price if q is not None else None
+        for key, lots in self.machine.close_all().items():
+            t = s.trades.get(key)
+            if t is not None:
+                for j in lots:
+                    self._record_exit(t, j, px if px is not None else t['entry_price'], 'broker_squareoff')
+                self._finalize_trade(key)
+        s.trades.clear()
+        s.prev_price, s.just = px, None
+        self._say('critical', f'{why}: the broker shows the position already flat (a broker square-off?). No order was sent. The trade is closed in '
+                              f'the books at the last price {px} as an ESTIMATE; check the broker tradebook for the real fills', channel='trade-alerts')
+
     def _drop_trades(self) -> None:
         s = self.state
         s.trades.clear()
@@ -571,7 +589,7 @@ class OleusEngine:
             return
         if not o.confirmed or o.closed is None or o.closed.lots <= 0:
             if o.status == OutcomeStatus.FILLED and o.closed is not None and 'already flat' in o.detail:
-                self._reconcile_with_ledger()
+                self._adopt_broker_flat(f'{key} {meta["kind"]}')
                 return
             self._failed(o, meta, f'{key} {meta["kind"]}' + ('' if meta['idx'] is None else f' T{meta["idx"] + 1}'))
             return
@@ -591,7 +609,7 @@ class OleusEngine:
         s = self.state
         if not o.confirmed or o.closed is None or o.closed.lots <= 0:
             if o.status == OutcomeStatus.FILLED or (o.closed is not None and 'already flat' in o.detail):
-                self._reconcile_with_ledger()
+                self._adopt_broker_flat(f'the {meta["reason"]} flatten')
                 if meta['reason'] == 'manual_exit':
                     self.exit_requested = False
                 return

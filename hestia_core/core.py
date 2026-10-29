@@ -648,6 +648,42 @@ class HestiaCore:
             return
         rec.state = 'running'
         self._run_inc(rec)
+        if self._verifies_before_close(rec):
+            self.broker.read_positions(lambda book: self._on_verify(rec, book))
+        else:
+            self._attempt(rec)
+
+    def _verifies_before_close(self, rec: _Rec) -> bool:
+        """A close or flatten of a LIVE engine on a non-default product (INTRADAY) first reads the broker's own row. The broker can square an
+        INTRADAY position off by itself (at a time of its choosing), and an exit sent against a position that is already gone would OPEN the
+        opposite one. CARRYFORWARD engines (the four live ones) are not read first: their path is unchanged."""
+        return (rec.request.kind in (RequestKind.CLOSE, RequestKind.FLATTEN) and self._product.get(rec.engine, DEFAULT_PRODUCT) != DEFAULT_PRODUCT
+                and self.broker.pool_of(rec.engine) == 'live')
+
+    def _on_verify(self, rec: _Rec, book: Optional[Dict[str, PositionRow]]) -> None:
+        if rec.state != 'running':
+            return
+        eng, token, product = rec.engine, rec.request.contract.token, self._product[rec.engine]
+        if book is None:
+            self._alert('warning', eng, 'could not read the broker position book before an exit; sending it on the ledger alone')
+            return self._attempt(rec)
+        row = book.get(book_key(token, product))
+        have, held = (row.net_lots if row else 0), self._held(eng, token)
+        if have == held:
+            return self._attempt(rec)
+        symbol = rec.request.contract.symbol
+        self._alert('critical', eng, f'before an exit: the broker {product} row shows {have:+d} lots of {symbol}, the ledger {held:+d} (the broker '
+                                     f'squared the position off?); the broker row is taken as the truth and no order is sent for lots that are gone')
+        pos = self._ledger.setdefault((eng, token), [0, None, self.now])
+        pos[0], pos[1], pos[2] = have, (row.avg_price if row and have else None), self.now
+        self._ledger_rev += 1
+        self._persist_ledger()
+        if have == 0:
+            return self._finish(rec, OutcomeStatus.FILLED, 'already flat', zero_fill=True)
+        refusal = self._admit(rec)                                  # re-planned against the corrected ledger
+        if refusal is not None:
+            status, detail = refusal
+            return self._finish(rec, status, detail, zero_fill=(detail == 'already flat'))
         self._attempt(rec)
 
     def _side(self, rec: _Rec) -> str:

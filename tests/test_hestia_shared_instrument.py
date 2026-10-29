@@ -18,7 +18,7 @@ from hestia_core.angel_broker import AngelBrokerPort
 from hestia_core.executors import InlineExecutor
 from hestia_core.fake_kernel import SimKernel
 from hestia_core.gateway import BrokerGateway
-from hestia_core.interface import (BarComplete, CommandKind, ContractInfo, Direction, OpenRequest, SessionStart, Stop)
+from hestia_core.interface import (BarComplete, CommandKind, ContractInfo, Direction, OpenRequest, RequestOutcome, SessionStart, Stop)
 from hestia_core.ports import DEFAULT_PRODUCT, OrderSpec, PositionRow, book_key, split_book_key
 
 T0 = datetime(2026, 9, 3, 9, 0)
@@ -371,3 +371,63 @@ def test_the_host_starts_seeds_trades_and_tears_down_with_two_engines_on_one_ins
     assert r.core.alerts_for('critical') == []
     report = [t for t in texts if t.startswith('\U0001f4ca *Hestia — Session Report*')]
     assert len(report) == 1 and '*A* [XX]' in report[0] and '*B* [XX]' in report[0]
+
+
+# ---- reading the broker's own row before an exit (an INTRADAY position the broker may have squared off) ---------------------------
+
+def _exit_at_0930(kind, lots=None):
+    from hestia_core.interface import CloseRequest, ExitReason, FlattenRequest
+
+    def act(eng, ctx, ev):
+        if isinstance(ev, BarComplete) and ev.boundary_ts == datetime(2026, 9, 3, 9, 30):
+            if kind == 'flatten':
+                ctx.submit(FlattenRequest(f'{eng.name}-x', FRONT, ExitReason.OTHER))
+            else:
+                ctx.submit(CloseRequest(f'{eng.name}-x', FRONT, Direction.BULLISH, ExitReason.OTHER, lots=lots))
+    return act
+
+
+def _two_live(log_a, log_b, act_a, act_b):
+    both_open = lambda lots, rid, then: (lambda eng, ctx, ev: (opener(lots, rid)(eng, ctx, ev), then(eng, ctx, ev)))   # noqa: E731
+    return [('a', lambda: RecEngine('a', log=log_a, act=both_open(3, 'a1', act_a)), {}),
+            ('b', lambda: RecEngine('b', log=log_b, act=both_open(2, 'b1', act_b)), {'product': 'INTRADAY'})]
+
+
+def test_a_flatten_of_an_intraday_engine_whose_broker_row_is_already_flat_sends_no_order(hestias):
+    log_a, log_b = [], []
+    h = hestias(_two_live(log_a, log_b, _exit_at_0930('flatten'), _exit_at_0930('flatten')))
+    h.kernel.at(T0 + timedelta(minutes=20), lambda: h._sim.seed('T1', 0, None, product='INTRADAY'))      # the broker squared Oleus's row off
+    h.start_session(SESSION_DATE)
+    h.run_until(T0 + timedelta(minutes=40))
+    out_b = {o.request_id: o for ts, ev in log_b for o in [ev] if isinstance(ev, RequestOutcome)}
+    assert out_b['b-x'].status.value == 'filled' and 'already flat' in out_b['b-x'].detail and out_b['b-x'].closed.lots == 0
+    sells = [(o.engine, o.side, o.lots) for o in h.orders if o.side == 'SELL']
+    assert sells == [('a', 'SELL', 3)], 'only the CARRYFORWARD engine exited; the gone INTRADAY lots were not sold again'
+    assert h.held('b', FRONT) == 0 and h.held('a', FRONT) == 0
+    crit = [x for x in h.alerts_for('critical') if x.engine == 'b']
+    assert len(crit) == 1 and 'INTRADAY row shows +0' in crit[0].text and not [x for x in h.alerts_for('critical') if x.engine == 'a']
+
+
+def test_a_close_of_more_lots_than_the_broker_row_holds_is_refused_after_correcting_the_ledger(hestias):
+    log_b = []
+    h = hestias(_two_live([], log_b, _exit_at_0930('close', 2), _exit_at_0930('close', 2)))
+    h.kernel.at(T0 + timedelta(minutes=20), lambda: h._sim.seed('T1', 1, 100.0, product='INTRADAY'))
+    h.start_session(SESSION_DATE)
+    h.run_until(T0 + timedelta(minutes=40))
+    out = {ev.request_id: ev for ts, ev in log_b if isinstance(ev, RequestOutcome)}['b-x']
+    assert out.status.value == 'rejected' and 'only 1 held' in out.detail
+    assert h.held('b', FRONT) == 1, 'the ledger now agrees with the broker row'
+
+
+def test_a_carryforward_engine_is_not_read_first_and_keeps_its_old_behaviour(hestias):
+    log_a = []
+    h = hestias(_two_live(log_a, [], _exit_at_0930('flatten'), lambda *a: None))
+    h.start_session(SESSION_DATE)
+    h.run_until(T0 + timedelta(minutes=40))
+    import types
+    from hestia_core.interface import ExitReason, FlattenRequest, OpenRequest as _Open
+    rec = lambda eng, req: types.SimpleNamespace(engine=eng, request=req)                                  # noqa: E731
+    flat = FlattenRequest('x', FRONT, ExitReason.OTHER)
+    assert h._verifies_before_close(rec('b', flat)) and not h._verifies_before_close(rec('a', flat)), 'only the INTRADAY engine is read first'
+    assert not h._verifies_before_close(rec('b', _Open('y', FRONT, Direction.BULLISH, 1, trade_ref=1))), 'an entry is never delayed by the check'
+    assert [(o.engine, o.side, o.lots) for o in h.orders if o.side == 'SELL'] == [('a', 'SELL', 3)] and h.alerts_for('critical') == []

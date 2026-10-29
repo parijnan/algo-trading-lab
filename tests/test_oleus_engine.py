@@ -52,10 +52,10 @@ def today(waypoints, spikes=None, n=MINUTES_PER_DAY):
     return pd.DataFrame(rows, columns=['time_stamp', 'open', 'high', 'low', 'close', 'volume'])
 
 
-def build(waypoints, spikes=None, prev=None, cfg=CFG, engine_cls=OleusEngine, config=None, **kw):
+def build(waypoints, spikes=None, prev=None, cfg=CFG, engine_cls=OleusEngine, config=None, reg=None, **kw):
     frames = [prev if prev is not None else prev_day(date(2026, 9, 2)), today(waypoints, spikes)]
     minutes = pd.concat([prev_day(date(2026, 9, 1))] + frames, ignore_index=True)
-    h = world([('oleus', lambda: engine_cls(cfg, 'oleus'), {'lots_per_unit': 3})], contracts=(), config=config,
+    h = world([('oleus', lambda: engine_cls(cfg, 'oleus'), {'lots_per_unit': 3, **(reg or {})})], contracts=(), config=config,
               extra=[ContractSpec(FRONT, lot_size=10, tick_size=0.5, freeze_qty_lots=20, minutes=minutes),
                      ContractSpec(NEXT, lot_size=10, tick_size=0.5, freeze_qty_lots=20, minutes=minutes)], **kw)
     return h
@@ -191,3 +191,22 @@ def test_decisions_requests_outcomes_levels_and_status_are_logged(caplog):
     for tag in ('LEVELS', 'STATUS', 'DECISION F_L entry', 'REQUEST oleus-', 'OUTCOME oleus-', 'fill minus trigger'):
         assert tag in text, tag
     assert text.count('DECISION') == 4 and text.count('OUTCOME') == 4, 'one entry and three targets'
+
+
+def test_a_broker_square_off_before_the_hard_exit_sends_no_order_and_is_booked_as_an_estimate():
+    h = build([(0, 101.0), (10, 101.0), (30, 103.0), (870, 103.0)], reg={'product': 'INTRADAY'})
+    h.kernel.at(D0 + timedelta(hours=3), lambda: h._sim.seed('T1', 0, None, product='INTRADAY'))      # Angel One squares the INTRADAY row off
+    run(h, datetime(2026, 9, 3, 23, 20))
+    (rec,) = records(h)
+    assert rec['lot1_exit_reason'] == rec['lot2_exit_reason'] == rec['lot3_exit_reason'] == 'broker_squareoff'
+    assert [(o.side, o.lots) for o in h.orders] == [('BUY', 3)], 'no exit order was sent against a position that was already gone'
+    assert h.held('oleus', FRONT) == 0
+    assert any('already flat' in a.text and 'ESTIMATE' in a.text for a in h.alerts_for('critical'))
+
+
+def test_a_partly_squared_off_position_exits_only_the_lots_the_broker_still_holds():
+    h = build([(0, 101.0), (10, 101.0), (30, 103.0), (870, 103.0)], reg={'product': 'INTRADAY'})
+    h.kernel.at(D0 + timedelta(hours=3), lambda: h._sim.seed('T1', 1, 103.0, product='INTRADAY'))     # two of three lots gone
+    run(h, datetime(2026, 9, 3, 23, 20))
+    assert [(o.side, o.lots) for o in h.orders] == [('BUY', 3), ('SELL', 1)]
+    assert h.held('oleus', FRONT) == 0 and any('INTRADAY row shows +1' in a.text for a in h.alerts_for('critical'))
