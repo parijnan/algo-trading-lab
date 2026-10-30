@@ -249,6 +249,16 @@ def test_window_subscribes_twice_never_unsubscribes_and_stays_in_the_limit(setup
     assert 'median_spread_pct_of_mid' in (day / 'summary_open_15.csv').read_text()
 
 
+def test_the_log_shows_each_subscribe_and_a_status_line_a_minute(setup, caplog):
+    rec, net, token, out, tmp, window = setup
+    with caplog.at_level(logging.INFO, logger='option_recorder'):
+        rec.record_window(window)
+    lines = [r.getMessage() for r in caplog.records]
+    assert sum('REST symbol lookup' in x for x in lines) == 2                                          # futures, then options
+    status = [x for x in lines if ' status: ' in x]
+    assert 13 <= len(status) <= 15 and 'symbols heard' in status[-1] and 'rows written' in status[-1]
+
+
 def test_only_changes_and_heartbeats_are_written_not_every_message(setup):
     rec, net, token, out, tmp, window = setup
     net.quote_fn = lambda sym, now: {**FakeNet.default_quote(sym, now), 'bid_price': 100.0, 'ask_price': 101.0, 'ltp': 100.5,

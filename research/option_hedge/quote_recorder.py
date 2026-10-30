@@ -376,6 +376,7 @@ class Recorder:
         def on_connect():
             flags['connected'] = True
             if current:                                                  # a reconnect by the SDK: subscribe everything again
+                log.warning('window %s: socket reconnected: subscribing %d symbols again (one REST symbol lookup)', window.name, len(current))
                 sock.subscribe(current)
 
         def on_error(msg):
@@ -397,6 +398,7 @@ class Recorder:
             refs = reference_futures(self.contracts, self.today)
             futures = sorted({f.symbol for f in refs.values()})
             current.extend(futures)
+            log.info('window %s: subscribing %d futures (one REST symbol lookup)', window.name, len(futures))
             sock.subscribe(futures)
             filt, fut_lp = ChangeFilter(), {}
             last_msg = [self.clock()]
@@ -416,12 +418,18 @@ class Recorder:
             self._write_universe(window, uni)
             options = [c.symbol for c in uni.options]
             current.extend(options)
+            log.info('window %s: subscribing %d options (one REST symbol lookup), %d symbols in all', window.name, len(options), len(current))
             sock.subscribe(options)
-            log.info('window %s: %d options and %d futures subscribed', window.name, len(options), len(futures))
             stale_warned = False
+            next_status = self.clock() + timedelta(seconds=cfg.STATUS_S)
             while self.clock() < window.end:
                 self.sleep(cfg.DRAIN_S)
                 pump()
+                if self.clock() >= next_status:
+                    next_status += timedelta(seconds=cfg.STATUS_S)
+                    log.info('window %s status: %d of %d symbols heard, %d messages, %d rows written, last message %.0f s ago', window.name,
+                             len(stats), len(current), sum(x.received for x in stats.values()), sum(x.written for x in stats.values()),
+                             (self.clock() - last_msg[0]).total_seconds())
                 if self._killed():
                     log.info('kill flag present: stopping the window')
                     return 'abort'

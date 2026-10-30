@@ -30,6 +30,7 @@ CLOSE_BUCKET = ('close', time(22, 45))            # from this time to the sessio
 # ---- what is written -------------------------------------------------------------------------------------------------------------
 HEARTBEAT_S = 60                      # a symbol whose quote has not changed is still written once in this many seconds
 DRAIN_S = 1.0                         # how often received messages are filtered and written
+STATUS_S = 60                         # a status line in the log this often while a window records
 
 # ---- the connection --------------------------------------------------------------------------------------------------------------
 CONNECT_WAIT_S = 20
