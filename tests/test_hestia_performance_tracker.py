@@ -194,6 +194,18 @@ def test_a_two_lot_position_with_lot_1_booked_values_only_the_open_lot_and_repor
     assert [t['hit'] for t in pos['targets']] == [True, False]
 
 
+def test_a_two_lot_position_at_several_units_counts_the_state_lots_once_not_per_unit():
+    # the state file holds lots across all units (5 units: lot1_lots 5, lot2_lots 5); the live position of 30 Oct 2026 was overstated five times by multiplying again
+    st = {'status': 'in_trade', 'direction': 'bullish', 'units': 5, 'entry_price': 9692.93, 'entry_ts': '2026-10-29T22:45:01', 'sl_price': 9596.0, 'trade_counter': 105,
+          'lot1_target': 9814.09, 'lot1_lots': 5, 'lot1_status': 'booked', 'lot1_exit_price': 9836.4, 'lot2_target': 10080.65, 'lot2_lots': 5, 'lot2_status': 'open',
+          'trade_row': {'lot1_pnl_points': 143.47, 'lot1_pnl_rs': 7173.5}}
+    pos = bt.open_position('prometheus', PROM, st, {'ts': 'x', 'close': 9920.0})
+    assert pos['open_lots_per_unit'] == 1 and pos['booked_unit'] == pytest.approx(1434.7)       # the booked row holds rupees for the 5 units
+    assert pos['unreal_unit'] == pytest.approx(227.07 * 10) and pos['unreal_actual'] == pytest.approx(227.07 * 10 * 5)
+    both = dict(st, lot1_status='open')
+    assert bt.open_position('prometheus', PROM, both, {'ts': 'x', 'close': 9920.0})['open_lots_per_unit'] == 2
+
+
 def test_flat_engine_has_no_open_position_and_a_missing_price_leaves_value_empty():
     assert bt.open_position('selene', SELENE, {'status': 'watching'}, None) is None
     assert bt.open_position('selene', SELENE, None, None) is None

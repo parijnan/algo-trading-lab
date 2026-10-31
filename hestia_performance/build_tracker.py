@@ -152,7 +152,7 @@ def open_position(engine, ecfg, state, last_price):
     per_lot = ecfg['rs_per_point_per_lot']
     two_lot = 'lot1_lots' in state
     if two_lot:
-        open_lots = sum(state[f'lot{i}_lots'] for i in (1, 2) if state.get(f'lot{i}_status') == 'open')
+        open_lots = sum(state[f'lot{i}_lots'] for i in (1, 2) if state.get(f'lot{i}_status') == 'open') / units      # the state holds lots across all units
     else:
         open_lots = (state.get('lots') or units * ecfg['lots_per_unit']) / units
     targets = []
@@ -167,7 +167,7 @@ def open_position(engine, ecfg, state, last_price):
         'engine': engine, 'trade_id': state.get('trade_counter'), 'direction': state['direction'], 'units': units,
         'lots': units * ecfg['lots_per_unit'], 'open_lots_per_unit': open_lots, 'entry_ts': state['entry_ts'], 'entry_price': state['entry_price'],
         'stop': state.get('sl_price'), 'targets': targets, 'last_price': None, 'last_ts': None, 'unreal_pts': None, 'unreal_unit': None, 'unreal_actual': None,
-        'booked_pts': booked.get('lot1_pnl_points'), 'booked_unit': booked.get('lot1_pnl_rs'),
+        'booked_pts': booked.get('lot1_pnl_points'), 'booked_unit': booked['lot1_pnl_rs'] / units if booked.get('lot1_pnl_rs') is not None else None,      # the row holds rupees for all units
     }
     if last_price:
         pts = (last_price['close'] - state['entry_price']) * sign
