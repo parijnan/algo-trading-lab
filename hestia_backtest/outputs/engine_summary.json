@@ -1,14 +1,14 @@
 {
  "engines": {
   "Prometheus": {
-   "trades": 1938,
+   "trades": 1942,
    "win_pct": 39.4,
-   "total_rs": 156589,
+   "total_rs": 154736,
    "max_dd_rs": -31670,
-   "calmar_per_year": 1.36,
+   "calmar_per_year": 1.34,
    "worst_trade_rs": -6880,
    "first_entry": "2023-03-03 20:30:00",
-   "last_exit": "2026-10-28 19:45:00",
+   "last_exit": "2026-10-29 22:45:00",
    "source": "prometheus_backtest/phase3_fyers/data_sweep/parity/parity_trades.csv"
   },
   "Selene": {
@@ -25,7 +25,7 @@
   "Helios": {
    "trades": 1158,
    "win_pct": 39.0,
-   "total_rs": 491861,
+   "total_rs": 491901,
    "max_dd_rs": -26300,
    "calmar_per_year": 3.69,
    "worst_trade_rs": -6360,
@@ -34,31 +34,31 @@
    "source": "helios_backtest/data_sweep/parity_trades.csv"
   },
   "Typhon": {
-   "trades": 1430,
-   "win_pct": 27.2,
-   "total_rs": 342605,
+   "trades": 1433,
+   "win_pct": 27.1,
+   "total_rs": 339025,
    "max_dd_rs": -39165,
-   "calmar_per_year": 2.45,
+   "calmar_per_year": 2.42,
    "worst_trade_rs": -8600,
    "first_entry": "2023-04-03 09:15:00",
-   "last_exit": "2026-10-27 17:22:00",
+   "last_exit": "2026-10-29 16:55:00",
    "source": "typhon_backtest/data_sweep/parity_decided_trades.csv"
   }
  },
  "combined": {
-  "trades": 7050,
-  "win_pct": 36.7,
-  "total_rs": 1603551,
-  "max_dd_rs": -57729,
-  "calmar_per_year": 4.99,
+  "trades": 7057,
+  "win_pct": 36.6,
+  "total_rs": 1598158,
+  "max_dd_rs": -58566,
+  "calmar_per_year": 4.9,
   "worst_trade_rs": -18917
  },
  "combined_common_window": {
-  "trades": 5797,
+  "trades": 5804,
   "win_pct": 35.9,
-  "total_rs": 1484943,
-  "max_dd_rs": -57729,
-  "calmar_per_year": 7.2,
+  "total_rs": 1479550,
+  "max_dd_rs": -58566,
+  "calmar_per_year": 7.07,
   "worst_trade_rs": -18917
  }
 }
