@@ -187,13 +187,16 @@ TRADING_HOSTS = {
     # ALL FOUR ENGINES TO 5 UNITS from the first session after 2026-10-23, i.e. Monday 2026-10-26 (user's decision 2026-10-23, scaling up from 2): Prometheus 10 lots (2 per unit),
     # Selene 5, Helios 100 (20 per unit), Typhon 10 (2 per unit). Same rules as the 2-unit step: a position already open keeps the units it was entered with until it closes;
     # new entries and flip legs use 5; a rollover reopen reuses the stored lots; a Slack sizing override would still win.
-    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
+    # 2026-11-03 (owner's decision): OLEUS LIVE at 1 unit (3 lots, INTRADAY) from the first session after this is pulled, and PROMETHEUS DOWN TO 4 UNITS (8 lots) to
+    # keep the crude exposure about flat (4 x 2 + 3 = 11 lots against 10 before). A Prometheus position already open keeps the 5 units it was entered with until it
+    # closes; new entries and flip legs use 4; a rollover reopen reuses the stored lots. Oleus's first live session is the first real INTRADAY order path.
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=4, unit_cap=100),
                            'selene': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'helios': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'typhon': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
-                           # Oleus PAPER at 1 unit (3 lots) from the first start after this commit is pulled (owner's decision 2026-10-29): the paper
-                           # broker never reaches Angel One; it shares CRUDEOILM's price feed with Prometheus (one stream per token).
-                           'oleus': dict(enabled=True, paper=True, static_units=1, unit_cap=100)},
+                           # Oleus was PAPER at 1 unit from 30 Oct (owner's decision 2026-10-29); LIVE at 1 unit from the first start after 2026-11-03. It trades
+                           # under the INTRADAY product beside Prometheus's CARRYFORWARD and shares CRUDEOILM's price feed with it (one stream per token).
+                           'oleus': dict(enabled=True, paper=False, static_units=1, unit_cap=100)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True,
                   # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md), upgraded to RESCUE the same
                   # day (Phase 2, user's go-ahead after the Zerodha cross-check: finalized Fyers matched Zerodha on 12 of 13 differing fields): Angel One
