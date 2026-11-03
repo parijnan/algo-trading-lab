@@ -54,9 +54,41 @@ def real_login() -> LoginResult:
 _feeds = []
 
 
+_tick_logs = []
+
+
+def make_tick_log(alert):
+    """The raw tick log, or None when switched off in the config or when it cannot be built: it must never stop the feed from starting."""
+    if not cfg.TICK_LOG['enabled']:
+        return None
+    try:
+        from hestia_core.mcx_market import ContractCatalog
+        from hestia_core.tick_log import TickLog
+        try:
+            catalog = ContractCatalog(cfg.INSTRUMENT_MASTER_FILE, cfg.MCX_DATA_DIR)
+
+            def symbol_of(token):
+                row = catalog.row(token)
+                return None if row is None else {'instrument': row.ref.instrument, 'symbol': row.ref.symbol, 'expiry': row.ref.expiry.isoformat()}
+        except Exception as exc:
+            logging.getLogger('hestia').warning('tick log: no symbol lookup (%s); tokens are logged without names', exc)
+            symbol_of = None
+        tick_log = TickLog(cfg.TICK_LOG['dir'], flush_s=cfg.TICK_LOG['flush_s'], max_buffered=cfg.TICK_LOG['max_buffered'],
+                           off_flag=cfg.TICK_LOG_FLAG, symbol_of=symbol_of, alert=lambda m: alert(m))
+        tick_log.start()
+        _tick_logs.append(tick_log)
+        return tick_log
+    except Exception as exc:
+        logging.getLogger('hestia').warning('tick log not started (%s); trading is unaffected', exc)
+        return None
+
+
 def make_feed(login: LoginResult, alert):
     from websocket_feed import SharedFeed
     feed = SharedFeed()
+    tick_log = make_tick_log(alert)
+    if tick_log is not None:
+        feed.set_tick_sink(tick_log.put)
     feed.start(auth_token=login.auth_token, api_key=login.api_key, client_code=login.client_code, feed_token=login.feed_token,
                alert_callback=alert)
     _feeds.append(feed)
@@ -72,6 +104,8 @@ def make_order_feed(login: LoginResult):
 def stop_feeds() -> None:
     for f in _feeds:
         f.stop()
+    for t in _tick_logs:                                # after the feeds have stopped, so the last messages are in
+        t.close()
 
 
 def check() -> int:

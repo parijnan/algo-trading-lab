@@ -131,6 +131,9 @@ class SharedFeed:
         self._stale_alerted = {}   # {token: float} — time.time() of last stale alert
         self._watchdog_thread = None
 
+        # Optional raw-message sink (hestia_core.tick_log.TickLog.put): called after the lock is released, never counted as a tick error. None = off.
+        self._tick_sink = None
+
     # -----------------------------------------------------------------------
     # Public interface
     # -----------------------------------------------------------------------
@@ -267,6 +270,11 @@ class SharedFeed:
                 self._ohlc.pop(t, None)
                 self._last_tick_ts.pop(t, None)
                 self._stale_alerted.pop(t, None)
+
+    def set_tick_sink(self, sink):
+        """Hand every received message to `sink(recv_ts, token, ltp, exchange_timestamp, sequence_number, exchange_type)`, or None to stop.
+        Set it before start() so no message is missed; a reconnect keeps it. The sink runs on the websocket thread, so it must only append."""
+        self._tick_sink = sink
 
     def get_ltp(self, token):
         """Return last traded price for a token, or None if no tick yet."""
@@ -415,11 +423,12 @@ class SharedFeed:
                 return
 
             ltp = float(raw) / 100.0
+            now = time.time()
 
             with self._lock:
                 self._ltp[token]        = ltp
                 self._tick_count[token] = self._tick_count.get(token, 0) + 1
-                self._last_tick_ts[token] = time.time()
+                self._last_tick_ts[token] = now
 
                 if token not in self._ohlc:
                     self._ohlc[token] = self._empty_ohlc()
@@ -437,6 +446,13 @@ class SharedFeed:
                     if ltp < window['low']:
                         window['low']  = ltp
                     window['close']    = ltp
+
+            sink = self._tick_sink
+            if sink is not None:
+                try:
+                    sink(now, token, ltp, message.get("exchange_timestamp"), message.get("sequence_number"), message.get("exchange_type"))
+                except Exception:
+                    pass   # a recorder fault must never count as a tick error or touch the price state above
 
         except Exception:
             # Never let a tick handler exception crash the WS thread.

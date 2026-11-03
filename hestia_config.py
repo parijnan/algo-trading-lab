@@ -93,6 +93,18 @@ CANDLE_SOURCE = dict(
 
 MCX_FO_WS_EXCHANGE_TYPE = 5                    # websocket_feed exchange type for MCX F&O
 
+# ---- the raw tick log (hestia_core/tick_log.py) ----------------------------------------------------------------------------------
+# Every websocket message is appended to hestia_data/ticks/ticks_<date>.csv (receive time, token, price, the exchange's timestamp and sequence
+# number) by a separate writer thread; the feed thread only appends to a bounded buffer. Stop it at once, no restart, with
+# `touch hestia_data/flags/tick_log_off.flag` (remove the file to resume). Expected tens of MB a day (about 60 bytes a row, about one message a second a token; the first full day gives the real figure); old files are removed by hand after backup.
+TICK_LOG_FLAG = FLAG_DIR / 'tick_log_off.flag'
+TICK_LOG = dict(
+    enabled=True,
+    dir=HESTIA_DIR / 'ticks',
+    flush_s=1.0,                                # the writer empties the buffer this often
+    max_buffered=200_000,                       # ticks held if the writer stalls; beyond this new ticks are counted and dropped, never queued without limit
+)
+
 # ---- the Angel One adapter and the paper broker ------------------------------------------------------------------------------
 ANGEL = dict(order_timeout_s=30.0, poll_interval_s=1.0)
 PAPER_CASH = 1_000_000.0                        # each paper engine's own pool
