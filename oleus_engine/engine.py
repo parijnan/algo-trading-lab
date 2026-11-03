@@ -179,8 +179,15 @@ class OleusEngine:
         return (m >= self.first_bar + timedelta(minutes=self.cfg.at_open_minutes)
                 and m < self.last_bar - timedelta(minutes=self.cfg.entry_cutoff_min))
 
+    @property
+    def hard_exit_at(self) -> datetime:
+        """The minute from which everything open is closed: `hard_exit_min` before the last bar, but never later than `hard_exit_latest` on the
+        session's own date (23:30 on a 23:55-close day, where the first rule alone would say 23:39)."""
+        by_rule = self.last_bar - timedelta(minutes=self.cfg.hard_exit_min)
+        return min(by_rule, datetime.combine(by_rule.date(), self.cfg.hard_exit_latest))
+
     def _hard_exit_due(self, now: datetime) -> bool:
-        return self._floor(now) >= self.last_bar - timedelta(minutes=self.cfg.hard_exit_min)
+        return self._floor(now) >= self.hard_exit_at
 
     def _current_units(self) -> int:
         sz = self.ctx.sizing()

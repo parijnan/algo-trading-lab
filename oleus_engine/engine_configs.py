@@ -8,6 +8,7 @@ the hard unit cap is Hestia's.
 """
 
 from dataclasses import dataclass, field
+from datetime import time
 from typing import Dict, Tuple
 
 # The four setups in absolute prices (janus_configs.ABS_SETUPS without the counter trade, which is off). side +1 long, -1 short.
@@ -42,6 +43,10 @@ class EngineConfig:
     at_open_minutes: int = 1                  # no entry in the first minute
     entry_cutoff_min: int = 60                # no entry in the last 60 minutes (measured from the last bar)
     hard_exit_min: int = 15                   # everything open is closed from this many minutes before the last bar
+    # ...and never later than this clock time: on a 23:55-close day the rule above would give 23:39, which is moved back to 23:30 to stay away from
+    # the thin liquidity at the close (owner's decision, 2026-11-03). On a 23:30-close day 23:14 is earlier, so nothing changes there. NOT in the
+    # research config: the backtest's exit on 23:55-close sessions was 23:39 and has not been rerun at 23:30.
+    hard_exit_latest: time = time(23, 30)
     # prices: an older tick never triggers anything (entries are stricter: a touch is the whole signal)
     ltp_max_age_s: float = 30.0
     ltp_max_age_entry_s: float = 10.0

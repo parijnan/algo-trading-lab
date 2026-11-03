@@ -246,3 +246,18 @@ def test_a_stop_sends_no_lot_exit_message_only_the_closing_summary():
     run(h, datetime(2026, 9, 3, 11, 0))
     assert lot_exit_alerts(h) == []
     assert any('closed.' in a.text and 'lot1 stop' in a.text for a in h.alerts_for('info'))
+
+
+def _engine_with_close(close_hhmm):
+    e = OleusEngine(CFG, 'oleus')
+    e.session_open = datetime(2026, 11, 3, 9, 0)
+    e.session_close = datetime(2026, 11, 3, *close_hhmm)
+    return e
+
+
+def test_the_hard_exit_is_23_30_on_a_23_55_close_and_unchanged_at_23_14_on_a_23_30_close():
+    winter, summer = _engine_with_close((23, 55)), _engine_with_close((23, 30))
+    assert winter.hard_exit_at == datetime(2026, 11, 3, 23, 30) and summer.hard_exit_at == datetime(2026, 11, 3, 23, 14)
+    assert not winter._hard_exit_due(datetime(2026, 11, 3, 23, 29, 59)) and winter._hard_exit_due(datetime(2026, 11, 3, 23, 30, 0))
+    assert not summer._hard_exit_due(datetime(2026, 11, 3, 23, 13, 59)) and summer._hard_exit_due(datetime(2026, 11, 3, 23, 14, 0))
+    assert winter.last_bar == datetime(2026, 11, 3, 23, 54), 'only the exit moves; the entry cutoff still counts from the last bar'
