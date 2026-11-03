@@ -614,12 +614,25 @@ class OleusEngine:
             for j in self.machine.apply_stop(key):
                 self._record_exit(t, j, price, 'stop')
         else:
-            for j in self.machine.apply_target(key, meta['idx']):
+            lots = list(self.machine.apply_target(key, meta['idx'])) + [meta['idx']]
+            for j in lots[:-1]:
                 self._record_exit(t, j, price, 'T3_flat')
             self._record_exit(t, meta['idx'], price, REASONS[meta['idx']])
         self._advance(meta)
         if self.machine.trades[key] is None:
             self._finalize_trade(key)
+        elif meta['kind'] != 'stop':
+            self._say_lot_exit(t, key, price, lots)
+
+    def _say_lot_exit(self, t: dict, key: str, price: float, lots: list) -> None:
+        """A target booked some lots and the trade is still open: the closing summary comes later, so say now what this exit took
+        (the same idea as Prometheus's per-lot exit message). `lots` are the lots that left on this one fill."""
+        pts = t['side'] * (price - t['entry_price'])
+        rs = pts * sum(t['sizes'][j] for j in lots) * self._lot_size()
+        names = ' + '.join(f"lot{j + 1} {t['exits'][j]['reason']}" for j in sorted(lots))
+        self._say('info', f'Trade #{t["trade_id"]} [{key}] {names} @{price:.2f}  (Units: {t["units"]})  Entry {t["entry_price"]:.2f} -> Exit '
+                          f'{price:.2f} | P&L: {pts:+.2f} pts per lot  Rs.{rs / t["units"]:+,.0f}/unit; the other lots stay open',
+                  channel='trade-alerts')
 
     def _done_flatten(self, o: RequestOutcome, meta: dict) -> None:
         s = self.state

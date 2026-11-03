@@ -222,3 +222,27 @@ def test_the_price_is_traced_only_near_a_level_or_while_a_trade_is_open(caplog):
     first = float(ticks[0].split()[2])
     assert abs(first - 101.0) > 0.5, 'nothing is traced while the price sits far from every level'
     assert any(float(t.split()[2]) > 102.0 for t in ticks) and len(ticks) < 400
+
+
+def lot_exit_alerts(h):
+    return [a for a in h.alerts_for('info') if 'the other lots stay open' in a.text]
+
+
+def test_a_target_that_leaves_the_trade_open_sends_its_own_exit_message_and_the_last_one_the_closing_summary():
+    h = build(FADE_LONG_FULL)
+    run(h)
+    msgs = lot_exit_alerts(h)
+    assert len(msgs) == 2, 'T1 and T2 each book one lot while the trade stays open; T3 closes it and the closing summary covers it'
+    assert 'Trade #1 [F_L] lot1 T1 @' in msgs[0].text and 'lot2 T2 @' in msgs[1].text and '(Units: 1)' in msgs[0].text
+    assert all(m.channel == 'trade-alerts' for m in msgs) and all('P&L: +' in m.text for m in msgs)
+    assert any('closed.' in a.text and 'lot3 T3' in a.text for a in h.alerts_for('info'))
+    rec, = records(h)
+    # Rs per unit in the message is that lot's own rupees (one lot of three at 10 per point here)
+    assert f"Rs.{rec['lot1_pnl_rs']:+,.0f}/unit" in msgs[0].text
+
+
+def test_a_stop_sends_no_lot_exit_message_only_the_closing_summary():
+    h = build([(0, 101.0), (10, 101.0), (30, 103.0), (45, 103.0), (65, 98.0), (870, 98.0)])
+    run(h, datetime(2026, 9, 3, 11, 0))
+    assert lot_exit_alerts(h) == []
+    assert any('closed.' in a.text and 'lot1 stop' in a.text for a in h.alerts_for('info'))
