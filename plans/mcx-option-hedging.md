@@ -40,6 +40,36 @@ For every position held across a session close or weekend/holiday gap, per engin
 
 Output: `research/option_hedge/gap_ceiling.py`, a per-engine table and a short results section appended to this plan.
 
+#### Phase 0 results, first pass for Selene, Helios and Typhon (2026-11-04)
+
+Scope: the three engines that hold positions across closes. Prometheus is left out because the owner is considering moving crude to Oleus, which is intraday (hard exit by 23:30) and carries no overnight or weekend gap; crude would be reopened only if Prometheus stays live as the positional crude engine. Done on the integrated backtest ledger (`hestia_backtest/outputs/integrated_trades.csv`, one unit each, gross of costs) and the 1-minute futures files (`data_pipeline/data/mcx` and `mcx_fyers`, Fyers last so it wins a clash). Every trade was matched to the contract it entered on (the contract whose bar open at the entry minute is nearest the ledger's entry price; 100% matched within 0.3% for all three engines). A session break is a hole of more than 3 hours between bars; a gap is the next session's first open minus the previous session's last close, taken in the trade's direction; a weekend or holiday is a break of 40 hours or more. Rupees are per unit; the live size is 5 units, so multiply by 5. Scripts: `research/option_hedge/gap_ceiling.py` (per-engine table, writes the gap events to a scratch CSV) and `research/option_hedge/gap_followup.py` (tail-only option payouts and the stop-outs that gapped through the stop); run the first, then the second.
+
+| | Typhon | Selene | Helios |
+|---|---|---|---|
+| Trades / trades held across at least one break | 1,433 / 458 | 2,524 / 1,272 | 1,158 / 850 |
+| Gap events (nights / weekends) | 534 (427 / 107) | 1,428 (1,140 / 288) | 1,264 (1,014 / 250) |
+| Net gap P&L (all gaps), Rs per unit | -6,450 | +6,679 | +7,920 |
+| Gaps worse than -0.5% / -1% / -2% | 137 / 59 / 14 | 76 / 28 / 7 | 40 / 5 / 0 |
+| 1st and 5th percentile gap | -2.79% / -1.53% | -1.49% / -0.55% | -0.75% / -0.41% |
+| Worst gap (percent, Rs per unit) | -4.75% (13 Feb 2026, weekend), -7,050 | -5.59% (night of 2 to 3 Feb 2026), -13,375 | -1.89% (night of 21 to 22 Oct 2025), -4,880 |
+| Stop-outs that gapped through the stop | 52 of 894 | 6 of 14 | 4 of 11 |
+| Loss beyond the stop on those, Rs per unit (share of engine total P&L) | 84,662 (25%) | 32,594 (5%) | 3,117 (0.6%) |
+| Payout of a perfectly priced option struck 0.5% / 1% / 2% away, Rs per unit | 125,444 / 60,542 / 18,075 | 105,882 / 54,702 / 21,471 | 22,984 / 4,235 / 0 |
+| The 1% payout as a share of engine total P&L (Rs per unit) | 18% (339,025) | 9% (612,497) | 0.9% (491,901) |
+| Net gap P&L inside the worst closed-trade drawdown, Rs per unit (drawdown) | -8,450 (-39,165) | -14,179 (-45,917) | -11,440 (-26,300) |
+
+How to read it:
+
+- **Typhon suffers most, Selene second, Helios least.** Gaps are neutral on average for all three (favourable and adverse nearly cancel), so only the tail matters. Typhon's 0.8% stop is hit often and a gap of 1% or more takes it well past the stop (52 stop-outs, a quarter of the engine's total P&L in excess loss); Selene's 3% stop is rarely reached, but when a gap reaches it the fill is far past it (five of the six were 1.0% to 4.3% past the stop, all between 19 Jan and 23 Feb 2026); Helios's largest gap in five years was under 2%.
+- **The rupee tail is largest in Selene** (worst gap Rs 13,375 per unit, Rs 66,900 at 5 units) because of its notional, and in Typhon in percent (11% of crossings are worse than -1%, against 2% for Selene and 0.4% for Helios).
+- **Stop-outs after a break fill one minute after the open** (the 09:01 or 17:01 bar), the repo's gap-fill convention, so the excess above includes the first minute's move after the open.
+- **The drawdown row is not hedge-addressable.** The net gap losses inside each engine's worst drawdown (Helios 43% of it, Selene 31%, Typhon 22%) come from many small gaps adding up, which no out-of-the-money option would pay on. The tail payout rows are the relevant ceiling.
+- **These are ceilings, not benefits.** They are before premium, spread and slippage, and nothing here is priced; the kill criterion in this section still needs the premium estimate from Phase 2. On the ceiling alone Helios fails the criterion (the 1% payout is under 1% of its total P&L and a 2%-strike option never paid), Typhon has the most to gain, and Selene sits between.
+- **Caveats.** Selene and Helios series are not back-adjusted, so a roll shows up as a gap and a few of their larger gaps may be roll artefacts (weeks with a roll are not separated). Typhon's history starts in 2023, the other two in 2021. The 15-minute guard-window loss after the open (the engines do not check stops in it) is only summarised here: the 5th-percentile worst adverse excursion in the first 15 minutes after an open was -2.37% for Typhon, -1.20% for Selene and -0.77% for Helios, and the worst was about -6% for all three; it is not yet turned into a loss figure. The share of the top 10 drawdowns, the conditional triggers and the US-calendar feature are not done.
+- **Liquidity side (recorder, 30 Oct to 4 Nov, near-month versus second-month options)**: November natural gas and silver options trade at 0.3% to 1.0% of mid at every hour of interest, December ones at 20% to 160%; gold options (GOLDM December) are usable only at the nearest strikes. Typhon's and Selene's hedges are liquid in the front month; the second month, which the hedge needs after the November expiries, is unmeasured until the recorder has run through the November-to-December roll.
+
+Effect on the plan: with crude moved to Oleus the study narrows to Typhon first, Selene (a cross-hedge through SILVERM) second, and Helios dropped unless the premium estimate makes a small hedge nearly free. The scope question (section 6, question 1) and the adoption rule (question 2) remain the owner's.
+
 ### Phase 1 — contract and instrument facts (read-only, in parallel with Phase 0)
 
 - Confirm against the MCX contract specifications and the Fyers master: lot size (qtyMult), tick size, option expiry rule (two days before the future), exercise style, settlement mechanism (exercise of an in-the-money option devolves into a futures position, as I understand it; if so a hedge must never be held into expiry), trading hours of options versus futures (the master shows 0900-2330 for the index options), strike ladders and their ATM-centred width, and the freeze quantity.
