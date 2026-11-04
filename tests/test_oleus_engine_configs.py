@@ -35,7 +35,7 @@ def test_the_registry_entry_matches_the_engine():
     assert e.factory == 'oleus_engine.engine:build' and isinstance(build(), OleusEngine)
     assert hc.ENGINES['prometheus'].product == 'CARRYFORWARD', 'the live engines keep the default product'
     assert all(hc.ENGINES[n].product == 'CARRYFORWARD' for n in ('prometheus', 'selene', 'helios', 'typhon'))
-    assert hc.TRADING_HOSTS['delos']['ENGINES']['oleus'] == dict(enabled=True, paper=False, static_units=1, unit_cap=100)   # live from 4 Nov 2026
+    assert hc.TRADING_HOSTS['delos']['ENGINES']['oleus'] == dict(enabled=True, paper=False, static_units=2, unit_cap=100)   # live from 4 Nov 2026; 2 units from the 5 Nov start
 
 
 def test_margin_per_unit_has_the_shape_of_prometheus_with_no_separate_lots_factor():
