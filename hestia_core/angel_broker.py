@@ -41,10 +41,10 @@ class AngelConfig:
     ghost_cooldown_s: float = 2.0
     ghost_lookback_s: float = 60.0
     max_transport_retries: int = 6         # placement retries after a lost response (each preceded by a ghost search)
-    cash_max_age_s: float = 120.0          # older than this, free_cash reports 0 so entries fail closed
-    cash_boundary_s: float = 900.0         # the margin is read once before each 15-minute boundary, entries only happen on one
+    cash_max_age_s: float = 120.0          # older than this, the reading is stale: it is read again now, and if that fails free_cash reports 0
+    cash_boundary_s: float = 900.0         # the margin is read once before each 15-minute boundary (the Supertrend engines enter on one)
     cash_lead_s: float = 30.0              # ... this long before it, so the reading is about half a minute old when the entry lands
-    cash_stale_refresh_min_s: float = 10.0 # a stale reading met at an entry kicks one background refresh, at most this often
+    cash_stale_refresh_min_s: float = 10.0 # a stale reading met at an entry is read again now, but no more often than this after a failure
 
 
 def _num(v) -> float:
@@ -90,7 +90,8 @@ class AngelBrokerPort:
         self._cash_ts: Optional[float] = None
         self._total: Optional[float] = None                 # total margin from the same rmsLimit() answer as _cash
         self._logged_total: Optional[float] = None
-        self._last_kick: Optional[float] = None
+        self._last_kick: Optional[float] = None             # when a read of a stale balance last FAILED (spaces the next attempt)
+        self._refresh_lock = threading.Lock()               # one on-demand balance read at a time
         self._lock = threading.Lock()
         self.session_failed = False
         if feed is not None:
@@ -117,32 +118,41 @@ class AngelBrokerPort:
     # ---- cash ------------------------------------------------------------------------------------------------------------
 
     def free_cash(self, engine: str = '') -> float:
-        with self._lock:
-            cash, ts = self._cash, self._cash_ts
-        if cash is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
-            self._kick_refresh()
-            return 0.0                                      # fail closed: an entry cannot be sized against a stale balance
-        return cash
+        return self._fresh_reading(lambda: self._cash)
 
     def total_margin(self, engine: str = '') -> float:
         """The account before any margin is in use: availablecash + availableintradaypayin + utiliseddebits (owner's definition,
-        2026-10-17; plans/hestia-dynamic-sizing.md section 4). Same freshness rule as free_cash: a missing or stale reading is 0.0."""
-        with self._lock:
-            total, ts = self._total, self._cash_ts
-        if total is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
-            self._kick_refresh()
-            return 0.0
-        return total
+        2026-10-17; plans/hestia-dynamic-sizing.md section 4). Same freshness rule as free_cash: a missing or stale reading is read
+        again now, and when that fails the answer is 0.0."""
+        return self._fresh_reading(lambda: self._total)
 
-    def _kick_refresh(self) -> None:
-        """A stale or missing reading was just met (an entry is being sized): ask the executor for a fresh one, without waiting for it.
-        This call still answers 0, so the entry is refused; the next one finds the new reading. Spaced so a run of reads makes one call."""
-        now = self._clock()
-        with self._lock:
+    def _fresh_reading(self, pick) -> float:
+        """The picked value when the last read is within cash_max_age_s. Otherwise (found on 2026-11-04: Oleus enters on a touch at any
+        second, so most entries met a reading up to 15 minutes old and were refused with 'available Rs 0') the balance is read right
+        now on the calling thread, and a failed read still answers 0.0, so an entry is never sized against a stale balance. One read at
+        a time (a second caller waits for it and uses its result), and after a failed read no further read for cash_stale_refresh_min_s."""
+        def current():
+            with self._lock:
+                value, ts = pick(), self._cash_ts
+            if value is None or ts is None or self._clock() - ts > self.cfg.cash_max_age_s:
+                return None
+            return value
+
+        value = current()
+        if value is not None:
+            return value
+        with self._refresh_lock:
+            value = current()                                       # another caller read it while this one waited
+            if value is not None:
+                return value
+            now = self._clock()
             if self._last_kick is not None and now - self._last_kick < self.cfg.cash_stale_refresh_min_s:
-                return
-            self._last_kick = now
-        self.executor.submit(self.refresh_cash_blocking, 'stale reading met at an entry')
+                return 0.0                                          # a read just failed: do not hammer the broker
+            ok = self.refresh_cash_blocking('stale reading met at an entry')
+            if not ok:
+                self._last_kick = self._clock()
+            value = current() if ok else None
+        return value if value is not None else 0.0
 
     def refresh_cash_blocking(self, why: str = 'direct call') -> bool:
         """One rmsLimit() read. Returns whether it produced a reading. `why` is logged so the read timing is visible."""

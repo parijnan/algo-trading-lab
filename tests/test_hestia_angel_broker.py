@@ -253,13 +253,29 @@ def test_positions_in_other_exchange_segments_are_not_part_of_the_mcx_book():
     assert out[0] == {'T1': PositionRow(-3, 99.5)}
 
 
-def test_free_cash_fails_closed_when_the_balance_is_missing_or_stale():
+def test_free_cash_fails_closed_when_the_balance_is_missing_or_stale_and_cannot_be_read():
     r = Rig()
-    assert r.port.free_cash('a') == 0.0
+    r.sc.rms_failures = 1000                                                        # the broker will not answer
+    assert r.port.free_cash('a') == 0.0                                             # nothing read yet
+    r.sc.rms_failures = 0
+    r.clock.sleep(AngelConfig().cash_stale_refresh_min_s + 1)
     r.port.refresh_cash_blocking()
     assert r.port.free_cash('a') == 1_000_000.0
+    r.sc.rms_failures = 1000
     r.clock.sleep(AngelConfig().cash_max_age_s + 1)
-    assert r.port.free_cash('a') == 0.0
+    assert r.port.free_cash('a') == 0.0                                             # stale and the fresh read failed: never the old balance
+
+
+def test_an_entry_between_boundaries_reads_the_balance_instead_of_being_refused():
+    """2026-11-04 15:56: Oleus touched a level 11 minutes after the last scheduled read, free_cash answered 0 and the entry was refused
+    with 'available Rs 0' while the account held Rs 46 lakh. A stale balance is now read at once."""
+    r = Rig()
+    r.port.start_cash_refresh()
+    r.clock.sleep(11 * 60)                                                          # far outside cash_max_age_s
+    calls = _rms_calls(r)
+    assert r.port.free_cash('a') == 1_000_000.0 and _rms_calls(r) == calls + 1      # the same call gets a real number
+    assert r.port.free_cash('a') == 1_000_000.0 and _rms_calls(r) == calls + 1      # fresh now: no second read
+    assert r.port.total_margin('a') == 1_000_000.0 and _rms_calls(r) == calls + 1
 
 
 def test_a_cash_read_is_retried_once_and_a_second_failure_alerts_and_keeps_the_old_state():
@@ -270,7 +286,7 @@ def test_a_cash_read_is_retried_once_and_a_second_failure_alerts_and_keeps_the_o
     r2 = Rig()
     r2.sc.rms_failures = 2
     r2.port.refresh_cash_blocking()
-    assert r2.port.free_cash('a') == 0.0 and any(level == 'warning' for level, _ in r2.alerts)
+    assert r2.port._cash is None and any(level == 'warning' for level, _ in r2.alerts)
 
 
 def _rms_calls(r):
@@ -315,21 +331,20 @@ def test_a_failed_scheduled_read_is_tried_again_shortly_after():
     r = Rig()
     r.sc.rms_failures = 2                                                           # the first read and its own retry both fail
     r.port.start_cash_refresh()
-    assert r.port.free_cash('a') == 0.0
+    assert r.port._cash is None
     r.kernel.run_for(11)
     assert r.port.free_cash('a') == 1_000_000.0
 
 
-def test_a_stale_reading_met_at_an_entry_kicks_one_refresh_and_this_call_still_answers_zero():
+def test_a_stale_reading_met_at_an_entry_is_read_again_on_the_same_call():
     r = Rig()
-    assert r.port.free_cash('a') == 0.0 and _rms_calls(r) == 1                      # nothing read yet: refused, refresh started
-    assert r.port.free_cash('a') == 1_000_000.0                                     # the next call finds it
+    assert r.port.free_cash('a') == 1_000_000.0 and _rms_calls(r) == 1              # nothing read yet: read now, answered at once
+    assert r.port.free_cash('a') == 1_000_000.0 and _rms_calls(r) == 1              # fresh: no second read
     r.clock.sleep(AngelConfig().cash_max_age_s + 1)
-    assert r.port.total_margin('a') == 0.0 and _rms_calls(r) == 2                   # stale again: refused, refresh started
-    assert r.port.total_margin('a') == 1_000_000.0
+    assert r.port.total_margin('a') == 1_000_000.0 and _rms_calls(r) == 2           # stale again: read again, answered at once
 
 
-def test_repeated_stale_reads_make_one_refresh_per_spacing():
+def test_repeated_stale_reads_after_a_failure_make_one_read_per_spacing():
     r = Rig()
     r.sc.rms_failures = 1000                                                        # the broker keeps failing: the reading stays missing
     r.port.free_cash('a')

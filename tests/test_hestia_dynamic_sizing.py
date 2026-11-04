@@ -47,7 +47,6 @@ def test_the_total_is_cash_plus_payin_plus_margin_used_from_one_answer():
     r = Rig()
     _rms(r, availablecash='5210479.8100', availableintradaypayin='121153.5800', utiliseddebits='109751.5000',
          collateral='5144319.2000', utilisedpayout='187314.1900', utilisedspan=None)
-    assert r.port.total_margin('a') == 0.0                                  # nothing read yet: fails closed
     r.port.refresh_cash_blocking()
     assert r.port.total_margin('a') == pytest.approx(5_441_384.89) and r.port.free_cash('a') == pytest.approx(5_210_479.81)
 
@@ -62,7 +61,7 @@ def test_missing_none_or_blank_margin_fields_count_as_zero_and_never_cost_the_ca
     assert r2.port.free_cash('a') == 1_000_000.0 and r2.port.total_margin('a') == 1_000_000.0
 
 
-def test_a_stale_total_reads_zero_and_the_total_is_logged_when_it_changes(caplog):
+def test_a_stale_total_is_read_again_and_reads_zero_only_when_that_fails_and_the_total_is_logged_when_it_changes(caplog):
     r = Rig()
     _rms(r, availablecash='100', availableintradaypayin='0', utiliseddebits='50')
     with caplog.at_level('INFO', logger='hestia_angel'):
@@ -71,7 +70,13 @@ def test_a_stale_total_reads_zero_and_the_total_is_logged_when_it_changes(caplog
     assert [m for m in caplog.messages if m.startswith('margin:')] == [
         'margin: availablecash 100.00 + availableintradaypayin 0.00 + utiliseddebits 50.00 = total 150.00']
     r.clock.sleep(AngelConfig().cash_max_age_s + 1)
-    assert r.port.total_margin('a') == 0.0
+    assert r.port.total_margin('a') == 150.0                                # stale: read again on the same call, unchanged so not logged again
+    r.clock.sleep(AngelConfig().cash_max_age_s + 1)
+
+    def down():
+        raise RuntimeError('rmsLimit down')
+    r.sc.rmsLimit = down
+    assert r.port.total_margin('a') == 0.0                                  # stale and the fresh read failed: fails closed
 
 
 def test_a_split_that_moves_at_a_constant_total_is_not_logged_again(caplog):
