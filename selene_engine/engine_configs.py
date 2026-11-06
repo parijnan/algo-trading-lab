@@ -1,6 +1,7 @@
 """
 Parameters of the Selene engine. One place, no magic numbers in engine code (repo convention). The values are the DECIDED ones in
-selene_backtest/selene_configs.py as of 2026-09-29 (SILVERMIC, ST 10 / 2.5, single position, 3.0% stop, no targets); a test pins them
+selene_backtest/selene_configs.py as of 2026-11-06 (SILVERMIC, ST 10 / 3.0, single position, 3.0% stop, no targets; the multiplier was 2.5 until
+the owner's decision of 6 Nov 2026, plan selene-silvermic-st-strategy.md section 20); a test pins them
 to that file so the two cannot drift silently. Sizing is NOT here: the engine reads it live through ctx.sizing(); sizing itself is on
 hold pending the user's review (project_selene.md) — Selene is registered paper, static units, until that review.
 """
@@ -13,7 +14,7 @@ class EngineConfig:
     instrument: str = 'SILVERMIC'
     # signal
     st_period: int = 10
-    st_multiplier: float = 2.5
+    st_multiplier: float = 3.0
     # position shape: a single lot, no scale-out, no targets
     sl_pct: float = 3.0
     # provisional-boundary trading (plans/hestia-provisional-all-engines.md): act on a tick-built bar when the candle window is STILL incomplete at the

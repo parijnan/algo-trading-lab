@@ -157,7 +157,8 @@ SINGLE_TARGET_LOTS_IN_SIM = 2          # the exit simulator runs two lots; one l
 # prometheus_production/ actually handles contracts (plans/prometheus-phase3-
 # production.md §3-§9, §18), applied to SILVERMIC's decided config below.
 # ---------------------------------------------------------------------------
-DECIDED_MULTIPLIER = 2.5     # plan §12
+DECIDED_MULTIPLIER = 3.0     # plan §12 decided 2.5; changed to 3.0 by the owner on 2026-11-06 for the current trending regime (plan section 20). The
+                             # parity_variants_selene.py check "the DECIDED pair reproduces the oracle" follows this value.
 DECIDED_SL_PCT     = 3.0     # wide protective stop, % of entry price; no targets
 
 # prometheus_configs.SEED_DAYS: each session's ST is seeded from this many
@@ -223,3 +224,37 @@ RISK_SEED = 20260925
 RISK_BLOCK_LEN = 20                      # trades per block for the clustered-losses variant
 RISK_LEVERAGE_GRID = [1.0, 1.5, 2.0, 3.0, 4.0]
 RISK_COST_DRAG_BPS = [0.0, 3.0, 6.0]     # extra cost per trade, in bps of entry price, on top of the gross parity trades
+
+# ---------------------------------------------------------------------------
+# Multi-metric exit optimisation (optimize_selene.py, 2026-11-06). One lot per unit (the live Selene shape), one stop, one optional
+# target, trend-flip exit, run on the raw trades of each multiplier in OPT_MULTIPLIERS and scored on the SAME metrics so the
+# decided 2.5 / 3.0%-stop / no-target config is the baseline. Research only: nothing here is read by selene_engine, and the
+# DECIDED_* values above are untouched.
+# ---------------------------------------------------------------------------
+OPT_MULTIPLIERS = [2.5, 3.0]
+OPT_STOP_GRID = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, DISABLED_PCT]   # finer than SL_ONLY_GRID below 1%
+OPT_TARGET_GRID = [DISABLED_PCT] + SINGLE_TARGET_GRID
+OPT_MARGIN_FRACTION = MARGIN_SIZING_MULTIPLIER / MARGIN_CONTRACT_VALUE_DIVISOR   # margin per unit as a fraction of price (0.5): a trade's return on margin is its % move / this
+OPT_CAPITAL_PER_MARGIN = 4.0             # capital held per unit, as a multiple of the unit's margin (price/2): 4 = a unit is funded at twice its notional value
+OPT_UNITS_FOR_COSTS = 5                  # brokerage is per order, so its share per lot falls with the units in the order; 5 = the live size
+OPT_DD_THRESHOLDS_PCT = [5.0, 10.0]      # drawdown episodes counted when deeper than these (percent of peak equity)
+OPT_SPLITS = ['2024-01-01', '2026-01-01']   # walk-forward: choose on entries before, read from the date on
+OPT_STOP_EXTRA_SLIP_BPS = 10.0           # stress: extra adverse slippage, in bps of entry price, on every stop-loss exit (stop orders fill worse than a flip)
+OPT_NEIGHBOUR_STEPS = 1                  # plateau score = mean of the composite over this many stop-grid steps either side (same target)
+OPT_COMPARISON_CSV = os.path.join(REPO_ROOT, 'hestia_backtest', 'outputs', 'comparison.csv')   # live-versus-backtest rows, source of the measured slippage
+OPT_GRID_FILE = os.path.join(DATA_SWEEP_DIR, 'optimize_grid.csv')
+OPT_WALK_FILE = os.path.join(DATA_SWEEP_DIR, 'optimize_walkforward.csv')
+
+# Shortlist read in detail (optimize_selene.py --shortlist): (multiplier, stop %, target %), the decided 2.5 first as the baseline. Chosen from the grid
+# for being on a plateau (neighbouring stops similar), not for the single best figure; the 0.6% stop is kept as the earlier spike to look at.
+OPT_SHORTLIST = [(2.5, 3.0, DISABLED_PCT), (3.0, DISABLED_PCT, DISABLED_PCT), (3.0, 3.0, DISABLED_PCT), (3.0, 1.5, DISABLED_PCT), (3.0, 0.6, DISABLED_PCT),
+                 (3.0, 2.0, 8.0), (3.0, 2.5, 6.0), (3.0, 1.5, 8.0)]
+OPT_PERIODS = [('all', '2000-01-01', '2100-01-01'), ('2021-23', '2000-01-01', '2024-01-01'), ('2024-25', '2024-01-01', '2026-01-01'), ('2026', '2026-01-01', '2100-01-01')]
+OPT_SHORTLIST_FILE = os.path.join(DATA_SWEEP_DIR, 'optimize_shortlist.csv')
+OPT_YEARS_FILE = os.path.join(DATA_SWEEP_DIR, 'optimize_years.csv')
+
+# Parity variants (parity_variants_selene.py, 2026-11-06): the production-parity state machine run with a chosen multiplier and stop WITHOUT touching
+# DECIDED_* or the parity_*.csv files that the replay test and the integrated backtest read. Outputs go to their own folder.
+PARITY_VARIANTS_DIR = os.path.join(DATA_SWEEP_DIR, 'parity_variants')
+PARITY_VARIANTS = [(2.5, 3.0), (3.0, 3.0), (3.0, 2.0), (3.0, 1.5), (3.0, 0.6), (3.0, DISABLED_PCT)]   # (multiplier, stop %), the 2.5 / 3.0 pair first as the baseline check
+PARITY_REPORT_FILE = os.path.join(PARITY_VARIANTS_DIR, 'parity_report.csv')
