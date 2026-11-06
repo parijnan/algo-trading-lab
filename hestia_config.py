@@ -193,13 +193,16 @@ TRADING_HOSTS = {
     # 2026-11-05 (owner's decision of 4 Nov, conditional on the 4 Nov hestia-qc being clean, which it was): OLEUS 1 to 2 UNITS (6 lots) and PROMETHEUS 4 to 3 UNITS (6 lots).
     # Crude total stays at the other three engines' 5 units (3 + 2 = 5, the matching rule); lots go from 11 to 12 (3 x 2 + 2 x 3). Neither engine had an open position at the
     # close, so both new entries use the new sizes from the 5 Nov start (a position already open would have kept the units it was entered with).
-    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=3, unit_cap=100),
+    # 2026-11-06 (owner's decision): PROMETHEUS 3 to 2 UNITS (4 lots) and OLEUS 2 to 3 UNITS (9 lots), taking effect at the first start after this is pulled (Monday
+    # 9 Nov 08:55). Crude total stays at the other three engines' 5 units (2 + 3 = 5, the matching rule); lots go from 12 to 13 (2 x 2 + 3 x 3). Prometheus and Oleus both hold
+    # open positions at the time of writing, and each keeps the units it was entered with until it closes (a rollover reopen reuses the stored lots).
+    'delos': dict(ENGINES={'prometheus': dict(enabled=True, paper=False, static_units=2, unit_cap=100),
                            'selene': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'helios': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            'typhon': dict(enabled=True, paper=False, static_units=5, unit_cap=100),
                            # Oleus was PAPER at 1 unit from 30 Oct (owner's decision 2026-10-29); LIVE at 1 unit from the first start after 2026-11-03. It trades
                            # under the INTRADAY product beside Prometheus's CARRYFORWARD and shares CRUDEOILM's price feed with it (one stream per token).
-                           'oleus': dict(enabled=True, paper=False, static_units=2, unit_cap=100)},
+                           'oleus': dict(enabled=True, paper=False, static_units=3, unit_cap=100)},
                   SLACK_PROMETHEUS_VIA_HESTIA=True,
                   # Fyers candle SHADOW on from 2026-10-05 (user's go-ahead, Phase 1 of plans/hestia-fyers-candle-source.md), upgraded to RESCUE the same
                   # day (Phase 2, user's go-ahead after the Zerodha cross-check: finalized Fyers matched Zerodha on 12 of 13 differing fields): Angel One

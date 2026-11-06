@@ -261,6 +261,14 @@ const DATA = __DATA__;
         'Every trade re-priced at 1 unit from its recorded points, so engines and days compare on one footing whatever size each trade actually ran at.' })));
   }
 
+  // How far the combined closed-trade curve (all engines, in exit order, from 0) sits below its own peak now. Drawdown is only ever read off this one
+  // running portfolio curve, never off a single engine's curve (owner's rule, 6 Nov 2026): the engines' own troughs fall on different days.
+  function portfolioNow() {
+    let peak = 0, last = 0;
+    DATA.series.portfolio.forEach(p => { last = cum(p); if (last > peak) peak = last; });
+    return peak - last;
+  }
+
   function renderHero() {
     const p = stat('portfolio'), openU = DATA.open.map(unreal).filter(v => v !== null), openTotal = openU.reduce((a, b) => a + b, 0);
     const hero = h('div', { class: 'card hero' },
@@ -270,7 +278,7 @@ const DATA = __DATA__;
         tile('Win rate', pct(p.win_rate), p.wins + ' wins, ' + p.losses + ' losses'),
         tile('Profit factor', p.profit_factor === null ? '–' : p.profit_factor.toFixed(2), 'gross gain over gross loss'),
         tile('Average trade', rs(p.expectancy), 'avg win ' + rs(p.avg_win) + ', avg loss ' + rs(p.avg_loss)),
-        tile('Max drawdown', rsPlain(p.max_drawdown), 'peak to trough, closed trades'),
+        tile('Max drawdown', rsPlain(p.max_drawdown), 'all engines together, running closed-trade curve; now ' + rsPlain(portfolioNow()) + ' below its peak'),
         tile('Open now', rs(openTotal), DATA.open.length + ' positions at last price, not in the realised figure')));
     return hero;
   }
@@ -299,7 +307,7 @@ const DATA = __DATA__;
     const trades = DATA.trades.filter(t => t.engine === e).sort((a, b) => a.exit_ts < b.exit_ts ? -1 : 1);
     const items = trades.map((t, i) => ({ v: val(t), x: '#' + t.trade_id, label: NAME(e) + ' #' + t.trade_id + ' ' + t.direction, detail: dtstr(t.entry_ts) + ' to ' + dtstr(t.exit_ts) + ', ' + t.reasons }));
     const mini = h('div', { class: 'mini' },
-      ...[['Closed trades', st.trades + ' (' + st.wins + ' won)'], ['Realised', rs(st.total)], ['Max drawdown', rsPlain(st.max_drawdown)],
+      ...[['Closed trades', st.trades + ' (' + st.wins + ' won)'], ['Realised', rs(st.total)],
         ['Win rate', pct(st.win_rate)], ['Avg hold', hrs(st.avg_hold_h)], ['Avg entry slippage', st.avg_slippage === null ? '–' : pts(st.avg_slippage) + ' pts']]
         .map(([k, v]) => h('div', {}, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }))));
     const openLine = pos ? h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px' },
@@ -314,10 +322,10 @@ const DATA = __DATA__;
 
   function renderRealised() {
     const row = (name, st, total) => h('tr', { class: total ? 'tot' : '' }, h('td', { text: name }), h('td', { class: 'n', text: String(st.trades) }), h('td', { class: 'n', text: rs(st.total) }),
-      h('td', { class: 'n', text: pct(st.win_rate) }), h('td', { class: 'n', text: rsPlain(st.max_drawdown) }));
+      h('td', { class: 'n', text: pct(st.win_rate) }));
     const rows = ENGINES.map(e => row(NAME(e), stat(e), false)).concat([row('All engines', stat('portfolio'), true)]);
-    const head = ['Engine', 'Live trades', 'Realised', 'Win rate', 'Max drawdown'];
-    return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Realised by engine' }), h('span', { class: 'meta', text: 'closed live trades only, gross of charges; drawdown is peak to trough of the closed-trade curve' })),
+    const head = ['Engine', 'Live trades', 'Realised', 'Win rate'];
+    return h('div', { class: 'card' }, h('div', { class: 'cardhead' }, h('h2', { text: 'Realised by engine' }), h('span', { class: 'meta', text: 'closed live trades only, gross of charges; drawdown is shown for the whole portfolio only (top tile)' })),
       h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, head.map((t, i) => h('th', { class: i >= 1 ? 'n' : '', text: t })))), h('tbody', {}, rows))));
   }
 
