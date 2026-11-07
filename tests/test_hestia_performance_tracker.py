@@ -270,6 +270,39 @@ def test_the_real_template_renders_with_the_real_config_and_a_synthetic_snapshot
 
 def test_config_pins_the_live_starts_and_lot_values():
     cfg = bt.load_config()['engines']
-    assert {e: c['first_live_trade_id'] for e, c in cfg.items()} == {'prometheus': 64, 'selene': 7, 'helios': 6, 'typhon': 3}
-    assert {e: c['lots_per_unit'] for e, c in cfg.items()} == {'prometheus': 2, 'selene': 1, 'helios': 20, 'typhon': 2}
-    assert {e: c['rs_per_point_per_lot'] for e, c in cfg.items()} == {'prometheus': 10, 'selene': 1, 'helios': 1, 'typhon': 250}
+    assert {e: c['first_live_trade_id'] for e, c in cfg.items()} == {'prometheus': 64, 'selene': 7, 'helios': 6, 'typhon': 3, 'oleus': 6}
+    assert {e: c['lots_per_unit'] for e, c in cfg.items()} == {'prometheus': 2, 'selene': 1, 'helios': 20, 'typhon': 2, 'oleus': 3}
+    assert {e: c['rs_per_point_per_lot'] for e, c in cfg.items()} == {'prometheus': 10, 'selene': 1, 'helios': 1, 'typhon': 250, 'oleus': 10}
+
+
+# ---------- Oleus: three lots, trades held in state['trades'] ----------
+
+OLEUS = {'name': 'Oleus', 'instrument': 'CRUDEOILM', 'lots_per_unit': 3, 'rs_per_point_per_lot': 10, 'first_live_trade_id': 6, 'live_since': '2026-11-04T16:02:47', 'note': ''}
+OLEUS_HEADER = ('trade_id,contract_expiry,direction,units,entry_ts,entry_price,signal_ts,signal_close,entry_slippage_points,sl_price,lot1_target,lot2_target,lot2_target_source,'
+                'parent_trade_id,lot1_exit_ts,lot1_exit_price,lot1_exit_reason,lot1_pnl_points,lot1_pnl_rs,lot2_exit_ts,lot2_exit_price,lot2_exit_reason,lot2_pnl_points,lot2_pnl_rs,'
+                'total_pnl_points,total_pnl_rs,setup,lot3_target,lot3_exit_ts,lot3_exit_price,lot3_exit_reason,lot3_pnl_points,lot3_pnl_rs')
+# the live trade 8 of 6 Nov 2026: two units, three targets
+OLEUS_ROW = ('8,2026-11-19,bearish,2,2026-11-06T09:01:28.898467,8682.0,,8685.55,3.55,8796.1,8538.15,8501.3,camarilla,,2026-11-06T13:38:43.230854,8540.0,T1,142.0,2840.0,'
+             '2026-11-06T13:44:45.292270,8498.5,T2,183.5,3670.0,542.5,10850.0,F_S,8464.45,2026-11-06T13:51:36.368199,8465.0,T3,217.0,4340.0')
+
+
+def test_oleus_trade_has_three_exits_and_its_rupees_check_out():
+    t = bt.parse_trades(OLEUS_HEADER + '\n' + OLEUS_ROW + '\n', 'oleus', OLEUS)[0]
+    assert [x['reason'] for x in t['exits']] == ['T1', 'T2', 'T3'] and t['lots'] == 6
+    assert t['rs_actual'] == 10850.0 and t['rs_unit'] == 5425.0
+    assert bt.check_rupees(t, OLEUS) is None
+
+
+def test_oleus_open_position_values_only_the_lots_still_open_and_reports_the_booked_part():
+    st = {'session_date': '2026-11-06', 'contract_token': '573423', 'trade_counter': 9, 'trades': {'F_S': {
+        'trade_id': 9, 'setup': 'F_S', 'side': -1, 'units': 2, 'sizes': [2, 2, 2], 'entry_ts': '2026-11-06T13:51:38', 'entry_price': 8680.0, 'stop': 8790.0,
+        'targets': [8540.0, 8500.0, 8460.0], 'exits': [{'ts': 'x', 'price': 8540.0, 'reason': 'T1'}, None, None], 'booked_pts': 140.0, 'booked_rs': 2800.0}}}
+    pos = bt.open_position('oleus', OLEUS, st, {'ts': 'x', 'close': 8600.0})
+    assert pos['trade_id'] == 9 and pos['direction'] == 'bearish' and pos['units'] == 2 and pos['lots'] == 6
+    assert pos['open_lots_per_unit'] == 2 and pos['unreal_pts'] == 80.0 and pos['unreal_unit'] == 80.0 * 10 * 2 and pos['unreal_actual'] == 80.0 * 10 * 2 * 2
+    assert pos['booked_unit'] == 1400.0 and pos['stop'] == 8790.0
+    assert [t['hit'] for t in pos['targets']] == [True, False, False]
+
+
+def test_oleus_flat_state_has_no_open_position():
+    assert bt.open_position('oleus', OLEUS, {'session_date': '2026-11-06', 'trades': {}, 'trade_counter': 9}, None) is None

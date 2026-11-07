@@ -38,11 +38,11 @@ def _ts(text):
 
 
 def parse_trades(csv_text, engine, ecfg):
-    """Every closed trade in the engine's CSV (live or not), as plain dicts. A trade has one exit (single lot group) or two (Prometheus lot 1 and lot 2)."""
+    """Every closed trade in the engine's CSV (live or not), as plain dicts. A trade has one exit (single lot group), two (Prometheus lot 1 and lot 2) or three (Oleus's three target lots)."""
     out = []
     for row in csv.DictReader(io.StringIO(csv_text or '')):
         exits = []
-        for lot in (1, 2):
+        for lot in (1, 2, 3):
             ts = _ts(row.get(f'lot{lot}_exit_ts'))
             if ts is None:
                 continue
@@ -142,9 +142,36 @@ def daily(trades):
     return [days[k] for k in sorted(days)]
 
 
+def _oleus_open_position(engine, ecfg, state, last_price):
+    """Oleus keeps its open trades in state['trades'] (setup key -> trade with the three lots' sizes and exits), not in the one-position shape of the other engines.
+    One trade is open at a time (a stop-and-reverse closes first). Unrealised covers the lots with no exit yet; the lots already booked are reported as booked."""
+    open_trades = sorted(state['trades'].values(), key=lambda t: t['trade_id'])
+    if not open_trades:
+        return None
+    t = open_trades[0]
+    sign = t['side']
+    units = int(t['units'])
+    per_lot = ecfg['rs_per_point_per_lot']
+    open_lots = sum(sz for sz, ex in zip(t['sizes'], t['exits']) if ex is None) / units      # the sizes hold lots across all units
+    pos = {
+        'engine': engine, 'trade_id': t['trade_id'], 'direction': 'bullish' if sign > 0 else 'bearish', 'units': units, 'lots': units * ecfg['lots_per_unit'],
+        'open_lots_per_unit': open_lots, 'entry_ts': t['entry_ts'], 'entry_price': t['entry_price'], 'stop': t['stop'],
+        'targets': [{'label': f'Lot {i + 1} target', 'price': price, 'hit': t['exits'][i] is not None} for i, price in enumerate(t['targets'])],
+        'last_price': None, 'last_ts': None, 'unreal_pts': None, 'unreal_unit': None, 'unreal_actual': None,
+        'booked_pts': t.get('booked_pts'), 'booked_unit': t['booked_rs'] / units if t.get('booked_rs') is not None else None,
+    }
+    if last_price:
+        pts = (last_price['close'] - t['entry_price']) * sign
+        pos.update({'last_price': last_price['close'], 'last_ts': last_price['ts'], 'unreal_pts': pts, 'unreal_unit': pts * per_lot * open_lots,
+                    'unreal_actual': pts * per_lot * open_lots * units})
+    return pos
+
+
 def open_position(engine, ecfg, state, last_price):
     """The engine's open position with unrealised value at the last cached close, or None when flat. Unrealised covers only the lots still open (Prometheus
     lot 1 may already be booked); what lot 1 booked is reported separately."""
+    if state and 'trades' in state and 'status' not in state:
+        return _oleus_open_position(engine, ecfg, state, last_price)
     if not state or state.get('status') != 'in_trade':
         return None
     sign = 1 if state['direction'] == 'bullish' else -1

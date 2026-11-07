@@ -1,5 +1,5 @@
 """
-Runs ON DELOS, read-only: prints one JSON snapshot of everything the performance tracker needs, to stdout. It reads the four engines' closed-trade CSVs,
+Runs ON DELOS, read-only: prints one JSON snapshot of everything the performance tracker needs, to stdout. It reads the five engines' closed-trade CSVs,
 their saved state (for any open position), the ledger, and the last cached one-minute close of each traded contract. It writes nothing and calls no broker.
 
     ssh delos-ipv6 'cd ~/scripts/algo-trading-lab && python3 -I -' < hestia_performance/pull_snapshot.py > snapshot.json
@@ -11,7 +11,7 @@ import io
 import json
 import os
 
-ENGINES = ('prometheus', 'selene', 'helios', 'typhon')
+ENGINES = ('prometheus', 'selene', 'helios', 'typhon', 'oleus')
 ROOT = os.path.expanduser('~/scripts/algo-trading-lab')
 DATA = os.path.join(ROOT, 'hestia_data')
 

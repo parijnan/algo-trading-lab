@@ -311,7 +311,7 @@ const DATA = __DATA__;
         ['Win rate', pct(st.win_rate)], ['Avg hold', hrs(st.avg_hold_h)], ['Avg entry slippage', st.avg_slippage === null ? '–' : pts(st.avg_slippage) + ' pts']]
         .map(([k, v]) => h('div', {}, h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v }))));
     const openLine = pos ? h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px' },
-      'Open: ' + pos.direction + ' since ' + dtstr(pos.entry_ts) + ' at ' + px(pos.entry_price) + ', now ' + rs(unreal(pos)) + (booked(pos) !== null ? ' (plus ' + rs(booked(pos)) + ' booked on lot 1)' : '')) : h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px', text: 'Flat.' });
+      'Open: ' + pos.direction + ' since ' + dtstr(pos.entry_ts) + ' at ' + px(pos.entry_price) + ', now ' + rs(unreal(pos)) + (booked(pos) !== null ? ' (plus ' + rs(booked(pos)) + ' booked on lots already closed)' : '')) : h('div', { class: 'meta', style: 'color: var(--ink2); font-size: 0.8rem; margin-top: 6px', text: 'Flat.' });
     const card = h('div', { class: 'card' },
       h('div', { class: 'cardhead' }, h('h2', {}, NAME(e) + ' ', h('span', { class: 'chip', text: WHAT(e) })), h('span', { class: 'meta', text: unitsText(e) + ', live since ' + dtstr(c.live_since) })),
       mini, line, bars, openLine);
@@ -361,7 +361,7 @@ const DATA = __DATA__;
       all.length > TRADES_SHOWN ? h('div', { class: 'expand' },
         h('button', { type: 'button', 'aria-expanded': String(state.tradesOpen), text: state.tradesOpen ? 'Show only the latest ' + TRADES_SHOWN : 'Show all ' + all.length + ' trades', onclick: () => { state.tradesOpen = !state.tradesOpen; render(); } }),
         h('span', { class: 'meta', text: state.tradesOpen ? 'all ' + all.length + ' trades, newest first' : 'latest ' + TRADES_SHOWN + ' of ' + all.length + ', newest first' })) : null,
-      h('div', { class: 'hint', style: 'margin-top: 8px', text: 'Slippage is entry price against the signal bar close, in points; positive means the fill cost that much. Prometheus rows show both lots; points are summed over the lots.' }));
+      h('div', { class: 'hint', style: 'margin-top: 8px', text: 'Slippage is entry price against the signal bar close, in points; positive means the fill cost that much. Prometheus and Oleus rows show every lot; points are summed over the lots.' }));
   }
 
   function render() {
